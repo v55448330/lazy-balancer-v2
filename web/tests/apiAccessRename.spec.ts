@@ -60,7 +60,7 @@ test('API 密钥统计：api_keys 现成字段现算，不虚报调用计数', (
   assert.doesNotMatch(statsBlock, /today_calls|calls/, 'API 侧不得虚报调用计数（该数据不存在）')
 })
 
-test('统计并列卡：REST/MCP 指标对称（今日调用/活跃维度/错误率）+明细并排', () => {
+test('接入仪表盘：REST/MCP 指标对称（今日调用/活跃维度/错误率）+趋势图+明细并排', () => {
   const text = code('src/views/settings/AccessStatsCards.vue')
   assert.match(text, /defineProps<\{\s*apiKeyStats: \{ total: number; enabled: number; active7d: number \}/)
   assert.match(text, /mcpStats: McpStats \| null/)
@@ -76,8 +76,13 @@ test('统计并列卡：REST/MCP 指标对称（今日调用/活跃维度/错误
   }
   assert.match(text, /mcpStats\.top_tools/)
   assert.match(text, /props\.mcpStats\?\.trend \?\? \[\]/, '趋势缺数据必须空态而非抛错')
-  assert.match(text, /recent_calls/, 'REST 最近调用明细必须在位（与 MCP 趋势并排）')
+  assert.match(text, /recent_calls/, 'REST 最近调用明细必须在位')
   assert.match(text, /:label="t\('app\.notification\.keysUsage\.colTool'\)"/)
+  // 仪表盘形态：ECharts 趋势（共享基线）+ Dashboard stat-item 网格，非 div bar
+  assert.match(text, /v-chart/, '趋势必须用 ECharts（全站图表规范）')
+  assert.match(text, /axisChartBase/, '图表必须经共享基线构建')
+  assert.match(text, /class="stat-item"/, '统计必须 Dashboard stat-item 同构')
+  assert.doesNotMatch(text, /trend-bar-track/, '旧 div 横条形态禁止回潮')
 })
 
 test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断开 / 全局开关', () => {

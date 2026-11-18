@@ -154,16 +154,17 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	}})
 }
 
-// UpdateNotificationRule PUT /notification/rules/:id——更新单条规则。
-// 拆解写回底层表（subscriptions / notification_daily）。
+// UpdateNotificationRule POST /notification/rules/:id——部分更新单条规则。
+// 拆解写回底层表（subscriptions / notification_daily）。缺省键=不动既有值：
+// 模板保存不得误启用已停用规则、级别调整不得清空模板。
 func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 	uid := contextUserID(c)
 	ruleID := c.Param("id")
 
 	var req struct {
-		Enabled      bool              `json:"enabled"`
-		MinLevel     string            `json:"min_level"`
-		BodyTemplate string            `json:"body_template"`
+		Enabled      *bool             `json:"enabled"`
+		MinLevel     *string           `json:"min_level"`
+		BodyTemplate *string           `json:"body_template"`
 		SendTime     string            `json:"send_time"`
 		Items        []string          `json:"items"`
 		Formats      map[string]string `json:"formats"`
@@ -181,7 +182,9 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取日报配置失败", err)})
 			return
 		}
-		cfg.Enabled = req.Enabled
+		if req.Enabled != nil {
+			cfg.Enabled = *req.Enabled
+		}
 		if req.SendTime != "" {
 			cfg.SendTime = req.SendTime
 		}
@@ -211,21 +214,35 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			return
 		}
 		for _, ev := range eventIDs {
-			if !req.Enabled {
-				// 取消订阅
+			if req.Enabled != nil && !*req.Enabled {
+				// 显式停用=取消订阅（删行）
 				if _, err := db.DB.Exec(`DELETE FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev); err != nil {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("取消订阅失败", err)})
 					return
 				}
-			} else {
-				// 设置/更新订阅
-				if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template)
-					VALUES (?,?,?,?)
-					ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template`,
-					uid, ev, req.MinLevel, req.BodyTemplate); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
-					return
+				continue
+			}
+			// 部分更新：先读既有行，缺省键沿用现值；无行且未显式启用=不动。
+			var curLevel, curTpl string
+			err := db.DB.QueryRow(`SELECT COALESCE(min_level,''), COALESCE(body_template,'') FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev).Scan(&curLevel, &curTpl)
+			if err != nil {
+				if req.Enabled == nil || !*req.Enabled {
+					continue // 未订阅且未要求启用：不建行
 				}
+				curLevel, curTpl = "info", ""
+			}
+			if req.MinLevel != nil {
+				curLevel = *req.MinLevel
+			}
+			if req.BodyTemplate != nil {
+				curTpl = *req.BodyTemplate
+			}
+			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template)
+				VALUES (?,?,?,?)
+				ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template`,
+				uid, ev, curLevel, curTpl); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
+				return
 			}
 		}
 
@@ -247,21 +264,60 @@ func dailyItemsForWizard() []gin.H {
 }
 
 // GetAdminNotificationOverview GET /notification/admin/overview——管理员视角：
-// 全平台通知统计+指定用户的通道/规则（user_id 参数可选，空=全平台汇总）。
+// 通知统计+通道类型分布+用户列表。?user_id=X 时统计收窄到该用户（概览筛选器），
+// 缺省=全平台汇总。
 func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 	if !isAdminRequest(c) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "admin only"})
 		return
 	}
-	// 全平台统计
+	// 统计口径：可选 user_id 收窄（与投递趋势筛选器同语义）
+	scope := ""
+	scopeArgs := []any{}
+	if q := c.Query("user_id"); q != "" {
+		if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
+			scope = " WHERE user_id=?"
+			scopeArgs = append(scopeArgs, v)
+		}
+	}
 	var totalChannels, totalRules, totalDeliveries, sentDeliveries int
-	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels WHERE enabled=1`).Scan(&totalChannels)
-	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions`).Scan(&totalRules)
-	_ = db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries`).Scan(&totalDeliveries)
-	_ = db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE status='sent'`).Scan(&sentDeliveries)
+	chQuery := `SELECT COUNT(*) FROM notification_channels WHERE enabled=1`
+	if scope != "" {
+		chQuery += ` AND user_id=?`
+	}
+	_ = db.DB.QueryRow(chQuery, scopeArgs...).Scan(&totalChannels)
+	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions`+scope, scopeArgs...).Scan(&totalRules)
+	dlQuery := `SELECT COUNT(*) FROM notification_deliveries` + scope
+	_ = db.MetricsDB.QueryRow(dlQuery, scopeArgs...).Scan(&totalDeliveries)
+	sentQuery := `SELECT COUNT(*) FROM notification_deliveries WHERE status='sent'`
+	if scope != "" {
+		sentQuery += ` AND user_id=?`
+	}
+	_ = db.MetricsDB.QueryRow(sentQuery, scopeArgs...).Scan(&sentDeliveries)
 	rate := float64(0)
 	if totalDeliveries > 0 {
 		rate = float64(sentDeliveries) / float64(totalDeliveries)
+	}
+
+	// 通道类型分布（启用通道；概览饼图数据源）
+	type typeCount struct {
+		Type  string `json:"type"`
+		Count int    `json:"count"`
+	}
+	byType := make([]typeCount, 0, 4)
+	tcQuery := `SELECT type, COUNT(*) FROM notification_channels WHERE enabled=1`
+	if scope != "" {
+		tcQuery += ` AND user_id=?`
+	}
+	tcQuery += ` GROUP BY type ORDER BY type`
+	if tcRows, err := db.DB.Query(tcQuery, scopeArgs...); err == nil {
+		for tcRows.Next() {
+			var tc typeCount
+			if tcRows.Scan(&tc.Type, &tc.Count) == nil {
+				byType = append(byType, tc)
+			}
+		}
+		tcRows.Close()
 	}
 
 	// 用户列表（供筛选器）
@@ -282,8 +338,9 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"stats": gin.H{"channels": totalChannels, "rules": totalRules, "deliveries": totalDeliveries, "success_rate": rate},
-		"users": users,
+		"stats":           gin.H{"channels": totalChannels, "rules": totalRules, "deliveries": totalDeliveries, "success_rate": rate},
+		"channel_by_type": byType,
+		"users":           users,
 	}})
 }
 

@@ -31,10 +31,9 @@
 
     <el-tabs v-model="apiActiveTab">
       <el-tab-pane :label="t('app.notification.keysAccess.overviewTab')" name="overview">
-    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
-
-    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.accessMethodTitle') }}</el-divider>
-    <el-row :gutter="16" class="keys-mcp-block">
+        <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" />
+        <div class="section-label">{{ t('app.notification.keysAccess.accessMethodTitle') }}</div>
+        <el-row :gutter="16" class="keys-mcp-block">
       <el-col :xs="24" :md="12">
         <el-card class="access-card">
           <template #header>
@@ -107,7 +106,15 @@
 
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.keysTab')" name="keys">
-    <el-card class="list-card">
+        <el-card class="list-card">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><Key /></el-icon>
+                <span>{{ t('app.notification.keysAccess.keysTab') }}</span>
+              </div>
+            </div>
+          </template>
     <el-table
       v-loading="loading"
       :data="tableKeys"
@@ -186,9 +193,7 @@
       </el-table-column>
     </el-table>
 
-    <el-card v-if="!loading && keys.length === 0 && !loadError" class="empty-card">
-      <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
-    </el-card>
+    <el-empty v-if="!loading && keys.length === 0 && !loadError" :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.mcpTab')" name="mcp">
@@ -879,6 +884,7 @@ code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light)
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-divider { margin: 24px 0 20px; }
 .section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
+.section-label { font-size: 14px; font-weight: 600; color: #374151; margin: 20px 0 12px; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .header-actions { display: flex; gap: 8px; }
 .header-actions :deep(a.el-button) { text-decoration: none; }
@@ -920,8 +926,6 @@ code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light)
 
 .created-key-text { flex: 1; min-width: 0; color: #111827; font-family: 'SF Mono', monospace; font-size: 12px; word-break: break-all; }
 
-.empty-card { padding: 20px; }
-.empty-card :deep(.el-empty__bottom) { margin-top: 16px; }
 
 @media (max-width: 767px) {
   .page-header { align-items: flex-start; flex-direction: column; gap: 12px; }

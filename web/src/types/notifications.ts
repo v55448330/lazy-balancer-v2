@@ -5,7 +5,7 @@
 import type { APIResponse } from './index.ts'
 
 /** 事件级别（与 internal/notify Level 同串）。 */
-export type NotificationLevel = 'info' | 'warn' | 'critical'
+type NotificationLevel = 'info' | 'warn' | 'critical'
 
 /** 投递状态（internal/notify/deliveries.go 状态机：pending → sent / failed / dead）。 */
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'dead'
@@ -28,32 +28,6 @@ export interface NotificationChannel {
 
 export type NotificationChannelsResponse = APIResponse<{ channels: NotificationChannel[] }>
 
-/** GET /notification/catalog 行。group 为服务端下发的分组显示串（认证/安全/…）。 */
-export interface CatalogEvent {
-  id: string
-  group: string
-  level: NotificationLevel
-  default_subscribed: boolean
-}
-
-export type NotificationCatalogResponse = APIResponse<{ events: CatalogEvent[] }>
-
-/** GET /notification/subscriptions 行（订阅态合并视图）。 */
-interface NotificationSubscriptionRow {
-  event_type: string
-  level: NotificationLevel
-  default_subscribed: boolean
-  subscribed: boolean
-  min_level: NotificationLevel | ''
-  body_template?: string
-}
-
-export type NotificationSubsResponse = APIResponse<{ subscriptions: NotificationSubscriptionRow[] }>
-
-/** PUT /notification/subscriptions 请求体：min_level 空=删行回默认（契约显式语义）。 */
-export interface NotificationSubsPayload {
-  items: Array<{ event_type: string; min_level: NotificationLevel | '' }>
-}
 
 /** GET /notification/deliveries 行（limit 默认 50 上限 200；?status= 过滤；管理员 ?all=1）。 */
 export interface NotificationDelivery {

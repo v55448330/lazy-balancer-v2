@@ -1,8 +1,11 @@
 <template>
-  <el-card shadow="never">
+  <el-card class="list-card">
     <template #header>
-      <div class="card-header-row">
-        <span>{{ t('app.notification.keysSessions.title') }}</span>
+      <div class="card-header">
+        <div class="card-title">
+          <el-icon class="title-icon"><Connection /></el-icon>
+          <span>{{ t('app.notification.keysSessions.title') }}</span>
+        </div>
         <div class="header-side">
           <!-- MCP 全局开关（管理员）：原接入卡唯一新有价值项，随会话表同卡呈现；
                关闭时立即提示全局停用语义 -->
@@ -31,7 +34,7 @@
       </template>
     </el-alert>
 
-    <el-table v-loading="loading" :data="sessions" stripe :empty-text="t('app.notification.keysSessions.emptyText')">
+    <el-table v-loading="loading" :data="sessions" stripe :header-cell-style="{ background: '#f9fafb' }" :empty-text="t('app.notification.keysSessions.emptyText')">
       <el-table-column prop="username" :label="t('app.notification.keysSessions.colUser')" min-width="130" show-overflow-tooltip />
       <el-table-column prop="key_name" :label="t('app.notification.keysSessions.colKey')" min-width="140" show-overflow-tooltip />
       <el-table-column prop="ip" label="IP" width="140" show-overflow-tooltip />
@@ -67,6 +70,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
+import { Connection } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
@@ -168,7 +172,9 @@ defineExpose({ fetchSessions })
 </script>
 
 <style scoped>
-.card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
+.title-icon { font-size: 16px; color: #3b82f6; }
 .header-side { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .mcp-disabled-note { font-size: 12px; color: var(--el-color-danger); }
 </style>

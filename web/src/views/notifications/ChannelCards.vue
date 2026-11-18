@@ -2,7 +2,7 @@
   <div>
     <!-- 工具栏 -->
     <div class="ch-toolbar">
-      <el-select v-if="isAdminUser" v-model="filterUserId" size="small" clearable placeholder="全部用户" style="width:140px" @change="fetchChannels">
+      <el-select v-if="isAdminUser" v-model="filterUserId" size="small" clearable :placeholder="t('app.notification.channels.allUsers')" style="width:140px" @change="fetchChannels">
         <el-option v-for="u in userList" :key="u.id" :value="u.id" :label="u.username" />
       </el-select>
       <el-radio-group v-model="filterType" size="small">
@@ -58,14 +58,24 @@
         </el-card>
       </el-col>
     </el-row>
+    <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
+      <template #title>
+        <div class="polling-error-title">
+          <span>{{ t('app.notification.channels.loadFailed') }}</span>
+          <el-button link type="danger" @click="fetchChannels">{{ t('common.app.views.audit.retryNow') }}</el-button>
+        </div>
+      </template>
+    </el-alert>
     <el-empty v-if="!loading && filteredChannels.length === 0 && !loadError"
       :description="t('app.notification.channels.emptyText')" :image-size="80" />
 
-    <!-- 编辑抽屉 -->
-    <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="6vh"
-      :title="editTarget ? t('app.notification.channels.edit') : t('app.notification.channels.add')"
+    <!-- 编辑弹窗（DialogHeader 规范 + 消息样式编辑） -->
+    <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(600px, 94vw)" top="6vh"
       :close-on-click-modal="false" @close="resetDrawer">
-      <el-form :label-width="$flw('90px')" :disabled="saving">
+      <template #header>
+        <DialogHeader :icon="editTarget ? Edit : Plus" :title="editTarget ? t('app.notification.channels.edit') : t('app.notification.channels.add')" :subtitle="typeLabel(drawerForm.type)" tone="primary" />
+      </template>
+      <el-form :label-width="$flw('110px')" :disabled="saving">
         <el-form-item :label="t('app.notification.channels.name')">
           <el-input v-model="drawerForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
         </el-form-item>
@@ -81,31 +91,85 @@
         <el-form-item v-else :label="targetLabel(drawerForm.type)">
           <div class="bind-area">
             <template v-if="drawerForm.targetValue">
-              <el-tag type="success" effect="plain">{{ drawerForm.targetValue }}</el-tag>
-              <el-button size="small" text type="primary" @click="drawerForm.targetValue = ''">重新绑定</el-button>
+              <el-tag type="success" effect="plain">{{ t('app.notification.channels.bindBound') }} · {{ drawerForm.targetValue }}</el-tag>
+              <el-button size="small" text type="primary" @click="drawerForm.targetValue = ''">{{ t('app.notification.channels.bindRebind') }}</el-button>
             </template>
             <template v-else>
-              <el-button type="primary" :loading="bindLoading" @click="startBind">获取绑定二维码</el-button>
+              <el-button type="primary" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
-              <div v-if="bindQrImg" class="bind-hint">请使用{{ drawerForm.type === 'qq' ? 'QQ' : '微信' }}扫描二维码完成绑定</div>
+              <div v-if="bindQrImg" class="bind-hint">{{ t('app.notification.channels.bindScanHint', { app: drawerForm.type === 'qq' ? 'QQ' : t('app.notification.channels.typeWx') }) }}</div>
             </template>
           </div>
         </el-form-item>
       </el-form>
+
+      <!-- 消息样式（编辑既有通道时；键白名单与后端 validateChannelStyle 一致） -->
+      <template v-if="editTarget">
+        <el-divider />
+        <div class="style-section-title">{{ t('app.notification.channels.styleSection') }}</div>
+        <el-form :label-width="$flw('110px')" :disabled="saving">
+          <template v-if="drawerForm.type === 'webhook'">
+            <el-form-item :label="t('app.notification.channels.stylePayloadTpl')">
+              <el-input v-model="styleForm.payload_template" type="textarea" :rows="4" :placeholder="t('app.notification.channels.stylePayloadPlaceholder')" />
+            </el-form-item>
+          </template>
+          <template v-else-if="drawerForm.type === 'email'">
+            <el-form-item :label="t('app.notification.channels.styleSubjectTpl')">
+              <el-input v-model="styleForm.subject_template" :placeholder="t('app.notification.channels.styleSubjectPlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('app.notification.channels.styleBodyTpl')">
+              <el-input v-model="styleForm.body_template" type="textarea" :rows="4" :placeholder="t('app.notification.channels.styleBodyPlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('app.notification.channels.styleBodyFormat')">
+              <el-radio-group v-model="styleForm.body_format" size="small">
+                <el-radio-button value="text">{{ t('app.notification.channels.styleFormatText') }}</el-radio-button>
+                <el-radio-button value="html">{{ t('app.notification.channels.styleFormatHtml') }}</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+          </template>
+          <template v-else>
+            <el-form-item v-if="drawerForm.type === 'qq'" :label="t('app.notification.channels.styleMsgType')">
+              <el-radio-group v-model="styleForm.msg_type" size="small">
+                <el-radio-button value="text">{{ t('app.notification.channels.styleMsgText') }}</el-radio-button>
+                <el-radio-button value="markdown">{{ t('app.notification.channels.styleMsgMd') }}</el-radio-button>
+              </el-radio-group>
+              <div v-if="styleForm.msg_type === 'markdown'" class="form-hint">{{ t('app.notification.channels.styleMsgMdHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('app.notification.channels.styleContentTpl')">
+              <el-input v-model="styleForm.content_template" type="textarea" :rows="4" :placeholder="t('app.notification.channels.styleContentPlaceholder')" />
+            </el-form-item>
+          </template>
+          <el-form-item :label="t('app.notification.channels.styleDailyFormat')">
+            <el-select v-model="styleForm.daily_format" size="small" style="width:160px">
+              <el-option value="" :label="t('app.notification.channels.styleFormatAuto')" />
+              <el-option value="text" :label="t('app.notification.channels.styleFormatText')" />
+              <el-option value="markdown" :label="t('app.notification.channels.styleFormatMarkdown')" />
+              <el-option value="html" :label="t('app.notification.channels.styleFormatHtml')" />
+              <el-option value="json" :label="t('app.notification.channels.styleFormatJson')" />
+            </el-select>
+          </el-form-item>
+          <div class="ph-row">
+            <el-tag v-for="ph in STYLE_PH" :key="ph" size="small" effect="plain" class="ph-tag" @click="appendStylePh(ph)">{{ ph }}</el-tag>
+          </div>
+          <div class="form-hint">{{ t('app.notification.channels.styleTplHint') }}</div>
+        </el-form>
+      </template>
       <template #footer>
-        <el-button @click="drawerVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDrawer">保存</el-button>
+        <el-button @click="drawerVisible = false">{{ t('app.notification.channels.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDrawer">{{ t('app.notification.channels.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChatDotRound, ChatLineRound, Link, Message, Plus } from '@element-plus/icons-vue'
-import { request } from '@/utils/api'
+import { ChatDotRound, ChatLineRound, Edit, Link, Message, Plus } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
+import DialogHeader from '@/components/DialogHeader.vue'
 import type { NotificationChannel, NotificationChannelType, NotificationChannelsResponse } from '@/types/notifications.ts'
 
 const { t } = useI18n()
@@ -208,6 +272,34 @@ const drawerForm = ref({ type: 'webhook' as NotificationChannelType, name: '', t
 const saving = ref(false)
 const canSave = computed(() => drawerForm.value.name.trim() !== '' && drawerForm.value.targetValue.trim() !== '')
 
+// 消息样式表单（键白名单=后端 validateChannelStyle；空串键提交时剔除）
+const STYLE_PH = ['{{title}}', '{{body}}', '{{level}}', '{{time}}']
+const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', msg_type: 'text', body_format: 'text', daily_format: '' })
+const styleForm = ref(emptyStyle())
+const appendStylePh = (ph: string): void => {
+  const typ = drawerForm.value.type
+  if (typ === 'webhook') styleForm.value.payload_template += ph
+  else if (typ === 'email') styleForm.value.body_template += ph
+  else styleForm.value.content_template += ph
+}
+const buildStyleConfig = (): Record<string, string> => {
+  const s = styleForm.value
+  const out: Record<string, string> = {}
+  const typ = drawerForm.value.type
+  if (typ === 'webhook' && s.payload_template.trim()) out.payload_template = s.payload_template
+  if (typ === 'email') {
+    if (s.subject_template.trim()) out.subject_template = s.subject_template
+    if (s.body_template.trim()) out.body_template = s.body_template
+    if (s.body_format === 'html') out.body_format = 'html'
+  }
+  if (typ === 'qq' || typ === 'wx_clawbot') {
+    if (s.content_template.trim()) out.content_template = s.content_template
+    if (typ === 'qq' && s.msg_type === 'markdown') out.msg_type = 'markdown'
+  }
+  if (s.daily_format) out.daily_format = s.daily_format
+  return out
+}
+
 const targetLabel = (typ: NotificationChannelType): string => {
   const map: Record<string, string> = { webhook: t('app.notification.channels.targetWebhookUrl'), email: t('app.notification.channels.targetEmail'), qq: t('app.notification.channels.targetQQ'), wx_clawbot: t('app.notification.channels.targetWx') }
   return map[typ] ?? 'Target'
@@ -222,11 +314,18 @@ const saveDrawer = async (): Promise<void> => {
   saving.value = true
   try {
     const key = { webhook: 'url', email: 'email', qq: 'openid', wx_clawbot: 'receiver' }[drawerForm.value.type] ?? 'target'
-    const body = { type: drawerForm.value.type, name: drawerForm.value.name.trim(), target: JSON.stringify({ [key]: drawerForm.value.targetValue.trim() }) }
+    const target = JSON.stringify({ [key]: drawerForm.value.targetValue.trim() })
     if (editTarget.value) {
-      await request.put(`/notification/channels/${editTarget.value.id}`, body)
+      // 编辑：名称/目标/样式一次提交（样式全量覆盖=所见即所存）
+      await request.put(`/notification/channels/${editTarget.value.id}`, {
+        name: drawerForm.value.name.trim(),
+        target,
+        style_config: buildStyleConfig(),
+      })
+      mfaAwareSuccess(t('app.notification.channels.updateSuccess'))
     } else {
-      await request.post('/notification/channels', body)
+      const res = await request.post<{ data?: { reused?: boolean } }>('/notification/channels', { type: drawerForm.value.type, name: drawerForm.value.name.trim(), target })
+      mfaAwareSuccess(res.data?.reused ? t('app.notification.channels.reusedHint') : t('app.notification.channels.createSuccess'))
     }
     drawerVisible.value = false
     await fetchChannels()
@@ -249,20 +348,31 @@ const startBind = async (): Promise<void> => {
     }
   } catch (e) { console.error(e) } finally { bindLoading.value = false }
 }
+let bindTimer: ReturnType<typeof setInterval> | null = null
+let bindTimeout: ReturnType<typeof setTimeout> | null = null
+const stopBindPolling = (): void => {
+  if (bindTimer !== null) { clearInterval(bindTimer); bindTimer = null }
+  if (bindTimeout !== null) { clearTimeout(bindTimeout); bindTimeout = null }
+}
 const pollBind = (): void => {
+  stopBindPolling()
   const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/bind-state'
-  const timer = setInterval(async () => {
+  bindTimer = setInterval(async () => {
     try {
       const res = await request.get<{ data?: { bound?: boolean; openid?: string; receiver?: string; bot_ready?: boolean } }>(endpoint, { silent: true })
       const val = res.data?.openid ?? res.data?.receiver ?? ''
-      if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; clearInterval(timer) }
+      if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; stopBindPolling() }
     } catch { /* keep polling */ }
   }, 3000)
-  setTimeout(() => clearInterval(timer), 300000)
+  bindTimeout = setTimeout(stopBindPolling, 300000)
 }
+onUnmounted(stopBindPolling)
 
 const resetDrawer = (): void => {
+  stopBindPolling()
+  bindQrImg.value = ''
   drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
+  styleForm.value = emptyStyle()
   editTarget.value = null
 }
 
@@ -273,6 +383,16 @@ const openCreate = (): void => {
 
 const openEdit = (ch: NotificationChannel): void => {
   editTarget.value = ch
+  drawerForm.value = { type: ch.type, name: ch.name, targetValue: parseTargetValue(ch) }
+  // 回填既有样式（style_config JSON → 表单；缺省键=默认形态）
+  const s = emptyStyle()
+  try {
+    const parsed = JSON.parse(ch.style_config || '{}') as Record<string, string>
+    for (const k of Object.keys(s) as (keyof typeof s)[]) {
+      if (typeof parsed[k] === 'string') s[k] = parsed[k]
+    }
+  } catch { /* 坏 JSON 按默认形态 */ }
+  styleForm.value = s
   drawerVisible.value = true
 }
 
@@ -289,9 +409,11 @@ const testChannel = async (ch: NotificationChannel): Promise<void> => {
   if (writeBlocked.value || testingId.value !== null) return
   testingId.value = ch.id
   try {
-    await request.post(`/notification/channels/${ch.id}/test`)
-  } catch { /* handled by refresh */ }
-  finally {
+    await request.post(`/notification/channels/${ch.id}/test`, {}, { silent: true })
+    mfaAwareSuccess(t('app.notification.channels.testSuccess'))
+  } catch {
+    ElMessage.error(t('app.notification.channels.testFailed'))
+  } finally {
     testingId.value = null
     await fetchChannels()
   }
@@ -299,10 +421,13 @@ const testChannel = async (ch: NotificationChannel): Promise<void> => {
 
 const deleteChannel = async (ch: NotificationChannel): Promise<void> => {
   if (writeBlocked.value || deletingIds.value.has(ch.id)) return
-  if (!window.confirm(t('app.notification.channels.deleteConfirm'))) return
+  try {
+    await ElMessageBox.confirm(t('app.notification.channels.deleteConfirm'), t('app.notification.channels.delete'), { type: 'warning' })
+  } catch { return }
   deletingIds.value.add(ch.id)
   try {
     await request.delete(`/notification/channels/${ch.id}`)
+    mfaAwareSuccess(t('app.notification.channels.deleteSuccess'))
     await fetchChannels()
   } catch { /* handled */ }
   finally {
@@ -370,4 +495,8 @@ defineExpose({ fetchChannels })
 .bind-area { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; }
 .bind-qr-img { width: 200px; height: 200px; }
 .bind-hint { font-size: 12px; color: #6b7280; }
+.style-section-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 12px; }
+.ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
 </style>

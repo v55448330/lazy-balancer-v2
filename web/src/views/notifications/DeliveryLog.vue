@@ -1,20 +1,26 @@
 <template>
-  <el-card >
+  <el-card class="list-card">
     <template #header>
-      <div class="card-header-row">
-        <div class="delivery-filters">
-          <el-select v-model="statusFilter" size="small" class="status-select" :placeholder="t('app.notification.deliveries.statusLabel')">
-            <el-option value="" :label="t('app.notification.deliveries.statusAll')" />
-            <el-option v-for="st in STATUSES" :key="st" :value="st" :label="statusLabel(st)" />
-          </el-select>
-          <template v-if="isAdmin">
-            <el-switch v-model="allScope" :active-text="t('app.notification.deliveries.allScope')" />
-            <span class="scope-hint">{{ t('app.notification.deliveries.allScopeHint') }}</span>
-          </template>
+      <div class="card-header">
+        <div class="card-title">
+          <el-icon class="title-icon"><List /></el-icon>
+          <span>{{ t('app.notification.rules.deliveriesTab') }}</span>
         </div>
-        <el-button size="small" :loading="loading" @click="fetchDeliveries">
-          {{ t('app.notification.deliveries.refresh') }}
-        </el-button>
+        <div class="card-header-actions">
+          <div class="delivery-filters">
+            <el-select v-model="statusFilter" size="small" class="status-select" :placeholder="t('app.notification.deliveries.statusLabel')">
+              <el-option value="" :label="t('app.notification.deliveries.statusAll')" />
+              <el-option v-for="st in STATUSES" :key="st" :value="st" :label="statusLabel(st)" />
+            </el-select>
+            <template v-if="isAdmin">
+              <el-switch v-model="allScope" :active-text="t('app.notification.deliveries.allScope')" />
+              <span class="scope-hint">{{ t('app.notification.deliveries.allScopeHint') }}</span>
+            </template>
+          </div>
+          <el-button size="small" :loading="loading" @click="fetchDeliveries">
+            {{ t('app.notification.deliveries.refresh') }}
+          </el-button>
+        </div>
       </div>
     </template>
 
@@ -31,6 +37,7 @@
       v-loading="loading"
       :data="deliveries"
       stripe
+      :header-cell-style="{ background: '#f9fafb' }"
       :empty-text="t('app.notification.deliveries.emptyText')"
     >
       <el-table-column :label="t('app.notification.deliveries.colTime')" width="170">
@@ -84,6 +91,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { List } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
@@ -187,7 +195,10 @@ defineExpose({ fetchDeliveries })
 </script>
 
 <style scoped>
-.card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
+.card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
+.title-icon { font-size: 16px; color: #3b82f6; }
 .delivery-filters { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .status-select { width: 130px; }
 .scope-hint { font-size: 12px; color: var(--text-secondary, #6b7280); }

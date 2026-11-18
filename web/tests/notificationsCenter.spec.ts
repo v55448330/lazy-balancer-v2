@@ -42,11 +42,14 @@ test('侧栏接线：通知中心菜单项紧跟 API 密钥之后（铃铛图标
   assert.match(navItems, /navNotifications/, '侧栏文案必须走 navNotifications 词条')
 })
 
-test('通知页四 tab 投影：规则/通道/投递/邮件服务', () => {
+test('通知页五 tab 投影：概览/规则/通道/投递/邮件服务', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
   assert.match(text, /el-tabs/, '必须使用 tabs')
   assert.match(text, /request\.get<[^>]*>\(rulesUrl\)/, '必须消费规则端点')
-  assert.match(text, /trigger-grid/, '触发条件网格必须在位')
+  // 概览=仪表盘（stat 卡+ECharts 趋势+通道分布），非简易 div bar
+  assert.match(text, /v-chart/, '概览趋势必须用 ECharts（全站图表规范）')
+  assert.match(text, /axisChartBase|pieChartBase/, '图表必须经共享基线构建')
+  assert.match(text, /class="stat-item"/, '概览统计卡必须 Dashboard 同构')
   assert.match(text, /DialogHeader/, '模板编辑弹窗必须用 DialogHeader')
   for (const comp of ['DeliveryLog', 'ChannelCards', 'SystemCredentials']) {
     assert.match(text, new RegExp(`import ${comp} from './${comp}\\.vue'`), `${comp} 必须在位`)
@@ -56,28 +59,30 @@ test('通知页四 tab 投影：规则/通道/投递/邮件服务', () => {
 
 
 
-test('通道卡 REST 契约：卡片网格+测试/启停/删除', () => {
+test('通道卡 REST 契约：卡片网格+测试/启停/删除+样式编辑', () => {
   const text = code('src/views/notifications/ChannelCards.vue')
   assert.match(text, /request\.get<NotificationChannelsResponse>\(url\)/)
-  assert.match(text, /request\.post\(`\/notification\/channels\/\$\{ch\.id\}\/test`\)/)
+  assert.match(text, /request\.post\(`\/notification\/channels\/\$\{ch\.id\}\/test`/)
   assert.match(text, /request\.put\(`\/notification\/channels\/\$\{ch\.id\}`/, '启停/编辑')
   assert.match(text, /request\.delete\(`\/notification\/channels\/\$\{ch\.id\}`\)/)
   // 卡片网格形态（非表格）
   assert.match(text, /class="ch-card"/, '通道必须为卡片网格形态')
   assert.match(text, /class="ch-icon/, '卡片必须有类型彩色图标')
+  // 消息样式编辑（style_config 全量覆盖；键白名单与后端一致）
+  assert.match(text, /style_config: buildStyleConfig\(\)/, '编辑保存必须提交样式')
+  assert.match(text, /ElMessageBox\.confirm/, '删除必须走站内确认框（非 window.confirm）')
 })
 
 
-test('订阅矩阵消费 catalog+subscriptions 契约，保存走 items 语义', () => {
-  const text = code('src/views/notifications/SubscriptionMatrix.vue')
-  assert.match(text, /request\.get<NotificationCatalogResponse>\('\/notification\/catalog'\)/)
-  assert.match(text, /request\.get<NotificationSubsResponse>\('\/notification\/subscriptions'\)/)
-  const saveBlock = text.slice(text.indexOf('const saveSubs'), text.indexOf('onMounted(()'))
-  assert.match(saveBlock, /items: events\.value\.map/, '保存必须按 PUT {items:[…]} 契约提交')
-  assert.match(saveBlock, /min_level: state\?\.subscribed \? \(state\.min_level \|\| evt\.level\) : ''/, '未订阅事件必须以空 min_level 显式删行（契约语义）')
-  // 日报已拆独立页签：订阅矩阵禁止残留日报卡片/手动触发/事件行注入
-  assert.doesNotMatch(text, /daily-report\/trigger/, '旧日报触发端点引用禁止回潮（统一 /notification/daily/trigger）')
-  assert.doesNotMatch(text, /DAILY_EVENT|dailyTitle|triggerDaily/, '订阅矩阵日报卡片已删（独立页签承载），禁止回潮')
+test('规则表格部分更新契约：模板保存不改启用态，级别/时间只写变更键', () => {
+  const text = code('src/views/notifications/NotificationCenter.vue')
+  const tplBlock = text.slice(text.indexOf('const saveTemplate'), text.indexOf('const testRule'))
+  assert.match(tplBlock, /\{ body_template: tplText\.value \}/, '模板保存只提交 body_template（部分更新）')
+  assert.doesNotMatch(tplBlock, /enabled: true/, '模板保存不得强制启用规则')
+  const fieldBlock = text.slice(text.indexOf('const saveRuleField'), text.indexOf('const editTemplate'))
+  assert.match(fieldBlock, /rule\.trigger === 'daily' \? \{ send_time: rule\.send_time \} : \{ min_level: rule\.min_level \}/, '字段保存只提交变更键')
+  // 级别列=下拉选择（radio-button 三按钮在 150px 列内竖排堆叠的缺陷形态禁止回潮）
+  assert.match(text, /el-select v-if="row\.trigger === 'event'" v-model="row\.min_level"/, '级别列必须为紧凑下拉')
 })
 
 test('投递记录消费 deliveries 契约：过滤/全平台/失败重发', () => {

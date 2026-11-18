@@ -1,5 +1,5 @@
 <template>
-  <el-card  v-loading="loading">
+  <el-card class="list-card" v-loading="loading">
     <template #header>
       <div class="card-header">
         <div class="card-title">
@@ -21,13 +21,12 @@
       </template>
     </el-alert>
 
-    <el-form v-if="!loadError" :label-width="$flw('130px')" :disabled="saving">
+    <el-form v-if="!loadError" :label-width="$flw('130px')" :disabled="saving" class="creds-form">
       <el-form-item :label="t('app.notification.creds.smtpHost')">
         <el-input v-model="form.smtpHost" class="creds-input" />
       </el-form-item>
-      <el-form-item :label="t('app.notification.creds.smtpPort')">
-        <el-input v-model.number="form.smtpPort" class="creds-port" :placeholder="t('app.notification.creds.portPlaceholder')" />
-        <div v-if="portError" class="el-form-item__error">{{ portError }}</div>
+      <el-form-item :label="t('app.notification.creds.smtpPort')" :error="portError || undefined">
+        <el-input-number v-model="form.smtpPort" :min="0" :max="65535" :controls="false" class="creds-port" :placeholder="t('app.notification.creds.portPlaceholder')" />
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpUser')">
         <el-input v-model="form.smtpUser" class="creds-input" autocomplete="off" />
@@ -36,24 +35,26 @@
         <el-input v-model="form.smtpFrom" class="creds-input" />
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpPass')">
-        <el-input
-          v-model="form.smtpPass"
-          type="password"
-          show-password
-          :placeholder="t('app.notification.creds.secretPlaceholder')"
-          class="creds-input"
-          autocomplete="new-password"
-        />
-        <el-tag :type="smtpPassConfigured ? 'success' : 'info'" size="small" effect="plain" class="cred-state-tag">
-          {{ smtpPassConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
-        </el-tag>
+        <div class="creds-pass-row">
+          <el-input
+            v-model="form.smtpPass"
+            type="password"
+            show-password
+            :placeholder="t('app.notification.creds.secretPlaceholder')"
+            class="creds-input"
+            autocomplete="new-password"
+          />
+          <el-tag :type="smtpPassConfigured ? 'success' : 'info'" size="small" effect="plain">
+            {{ smtpPassConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
+          </el-tag>
+        </div>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTestTo')">
-        <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')">
-          <template #append>
-            <el-button :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">{{ t('app.notification.creds.smtpTest') }}</el-button>
-          </template>
-        </el-input>
+        <div class="smtp-test-row">
+          <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')" />
+          <el-button :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">{{ t('app.notification.creds.smtpTest') }}</el-button>
+        </div>
+        <div class="form-hint">{{ t('app.notification.creds.smtpTestHint') }}</div>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveSettings">
@@ -188,13 +189,13 @@ defineExpose({ fetchSettings })
 </script>
 
 <style scoped>
-.card-title { font-weight: 600; }
-.creds-input { max-width: 420px; }
-.creds-port { max-width: 420px; }
-.cred-state-tag { margin-left: 10px; }
-.smtp-test-row { display: flex; gap: 8px; width: 100%; }
-.switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
+.creds-form { max-width: 640px; }
+.creds-input { width: 100%; max-width: 420px; }
+.creds-port { width: 160px; }
+.creds-pass-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+.smtp-test-row { display: flex; gap: 8px; width: 100%; align-items: center; }
+.form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
 </style>
