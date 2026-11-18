@@ -123,24 +123,53 @@
       </div>
 
       <el-form v-else-if="wizardStep === 1" :label-width="$flw('110px')" :disabled="submitting">
+        {{ console.debug('[LB-DEBUG] wizard step1 type=', wizardForm.type) }}
         <el-form-item :label="t('app.notification.channels.name')">
           <el-input v-model="wizardForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
         </el-form-item>
-        <el-form-item v-if="wizardForm.type === 'webhook' || wizardForm.type === 'email'" :label="targetLabel(wizardForm.type)">
+        <!-- Webhook：地址（payload 模板在编辑弹框「消息样式」配置） -->
+        <el-form-item v-if="wizardForm.type === 'webhook'" :label="targetLabel('webhook')">
           <el-input
-            v-if="wizardForm.type === 'webhook'"
             v-model="wizardForm.targetValue"
             :placeholder="t('app.notification.channels.targetWebhookPlaceholder')"
           />
+          <div class="info-note-bar"><span class="info-note-desc">{{ targetHint('webhook') }}</span></div>
+        </el-form-item>
+        <!-- 邮件：收件邮箱 -->
+        <el-form-item v-else-if="wizardForm.type === 'email'" :label="targetLabel('email')">
           <el-input
-            v-else-if="wizardForm.type === 'email'"
             v-model="wizardForm.targetValue"
             :placeholder="t('app.notification.channels.targetEmailPlaceholder')"
           />
+          <div class="info-note-bar"><span class="info-note-desc">{{ targetHint('email') }}</span></div>
         </el-form-item>
-        <!-- 微信绑定闭环：①bot 未登录→（管理员）内嵌扫码登录；②登录后
-             用户向机器人发送任意消息→自动捕获 receiver 回填；手填兜底 -->
-        <template v-if="wizardForm.type === 'wx_clawbot'">
+        <!-- QQ 扫码绑定闭环（官方插件协议） -->
+        <template v-else-if="wizardForm.type === 'qq'">
+          <div class="bind-stage">
+            <template v-if="!qqBind.qrUrl && !qqBind.bound">
+              <p class="bind-stage-hint">{{ targetHint('qq') }}</p>
+              <el-button type="primary" :loading="qqBind.loading" @click="generateQQBindCode">
+                {{ t('app.notification.channels.qqBindGenerate') }}
+              </el-button>
+            </template>
+            <template v-else-if="qqBind.qrUrl && !qqBind.bound">
+              <img v-if="qqBind.qrImg" class="qq-bind-qr" :src="qqBind.qrImg" :alt="t('app.notification.channels.qqBindQrAlt')" />
+              <div class="qq-bind-steps">
+                <div>1. {{ t('app.notification.channels.qqBindStepScan') }}</div>
+                <div>2. {{ t('app.notification.channels.qqBindStepConfirm') }}</div>
+                <div>3. {{ t('app.notification.channels.qqBindStepWait') }}</div>
+              </div>
+              <el-button size="small" @click="generateQQBindCode">{{ t('app.notification.channels.qqBindRegenerate') }}</el-button>
+            </template>
+            <template v-else>
+              <el-tag type="success" effect="light">{{ t('app.notification.channels.qqBoundTag') }}</el-tag>
+              <code class="qq-bind-openid">{{ qqBind.openid }}</code>
+              <span class="bind-stage-sub">{{ t('app.notification.channels.qqBoundNext') }}</span>
+            </template>
+          </div>
+        </template>
+        <!-- 微信绑定闭环：bot 登录（管理员内嵌扫码）→ 发任意消息捕获 receiver；手填兜底 -->
+        <template v-else-if="wizardForm.type === 'wx_clawbot'">
           <div class="bind-stage">
             <template v-if="!wxBind.botReady">
               <p class="bind-stage-hint">{{ t('app.notification.channels.wxBindHintLogin') }}</p>
@@ -176,32 +205,46 @@
             </template>
           </div>
         </template>
-        <!-- QQ 扫码绑定闭环（官方插件协议） -->
-        <template v-if="wizardForm.type === 'qq'">
-          <div class="bind-stage">
-            <template v-if="!qqBind.qrUrl && !qqBind.bound">
-              <p class="bind-stage-hint">{{ targetHint('qq') }}</p>
-              <el-button type="primary" :loading="qqBind.loading" @click="generateQQBindCode">
-                {{ t('app.notification.channels.qqBindGenerate') }}
-              </el-button>
+        <!-- 消息样式（可选；也可创建后在编辑中配置） -->
+        <el-collapse v-if="wizardForm.type !== 'wx_clawbot'" class="style-collapse">
+          <el-collapse-item :title="t('app.notification.channels.styleSection')" name="style">
+            <template v-if="wizardForm.type === 'webhook'">
+              <el-form-item :label="t('app.notification.channels.stylePayloadTpl')">
+                <el-input v-model="wizardForm.style.payload_template" type="textarea" :rows="5" class="mono-input"
+                  :placeholder="t('app.notification.channels.stylePayloadPlaceholder')" />
+                <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.styleTplHint') }}</span></div>
+              </el-form-item>
             </template>
-            <template v-else-if="qqBind.qrUrl && !qqBind.bound">
-              <img v-if="qqBind.qrImg" class="qq-bind-qr" :src="qqBind.qrImg" :alt="t('app.notification.channels.qqBindQrAlt')" />
-              <div class="qq-bind-steps">
-                <div>1. {{ t('app.notification.channels.qqBindStepScan') }}</div>
-                <div>2. {{ t('app.notification.channels.qqBindStepConfirm') }}</div>
-                <div>3. {{ t('app.notification.channels.qqBindStepWait') }}</div>
-              </div>
-              <el-button size="small" @click="generateQQBindCode">{{ t('app.notification.channels.qqBindRegenerate') }}</el-button>
+            <template v-else-if="wizardForm.type === 'email'">
+              <el-form-item :label="t('app.notification.channels.styleSubjectTpl')">
+                <el-input v-model="wizardForm.style.subject_template" :placeholder="t('app.notification.channels.styleSubjectPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('app.notification.channels.styleBodyFormat')">
+                <el-radio-group v-model="wizardForm.style.body_format">
+                  <el-radio value="text">Text</el-radio>
+                  <el-radio value="html">HTML</el-radio>
+                </el-radio-group>
+              </el-form-item>
             </template>
-            <template v-else>
-              <el-tag type="success" effect="light">{{ t('app.notification.channels.qqBoundTag') }}</el-tag>
-              <code class="qq-bind-openid">{{ qqBind.openid }}</code>
-              <span class="bind-stage-sub">{{ t('app.notification.channels.qqBoundNext') }}</span>
+            <template v-else-if="wizardForm.type === 'qq'">
+              <el-form-item :label="t('app.notification.channels.styleMsgType')">
+                <el-radio-group v-model="wizardForm.style.msg_type">
+                  <el-radio value="text">{{ t('app.notification.channels.styleMsgText') }}</el-radio>
+                  <el-radio value="markdown">Markdown</el-radio>
+                </el-radio-group>
+                <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.styleMsgMdHint') }}</span></div>
+              </el-form-item>
             </template>
-          </div>
-        </template>
-        <div v-else class="info-note-bar"><span class="info-note-desc">{{ targetHint(wizardForm.type) }}</span></div>
+            <el-form-item :label="t('app.notification.channels.styleDailyFormat')">
+              <el-select v-model="wizardForm.style.daily_format" class="style-select" clearable placeholder="Auto">
+                <el-option value="text" label="Text" />
+                <el-option value="markdown" label="Markdown" />
+                <el-option value="html" label="HTML" />
+                <el-option value="json" label="JSON" />
+              </el-select>
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
 
       <el-descriptions v-else :column="1" size="small" border :title="t('app.notification.channels.confirmSummary')">
@@ -417,6 +460,7 @@ const targetLabel = (typ: NotificationChannelType | undefined): string => {
 const targetHint = (typ: NotificationChannelType | undefined): string => {
   switch (typ) {
     case 'webhook': return t('app.notification.channels.targetWebhookHint')
+    case 'email': return t('app.notification.channels.targetEmailHint')
     case 'qq': return t('app.notification.channels.targetQQHint')
     case 'wx_clawbot': return t('app.notification.channels.targetWxHint')
     default: return ''
@@ -445,7 +489,10 @@ const fetchChannels = async (): Promise<void> => {
 const wizardVisible = ref(false)
 const wizardStep = ref(0)
 const submitting = ref(false)
-const wizardForm = ref({ type: 'webhook' as NotificationChannelType, name: '', targetValue: '' })
+const emptyStyle = (): Record<string, string> => ({ payload_template: '', subject_template: '', body_format: 'text', msg_type: 'text', daily_format: '' })
+const wizardForm = ref<{ type: NotificationChannelType; name: string; targetValue: string; style: Record<string, string> }>({
+  type: 'webhook', name: '', targetValue: '', style: emptyStyle(),
+})
 
 const openWizard = (): void => {
   if (writeBlocked.value || submitting.value) return
@@ -455,7 +502,7 @@ const openWizard = (): void => {
 
 const resetWizard = (): void => {
   wizardStep.value = 0
-  wizardForm.value = { type: 'webhook', name: '', targetValue: '' }
+  wizardForm.value = { type: 'webhook', name: '', targetValue: '', style: emptyStyle() }
   if (qqBind.value.timer !== null) {
     window.clearInterval(qqBind.value.timer)
     qqBind.value.timer = null
@@ -638,10 +685,15 @@ const submitWizard = async (): Promise<void> => {
   if (writeBlocked.value || submitting.value || !canAdvance.value) return
   submitting.value = true
   try {
+    const styleOut: Record<string, string> = {}
+    for (const [k, v] of Object.entries(wizardForm.value.style)) {
+      if (v !== '' && !(k === 'body_format' && v === 'text') && !(k === 'msg_type' && v === 'text')) styleOut[k] = v
+    }
     const res = await request.post<NotificationCreateChannelResponse & { data?: { id: number; reused?: boolean } }>('/notification/channels', {
       type: wizardForm.value.type,
       name: wizardForm.value.name.trim(),
       target: buildTarget(wizardForm.value.type, wizardForm.value.targetValue),
+      style_config: styleOut,
     })
     // 同 user+type+target 通道已存在：后端幂等复用（reused=true）——不是错误，
     // 提示用户通道已在列（QQ 扫码绑定后重复保存的正常路径）。
@@ -664,7 +716,6 @@ const submitWizard = async (): Promise<void> => {
 const editVisible = ref(false)
 const saving = ref(false)
 const editTarget = ref<NotificationChannel | null>(null)
-const emptyStyle = (): Record<string, string> => ({ payload_template: '', subject_template: '', body_format: 'text', msg_type: 'text', daily_format: '' })
 const editForm = ref<{ name: string; targetValue: string; enabled: boolean; style: Record<string, string> }>({
   name: '', targetValue: '', enabled: true, style: emptyStyle(),
 })
@@ -786,7 +837,9 @@ defineExpose({ fetchChannels })
 .wx-capture-panel { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .style-divider { margin: 12px 0 8px; }
 .mono-input :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.style-select { width: 200px; }
+.style-select { width: 220px; }
+.style-collapse { margin-top: 4px; }
+.style-collapse :deep(.el-collapse-item__header) { font-weight: 600; }
 .channel-col { margin-bottom: 16px; }
 .channel-disabled { opacity: 0.72; }
 .channel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

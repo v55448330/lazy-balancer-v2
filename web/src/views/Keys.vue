@@ -29,8 +29,10 @@
       </template>
     </el-alert>
 
+    <el-tabs v-model="activeTab" class="keys-tabs">
+      <el-tab-pane :label="t('common.app.views.keys.pageTitle')" name="keys">
     <el-row v-loading="loading" :gutter="20">
-      <el-col v-for="key in keys" :key="key.id" :span="8" class="key-col">
+      <el-col v-for="key in keys" :key="key.id" :xs="24" :md="12" :xl="8" class="key-col">
         <el-card class="key-card" shadow="hover" :class="{ 'key-card-disabled': !key.is_enabled }">
           <template #header>
             <div class="key-title-row">
@@ -110,8 +112,6 @@
       </el-col>
     </el-row>
 
-    <el-tabs v-model="activeTab" class="keys-tabs">
-      <el-tab-pane :label="t('common.app.views.keys.pageTitle')" name="keys">
     <el-card v-if="!loading && keys.length === 0 && !loadError" class="empty-card">
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>

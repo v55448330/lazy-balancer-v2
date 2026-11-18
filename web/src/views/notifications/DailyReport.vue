@@ -41,14 +41,12 @@
           <div v-for="ch in formatRows" :key="ch.key" class="daily-format-row">
             <span class="daily-format-channel">{{ ch.label }}</span>
             <el-select v-model="form.formats[ch.key]" class="daily-format" clearable
-              :placeholder="t('app.notification.daily.formatAuto')" @clear="delete form.formats[ch.key]">
+              placeholder="Auto" @clear="delete form.formats[ch.key]">
               <el-option v-for="f in FORMAT_OPTIONS" :key="f.value" :value="f.value" :label="f.label" />
             </el-select>
           </div>
         </div>
-        <div class="info-note-bar daily-format-map">
-          <span class="info-note-desc">{{ t('app.notification.daily.formatChannelMap') }}</span>
-        </div>
+        <div class="daily-format-note">{{ t('app.notification.daily.formatChannelMap') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.notification.daily.preview')">
         <div class="daily-preview-bar">
@@ -227,6 +225,8 @@ onMounted(() => {
 .daily-format-map { margin-top: 6px; }
 .daily-format-rows { display: flex; flex-direction: column; gap: 8px; }
 .daily-format-row { display: flex; align-items: center; gap: 12px; }
-.daily-format-channel { flex: none; width: 88px; font-size: 13px; }
+.daily-format-channel { flex: none; width: 88px; font-size: 13px; text-align: right; }
+.daily-format-row .daily-format { width: 220px; }
+.daily-format-note { margin-top: 8px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 </style>

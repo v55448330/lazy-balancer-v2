@@ -183,7 +183,7 @@ defineExpose({ fetchSettings })
 <style scoped>
 .card-title { font-weight: 600; }
 .creds-input { max-width: 420px; }
-.creds-port { max-width: 160px; }
+.creds-port { max-width: 420px; }
 .cred-state-tag { margin-left: 10px; }
 .smtp-test-row { display: flex; gap: 8px; width: 100%; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
