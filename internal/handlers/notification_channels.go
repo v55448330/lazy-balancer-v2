@@ -70,6 +70,11 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 	if !admin {
 		query += ` WHERE user_id=?`
 		args = append(args, uid)
+	} else if q := c.Query("user_id"); q != "" {
+		if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
+			query += ` WHERE user_id=?`
+			args = append(args, v)
+		}
 	}
 	query += ` ORDER BY id`
 	rows, err := db.DB.Query(query, args...)

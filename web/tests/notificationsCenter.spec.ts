@@ -45,7 +45,7 @@ test('侧栏接线：通知中心菜单项紧跟 API 密钥之后（铃铛图标
 test('通知页四 tab 投影：规则/通道/投递/邮件服务', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
   assert.match(text, /el-tabs/, '必须使用 tabs')
-  assert.match(text, /request\.get<[^>]*>\('\/notification\/rules'\)/, '必须消费规则端点')
+  assert.match(text, /request\.get<[^>]*>\(rulesUrl\)/, '必须消费规则端点')
   assert.match(text, /trigger-grid/, '触发条件网格必须在位')
   assert.match(text, /DialogHeader/, '模板编辑弹窗必须用 DialogHeader')
   for (const comp of ['DeliveryLog', 'ChannelCards', 'SystemCredentials']) {
@@ -58,7 +58,7 @@ test('通知页四 tab 投影：规则/通道/投递/邮件服务', () => {
 
 test('通道卡 REST 契约：卡片网格+测试/启停/删除', () => {
   const text = code('src/views/notifications/ChannelCards.vue')
-  assert.match(text, /request\.get<NotificationChannelsResponse>\('\/notification\/channels'\)/)
+  assert.match(text, /request\.get<NotificationChannelsResponse>\(url\)/)
   assert.match(text, /request\.post\(`\/notification\/channels\/\$\{ch\.id\}\/test`\)/)
   assert.match(text, /request\.put\(`\/notification\/channels\/\$\{ch\.id\}`/, '启停/编辑')
   assert.match(text, /request\.delete\(`\/notification\/channels\/\$\{ch\.id\}`\)/)

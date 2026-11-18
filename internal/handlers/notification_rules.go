@@ -12,6 +12,7 @@ package handlers
 import (
 	"net/http"
 	"sort"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -47,6 +48,14 @@ type RuleChannel struct {
 // GetNotificationRules GET /notification/rules——聚合当前用户的全部通知规则。
 func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	uid := contextUserID(c)
+	// 管理员可指定 user_id 查看其他用户配置（隐私：target 脱敏在列表层处理）
+	if isAdminRequest(c) {
+		if q := c.Query("user_id"); q != "" {
+			if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
+				uid = v
+			}
+		}
+	}
 
 	// 1. 读取用户全部通道
 	chRows, err := db.DB.Query(`SELECT id, type, name FROM notification_channels

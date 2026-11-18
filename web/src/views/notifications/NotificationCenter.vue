@@ -46,6 +46,12 @@
       <!-- Tab 2: 通知规则 -->
       <el-tab-pane :label="t('app.notification.rules.rulesTab')" name="rules">
         <el-card class="list-card">
+        <div v-if="isAdmin" class="rules-filter">
+          <el-select v-model="rulesUserId" size="small" clearable placeholder="我的规则" style="width:150px" @change="fetchRules">
+            <el-option v-for="u in adminUsers" :key="u.id" :value="u.id" :label="u.username" />
+          </el-select>
+          <span class="privacy-hint">{{ t('app.notification.rules.privacyHint') }}</span>
+        </div>
         <el-table :data="rules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }">
           <el-table-column :label="t('app.notification.rules.trigger')" min-width="130">
             <template #default="{ row }">
@@ -168,6 +174,7 @@ interface Rule { id: string; trigger: string; title: string; events?: string[]; 
 
 const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
 const adminUserId = ref<number | ''>('')
+const rulesUserId = ref<number | ''>('')
 const adminUsers = ref<{ id: number; username: string }[]>([])
 const trendData = ref<{ date: string; count: number; pct: number }[]>([])
 
@@ -201,7 +208,8 @@ const previewText = computed(() => tplText.value.replace(/\{\{title\}\}/g, '证�
 const fetchRules = async (): Promise<void> => {
   loading.value = true
   try {
-    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: { id: number }[] } }>('/notification/rules')
+    const rulesUrl = rulesUserId.value ? `/notification/rules?user_id=${rulesUserId.value}` : '/notification/rules'
+    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: { id: number }[] } }>(rulesUrl)
     rules.value = res.data?.rules ?? []
     overviewStats.value = { channels: res.data?.channels?.length ?? 0, rules: rules.value.filter(r => r.enabled).length, deliveries: 0, successRate: 0 }
   } catch (e) { console.error(e) } finally { loading.value = false }
@@ -293,6 +301,8 @@ onMounted(() => {
 .stat-value { font-size: 20px; font-weight: 600; color: #111827; line-height: 1.2; }
 .stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
 /* 概览 */
+.rules-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.privacy-hint { font-size: 12px; color: #9ca3af; }
 .overview-filter { margin-bottom: 12px; }
 .overview-stats { margin-bottom: 16px; }
 .trend-card { margin-top: 16px; }

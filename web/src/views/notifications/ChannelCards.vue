@@ -2,6 +2,9 @@
   <div>
     <!-- 工具栏 -->
     <div class="ch-toolbar">
+      <el-select v-if="isAdminUser" v-model="filterUserId" size="small" clearable placeholder="全部用户" style="width:140px" @change="fetchChannels">
+        <el-option v-for="u in userList" :key="u.id" :value="u.id" :label="u.username" />
+      </el-select>
       <el-radio-group v-model="filterType" size="small">
         <el-radio-button value="">{{ t('app.notification.channels.filterAll') }}</el-radio-button>
         <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">{{ typeLabel(typ) }}</el-radio-button>
@@ -114,6 +117,9 @@ const loading = ref(false)
 const loadError = ref(false)
 const channels = ref<NotificationChannel[]>([])
 const filterType = ref<NotificationChannelType | ''>('')
+const filterUserId = ref<number | ''>('')
+const userList = ref<{ id: number; username: string }[]>([])
+const isAdminUser = computed(() => authStore.user?.role === 'admin')
 const testingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
 const drawerVisible = ref(false)
@@ -186,7 +192,8 @@ const fetchChannels = async (): Promise<void> => {
   const seq = ++fetchSeq
   loading.value = true
   try {
-    const res = await request.get<NotificationChannelsResponse>('/notification/channels')
+    const url = filterUserId.value ? `/notification/channels?user_id=${filterUserId.value}` : '/notification/channels'
+    const res = await request.get<NotificationChannelsResponse>(url)
     if (seq !== fetchSeq) return
     channels.value = res.data?.channels ?? []
     loadError.value = false
@@ -305,6 +312,10 @@ const deleteChannel = async (ch: NotificationChannel): Promise<void> => {
 
 onMounted(() => {
   void fetchChannels()
+  if (isAdminUser.value) {
+    request.get<{ data?: { users: { id: number; username: string }[] } }>('/notification/admin/overview', { silent: true })
+      .then(r => { userList.value = r.data?.users ?? [] }).catch(() => {})
+  }
 })
 
 defineExpose({ fetchChannels })
