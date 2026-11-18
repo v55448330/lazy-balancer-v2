@@ -23,6 +23,7 @@ export default {
         format: '投递格式',
         formatHint: '各通道投递格式；留空使用自动映射',
         formatAuto: '自动（Webhook=JSON/邮件=HTML/QQ·微信=Markdown）',
+        trigger: '立即投递全员',
         formatChannelMap: '各通道自动选择样式：Webhook=JSON、邮件=HTML、QQ/微信=Markdown 文本',
         preview: '预览',
         previewRun: '生成预览',

@@ -123,7 +123,6 @@
       </div>
 
       <el-form v-else-if="wizardStep === 1" :label-width="$flw('110px')" :disabled="submitting">
-        {{ console.debug('[LB-DEBUG] wizard step1 type=', wizardForm.type) }}
         <el-form-item :label="t('app.notification.channels.name')">
           <el-input v-model="wizardForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
         </el-form-item>
