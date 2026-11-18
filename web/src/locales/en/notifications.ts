@@ -56,6 +56,7 @@ export default {
       channelActive: "Active",
       channelsSection: "Channels",
       triggersSection: "Triggers",
+      enabled: "Enabled",
       actions: "Actions",
       defaultTpl: "Default",
       triggerDesc: "Trigger",

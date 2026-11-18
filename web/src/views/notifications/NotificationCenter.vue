@@ -19,8 +19,6 @@
           <el-col :span="6"><div class="stat-item"><div class="stat-icon stat-green"><el-icon><CircleCheckFilled /></el-icon></div><div class="stat-content"><div class="stat-value">{{ overviewStats.deliveries }}</div><div class="stat-label">{{ t('app.notification.rules.statDeliveries') }}</div></div></div></el-col>
           <el-col :span="6"><div class="stat-item"><div class="stat-icon" :class="overviewStats.successRate > 0.9 ? 'stat-green' : 'stat-orange'"><el-icon><DataAnalysis /></el-icon></div><div class="stat-content"><div class="stat-value">{{ (overviewStats.successRate * 100).toFixed(1) }}%</div><div class="stat-label">{{ t('app.notification.rules.statSuccessRate') }}</div></div></div></el-col>
         </el-row>
-        <el-divider content-position="left">{{ t('app.notification.rules.recentDeliveries') }}</el-divider>
-        <DeliveryLog />
       </el-tab-pane>
 
       <!-- Tab 1: 通道管理 -->
@@ -30,35 +28,56 @@
 
       <!-- Tab 2: 通知规则 -->
       <el-tab-pane :label="t('app.notification.rules.rulesTab')" name="rules">
-        <div v-loading="loading" class="trigger-grid">
-          <el-card v-for="rule in rules" :key="rule.id" class="trigger-item" :class="{ active: rule.enabled }">
-            <div class="trigger-head">
-              <el-switch v-model="rule.enabled" size="small" @change="toggleRule(rule)" />
-              <span class="trigger-name">{{ rule.title }}</span>
-              <el-button size="small" text type="primary" class="trigger-tpl-btn" @click="editTemplate(rule)">
-                {{ rule.body_template ? t('app.notification.rules.customTemplate') : t('app.notification.rules.bodyTemplate') }}
-              </el-button>
-            </div>
-            <div class="trigger-detail">
-              <template v-if="rule.trigger === 'daily'">
-                <el-time-select v-model="rule.send_time" start="00:00" step="00:30" end="23:30" size="small" class="trigger-time" @change="saveRuleField(rule)" />
-                <el-button size="small" text type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
+        <el-table :data="rules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }">
+          <el-table-column :label="t('app.notification.rules.trigger')" min-width="130">
+            <template #default="{ row }">
+              <div class="rule-name-cell">
+                <el-icon :size="16" :style="{ color: row.trigger === 'daily' ? '#8b5cf6' : '#3b82f6' }"><component :is="row.trigger === 'daily' ? Calendar : Bell" /></el-icon>
+                <span class="rule-name-text">{{ row.title }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('app.notification.rules.events')" min-width="200">
+            <template #default="{ row }">
+              <template v-if="row.trigger === 'daily'">
+                <el-time-select v-model="row.send_time" start="00:00" step="00:30" end="23:30" size="small" style="width:100px" @change="saveRuleField(asRule(row))" />
               </template>
               <template v-else>
-                <el-radio-group v-model="rule.min_level" size="small" @change="saveRuleField(rule)">
-                  <el-radio-button value="info">Info</el-radio-button>
-                  <el-radio-button value="warn">Warn</el-radio-button>
-                  <el-radio-button value="critical">Critical</el-radio-button>
-                </el-radio-group>
-                <div class="trigger-events">
-                  <el-tag v-for="ev in (rule.events || []).slice(0, 4)" :key="ev" size="small" effect="plain" class="ev-tag">{{ ev }}</el-tag>
-                  <span v-if="(rule.events?.length || 0) > 4" class="ev-more">+{{ rule.events!.length - 4 }}</span>
-                </div>
-                <el-button size="small" text type="primary" @click="testRule(rule)">{{ t('app.notification.rules.test') }}</el-button>
+                <el-tag v-for="ev in (row.events || []).slice(0, 3)" :key="ev" size="small" effect="plain" class="mr4">{{ ev }}</el-tag>
+                <span v-if="(row.events?.length || 0) > 3" class="ev-more">+{{ row.events!.length - 3 }}</span>
               </template>
-            </div>
-          </el-card>
-        </div>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('app.notification.rules.minLevel')" width="150" align="center">
+            <template #default="{ row }">
+              <el-radio-group v-if="row.trigger === 'event'" v-model="row.min_level" size="small" @change="saveRuleField(asRule(row))">
+                <el-radio-button value="info">Info</el-radio-button>
+                <el-radio-button value="warn">Warn</el-radio-button>
+                <el-radio-button value="critical">Crit</el-radio-button>
+              </el-radio-group>
+              <el-button v-else size="small" text type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('app.notification.rules.sendTo')" min-width="130">
+            <template #default="{ row }">
+              <el-tag v-for="ch in (row.channels || []).slice(0, 2)" :key="ch.id" size="small" effect="plain" class="mr4">{{ ch.name }}</el-tag>
+              <span v-if="(row.channels?.length || 0) > 2" class="ev-more">+{{ row.channels!.length - 2 }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('app.notification.rules.bodyTemplate')" width="90" align="center">
+            <template #default="{ row }">
+              <el-button size="small" link type="primary" @click="editTemplate(asRule(row))">{{ row.body_template ? t('app.notification.rules.customTemplate') : t('app.notification.rules.edit') }}</el-button>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('app.notification.rules.enabled')" width="65" align="center">
+            <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="toggleRule(asRule(row))" /></template>
+          </el-table-column>
+          <el-table-column :label="t('app.notification.rules.actions')" width="80" fixed="right">
+            <template #default="{ row }">
+              <el-button v-if="row.trigger === 'event'" size="small" link type="primary" @click="testRule(asRule(row))">{{ t('app.notification.rules.test') }}</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
         <el-empty v-if="!loading && rules.length === 0" :description="t('app.notification.rules.emptyText')" :image-size="80" />
       </el-tab-pane>
 
@@ -78,26 +97,30 @@
       <template #header>
         <DialogHeader :icon="Bell" :title="tplEditingRule?.title || ''" :subtitle="t('app.notification.rules.bodyTemplate')" tone="primary" />
       </template>
-      <el-form :label-width="$flw('80px')">
-        <el-form-item :label="t('app.notification.rules.bodyTemplate')">
+      <el-tabs v-model="tplChannelTab">
+        <el-tab-pane label="QQ" name="qq">
           <el-input v-model="tplText" type="textarea" :rows="5" :placeholder="t('app.notification.rules.templatePlaceholder')" />
-          <div class="ph-row">
-            <el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag>
-          </div>
-          <div class="form-hint">{{ t('app.notification.rules.templateHint') }}</div>
-        </el-form-item>
-        <el-form-item :label="t('app.notification.rules.preview')">
-          <pre class="tpl-preview">{{ previewText }}</pre>
-        </el-form-item>
-        <el-form-item :label="t('app.notification.rules.channelFormats')">
-          <div class="fmt-hints">
-            <div class="fmt-hint"><el-tag size="small">QQ</el-tag> 文本或 Markdown（需权限）</div>
-            <div class="fmt-hint"><el-tag size="small">微信</el-tag> 纯文本</div>
-            <div class="fmt-hint"><el-tag size="small">Webhook</el-tag> JSON（payload_template）</div>
-            <div class="fmt-hint"><el-tag size="small">邮件</el-tag> HTML 或纯文本（subject_template + body_template）</div>
-          </div>
-        </el-form-item>
-      </el-form>
+          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
+        </el-tab-pane>
+        <el-tab-pane label="微信" name="wx">
+          <el-input v-model="tplText" type="textarea" :rows="5" :placeholder="t('app.notification.rules.templatePlaceholder')" />
+          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
+        </el-tab-pane>
+        <el-tab-pane label="Webhook" name="webhook">
+          <el-input v-model="tplText" type="textarea" :rows="6" placeholder='{"title":"{{title}}","body":"{{body}}","level":"{{level}}"}' />
+          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
+        </el-tab-pane>
+        <el-tab-pane label="邮件" name="email">
+          <div class="tpl-section-label">标题模板</div>
+          <el-input v-model="tplSubject" placeholder="{{title}}" style="margin-bottom:8px" />
+          <div class="tpl-section-label">正文模板</div>
+          <el-input v-model="tplText" type="textarea" :rows="4" :placeholder="t('app.notification.rules.templatePlaceholder')" />
+          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
+        </el-tab-pane>
+      </el-tabs>
+      <el-divider />
+      <div class="tpl-section-label">{{ t('app.notification.rules.preview') }}</div>
+      <pre class="tpl-preview">{{ previewText }}</pre>
       <template #footer>
         <el-button @click="tplDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="savingTpl" @click="saveTemplate">保存</el-button>
@@ -109,7 +132,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Bell, ChatDotRound, CircleCheckFilled, DataAnalysis } from '@element-plus/icons-vue'
+import { Calendar, Bell, ChatDotRound, CircleCheckFilled, DataAnalysis } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -126,11 +149,14 @@ interface RuleChannel { id: number; type: string; name: string }
 interface Rule { id: string; trigger: string; title: string; events?: string[]; min_level?: string; send_time?: string; channels: RuleChannel[]; body_template: string; enabled: boolean }
 
 const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
+const asRule = (row: unknown): Rule => row as Rule
 const loading = ref(false)
 const rules = ref<Rule[]>([])
 const tplDialogVisible = ref(false)
 const tplEditingRule = ref<Rule | null>(null)
 const tplText = ref('')
+const tplChannelTab = ref('qq')
+const tplSubject = ref('')
 const savingTpl = ref(false)
 const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}']
 const previewText = computed(() => tplText.value.replace(/\{\{title\}\}/g, '证书续签失败').replace(/\{\{body\}\}/g, '证书 3 天后过期').replace(/\{\{level\}\}/g, 'critical').replace(/\{\{time\}\}/g, '2026-11-18 09:00'))
@@ -192,6 +218,11 @@ onMounted(() => { void fetchRules() })
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
+.rule-name-cell { display: flex; align-items: center; gap: 8px; }
+.rule-name-text { font-weight: 600; }
+.mr4 { margin-right: 4px; }
+.tpl-section-label { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
+.tpl-textarea { margin-bottom: 8px; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; }
 .trigger-events { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .ev-tag { font-size: 11px; }

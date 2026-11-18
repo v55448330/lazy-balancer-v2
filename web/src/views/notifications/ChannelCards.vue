@@ -72,8 +72,21 @@
           </el-radio-group>
           <span v-else>{{ typeLabel(drawerForm.type) }}</span>
         </el-form-item>
-        <el-form-item :label="targetLabel(drawerForm.type)">
+        <el-form-item v-if="drawerForm.type === 'webhook' || drawerForm.type === 'email'" :label="targetLabel(drawerForm.type)">
           <el-input v-model="drawerForm.targetValue" :placeholder="targetPlaceholder(drawerForm.type)" />
+        </el-form-item>
+        <el-form-item v-else :label="targetLabel(drawerForm.type)">
+          <div class="bind-area">
+            <template v-if="drawerForm.targetValue">
+              <el-tag type="success" effect="plain">{{ drawerForm.targetValue }}</el-tag>
+              <el-button size="small" text type="primary" @click="drawerForm.targetValue = ''">重新绑定</el-button>
+            </template>
+            <template v-else>
+              <el-button type="primary" :loading="bindLoading" @click="startBind">获取绑定二维码</el-button>
+              <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
+              <div v-if="bindQrImg" class="bind-hint">请使用{{ drawerForm.type === 'qq' ? 'QQ' : '微信' }}扫描二维码完成绑定</div>
+            </template>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -213,6 +226,34 @@ const saveDrawer = async (): Promise<void> => {
   } catch (e) { console.error(e) } finally { saving.value = false }
 }
 
+const bindLoading = ref(false)
+const bindQrImg = ref('')
+const startBind = async (): Promise<void> => {
+  bindLoading.value = true
+  try {
+    const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/qr/start'
+    const res = await request.post<{ data?: { qr_content?: string } }>(endpoint, {})
+    const qrUrl = res.data?.qr_content ?? ''
+    if (qrUrl) {
+      const QRCode = (await import('qrcode')).default
+      bindQrImg.value = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
+      // 轮询绑定结果
+      pollBind()
+    }
+  } catch (e) { console.error(e) } finally { bindLoading.value = false }
+}
+const pollBind = (): void => {
+  const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/bind-state'
+  const timer = setInterval(async () => {
+    try {
+      const res = await request.get<{ data?: { bound?: boolean; openid?: string; receiver?: string; bot_ready?: boolean } }>(endpoint, { silent: true })
+      const val = res.data?.openid ?? res.data?.receiver ?? ''
+      if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; clearInterval(timer) }
+    } catch { /* keep polling */ }
+  }, 3000)
+  setTimeout(() => clearInterval(timer), 300000)
+}
+
 const resetDrawer = (): void => {
   drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
   editTarget.value = null
@@ -315,4 +356,7 @@ defineExpose({ fetchChannels })
 .test-none { color: #9ca3af; }
 
 .ch-actions { display: flex; gap: 4px; justify-content: flex-end; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; }
+.bind-area { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; }
+.bind-qr-img { width: 200px; height: 200px; }
+.bind-hint { font-size: 12px; color: #6b7280; }
 </style>

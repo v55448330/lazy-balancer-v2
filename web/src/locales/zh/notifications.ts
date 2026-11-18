@@ -58,6 +58,7 @@ export default {
       channelActive: "已启用",
       channelsSection: "接收通道",
       triggersSection: "触发条件",
+      enabled: "启用",
       actions: "操作",
       defaultTpl: "默认格式",
       triggerDesc: "触发描述",

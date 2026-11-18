@@ -49,13 +49,12 @@
         </el-tag>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTestTo')">
-        <div class="smtp-test-row">
-          <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')" />
-          <el-button size="small" :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">
-            {{ t('app.notification.creds.smtpTest') }}
-          </el-button>
-        </div>
-        <span class="switch-hint">{{ t('app.notification.creds.smtpTestHint') }}</span>
+        <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')">
+          <template #append>
+            <el-button :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">{{ t('app.notification.creds.smtpTest') }}</el-button>
+          </template>
+        </el-input>
+        <div class="form-hint">{{ t('app.notification.creds.smtpTestHint') }}</div>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveSettings">
