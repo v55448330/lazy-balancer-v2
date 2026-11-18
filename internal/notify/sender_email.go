@@ -26,6 +26,7 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	var cfg struct {
 		Email           string `json:"email"`
 		SubjectTemplate string `json:"subject_template"`
+		BodyTemplate    string `json:"body_template"`
 		BodyFormat      string `json:"body_format"`
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
@@ -38,11 +39,19 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	if err != nil {
 		return err
 	}
+	ts := msg.Time
+	if ts.IsZero() {
+		ts = time.Now()
+	}
 	subject := msg.Title
 	if cfg.SubjectTemplate != "" {
-		subject = renderStyleTemplate(cfg.SubjectTemplate, msg, time.Now())
+		subject = renderStyleTemplate(cfg.SubjectTemplate, msg, ts)
 	}
-	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, msg.Body, cfg.BodyFormat == "html")
+	body := msg.Body
+	if cfg.BodyTemplate != "" {
+		body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
+	}
+	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, cfg.BodyFormat == "html")
 }
 
 func (s emailSender) Test(ctx context.Context, targetJSON string) error {
@@ -154,7 +163,6 @@ func buildRFC822Message(from, to, subject, body string, htmlBody bool) []byte {
 	}
 	return b.Bytes()
 }
-
 
 // SmtpConnectivityTest SMTP 连通性测试：用当前全局凭据握手+AUTH（可选发信
 // 到 testTo 非空时的指定收件人——发一封标记邮件；空=仅握手不投递）。

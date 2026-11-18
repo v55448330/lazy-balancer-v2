@@ -48,10 +48,10 @@ test('Keys.vue 区块接线：统计并列卡+会话卡（原 MCP 文档对话�
   assert.doesNotMatch(text, /McpAccessCard|McpUsageCard/, '接入卡已按裁定删除，不得残留引用')
   // 新信息架构：①接入统计（健康度总览）→②接入方式（双协议同构连接卡）→③会话卡；
   // 统计卡上移到分隔线之前（首屏总览），连接卡承载端点/鉴权/文档动作
-  const statsAt = text.indexOf('<AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats"')
-  const dividerAt = text.indexOf("<el-divider content-position=\"left\" class=\"section-divider\">{{ t('app.notification.keysAccess.title') }}")
-  assert.ok(statsAt > 0 && dividerAt > statsAt, '接入统计必须先于接入方式区（健康度总览置顶）')
-  const blocks = text.slice(dividerAt, text.indexOf('<el-dialog', dividerAt))
+  const statsAt = text.indexOf('<AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview"')
+  const accessAt = text.indexOf('name="access"')
+  assert.ok(statsAt > 0 && accessAt > 0 && accessAt < statsAt, '接入统计必须在「接入概览」pane 内（REST overview 端点喂数据）')
+  const blocks = text.slice(accessAt, text.indexOf('<el-dialog', accessAt))
   // 双协议同构连接卡：同一组行标签（端点/鉴权/用途）出现两次（REST 与 MCP 各一）
   const rowLabelHits = (blocks.match(/rowEndpoint/g) || []).length
   assert.ok(rowLabelHits >= 2, `接入卡必须同构（rowEndpoint 出现 ${rowLabelHits} 次, want ≥2）`)
@@ -74,13 +74,15 @@ test('API 密钥统计：api_keys 现成字段现算，不虚报调用计数', (
   assert.doesNotMatch(statsBlock, /today_calls|calls/, 'API 侧不得虚报调用计数（该数据不存在）')
 })
 
-test('统计并列卡：API 三指标 tiles + MCP tiles/TOP 工具/趋势同形态', () => {
+test('统计并列卡：REST/MCP 指标对称（今日调用/活跃维度/错误率）+明细并排', () => {
   const text = code('src/views/settings/AccessStatsCards.vue')
   assert.match(text, /defineProps<\{\s*apiKeyStats: \{ total: number; enabled: number; active7d: number \}/)
   assert.match(text, /mcpStats: McpStats \| null/)
-  // API 侧三指标（词条）
-  for (const key of ['statTotal', 'statEnabled', 'statActive7d']) {
-    assert.match(text, new RegExp(`t\\('app\\.notification\\.keysAccess\\.${key}'\\)`))
+  // REST overview 端点数据（对称化的调用/错误率数据源）
+  assert.match(text, /restStats:/, 'REST 列必须有 overview 数据 prop')
+  // REST 侧指标（今日调用=overview、活跃密钥=api_keys、错误率=overview）
+  for (const key of ['statTodayCalls', 'statActive7d', 'statErrorRate']) {
+    assert.match(text, new RegExp(`t\\('app\\.notification\\.(keysUsage|keysAccess)\\.${key}'\\)`))
   }
   // MCP 侧同形态 tiles + TOP 工具 + 趋势
   for (const key of ['statTodayCalls', 'statActiveSessions', 'statErrorRate']) {
@@ -88,6 +90,7 @@ test('统计并列卡：API 三指标 tiles + MCP tiles/TOP 工具/趋势同形�
   }
   assert.match(text, /mcpStats\.top_tools/)
   assert.match(text, /props\.mcpStats\?\.trend \?\? \[\]/, '趋势缺数据必须空态而非抛错')
+  assert.match(text, /recent_calls/, 'REST 最近调用明细必须在位（与 MCP 趋势并排）')
   assert.match(text, /:label="t\('app\.notification\.keysUsage\.colTool'\)"/)
 })
 

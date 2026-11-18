@@ -367,6 +367,14 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 				return "", errors.New("subject_template 过长（≤300）")
 			}
 			out[k] = sv
+		case "body_template":
+			if typ != "email" {
+				return "", errors.New("body_template 仅邮件通道支持")
+			}
+			if len(sv) > 4000 {
+				return "", errors.New("body_template 过长（≤4000）")
+			}
+			out[k] = sv
 		case "body_format":
 			if typ != "email" {
 				return "", errors.New("body_format 仅邮件通道支持")

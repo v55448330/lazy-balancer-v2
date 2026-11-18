@@ -31,86 +31,82 @@
 
     <el-tabs v-model="activeTab" class="keys-tabs">
       <el-tab-pane :label="t('common.app.views.keys.pageTitle')" name="keys">
-    <el-row v-loading="loading" :gutter="20">
-      <el-col v-for="key in keys" :key="key.id" :xs="24" :md="12" :xl="8" class="key-col">
-        <el-card class="key-card" shadow="hover" :class="{ 'key-card-disabled': !key.is_enabled }">
-          <template #header>
-            <div class="key-title-row">
-              <span class="key-name">{{ key.name }}</span>
-              <el-tag v-if="keyExpired(key)" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
-              <el-tag v-else :type="key.is_enabled ? 'success' : 'info'" size="small">
-                {{ key.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}
-              </el-tag>
-            </div>
-          </template>
-          <el-descriptions :column="1" size="small" border>
-            <el-descriptions-item :label="t('common.app.views.keys.keyPrefix')">
-              <code>{{ key.key_prefix || '-' }}</code>
-            </el-descriptions-item>
-            <el-descriptions-item :label="t('common.app.views.keys.features')">
-              <div class="feature-tags">
-                <el-tag :type="key.mcp_enabled ? 'primary' : 'info'" size="small" effect="plain">
-                  MCP {{ key.mcp_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}
-                </el-tag>
-                <el-tag :type="key.read_only ? 'warning' : 'success'" size="small" effect="plain">
-                  {{ key.read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
-                </el-tag>
-                <el-tooltip v-if="whitelistEntries(key.mcp_ip_whitelist).length" :content="whitelistSummary(key.mcp_ip_whitelist)" placement="top">
-                  <el-tag type="warning" size="small" effect="plain">{{ t('common.app.views.keys.ipWhitelist') }}</el-tag>
-                </el-tooltip>
-              </div>
-            </el-descriptions-item>
-            <el-descriptions-item :label="t('common.app.views.keys.createdAt')">
-              {{ formatDateShort(key.created_at) || '-' }}
-            </el-descriptions-item>
-            <el-descriptions-item :label="t('common.app.views.keys.lastUsed')">
-              {{ formatDate(key.last_used) || t('common.app.views.keys.neverUsed') }}
-            </el-descriptions-item>
-            <el-descriptions-item :label="t('common.app.views.keys.expiresAt')">
-              {{ formatDate(key.expires_at) || t('common.app.views.keys.neverExpires') }}
-            </el-descriptions-item>
-          </el-descriptions>
-          <div class="key-actions">
-            <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
-              <div>
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :disabled="nodeWriteBlocked || togglePendingId === key.id || deletingIds.has(key.id)"
-                  @click="openFeatureDialog(key)"
-                >
-                  <el-icon><Setting /></el-icon>
-                  {{ t('common.app.views.keys.featureConfig') }}
-                </el-button>
-              </div>
-            </el-tooltip>
-            <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
-              <div>
-                <el-button
-                  size="small"
-                  :type="key.is_enabled ? 'warning' : 'success'"
-                  :loading="togglePendingId === key.id"
-                  :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== key.id) || deletingIds.has(key.id)"
-                  @click="toggleKey(key)"
-                >
-                  <el-icon><SwitchButton v-if="key.is_enabled" /><VideoPlay v-else /></el-icon>
-                  {{ key.is_enabled ? t('common.app.views.keys.disable') : t('common.app.views.keys.enable') }}
-                </el-button>
-              </div>
-            </el-tooltip>
-            <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
-              <div>
-                <el-button size="small" type="danger" :loading="deletingIds.has(key.id)" :disabled="nodeWriteBlocked || togglePendingId === key.id || deletingIds.has(key.id)" @click="deleteKey(key.id)">
-                  <el-icon><Delete /></el-icon>
-                  {{ t('common.app.views.keys.delete') }}
-                </el-button>
-              </div>
+    <el-table
+      v-loading="loading"
+      :data="tableKeys"
+      stripe
+      class="keys-table"
+      :empty-text="t('common.app.views.keys.emptyText')"
+    >
+      <el-table-column :label="t('common.app.views.keys.name')" min-width="140">
+        <template #default="scope">
+          <span class="key-name-cell">{{ scope.row.name }}</span>
+          <el-tag v-if="keyExpired(asKey(scope.row))" type="danger" size="small" class="ml4">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
+          <el-tag v-else :type="scope.row.is_enabled ? 'success' : 'info'" size="small" class="ml4">
+            {{ scope.row.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.keyPrefix')" min-width="170">
+        <template #default="scope"><code>{{ scope.row.key_prefix || '-' }}</code></template>
+      </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.features')" min-width="170">
+        <template #default="scope">
+          <div class="feature-tags">
+            <el-tag :type="scope.row.mcp_enabled ? 'primary' : 'info'" size="small" effect="plain">
+              MCP {{ scope.row.mcp_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}
+            </el-tag>
+            <el-tag :type="scope.row.read_only ? 'warning' : 'success'" size="small" effect="plain">
+              {{ scope.row.read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
+            </el-tag>
+            <el-tooltip v-if="whitelistEntries(asKey(scope.row).mcp_ip_whitelist).length" :content="whitelistSummary(asKey(scope.row).mcp_ip_whitelist)" placement="top">
+              <el-tag type="warning" size="small" effect="plain">{{ t('common.app.views.keys.ipWhitelist') }}</el-tag>
             </el-tooltip>
           </div>
-        </el-card>
-      </el-col>
-    </el-row>
+        </template>
+      </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.createdAt')" width="110">
+        <template #default="scope">{{ formatDateShort(scope.row.created_at) || '-' }}</template>
+      </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.lastUsed')" width="140">
+        <template #default="scope">{{ formatDate(scope.row.last_used) || t('common.app.views.keys.neverUsed') }}</template>
+      </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="110">
+        <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
+      </el-table-column>
+      <el-table-column :label="t('app.notification.deliveries.colAction')" width="240" align="right">
+        <template #default="scope">
+          <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+            <div class="row-actions">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)"
+                @click="openFeatureDialog(asKey(scope.row))"
+              >
+                <el-icon><Setting /></el-icon>
+                {{ t('common.app.views.keys.featureConfig') }}
+              </el-button>
+              <el-button
+                size="small"
+                :type="scope.row.is_enabled ? 'warning' : 'success'"
+                :loading="togglePendingId === scope.row.id"
+                :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== scope.row.id) || deletingIds.has(scope.row.id)"
+                @click="toggleKey(asKey(scope.row))"
+              >
+                <el-icon><SwitchButton v-if="scope.row.is_enabled" /><VideoPlay v-else /></el-icon>
+                {{ scope.row.is_enabled ? t('common.app.views.keys.disable') : t('common.app.views.keys.enable') }}
+              </el-button>
+              <el-button size="small" type="danger" :loading="deletingIds.has(scope.row.id)" :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)" @click="deleteKey(scope.row.id)">
+                <el-icon><Delete /></el-icon>
+                {{ t('common.app.views.keys.delete') }}
+              </el-button>
+            </div>
+          </el-tooltip>
+        </template>
+      </el-table-column>
+    </el-table>
 
     <el-card v-if="!loading && keys.length === 0 && !loadError" class="empty-card">
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
@@ -118,10 +114,9 @@
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.accessTab')" name="access">
     <!-- ① 接入统计（健康度总览：REST/MCP 双列同构指标） -->
-    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" class="keys-mcp-block" />
+    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
 
     <!-- ② 接入方式（双协议完全同构卡：端点/鉴权/文档三行，操作逻辑一致） -->
-    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.title') }}</el-divider>
     <el-row :gutter="16" class="keys-mcp-block">
       <el-col :xs="24" :md="12">
         <el-card shadow="never" class="access-card">
@@ -492,6 +487,8 @@ interface CreateAPIKeyResponse {
 const authStore = useAuthStore()
 // MCP 调用统计（管理员）：/notification/mcp/stats，统计卡单次拉取
 const mcpStats = ref<McpStats | null>(null)
+// REST 调用统计（内存环形采集：今日调用/错误率/最近调用）
+const restOverview = ref<{ today_calls: number; error_rate: number; recent_calls: { time: string; key_name: string; method: string; path: string; ip: string; status: number }[]; trend: { date: string; calls: number }[] } | null>(null)
 const fetchMcpStats = async (): Promise<void> => {
   if (!isAdmin.value) return
   try {
@@ -502,6 +499,13 @@ const fetchMcpStats = async (): Promise<void> => {
     console.error('Failed to fetch MCP usage stats:', error)
     mcpStats.value = null
   }
+  try {
+    const r = await request.get<{ code: number; data?: { rest: typeof restOverview.value } }>('/api-keys/access-overview', { silent: true })
+    restOverview.value = r.data?.rest ?? null
+  } catch (error: unknown) {
+    console.error('Failed to fetch REST call overview:', error)
+    restOverview.value = null
+  }
 }
 // 从节点判定走 store 单源；节点模式未知仍按既有契约 fail-closed。
 // 主节点非 admin 可管理本人密钥，因此不能复用全站 non-admin 只读门。
@@ -510,6 +514,8 @@ const nodeWriteBlockedReason = computed(() => authStore.isSlaveNode ? t('common.
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const keys = ref<readonly APIKey[]>([])
+const tableKeys = computed<APIKey[]>(() => [...keys.value])
+const asKey = (row: unknown): APIKey => row as APIKey
 const loading = ref(false)
 // 加载失败不得呈现为「暂无 API 密钥」——显性错误态 + 重试
 const loadError = ref(false)
@@ -849,6 +855,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.keys-table { width: 100%; }
+.key-name-cell { font-weight: 600; }
+.ml4 { margin-left: 4px; }
+.row-actions { display: inline-flex; gap: 6px; }
 /* API/MCP 接入卡（双协议同构：端点/鉴权/用途三行） */
 .access-card :deep(.el-card__body) { padding: 14px 16px; }
 .access-proto { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }

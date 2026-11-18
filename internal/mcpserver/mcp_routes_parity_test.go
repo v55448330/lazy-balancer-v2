@@ -178,6 +178,7 @@ var mcpUncoveredRoutes = map[string]string{
 	"PUT /api/v1/notification/daily":                  "JWT 会话专属：当前用户日报配置保存（自助 UI，MCP 不承载）",
 	"POST /api/v1/notification/daily/preview":         "日报预览：按请求配置渲染昨日真实数据不落库（Web 控制台预览语义）",
 	"POST /api/v1/notification/settings/smtp-test":    "SMTP 连通性测试：管理员诊断动作（真实握手/发信，Agent 无凭据管理场景）",
+	"GET /api/v1/api-keys/access-overview":            "管理员接入统计读取：REST 内存环形采集+MCP 专属统计并存（Agent 无消费场景）",
 	"POST /api/v1/notification/daily/trigger":         "手动触发全员日报：管理员即时投递动作（与 Scheduled 任务体同源，Web 控制台低频操作）",
 	"POST /api/v1/notification/qq/bind-code":          "QQ 扫码绑定产码：手机 QQ 扫码授权闭环的浏览器侧行为（Agent 无扫码场景）",
 	"GET /api/v1/notification/qq/bind-code":           "QQ 扫码绑定轮询：绑定完成时凭据落库+openid 通道绑定（浏览器侧轮询）",

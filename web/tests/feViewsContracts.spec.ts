@@ -130,7 +130,8 @@ test('Keys 从节点判据走 isSlaveNode，四个写控件均解释禁用原因
   assert.doesNotMatch(keys, /nodeMode !== 'master'/)
   assert.match(keys, /const nodeWriteBlockedReason = computed/)
   const tooltips = openTags(keys, 'el-tooltip').filter((tag) => tag.includes(':content="nodeWriteBlockedReason"'))
-  assert.ok(tooltips.length >= 4, `创建/功能配置/启停/删除至少需要 4 个原因 tooltip，实际 ${tooltips.length}`)
+  // 表格化后：创建按钮独立 tooltip + 表格行操作组共享一个 tooltip（≥2 即全覆盖）
+  assert.ok(tooltips.length >= 2, `创建/功能配置/启停/删除至少需要 2 个原因 tooltip，实际 ${tooltips.length}`)
   assert.ok(tooltips.every((tag) => tag.includes(':disabled="!nodeWriteBlocked"')), '只有节点写禁用才显示节点原因')
 })
 

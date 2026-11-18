@@ -988,6 +988,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 				// API Keys（创建与自助同实现：属主恒为当前认证身份）
 				admin.POST("/api-keys", noStoreResponse(), h.CreateCurrentUserAPIKey)
+				admin.GET("/api-keys/access-overview", noStoreResponse(), h.GetAccessOverview)
 				admin.PATCH("/api-keys/:id/status", h.UpdateAPIKeyStatus)
 				admin.DELETE("/api-keys/:id", h.DeleteAPIKey)
 
@@ -1645,7 +1646,15 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 		c.Set("api_key_mcp_enabled", mcpEnabled)
 		c.Set("api_key_read_only", readOnly)
 
+		// REST 调用采集（API 接入页接入统计 REST 列数据源；MCP 路径
+		// 排除——已有专属统计；JWT-only 请求不计入，与「密钥资产」口径一致）。
+		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
+			services.RecordRESTAPICall(keyName, c.Request.Method, c.Request.URL.Path, c.ClientIP(), 200)
+		}
 		c.Next()
+		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
+			services.RecordRESTAPICallStatus(c.Writer.Status())
+		}
 	}
 }
 

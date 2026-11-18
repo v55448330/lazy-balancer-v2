@@ -614,3 +614,13 @@ func encodeMCPIPWhitelist(whitelist []string) (string, error) {
 	}
 	return string(data), nil
 }
+
+// GetAccessOverview GET /api-keys/access-overview——接入统计 REST 列数据
+// （今日调用/错误率/趋势/最近调用；MCP 列沿用 /notification/mcp/stats）。
+func (h *Handlers) GetAccessOverview(c *gin.Context) {
+	if !isAdminRequest(c) {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rest": services.GetRESTCallOverview()}})
+}

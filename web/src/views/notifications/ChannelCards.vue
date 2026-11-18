@@ -202,6 +202,14 @@
                 <template #prefix><el-icon><ChatLineRound /></el-icon></template>
               </el-input>
               <span class="bind-stage-sub">{{ t('app.notification.channels.wxBindManualHint') }}</span>
+              <el-button size="small" link type="primary" @click="startWxLoginInWizard">
+                {{ t('app.notification.channels.wxReloginBot') }}
+              </el-button>
+              <template v-if="wxLogin.qrImg">
+                <img class="qq-bind-qr" :src="wxLogin.qrImg" :alt="t('app.notification.creds.wxQrAlt')" />
+                <span class="bind-stage-sub">{{ t('app.notification.channels.wxBindConfirm') }}</span>
+                <el-button v-if="wxLogin.expired" size="small" @click="startWxLoginInWizard">{{ t('app.notification.creds.wxQrRefresh') }}</el-button>
+              </template>
             </template>
           </div>
         </template>
@@ -218,6 +226,11 @@
             <template v-else-if="wizardForm.type === 'email'">
               <el-form-item :label="t('app.notification.channels.styleSubjectTpl')">
                 <el-input v-model="wizardForm.style.subject_template" :placeholder="t('app.notification.channels.styleSubjectPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('app.notification.channels.styleBodyTpl')">
+                <el-input v-model="wizardForm.style.body_template" type="textarea" :rows="6" class="mono-input"
+                  :placeholder="t('app.notification.channels.styleBodyPlaceholder')" />
+                <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.styleTplHint') }}</span></div>
               </el-form-item>
               <el-form-item :label="t('app.notification.channels.styleBodyFormat')">
                 <el-radio-group v-model="wizardForm.style.body_format">
@@ -313,6 +326,11 @@
           <el-divider content-position="left" class="style-divider">{{ t('app.notification.channels.styleSection') }}</el-divider>
           <el-form-item :label="t('app.notification.channels.styleSubjectTpl')">
             <el-input v-model="editForm.style.subject_template" :placeholder="t('app.notification.channels.styleSubjectPlaceholder')" />
+          </el-form-item>
+          <el-form-item :label="t('app.notification.channels.styleBodyTpl')">
+            <el-input v-model="editForm.style.body_template" type="textarea" :rows="6" class="mono-input"
+              :placeholder="t('app.notification.channels.styleBodyPlaceholder')" />
+            <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.styleTplHint') }}</span></div>
           </el-form-item>
           <el-form-item :label="t('app.notification.channels.styleBodyFormat')">
             <el-radio-group v-model="editForm.style.body_format">
@@ -489,7 +507,7 @@ const fetchChannels = async (): Promise<void> => {
 const wizardVisible = ref(false)
 const wizardStep = ref(0)
 const submitting = ref(false)
-const emptyStyle = (): Record<string, string> => ({ payload_template: '', subject_template: '', body_format: 'text', msg_type: 'text', daily_format: '' })
+const emptyStyle = (): Record<string, string> => ({ payload_template: '', subject_template: '', body_template: '', body_format: 'text', msg_type: 'text', daily_format: '' })
 const wizardForm = ref<{ type: NotificationChannelType; name: string; targetValue: string; style: Record<string, string> }>({
   type: 'webhook', name: '', targetValue: '', style: emptyStyle(),
 })
@@ -646,7 +664,7 @@ const startWxLoginInWizard = async (): Promise<void> => {
           window.clearInterval(timer)
           wxLogin.value.timer = null
           wxBind.value.botReady = true
-          startWxPolling()
+          if (wxBind.value.timer === null && !wizardForm.value.targetValue) startWxPolling()
         } else if (st.data?.status === 'expired') {
           wxLogin.value.expired = true
           window.clearInterval(timer)
