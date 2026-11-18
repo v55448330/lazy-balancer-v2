@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -284,4 +285,36 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 		"stats": gin.H{"channels": totalChannels, "rules": totalRules, "deliveries": totalDeliveries, "success_rate": rate},
 		"users": users,
 	}})
+}
+
+// GetDeliveryTrend GET /notification/delivery-trend——7天投递趋势（按日计数+成功率）。
+// 管理员可 ?user_id=X 查看指定用户；默认当前用户。
+func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
+	uid := contextUserID(c)
+	if isAdminRequest(c) {
+		if q := c.Query("user_id"); q != "" {
+			if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
+				uid = v
+			}
+		}
+	}
+	type dayStat struct {
+		Date  string  `json:"date"`
+		Total int     `json:"total"`
+		Sent  int     `json:"sent"`
+		Rate  float64 `json:"rate"`
+	}
+	out := make([]dayStat, 0, 7)
+	for i := 6; i >= 0; i-- {
+		day := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
+		var total, sent int
+		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=?`, uid, day).Scan(&total)
+		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=? AND status='sent'`, uid, day).Scan(&sent)
+		rate := float64(0)
+		if total > 0 {
+			rate = float64(sent) / float64(total)
+		}
+		out = append(out, dayStat{Date: day, Total: total, Sent: sent, Rate: rate})
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"trend": out}})
 }

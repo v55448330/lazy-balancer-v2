@@ -30,7 +30,7 @@
           <template #header><div class="card-header"><div class="card-title"><el-icon class="title-icon"><DataAnalysis /></el-icon><span>{{ t('app.notification.rules.trendTitle') }}</span></div></div></template>
           <div class="trend-bars">
             <div v-for="d in trendData" :key="d.date" class="trend-bar-item">
-              <div class="trend-bar-fill" :style="{ height: d.pct + '%' }"></div>
+              <div class="trend-bar-fill" :style="{ height: d.pct + '%' }" :title="`${d.count} 投递 · 成功率 ${(d.rate*100).toFixed(0)}%`"></div>
               <div class="trend-bar-label">{{ d.date.slice(5) }}</div>
               <div class="trend-bar-value">{{ d.count }}</div>
             </div>
@@ -176,7 +176,17 @@ const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0
 const adminUserId = ref<number | ''>('')
 const rulesUserId = ref<number | ''>('')
 const adminUsers = ref<{ id: number; username: string }[]>([])
-const trendData = ref<{ date: string; count: number; pct: number }[]>([])
+const trendData = ref<{ date: string; count: number; pct: number; rate: number }[]>([])
+const fetchTrend = async (): Promise<void> => {
+  try {
+    const uid = adminUserId.value || rulesUserId.value
+    const url = uid ? `/notification/delivery-trend?user_id=${uid}` : '/notification/delivery-trend'
+    const res = await request.get<{ data?: { trend: { date: string; total: number; sent: number; rate: number }[] } }>(url, { silent: true })
+    const t = res.data?.trend ?? []
+    const max = Math.max(1, ...t.map(d => d.total))
+    trendData.value = t.map(d => ({ date: d.date, count: d.total, pct: Math.round((d.total / max) * 100), rate: d.rate }))
+  } catch { /* keep empty */ }
+}
 
 const fetchAdminOverview = async (): Promise<void> => {
   if (!isAdmin.value) return
@@ -254,13 +264,7 @@ const previewDaily = async (): Promise<void> => {
 onMounted(() => {
   void fetchRules()
   void fetchAdminOverview()
-  // 7天趋势（从投递记录统计——简化为静态演示数据，实际应从后端获取）
-  const days: { date: string; count: number; pct: number }[] = []
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000)
-    days.push({ date: d.toISOString().slice(0, 10), count: 0, pct: 0 })
-  }
-  trendData.value = days
+  void fetchTrend()
 })
 </script>
 
