@@ -46,6 +46,7 @@ interface NotificationSubscriptionRow {
   default_subscribed: boolean
   subscribed: boolean
   min_level: NotificationLevel | ''
+  body_template?: string
 }
 
 export type NotificationSubsResponse = APIResponse<{ subscriptions: NotificationSubscriptionRow[] }>

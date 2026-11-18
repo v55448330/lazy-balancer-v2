@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/apimsg"
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
@@ -121,4 +122,68 @@ func (h *Handlers) TriggerNotificationDaily(c *gin.Context) {
 	recordAudit(c, "触发", "通知日报", services.FormatAuditDetail(
 		fmt.Sprintf("手动触发全员日报（渲染 %d 用户）", rendered), "", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rendered": rendered}})
+}
+
+// GetDailyTargets GET /notification/daily/targets——日报投递目标透明化：
+// 启用日报的用户 → 各自的启用通道（管理员全量，普通用户仅自己）。
+func (h *Handlers) GetDailyTargets(c *gin.Context) {
+	admin := isAdminRequest(c)
+
+	type target struct {
+		Username string `json:"username"`
+		Channels []struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		} `json:"channels"`
+	}
+
+	query := `SELECT DISTINCT u.id, u.username
+		FROM users u
+		JOIN notification_daily nd ON nd.user_id = u.id
+			AND COALESCE(json_extract(nd.config,'$.enabled'),1)=1`
+	if !admin {
+		query += ` WHERE u.id=?`
+	}
+	query += ` ORDER BY u.id`
+
+	rows, err := db.DB.Query(query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+		return
+	}
+	var userIDs []int64
+	var usernames []string
+	for rows.Next() {
+		var id int64
+		var name string
+		if rows.Scan(&id, &name) == nil {
+			userIDs = append(userIDs, id)
+			usernames = append(usernames, name)
+		}
+	}
+	rows.Close()
+
+	targets := make([]target, 0, len(userIDs))
+	for i, id := range userIDs {
+		t := target{Username: usernames[i], Channels: []struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}{}}
+		chRows, err := db.DB.Query(`SELECT type, name FROM notification_channels
+			WHERE user_id=? AND enabled=1 ORDER BY id`, id)
+		if err == nil {
+			for chRows.Next() {
+				var ct, cn string
+				if chRows.Scan(&ct, &cn) == nil {
+					t.Channels = append(t.Channels, struct {
+						Type string `json:"type"`
+						Name string `json:"name"`
+					}{Type: ct, Name: cn})
+				}
+			}
+			chRows.Close()
+		}
+		targets = append(targets, t)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"targets": targets}})
 }

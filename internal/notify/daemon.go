@@ -72,6 +72,12 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 	for _, ch := range channels {
 		chMsg := msg
 		chMsg.Title = msg.Title + "（" + ch.Type + "）"
+		// 投递优先级链：事件级模板（subscription.body_template）> 通道级
+		// 模板（style_config.content_template）> 系统默认——事件模板在
+		// subscribersFor 层获取（见 subscriptionsFor 改造）。
+		if eventTpl := subscriptionTemplateFor(userID, msg.EventType); eventTpl != "" {
+			chMsg.Body = renderStyleTemplate(eventTpl, msg, time.Now())
+		}
 		// 日报按通道格式渲染（优先级：日报页 per-channel 配置 > 通道
 		// style_config.daily_format > 自动映射；其余事件原样透传）。
 		chMsg.Body = renderDailyForChannel(msg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
@@ -118,4 +124,13 @@ func cleanupExpiredMCPSessions() {
 	if _, err := db.DB.Exec(`DELETE FROM mcp_sessions WHERE last_seen < datetime('now', '-30 minutes')`); err != nil {
 		log.Printf("WARN: notify MCP 会话清理失败: %v", err)
 	}
+}
+
+// subscriptionTemplateFor 事件级消息模板（notification_subscriptions.body_template；
+// 优先于通道模板——投递 Daemon 的 renderStyleTemplate 同占位符集）。
+func subscriptionTemplateFor(userID int64, eventType string) string {
+	var tpl string
+	_ = db.DB.QueryRow(`SELECT COALESCE(body_template,'') FROM notification_subscriptions
+		WHERE user_id=? AND event_type=?`, userID, eventType).Scan(&tpl)
+	return tpl
 }

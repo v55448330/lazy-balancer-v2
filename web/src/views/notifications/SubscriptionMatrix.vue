@@ -33,6 +33,26 @@
         default-expand-all
         :empty-text="t('app.notification.subs.emptyText')"
       >
+        <el-table-column type="expand">
+          <template #default="scope">
+            <div v-if="!isGroupRow(scope.row)" class="event-template-row">
+              <span class="event-template-label">{{ t('app.notification.subs.bodyTemplate') }}</span>
+              <el-input
+                :model-value="matrix[scope.row.id]?.body_template ?? ''"
+                type="textarea" :rows="3" class="mono-template"
+                :placeholder="t('app.notification.subs.bodyTemplatePlaceholder')"
+                :disabled="subsSaving"
+                @update:model-value="(v: string) => setBodyTemplate(scope.row.id, v)"
+              />
+              <div class="ph-chips">
+                <el-tag v-for="ph in ['{{title}}','{{body}}','{{level}}','{{time}}']" :key="ph"
+                  size="small" effect="plain" class="ph-chip"
+                  @click="insertPh(scope.row.id, ph)">{{ ph }}</el-tag>
+              </div>
+              <span class="event-template-hint">{{ t('app.notification.subs.bodyTemplateHint') }}</span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column :label="t('app.notification.deliveries.colEvent')" min-width="260">
           <template #default="scope">
             <span :class="{ 'group-row-title': isGroupRow(scope.row) }">
@@ -101,6 +121,7 @@ const LEVELS: readonly NotificationLevel[] = ['info', 'warn', 'critical']
 interface MatrixState {
   subscribed: boolean
   min_level: NotificationLevel | ''
+  body_template: string
 }
 
 interface GroupRow {
@@ -152,14 +173,28 @@ const toggleEvent = (eventType: string, on: boolean): void => {
     [eventType]: {
       subscribed: on,
       min_level: on ? (current?.min_level || fallbackLevel) : '',
+      body_template: current?.body_template ?? '',
     },
   }
+}
+
+const setBodyTemplate = (eventId: string, tpl: string): void => {
+  const cur = matrix.value[eventId]
+  if (!cur) return
+  matrix.value[eventId] = { ...cur, body_template: tpl }
+}
+
+const insertPh = (eventId: string, ph: string): void => {
+  const cur = matrix.value[eventId]
+  if (!cur) return
+  const t = cur.body_template ?? ''
+  matrix.value[eventId] = { ...cur, body_template: t === '' || t.endsWith(' ') ? t + ph : t + ' ' + ph }
 }
 
 const setMinLevel = (eventType: string, level: NotificationLevel): void => {
   matrix.value = {
     ...matrix.value,
-    [eventType]: { subscribed: true, min_level: level },
+    [eventType]: { subscribed: true, min_level: level, body_template: matrix.value[eventType]?.body_template ?? '' },
   }
 }
 
@@ -178,10 +213,10 @@ const fetchMatrix = async (): Promise<void> => {
     for (const evt of events.value) {
       const row = subRows.get(evt.id)
       if (row) {
-        state[evt.id] = { subscribed: row.subscribed, min_level: row.min_level }
+        state[evt.id] = { subscribed: row.subscribed, min_level: row.min_level, body_template: row.body_template ?? '' }
       } else {
         // 无显式订阅行：目录默认态（default_subscribed=true 时级别下限取事件级别）
-        state[evt.id] = { subscribed: evt.default_subscribed, min_level: evt.default_subscribed ? evt.level : '' }
+        state[evt.id] = { subscribed: evt.default_subscribed, min_level: evt.default_subscribed ? evt.level : '', body_template: '' }
       }
     }
     matrix.value = state
@@ -204,7 +239,7 @@ const saveSubs = async (): Promise<void> => {
     const payload: NotificationSubsPayload = {
       items: events.value.map((evt) => {
         const state = matrix.value[evt.id]
-        return { event_type: evt.id, min_level: state?.subscribed ? (state.min_level || evt.level) : '' }
+        return { event_type: evt.id, min_level: state?.subscribed ? (state.min_level || evt.level) : '', body_template: state?.body_template ?? '' }
       }),
     }
     await request.put('/notification/subscriptions', payload)
@@ -229,4 +264,11 @@ defineExpose({ fetchMatrix })
 .subs-hint { margin-bottom: 8px; }
 .group-row-title { font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .group-row-icon { flex: none; }
+/* 事件级消息模板（展开行内） */
+.event-template-row { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 8px; }
+.event-template-label { font-size: 13px; font-weight: 600; color: var(--text-secondary, #6b7280); }
+.mono-template :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-width: 560px; }
+.ph-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.ph-chip { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.event-template-hint { font-size: 12px; color: var(--text-secondary, #6b7280); }
 </style>

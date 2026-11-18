@@ -27,19 +27,21 @@ func (h *Handlers) ListNotificationCatalog(c *gin.Context) {
 // 订阅矩阵：目录全量行（含未订阅行的默认态）合并本人显式订阅。
 func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 	uid := contextUserID(c)
-	rows, err := db.DB.Query(`SELECT event_type, min_level FROM notification_subscriptions WHERE user_id=?`, uid)
+	rows, err := db.DB.Query(`SELECT event_type, min_level, COALESCE(body_template,'') FROM notification_subscriptions WHERE user_id=?`, uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
 		return
 	}
 	defer rows.Close()
 	explicit := map[string]string{}
+	explicitTpl := map[string]string{}
 	for rows.Next() {
-		var eventType, minLevel string
-		if err := rows.Scan(&eventType, &minLevel); err != nil {
+		var eventType, minLevel, bodyTemplate string
+		if err := rows.Scan(&eventType, &minLevel, &bodyTemplate); err != nil {
 			continue
 		}
 		explicit[eventType] = minLevel
+		explicitTpl[eventType] = bodyTemplate
 	}
 
 	catalog := notify.CatalogExport()
@@ -47,9 +49,11 @@ func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 	for _, e := range catalog {
 		minLevel := ""
 		subscribed := false
+		bodyTemplate := ""
 		if lvl, ok := explicit[e.ID]; ok {
 			subscribed = true
 			minLevel = lvl
+			bodyTemplate = explicitTpl[e.ID]
 		}
 		subs = append(subs, gin.H{
 			"event_type":         e.ID,
@@ -57,6 +61,7 @@ func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 			"default_subscribed": e.DefaultSubscribed,
 			"subscribed":         subscribed,
 			"min_level":          minLevel,
+			"body_template":      bodyTemplate,
 		})
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"subscriptions": subs}})
@@ -77,8 +82,9 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 	uid := contextUserID(c)
 	var req struct {
 		Items []struct {
-			EventType string `json:"event_type"`
-			MinLevel  string `json:"min_level"`
+			EventType    string `json:"event_type"`
+			MinLevel     string `json:"min_level"`
+			BodyTemplate string `json:"body_template"`
 		} `json:"items"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
@@ -90,8 +96,9 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 		catalogByID[e.ID] = struct{}{}
 	}
 	type subOp struct {
-		eventType string
-		minLevel  string // 空=删除
+		eventType    string
+		minLevel     string
+		bodyTemplate string // 空=删除
 	}
 	ops := make([]subOp, 0, len(req.Items))
 	for _, item := range req.Items {
@@ -104,7 +111,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3ae60346"), MessageKey: "k_3ae60346"})
 			return
 		}
-		ops = append(ops, subOp{eventType: item.EventType, minLevel: item.MinLevel})
+		ops = append(ops, subOp{eventType: item.EventType, minLevel: item.MinLevel, bodyTemplate: item.BodyTemplate})
 	}
 
 	tx, err := db.DB.Begin()
@@ -121,8 +128,8 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 			}
 			continue
 		}
-		if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level) VALUES (?,?,?)
-			ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level`, uid, op.eventType, op.minLevel); err != nil {
+		if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template) VALUES (?,?,?,?)
+			ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template`, uid, op.eventType, op.minLevel, op.bodyTemplate); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
 			return
 		}

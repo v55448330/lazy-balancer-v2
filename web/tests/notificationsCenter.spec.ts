@@ -42,16 +42,14 @@ test('侧栏接线：通知中心菜单项紧跟 API 密钥之后（铃铛图标
   assert.match(navItems, /navNotifications/, '侧栏文案必须走 navNotifications 词条')
 })
 
-test('通知页四页签投影：channels/subs/deliveries 恒在，credentials 仅管理员', () => {
+test('通知页单页分区投影：锚点导航+五区全渲染（credentials 仅管理员）', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
-  assert.match(text, /:label="t\('app\.notification\.tabs\.channels'\)" name="channels"/)
-  assert.match(text, /:label="t\('app\.notification\.tabs\.subs'\)" name="subs"/)
-  assert.match(text, /:label="t\('app\.notification\.tabs\.deliveries'\)" name="deliveries"/)
-  assert.match(text, /:label="t\('app\.notification\.tabs\.credentials'\)" name="credentials"/)
-  assert.match(text, /<el-tab-pane v-if="isAdmin"[^>]*name="credentials">/, '系统凭据页签必须管理员限定')
-  for (const comp of ['ChannelCards', 'SubscriptionMatrix', 'DeliveryLog', 'SystemCredentials']) {
+  assert.match(text, /class="anchor-nav"/, '锚点导航必须在位')
+  assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, '通知中心不得回潮 tabs 形态')
+  for (const comp of ['ChannelCards', 'SubscriptionMatrix', 'DailyReport', 'DeliveryLog', 'SystemCredentials']) {
     assert.match(text, new RegExp(`import ${comp} from './${comp}\\.vue'`), `${comp} 必须落位 notifications 域内`)
   }
+  assert.match(text, /v-if="isAdmin"[^>]*id="sec-smtp"/, '邮件服务区必须管理员限定')
 })
 
 test('通道抽屉消费通道 REST 契约：CRUD+test+按类型目标 JSON+样式提交', () => {

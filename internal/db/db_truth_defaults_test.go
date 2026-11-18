@@ -804,7 +804,7 @@ var freshOriginalColumns = map[string][]string{
 	"notification_channels":      {"id", "user_id", "type", "name", "target", "style_config", "enabled", "last_test_at", "last_test_ok", "created_at", "updated_at"},
 	"notification_deliveries":    {"id", "user_id", "event_type", "level", "title", "body", "status", "attempts", "error", "created_at", "sent_at"},
 	"notification_daily":         {"user_id", "config", "updated_at"},
-	"notification_subscriptions": {"user_id", "event_type", "min_level"},
+	"notification_subscriptions": {"user_id", "event_type", "min_level", "body_template"},
 	"notify_settings":            {"key", "value"},
 	"path_rules":                 {"id", "rule_id", "sort_order", "match_type", "path", "upstreams_json", "created_at", "updated_at"},
 	"qq_bind_codes":              {"code", "user_id", "expires_at"},

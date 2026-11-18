@@ -1166,6 +1166,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/notification/wx/bind-state", h.GetWxBindState)
 				business.POST("/notification/qq/bind-code", h.PostQQBindCode)
 				business.GET("/notification/qq/bind-code", h.GetQQBindCode)
+				business.GET("/notification/daily/targets", h.GetDailyTargets)
 				business.GET("/notification/daily", h.GetNotificationDaily)
 				business.PUT("/notification/daily", h.PutNotificationDaily)
 				business.POST("/notification/daily/preview", noStoreResponse(), h.PreviewNotificationDaily)

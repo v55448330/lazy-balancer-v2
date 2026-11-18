@@ -54,13 +54,42 @@
         <pre v-if="previewContent" class="daily-preview">{{ previewContent }}</pre>
         <el-empty v-else-if="!previewing" :description="t('app.notification.daily.previewEmpty')" :image-size="60" />
       </el-col>
-    </el-row></el-card>
+    </el-row>
+
+    <!-- 投递目标透明化：日报发送给谁→通过什么通道 -->
+    <div v-if="dailyTargets.length" class="daily-targets">
+      <div class="section-head">{{ t('app.notification.daily.targetsTitle') }}</div>
+      <div v-for="tgt in dailyTargets" :key="tgt.username" class="daily-target-row">
+        <el-icon class="target-user-icon"><User /></el-icon>
+        <span class="target-username">{{ tgt.username }}</span>
+        <span class="target-arrow">→</span>
+        <el-tag v-for="ch in tgt.channels" :key="ch.type + ch.name" size="small" effect="plain">
+          {{ ch.name }}（{{ ch.type }}）
+        </el-tag>
+        <span v-if="!tgt.channels.length" class="target-none">{{ t('app.notification.daily.noChannels') }}</span>
+      </div>
+    </div>
+  </el-card>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { User } from '@element-plus/icons-vue'
+
+
 import { request, mfaAwareSuccess } from '@/utils/api'
+
+const dailyTargets = ref<{ username: string; channels: { type: string; name: string }[] }[]>([])
+const fetchDailyTargets = async (): Promise<void> => {
+  try {
+    const res = await request.get<{ code: number; data?: { targets: typeof dailyTargets.value } }>('/notification/daily/targets', { silent: true })
+    dailyTargets.value = res.data?.targets ?? []
+  } catch {
+    dailyTargets.value = []
+  }
+}
+
 import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
@@ -188,7 +217,9 @@ const triggerDaily = async (): Promise<void> => {
 }
 
 onMounted(() => {
+  void fetchDailyTargets()
   void fetchDaily()
+  void fetchDailyTargets()
 })
 </script>
 
@@ -220,4 +251,11 @@ onMounted(() => {
 .daily-format-row .daily-format { width: 220px; }
 .daily-format-note { margin-top: 8px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
+.daily-targets { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--el-border-color-lighter); }
+.section-head { font-weight: 600; font-size: 14px; margin-bottom: 10px; }
+.daily-target-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.target-user-icon { color: var(--el-color-primary); }
+.target-username { font-weight: 600; font-size: 13px; }
+.target-arrow { color: var(--text-secondary, #6b7280); }
+.target-none { font-size: 12px; color: var(--text-secondary, #6b7280); font-style: italic; }
 </style>
