@@ -33,6 +33,78 @@
       <el-tab-pane :label="t('app.notification.keysAccess.overviewTab')" name="overview">
     <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
 
+    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.accessMethodTitle') }}</el-divider>
+    <el-row :gutter="16" class="keys-mcp-block">
+      <el-col :xs="24" :md="12">
+        <el-card shadow="never" class="access-card">
+          <template #header>
+            <div class="card-header-row">
+              <div class="access-proto">
+                <el-icon class="access-proto-icon"><Key /></el-icon>
+                <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
+              </div>
+              <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
+                {{ t('common.app.views.keys.apiDocs') }}
+              </el-button>
+            </div>
+          </template>
+          <div class="access-rows">
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
+              <code class="access-row-value">/api/v1/…</code>
+              <el-tooltip :content="t('common.app.views.keys.copy')" placement="top">
+                <el-button size="small" link :aria-label="t('common.app.views.keys.copy')" @click="copyRestBase">
+                  <el-icon><CopyDocument /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.authRest') }}</span>
+            </div>
+            <div class="access-row access-row-desc">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.apiCardDesc') }}</span>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :md="12">
+        <el-card shadow="never" class="access-card">
+          <template #header>
+            <div class="card-header-row">
+              <div class="access-proto">
+                <el-icon class="access-proto-icon"><Connection /></el-icon>
+                <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
+              </div>
+              <el-button size="small" @click="mcpDocsVisible = true">
+                {{ t('common.app.views.keys.mcpDocs') }}
+              </el-button>
+            </div>
+          </template>
+          <div class="access-rows">
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
+              <code class="access-row-value">{{ mcpServiceURL }}</code>
+              <el-tooltip :content="t('common.app.views.keys.copyMcpUrlAria')" placement="top">
+                <el-button size="small" link :aria-label="t('common.app.views.keys.copyMcpUrlAria')" @click="copyMCPServiceURL">
+                  <el-icon><CopyDocument /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.authMcp') }}</span>
+            </div>
+            <div class="access-row access-row-desc">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.keysTab')" name="keys">
     <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.pageTitle') }}</el-divider>
@@ -118,77 +190,6 @@
     </el-card>
     <!-- 分区②：接入统计（健康度总览：REST/MCP 双列同构指标） -->
 
-    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.accessMethodTitle') }}</el-divider>
-    <el-row :gutter="16" class="keys-mcp-block">
-      <el-col :xs="24" :md="12">
-        <el-card shadow="never" class="access-card">
-          <template #header>
-            <div class="card-header-row">
-              <div class="access-proto">
-                <el-icon class="access-proto-icon"><Key /></el-icon>
-                <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
-              </div>
-              <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
-                {{ t('common.app.views.keys.apiDocs') }}
-              </el-button>
-            </div>
-          </template>
-          <div class="access-rows">
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
-              <code class="access-row-value">/api/v1/…</code>
-              <el-tooltip :content="t('common.app.views.keys.copy')" placement="top">
-                <el-button size="small" link :aria-label="t('common.app.views.keys.copy')" @click="copyRestBase">
-                  <el-icon><CopyDocument /></el-icon>
-                </el-button>
-              </el-tooltip>
-            </div>
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.authRest') }}</span>
-            </div>
-            <div class="access-row access-row-desc">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.apiCardDesc') }}</span>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :md="12">
-        <el-card shadow="never" class="access-card">
-          <template #header>
-            <div class="card-header-row">
-              <div class="access-proto">
-                <el-icon class="access-proto-icon"><Connection /></el-icon>
-                <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
-              </div>
-              <el-button size="small" @click="mcpDocsVisible = true">
-                {{ t('common.app.views.keys.mcpDocs') }}
-              </el-button>
-            </div>
-          </template>
-          <div class="access-rows">
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
-              <code class="access-row-value">{{ mcpServiceURL }}</code>
-              <el-tooltip :content="t('common.app.views.keys.copyMcpUrlAria')" placement="top">
-                <el-button size="small" link :aria-label="t('common.app.views.keys.copyMcpUrlAria')" @click="copyMCPServiceURL">
-                  <el-icon><CopyDocument /></el-icon>
-                </el-button>
-              </el-tooltip>
-            </div>
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.authMcp') }}</span>
-            </div>
-            <div class="access-row access-row-desc">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
 
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.mcpTab')" name="mcp">

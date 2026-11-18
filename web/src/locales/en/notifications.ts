@@ -70,6 +70,7 @@ export default {
       bodyTemplate: "Message template",
       templatePlaceholder: "{{title}}\\n{{body}}\\n—— {{level}} · {{time}}",
       templateHint: "Priority: event > channel > system default; empty = default",
+      channelFormats: "Channel format requirements",
       stepTrigger: "Trigger",
       stepChannel: "Channel",
       stepTemplate: "Template",

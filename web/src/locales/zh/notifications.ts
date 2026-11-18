@@ -72,6 +72,7 @@ export default {
       bodyTemplate: "消息模板",
       templatePlaceholder: "{{title}}\\n{{body}}\\n—— {{level}} · {{time}}",
       templateHint: "优先级：事件模板 > 通道模板 > 系统默认；留空使用默认",
+      channelFormats: "通道格式要求",
       stepTrigger: "触发",
       stepChannel: "通道",
       stepTemplate: "模板",

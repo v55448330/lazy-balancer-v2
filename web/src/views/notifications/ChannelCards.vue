@@ -59,9 +59,28 @@
       :description="t('app.notification.channels.emptyText')" :image-size="80" />
 
     <!-- 编辑抽屉 -->
-    <el-drawer v-model="drawerVisible" size="540px" :title="editTarget ? t('app.notification.channels.edit') : t('app.notification.channels.add')">
-      <p>{{ t('app.notification.channels.listDesc') }}</p>
-    </el-drawer>
+    <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="6vh"
+      :title="editTarget ? t('app.notification.channels.edit') : t('app.notification.channels.add')"
+      :close-on-click-modal="false" @close="resetDrawer">
+      <el-form :label-width="$flw('90px')" :disabled="saving">
+        <el-form-item :label="t('app.notification.channels.name')">
+          <el-input v-model="drawerForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
+        </el-form-item>
+        <el-form-item :label="t('app.notification.channels.colType')">
+          <el-radio-group v-if="!editTarget" v-model="drawerForm.type">
+            <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">{{ typeLabel(typ) }}</el-radio-button>
+          </el-radio-group>
+          <span v-else>{{ typeLabel(drawerForm.type) }}</span>
+        </el-form-item>
+        <el-form-item :label="targetLabel(drawerForm.type)">
+          <el-input v-model="drawerForm.targetValue" :placeholder="targetPlaceholder(drawerForm.type)" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="drawerVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDrawer">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -163,6 +182,40 @@ const fetchChannels = async (): Promise<void> => {
   } finally {
     if (seq === fetchSeq) loading.value = false
   }
+}
+
+const drawerForm = ref({ type: 'webhook' as NotificationChannelType, name: '', targetValue: '' })
+const saving = ref(false)
+const canSave = computed(() => drawerForm.value.name.trim() !== '' && drawerForm.value.targetValue.trim() !== '')
+
+const targetLabel = (typ: NotificationChannelType): string => {
+  const map: Record<string, string> = { webhook: t('app.notification.channels.targetWebhookUrl'), email: t('app.notification.channels.targetEmail'), qq: t('app.notification.channels.targetQQ'), wx_clawbot: t('app.notification.channels.targetWx') }
+  return map[typ] ?? 'Target'
+}
+const targetPlaceholder = (typ: NotificationChannelType): string => {
+  const map: Record<string, string> = { webhook: t('app.notification.channels.targetWebhookPlaceholder'), email: t('app.notification.channels.targetEmailPlaceholder'), qq: t('app.notification.channels.targetQQHint'), wx_clawbot: t('app.notification.channels.targetWxPlaceholder') }
+  return map[typ] ?? ''
+}
+
+const saveDrawer = async (): Promise<void> => {
+  if (saving.value || !canSave.value) return
+  saving.value = true
+  try {
+    const key = { webhook: 'url', email: 'email', qq: 'openid', wx_clawbot: 'receiver' }[drawerForm.value.type] ?? 'target'
+    const body = { type: drawerForm.value.type, name: drawerForm.value.name.trim(), target: JSON.stringify({ [key]: drawerForm.value.targetValue.trim() }) }
+    if (editTarget.value) {
+      await request.put(`/notification/channels/${editTarget.value.id}`, body)
+    } else {
+      await request.post('/notification/channels', body)
+    }
+    drawerVisible.value = false
+    await fetchChannels()
+  } catch (e) { console.error(e) } finally { saving.value = false }
+}
+
+const resetDrawer = (): void => {
+  drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
+  editTarget.value = null
 }
 
 const openCreate = (): void => {

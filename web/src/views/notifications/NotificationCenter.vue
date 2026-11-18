@@ -11,7 +11,12 @@
     </div>
 
     <el-tabs v-model="activeTab">
-      <!-- Tab 1: 通知规则 -->
+      <!-- Tab 1: 通道管理 -->
+      <el-tab-pane :label="t('app.notification.rules.channelsTab')" name="channels">
+        <ChannelCards />
+      </el-tab-pane>
+
+      <!-- Tab 2: 通知规则 -->
       <el-tab-pane :label="t('app.notification.rules.rulesTab')" name="rules">
         <div v-loading="loading" class="trigger-grid">
           <div v-for="rule in rules" :key="rule.id" class="trigger-item" :class="{ active: rule.enabled }">
@@ -33,18 +38,16 @@
                   <el-radio-button value="warn">Warn</el-radio-button>
                   <el-radio-button value="critical">Critical</el-radio-button>
                 </el-radio-group>
-                <span class="trigger-count">{{ rule.events?.length || 0 }} {{ t('app.notification.rules.events') }}</span>
+                <div class="trigger-events">
+                  <el-tag v-for="ev in (rule.events || []).slice(0, 4)" :key="ev" size="small" effect="plain" class="ev-tag">{{ ev }}</el-tag>
+                  <span v-if="(rule.events?.length || 0) > 4" class="ev-more">+{{ rule.events!.length - 4 }}</span>
+                </div>
                 <el-button size="small" text type="primary" @click="testRule(rule)">{{ t('app.notification.rules.test') }}</el-button>
               </template>
             </div>
           </div>
         </div>
         <el-empty v-if="!loading && rules.length === 0" :description="t('app.notification.rules.emptyText')" :image-size="80" />
-      </el-tab-pane>
-
-      <!-- Tab 2: 通道管理 -->
-      <el-tab-pane :label="t('app.notification.rules.channelsTab')" name="channels">
-        <ChannelCards />
       </el-tab-pane>
 
       <!-- Tab 3: 投递记录 -->
@@ -74,6 +77,14 @@
         <el-form-item :label="t('app.notification.rules.preview')">
           <pre class="tpl-preview">{{ previewText }}</pre>
         </el-form-item>
+        <el-form-item :label="t('app.notification.rules.channelFormats')">
+          <div class="fmt-hints">
+            <div class="fmt-hint"><el-tag size="small">QQ</el-tag> 文本或 Markdown（需权限）</div>
+            <div class="fmt-hint"><el-tag size="small">微信</el-tag> 纯文本</div>
+            <div class="fmt-hint"><el-tag size="small">Webhook</el-tag> JSON（payload_template）</div>
+            <div class="fmt-hint"><el-tag size="small">邮件</el-tag> HTML 或纯文本（subject_template + body_template）</div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="tplDialogVisible = false">取消</el-button>
@@ -97,7 +108,7 @@ import SystemCredentials from './SystemCredentials.vue'
 const { t } = useI18n()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
-const activeTab = ref('rules')
+const activeTab = ref('channels')
 
 interface RuleChannel { id: number; type: string; name: string }
 interface Rule { id: string; trigger: string; title: string; events?: string[]; min_level?: string; send_time?: string; channels: RuleChannel[]; body_template: string; enabled: boolean }
@@ -167,4 +178,9 @@ onMounted(() => { void fetchRules() })
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; }
+.trigger-events { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.ev-tag { font-size: 11px; }
+.ev-more { font-size: 11px; color: #6b7280; }
+.fmt-hints { display: flex; flex-direction: column; gap: 6px; }
+.fmt-hint { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6b7280; }
 </style>

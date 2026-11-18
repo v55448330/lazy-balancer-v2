@@ -1,7 +1,15 @@
 <template>
   <el-card shadow="never" v-loading="loading">
     <template #header>
-      <span class="card-title">{{ t('app.notification.creds.smtpSection') }}</span>
+      <div class="card-header">
+        <div class="card-title">
+          <el-icon class="title-icon"><Message /></el-icon>
+          <span>{{ t('app.notification.creds.smtpSection') }}</span>
+        </div>
+        <el-tag :type="smtpPassConfigured ? 'success' : 'info'" size="small">
+          {{ smtpPassConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
+        </el-tag>
+      </div>
     </template>
 
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
@@ -65,6 +73,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
+import { Message } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import type {
   NotificationSettingsPayload,
@@ -187,4 +196,7 @@ defineExpose({ fetchSettings })
 .cred-state-tag { margin-left: 10px; }
 .smtp-test-row { display: flex; gap: 8px; width: 100%; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
+.title-icon { font-size: 16px; color: #3b82f6; }
 </style>
