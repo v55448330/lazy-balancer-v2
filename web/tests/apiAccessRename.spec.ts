@@ -41,24 +41,53 @@ test('Keys.vue 页头与侧栏文案仍走词条单源（不改字面量）', ()
   assert.match(layout, /NAV_LABELS\['settings-apikeys'\]/)
 })
 
-test('Keys.vue 三新区块接线：接入卡/会话表/调用统计', () => {
+test('Keys.vue 区块接线：统计并列卡+会话卡（原 MCP 文档对话框不动）', () => {
   const text = code('src/views/Keys.vue')
-  for (const comp of ['McpAccessCard', 'McpSessionsCard', 'McpUsageCard']) {
-    assert.match(text, new RegExp(`import ${comp} from './settings/${comp}\\.vue'`), `${comp} 必须落位 settings 域`)
-  }
+  assert.match(text, /import AccessStatsCards from '\.\/settings\/AccessStatsCards\.vue'/)
+  assert.match(text, /import McpSessionsCard from '\.\/settings\/McpSessionsCard\.vue'/)
+  assert.doesNotMatch(text, /McpAccessCard|McpUsageCard/, '接入卡已按裁定删除，不得残留引用')
   const blocksStart = text.indexOf("<el-divider content-position=\"left\" class=\"section-divider\">{{ t('app.notification.keysAccess.title') }}")
   assert.ok(blocksStart > 0, 'MCP 区块分隔标题缺失')
   const blocks = text.slice(blocksStart, text.indexOf('<el-dialog', blocksStart))
-  assert.match(blocks, /<McpAccessCard :stats="mcpStats"/)
+  // 结构：统计并列卡（API+MCP）→ 会话卡；playbook/认证示例只在原对话框内
+  assert.match(blocks, /<AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats"/)
   assert.match(blocks, /<McpSessionsCard/)
-  // 调用统计是管理员数据（/notification/mcp/stats 契约管理员限定）
-  assert.match(blocks, /<McpUsageCard v-if="isAdmin" :stats="mcpStats"/)
+  assert.doesNotMatch(blocks, /ops-playbook|X-API-Key/, '端点/认证示例/playbook 不得在页面区块重复（原对话框已承载）')
+  // 原有 MCP 文档入口保持：页头按钮 + 对话框内 playbook 下载
+  assert.match(text, /@click="mcpDocsVisible = true"/)
+  assert.match(text, /request\.get<Blob>\('\/mcp\/ops-playbook', \{ responseType: 'blob' \}\)/)
   // 统计单次拉取：管理员门 + 端点
   assert.match(text, /if \(!isAdmin\.value\) return/, 'stats 拉取必须管理员限定')
   assert.match(text, /request\.get<McpStatsResponse>\('\/notification\/mcp\/stats'\)/)
 })
 
-test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断开', () => {
+test('API 密钥统计：api_keys 现成字段现算，不虚报调用计数', () => {
+  const text = code('src/views/Keys.vue')
+  const statsBlock = text.slice(text.indexOf('const ACTIVE_WINDOW_MS'), text.indexOf('const creating'))
+  assert.match(statsBlock, /key\.is_enabled/, '启用数必须来自 is_enabled 现成字段')
+  assert.match(statsBlock, /key\.last_used/, '近 7 天活跃必须来自 last_used 现成字段')
+  assert.match(statsBlock, /7 \* 24 \* 60 \* 60 \* 1000/, '活跃窗口=7 天')
+  assert.doesNotMatch(statsBlock, /today_calls|calls/, 'API 侧不得虚报调用计数（该数据不存在）')
+})
+
+test('统计并列卡：API 三指标 tiles + MCP tiles/TOP 工具/趋势同形态', () => {
+  const text = code('src/views/settings/AccessStatsCards.vue')
+  assert.match(text, /defineProps<\{\s*apiKeyStats: \{ total: number; enabled: number; active7d: number \}/)
+  assert.match(text, /mcpStats: McpStats \| null/)
+  // API 侧三指标（词条）
+  for (const key of ['statTotal', 'statEnabled', 'statActive7d']) {
+    assert.match(text, new RegExp(`t\\('app\\.notification\\.keysAccess\\.${key}'\\)`))
+  }
+  // MCP 侧同形态 tiles + TOP 工具 + 趋势
+  for (const key of ['statTodayCalls', 'statActiveSessions', 'statErrorRate']) {
+    assert.match(text, new RegExp(`t\\('app\\.notification\\.keysUsage\\.${key}'\\)`))
+  }
+  assert.match(text, /mcpStats\.top_tools/)
+  assert.match(text, /props\.mcpStats\?\.trend \?\? \[\]/, '趋势缺数据必须空态而非抛错')
+  assert.match(text, /:label="t\('app\.notification\.keysUsage\.colTool'\)"/)
+})
+
+test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断开 / 全局开关', () => {
   const text = code('src/views/settings/McpSessionsCard.vue')
   assert.match(text, /request\.get<McpSessionsResponse>\(`\/security\/mcp-sessions\$\{query\}`\)/)
   assert.match(text, /isAdmin\.value \? '' : '\?mine=1'/, '管理员无参数=全平台；非管理员 mine=1')
@@ -67,28 +96,10 @@ test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断�
   assert.match(text, /v-if="isAdmin" :label="t\('app\.notification\.deliveries\.colAction'\)"/)
   const dialogBlock = text.slice(text.indexOf('const disconnect ='), text.indexOf('defineExpose'))
   assert.match(dialogBlock, /ElMessageBox\.confirm/, '强制断开必须先确认')
-})
-
-test('MCP 接入卡：端点/认证示例/playbook/管理员全局开关', () => {
-  const text = code('src/views/settings/McpAccessCard.vue')
-  assert.match(text, /new URL\('\/api\/v1\/mcp', window\.location\.origin\)/)
-  assert.match(text, /X-API-Key: <YOUR_API_KEY>/, '认证示例必须携带 X-API-Key 头')
-  assert.match(text, /request\.get<Blob>\('\/mcp\/ops-playbook', \{ responseType: 'blob' \}\)/)
-  // 全局开关：管理员限定 + 最小 PUT（只动 mcp_enabled）
-  assert.match(text, /v-if="isAdmin"/, '全局开关必须管理员限定')
-  const toggleBlock = text.slice(text.indexOf('const toggleMcp'), text.indexOf('const playbookDownloading'))
+  // 全局开关（原接入卡唯一新有价值项）：管理员限定 + 最小 PUT + 停用提示
+  assert.match(text, /v-model="mcpEnabled"/)
+  const toggleBlock = text.slice(text.indexOf('const toggleMcp'), text.indexOf('const disconnect ='))
   assert.match(toggleBlock, /request\.put\('\/notification\/settings', \{ mcp_enabled: on \}\)/, '开关写入必须最小 PUT')
-  // 统计卡三指标
-  for (const key of ['statTodayCalls', 'statActiveSessions', 'statErrorRate']) {
-    assert.match(text, new RegExp(`t\\('app\\.notification\\.keysAccess\\.${key}'\\)`))
-  }
-})
-
-test('调用统计卡：TOP 工具表+趋势投影（无数据空态）', () => {
-  const text = code('src/views/settings/McpUsageCard.vue')
-  assert.match(text, /defineProps<\{ stats: McpStats \| null \}>\(\)/)
-  assert.match(text, /stats\.top_tools/)
-  assert.match(text, /props\.stats\?\.trend \?\? \[\]/, '趋势缺数据必须空态而非抛错')
-  assert.match(text, /:label="t\('app\.notification\.keysUsage\.colTool'\)"/)
-  assert.match(text, /:label="t\('app\.notification\.keysUsage\.colCalls'\)"/)
+  assert.match(text, /v-if="!mcpEnabled"[^>]*class="mcp-disabled-note"/, '全局停用必须带提示语')
+  assert.match(text, /t\('app\.notification\.keysSessions\.mcpDisabledNote'\)/)
 })

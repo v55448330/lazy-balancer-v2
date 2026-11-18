@@ -137,9 +137,35 @@
             v-model="wizardForm.targetValue"
             :placeholder="t('app.notification.channels.targetEmailPlaceholder')"
           />
-          <el-input v-else v-model="wizardForm.targetValue" :placeholder="t('app.notification.channels.targetWxPlaceholder')" />
+          <el-input
+            v-else-if="wizardForm.type === 'wx_clawbot'"
+            v-model="wizardForm.targetValue"
+            :placeholder="t('app.notification.channels.targetWxPlaceholder')"
+          />
         </el-form-item>
-        <div class="info-note-bar"><span class="info-note-desc">{{ targetHint(wizardForm.type) }}</span></div>
+        <!-- QQ 扫码绑定闭环：生成绑定码 → 扫码加好友 → 发「绑定 码」→ 轮询回填 openid -->
+        <template v-if="wizardForm.type === 'qq'">
+          <div class="info-note-bar"><span class="info-note-desc">{{ targetHint('qq') }}</span></div>
+          <div v-if="!qqBind.code && !qqBind.bound" class="qq-bind-actions">
+            <el-button type="primary" :loading="qqBind.loading" @click="generateQQBindCode">
+              {{ t('app.notification.channels.qqBindGenerate') }}
+            </el-button>
+          </div>
+          <div v-else-if="qqBind.code && !qqBind.bound" class="qq-bind-panel">
+            <div class="qq-bind-code"><code>{{ qqBind.code }}</code></div>
+            <div class="qq-bind-steps">
+              <div>1. {{ t('app.notification.channels.qqBindStepScan') }}</div>
+              <div>2. {{ t('app.notification.channels.qqBindStepSend', { code: qqBind.code }) }}</div>
+              <div>3. {{ t('app.notification.channels.qqBindStepWait') }}</div>
+            </div>
+            <el-button size="small" @click="generateQQBindCode">{{ t('app.notification.channels.qqBindRegenerate') }}</el-button>
+          </div>
+          <div v-else class="qq-bind-bound">
+            <el-tag type="success">{{ t('app.notification.channels.qqBoundTag') }}</el-tag>
+            <code class="qq-bind-openid">{{ qqBind.openid }}</code>
+          </div>
+        </template>
+        <div v-else class="info-note-bar"><span class="info-note-desc">{{ targetHint(wizardForm.type) }}</span></div>
       </el-form>
 
       <el-descriptions v-else :column="1" size="small" border :title="t('app.notification.channels.confirmSummary')">
@@ -337,12 +363,66 @@ const openWizard = (): void => {
 const resetWizard = (): void => {
   wizardStep.value = 0
   wizardForm.value = { type: 'webhook', name: '', targetValue: '' }
+  if (qqBind.value.timer !== null) {
+    window.clearInterval(qqBind.value.timer)
+    qqBind.value.timer = null
+  }
+  qqBind.value = { code: '', openid: '', bound: false, loading: false, timer: null }
 }
 
 const closeWizard = (): void => { wizardVisible.value = false }
 
+// QQ 扫码绑定状态（向导内闭环：生成码→扫码发指令→轮询回填 openid）
+const qqBind = ref<{ code: string; openid: string; bound: boolean; loading: boolean; timer: number | null }>({
+  code: '', openid: '', bound: false, loading: false, timer: null,
+})
+
+const generateQQBindCode = async (): Promise<void> => {
+  if (qqBind.value.loading) return
+  qqBind.value.loading = true
+  try {
+    const res = await request.post<NotificationCreateChannelResponse & { data: { code: string } }>('/notification/qq/bind-code', {})
+    qqBind.value.code = res.data?.code ?? ''
+    startQQBindPolling()
+  } finally {
+    qqBind.value.loading = false
+  }
+}
+
+const startQQBindPolling = (): void => {
+  if (qqBind.value.timer !== null) return
+  const timer = window.setInterval(async () => {
+    try {
+      const res = await request.get<NotificationCreateChannelResponse & { data: { bound: boolean; openid: string; has_code: boolean } }>('/notification/qq/bind-code')
+      const data = res.data
+      if (data?.bound) {
+        qqBind.value.bound = true
+        qqBind.value.openid = data.openid
+        wizardForm.value.targetValue = data.openid
+        if (qqBind.value.timer !== null) {
+          window.clearInterval(qqBind.value.timer)
+          qqBind.value.timer = null
+        }
+      }
+    } catch {
+      // 轮询失败保持等待；超时（10 分钟）由 expires_at 提示重新生成
+    }
+  }, 3000)
+  qqBind.value.timer = timer
+  window.setTimeout(() => {
+    if (qqBind.value.timer === timer && !qqBind.value.bound) {
+      window.clearInterval(timer)
+      qqBind.value.timer = null
+    }
+  }, 10 * 60 * 1000)
+}
+
 const canAdvance = computed(() => {
   if (wizardStep.value === 0) return true
+  if (wizardForm.value.type === 'qq') {
+    // QQ：openid 由扫码绑定自动回填，手填通道已退役
+    return wizardForm.value.name.trim() !== '' && qqBind.value.bound && wizardForm.value.targetValue.trim() !== ''
+  }
   // 目标步：名称与目标值都必填（后端对目标按类型做最小契约校验）
   return wizardForm.value.name.trim() !== '' && wizardForm.value.targetValue.trim() !== ''
 })

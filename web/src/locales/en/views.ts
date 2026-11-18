@@ -583,6 +583,7 @@ export default {
     'scopeNodeService': 'Service control (start/stop/restart Caddy, restart app)',
     'scopeNodeSite': 'Node site coordinates config',
     'scopeNotifyChannelCrud': 'Notification channel create/edit/delete/test',
+    'scopeNotifyQQBind': 'QQ channel QR binding code generation',
     'scopeNotifyDeliveryResend': 'Delivery failure resend',
     'scopeNotifySettings': 'Notification system settings (SMTP/QQ/WeChat credentials & MCP global switch)',
     'scopeNotifySubs': 'Notification subscriptions & daily report settings (incl. manual trigger)',

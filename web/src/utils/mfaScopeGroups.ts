@@ -41,6 +41,6 @@ export const MFA_SCOPE_GROUPS: MfaScopeGroup[] = [
   },
   {
     title: t('common.app.views.mfa.scopeGroupNotify'),
-    items: [t('common.app.views.mfa.scopeNotifyChannelCrud'), t('common.app.views.mfa.scopeNotifySubs'), t('common.app.views.mfa.scopeNotifyDeliveryResend'), t('common.app.views.mfa.scopeNotifySettings'), t('common.app.views.mfa.scopeMcpSessionDisconnect')],
+    items: [t('common.app.views.mfa.scopeNotifyChannelCrud'), t('common.app.views.mfa.scopeNotifyQQBind'), t('common.app.views.mfa.scopeNotifySubs'), t('common.app.views.mfa.scopeNotifyDeliveryResend'), t('common.app.views.mfa.scopeNotifySettings'), t('common.app.views.mfa.scopeMcpSessionDisconnect')],
   },
 ]

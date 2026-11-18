@@ -583,6 +583,7 @@ export default {
     'scopeNodeService': '服务控制（启动/停止/重启 Caddy、重启应用）',
     'scopeNodeSite': '节点站点坐标配置',
     'scopeNotifyChannelCrud': '通知通道增删改/测试',
+    'scopeNotifyQQBind': 'QQ 通道扫码绑定码生成',
     'scopeNotifyDeliveryResend': '投递记录失败重发',
     'scopeNotifySettings': '通知系统设置（SMTP/QQ/微信凭据与 MCP 全局开关）',
     'scopeNotifySubs': '通知订阅与每日日报设置（含手动触发）',

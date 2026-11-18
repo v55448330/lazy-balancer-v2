@@ -124,9 +124,8 @@
 
     <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.title') }}</el-divider>
 
-    <McpAccessCard :stats="mcpStats" class="keys-mcp-block" />
+    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" class="keys-mcp-block" />
     <McpSessionsCard class="keys-mcp-block" />
-    <McpUsageCard v-if="isAdmin" :stats="mcpStats" class="keys-mcp-block" />
 
     <el-dialog
       v-model="mcpDocsVisible"
@@ -406,9 +405,8 @@ import type { McpStats, McpStatsResponse } from '@/types/notifications.ts'
 import { useI18n } from 'vue-i18n'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
-import McpAccessCard from './settings/McpAccessCard.vue'
 import McpSessionsCard from './settings/McpSessionsCard.vue'
-import McpUsageCard from './settings/McpUsageCard.vue'
+import AccessStatsCards from './settings/AccessStatsCards.vue'
 
 const { t } = useI18n()
 
@@ -421,7 +419,7 @@ interface CreateAPIKeyResponse {
 }
 
 const authStore = useAuthStore()
-// MCP 调用统计（管理员）：/notification/mcp/stats，接入卡与统计卡共享一次拉取
+// MCP 调用统计（管理员）：/notification/mcp/stats，统计卡单次拉取
 const mcpStats = ref<McpStats | null>(null)
 const fetchMcpStats = async (): Promise<void> => {
   if (!isAdmin.value) return
@@ -444,6 +442,20 @@ const keys = ref<readonly APIKey[]>([])
 const loading = ref(false)
 // 加载失败不得呈现为「暂无 API 密钥」——显性错误态 + 重试
 const loadError = ref(false)
+// API 密钥统计（与 MCP 统计卡并列同形态）：数据全部来自密钥列表现成字段
+// （总数/启用数/近 7 天活跃=last_used），不虚报调用计数
+const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+const apiKeyStats = computed(() => {
+  const activeThreshold = Date.now() - ACTIVE_WINDOW_MS
+  let enabled = 0
+  let active7d = 0
+  for (const key of keys.value) {
+    if (key.is_enabled) enabled += 1
+    const lastUsed = key.last_used ? new Date(key.last_used).getTime() : NaN
+    if (Number.isFinite(lastUsed) && lastUsed >= activeThreshold) active7d += 1
+  }
+  return { total: keys.value.length, enabled, active7d }
+})
 const creating = ref(false)
 const createDialogVisible = ref(false)
 const createNameError = ref('')
