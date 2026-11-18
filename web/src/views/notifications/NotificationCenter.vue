@@ -1,6 +1,5 @@
 <template>
   <div class="page">
-    <!-- 页头 -->
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
@@ -10,82 +9,73 @@
         <p class="page-desc">{{ t('app.notification.rules.pageDesc') }}</p>
       </div>
       <div class="header-actions">
-        <el-button @click="showChannelManage = true">
-          <el-icon><Setting /></el-icon>
-          {{ t('app.notification.rules.manageChannels') }}
-        </el-button>
-        <el-button v-if="isAdmin" @click="showSmtp = !showSmtp">
-          <el-icon><Message /></el-icon>
-          {{ t('app.notification.rules.smtpSettings') }}
-        </el-button>
-        <el-button type="primary" @click="showAddWizard = true">
-          <el-icon><Plus /></el-icon>
-          {{ t('app.notification.rules.addRule') }}
-        </el-button>
+        <el-button @click="showChannelManage = true">{{ t('app.notification.rules.manageChannels') }}</el-button>
+        <el-button v-if="isAdmin" @click="showSmtp = !showSmtp">{{ t('app.notification.rules.smtpSettings') }}</el-button>
+        <el-button type="primary" @click="showAddWizard = true">{{ t('app.notification.rules.addRule') }}</el-button>
       </div>
     </div>
 
-    <!-- 规则卡片（主交互区） -->
-    <div v-loading="loading" class="rules-list">
-      <div v-for="rule in rules" :key="rule.id"
-        class="rule-card" :class="{ 'rule-paused': !rule.enabled }">
-        <div class="rule-card-head">
-          <div class="rule-icon" :class="rule.trigger === 'daily' ? 'rule-icon-daily' : 'rule-icon-event'">
-            <el-icon :size="20"><component :is="rule.trigger === 'daily' ? Calendar : Bell" /></el-icon>
-          </div>
-          <div class="rule-title-area">
-            <div class="rule-title">{{ rule.title }}</div>
-            <div class="rule-trigger-desc">
-              <template v-if="rule.trigger === 'daily'">
-                {{ t('app.notification.rules.everyDay') }} {{ rule.send_time }}
-                <span v-if="rule.items?.length" class="rule-items">· {{ rule.items.map(i => itemLabel(i)).join(' / ') }}</span>
-              </template>
-              <template v-else>
-                {{ rule.events?.length || 0 }} {{ t('app.notification.rules.events') }}
-                <span v-if="rule.min_level" class="rule-level">≥ {{ rule.min_level }}</span>
-              </template>
+    <!-- 规则列表：el-card 网格（系统统一直角+shadow=never） -->
+    <el-row v-loading="loading" :gutter="16">
+      <el-col v-for="rule in rules" :key="rule.id" :xs="24" :md="12" :xl="8">
+        <el-card shadow="never" class="rule-el-card" :class="{ 'is-paused': !rule.enabled }">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon">
+                  <component :is="rule.trigger === 'daily' ? Calendar : Bell" />
+                </el-icon>
+                <span>{{ rule.title }}</span>
+              </div>
+              <el-switch v-model="rule.enabled" size="small" @change="toggleRule(rule)" />
             </div>
+          </template>
+          <div class="rule-desc">
+            <template v-if="rule.trigger === 'daily'">
+              {{ t('app.notification.rules.everyDay') }} {{ rule.send_time }}
+            </template>
+            <template v-else>
+              {{ rule.events?.length || 0 }} {{ t('app.notification.rules.events') }}
+              <span v-if="rule.min_level" class="rule-level">≥{{ rule.min_level }}</span>
+            </template>
           </div>
-          <el-switch v-model="rule.enabled" size="small" @change="toggleRule(rule)" />
-        </div>
+          <div v-if="rule.trigger === 'daily' && rule.items?.length" class="rule-items">
+            {{ rule.items.map(i => itemLabel(i)).join(' / ') }}
+          </div>
+          <div class="rule-channels">
+            <el-tag v-for="ch in rule.channels" :key="ch.id" size="small" effect="plain" class="rule-ch-tag">
+              {{ ch.name }}
+            </el-tag>
+            <span v-if="!rule.channels?.length" class="rule-no-ch">{{ t('app.notification.rules.noChannels') }}</span>
+          </div>
+          <div v-if="rule.body_template" class="rule-tpl">
+            <code>{{ rule.body_template.slice(0, 60) }}{{ rule.body_template.length > 60 ? '…' : '' }}</code>
+          </div>
+          <div class="rule-ops">
+            <el-button size="small" text type="primary" @click="editRule(rule)">{{ t('app.notification.rules.edit') }}</el-button>
+            <el-button v-if="rule.trigger === 'event'" size="small" text type="primary" @click="testRule(rule)">{{ t('app.notification.rules.test') }}</el-button>
+            <el-button v-if="rule.trigger === 'daily'" size="small" text type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+    <el-empty v-if="!loading && rules.length === 0" :description="t('app.notification.rules.emptyText')" :image-size="80" />
 
-        <div class="rule-channels">
-          <span class="rule-channels-label">{{ t('app.notification.rules.sendTo') }}</span>
-          <el-tag v-for="ch in rule.channels" :key="ch.id" size="small" effect="plain">
-            {{ ch.name }}（{{ ch.type }}）
-          </el-tag>
-          <span v-if="!rule.channels?.length" class="rule-no-channels">{{ t('app.notification.rules.noChannels') }}</span>
-        </div>
-
-        <div v-if="rule.body_template" class="rule-template">
-          <span class="rule-template-label">{{ t('app.notification.rules.customTemplate') }}</span>
-          <code class="rule-template-preview">{{ rule.body_template.slice(0, 80) }}{{ rule.body_template.length > 80 ? '…' : '' }}</code>
-        </div>
-
-        <div class="rule-actions">
-          <el-button size="small" text type="primary" @click="editRule(rule)">{{ t('app.notification.rules.edit') }}</el-button>
-          <el-button v-if="rule.trigger === 'event'" size="small" text type="primary" @click="testRule(rule)">{{ t('app.notification.rules.test') }}</el-button>
-          <el-button v-if="rule.trigger === 'daily'" size="small" text type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
-        </div>
-      </div>
-      <el-empty v-if="!loading && rules.length === 0" :description="t('app.notification.rules.emptyText')" :image-size="80" />
-    </div>
-
-    <!-- SMTP 设置（管理员，内联折叠） -->
+    <!-- SMTP 设置 -->
     <template v-if="isAdmin && showSmtp">
       <el-divider content-position="left">{{ t('app.notification.rules.smtpSettings') }}</el-divider>
       <SystemCredentials />
     </template>
 
-    <!-- 最近投递 -->
+    <!-- 投递记录 -->
     <el-divider content-position="left">{{ t('app.notification.rules.recentDeliveries') }}</el-divider>
     <DeliveryLog />
 
-    <!-- 编辑抽屉 -->
+    <!-- 编辑抽屉（系统统一直角） -->
     <el-drawer v-model="showEditDrawer" size="500px" :title="t('app.notification.rules.editRule')">
       <el-form v-if="editingRule" :label-width="$flw('90px')" :disabled="savingRule">
         <el-form-item :label="t('app.notification.rules.trigger')">
-          <span class="form-muted">{{ editingRule.title }}</span>
+          <span>{{ editingRule.title }}</span>
         </el-form-item>
         <el-form-item v-if="editingRule.trigger === 'event'" :label="t('app.notification.rules.minLevel')">
           <el-radio-group v-model="editingRule.min_level">
@@ -103,13 +93,12 @@
           </el-checkbox-group>
         </el-form-item>
         <el-form-item :label="t('app.notification.rules.bodyTemplate')">
-          <el-input v-model="editingRule.body_template" type="textarea" :rows="4" class="mono"
+          <el-input v-model="editingRule.body_template" type="textarea" :rows="4"
             :placeholder="t('app.notification.rules.templatePlaceholder')" />
           <div class="ph-row">
-            <el-tag v-for="ph in templatePlaceholders" :key="ph" size="small" effect="plain" class="ph-tag"
+            <el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag"
               @click="editingRule.body_template += ph">{{ ph }}</el-tag>
           </div>
-          <div class="form-hint">{{ t('app.notification.rules.templateHint') }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -118,89 +107,67 @@
       </template>
     </el-drawer>
 
-    <!-- 通道管理抽屉（完整 ChannelCards 含 QR 绑定） -->
+    <!-- 通道管理（完整 ChannelCards 含 QR 绑定） -->
     <el-drawer v-model="showChannelManage" size="680px" :title="t('app.notification.rules.manageChannels')">
       <ChannelCards />
     </el-drawer>
 
     <!-- 添加规则向导 -->
     <el-dialog v-model="showAddWizard" :title="t('app.notification.rules.addRule')" width="560px" :close-on-click-modal="false">
-      <el-steps :active="wizardStep" align-center finish-status="success" class="wizard-steps">
+      <el-steps :active="wizardStep" align-center finish-status="success">
         <el-step :title="t('app.notification.rules.stepTrigger')" />
         <el-step :title="t('app.notification.rules.stepChannel')" />
         <el-step :title="t('app.notification.rules.stepTemplate')" />
       </el-steps>
-
-      <div v-if="wizardStep === 0" class="wizard-body">
-        <div class="wizard-option" :class="{ selected: wizardForm.trigger === 'event' }" @click="wizardForm.trigger = 'event'">
+      <div v-if="wizardStep === 0" class="wiz-body">
+        <div class="wiz-opt" :class="{ sel: wf.trigger === 'event' }" @click="wf.trigger = 'event'">
           <el-icon :size="22"><Bell /></el-icon>
-          <div>
-            <div class="wizard-option-title">{{ t('app.notification.rules.eventTrigger') }}</div>
-            <div class="wizard-option-desc">{{ t('app.notification.rules.eventTriggerDesc') }}</div>
-          </div>
+          <div><div class="wiz-t">{{ t('app.notification.rules.eventTrigger') }}</div><div class="wiz-d">{{ t('app.notification.rules.eventTriggerDesc') }}</div></div>
         </div>
-        <div class="wizard-option" :class="{ selected: wizardForm.trigger === 'daily' }" @click="wizardForm.trigger = 'daily'">
+        <div class="wiz-opt" :class="{ sel: wf.trigger === 'daily' }" @click="wf.trigger = 'daily'">
           <el-icon :size="22"><Calendar /></el-icon>
-          <div>
-            <div class="wizard-option-title">{{ t('app.notification.rules.dailyTrigger') }}</div>
-            <div class="wizard-option-desc">{{ t('app.notification.rules.dailyTriggerDesc') }}</div>
-          </div>
+          <div><div class="wiz-t">{{ t('app.notification.rules.dailyTrigger') }}</div><div class="wiz-d">{{ t('app.notification.rules.dailyTriggerDesc') }}</div></div>
         </div>
-        <template v-if="wizardForm.trigger === 'event'">
+        <template v-if="wf.trigger === 'event'">
           <el-divider />
-          <div class="wizard-event-groups">
-            <div v-for="group in eventGroups" :key="group.name"
-              class="wizard-event-group" :class="{ selected: wizardForm.group === group.name }"
-              @click="wizardForm.group = group.name">
-              <span>{{ group.name }}</span>
-              <span class="wizard-event-count">{{ group.events.length }}</span>
+          <div class="wiz-groups">
+            <div v-for="g in eventGroups" :key="g.name" class="wiz-grp" :class="{ sel: wf.group === g.name }" @click="wf.group = g.name">
+              <span>{{ g.name }}</span><span class="wiz-cnt">{{ g.events.length }}</span>
             </div>
           </div>
         </template>
       </div>
-
-      <div v-if="wizardStep === 1" class="wizard-body">
-        <div v-if="availableChannels.length === 0" class="wizard-no-channels">
+      <div v-if="wizardStep === 1" class="wiz-body">
+        <div v-if="availableChannels.length === 0" class="wiz-empty">
           <p>{{ t('app.notification.rules.needChannelFirst') }}</p>
           <el-button type="primary" @click="showChannelManage = true">{{ t('app.notification.rules.addChannel') }}</el-button>
         </div>
-        <div v-else class="wizard-channel-list">
-          <div v-for="ch in availableChannels" :key="ch.id"
-            class="wizard-channel-item" :class="{ selected: wizardForm.channelIds.includes(ch.id) }"
-            @click="toggleChannel(ch.id)">
-            <div>
-              <div>{{ ch.name }}</div>
-              <div class="wizard-channel-type">{{ ch.type }}</div>
-            </div>
-            <el-icon v-if="wizardForm.channelIds.includes(ch.id)" class="wizard-check"><CircleCheckFilled /></el-icon>
+        <div v-else class="wiz-chs">
+          <div v-for="ch in availableChannels" :key="ch.id" class="wiz-ch" :class="{ sel: wf.channelIds.includes(ch.id) }" @click="togCh(ch.id)">
+            <div><div>{{ ch.name }}</div><div class="wiz-ct">{{ ch.type }}</div></div>
+            <el-icon v-if="wf.channelIds.includes(ch.id)" class="wiz-ck"><CircleCheckFilled /></el-icon>
           </div>
         </div>
       </div>
-
-      <div v-if="wizardStep === 2" class="wizard-body">
+      <div v-if="wizardStep === 2" class="wiz-body">
         <el-form :label-width="$flw('90px')">
           <el-form-item :label="t('app.notification.rules.bodyTemplate')">
-            <el-input v-model="wizardForm.body_template" type="textarea" :rows="4" class="mono"
+            <el-input v-model="wf.body_template" type="textarea" :rows="4"
               :placeholder="t('app.notification.rules.templatePlaceholder')" />
             <div class="ph-row">
-              <el-tag v-for="ph in templatePlaceholders" :key="ph" size="small" effect="plain" class="ph-tag"
-                @click="wizardForm.body_template += ph">{{ ph }}</el-tag>
+              <el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag"
+                @click="wf.body_template += ph">{{ ph }}</el-tag>
             </div>
           </el-form-item>
           <el-form-item :label="t('app.notification.rules.preview')">
-            <pre class="wizard-preview">{{ renderPreview() }}</pre>
+            <pre class="wiz-prev">{{ renderPreview() }}</pre>
           </el-form-item>
         </el-form>
       </div>
-
       <template #footer>
         <el-button v-if="wizardStep > 0" @click="wizardStep--">{{ t('app.notification.rules.prev') }}</el-button>
-        <el-button v-if="wizardStep < 2" type="primary" :disabled="!canAdvanceWizard" @click="wizardStep++">
-          {{ t('app.notification.rules.next') }}
-        </el-button>
-        <el-button v-if="wizardStep === 2" type="primary" :loading="savingRule" @click="saveWizardRule">
-          {{ t('app.notification.rules.save') }}
-        </el-button>
+        <el-button v-if="wizardStep < 2" type="primary" :disabled="!canAdv" @click="wizardStep++">{{ t('app.notification.rules.next') }}</el-button>
+        <el-button v-if="wizardStep === 2" type="primary" :loading="savingRule" @click="saveWiz">{{ t('app.notification.rules.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -209,7 +176,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Bell, Calendar, CircleCheckFilled, Message, Plus, Setting } from '@element-plus/icons-vue'
+import { Bell, Calendar, CircleCheckFilled } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import DeliveryLog from './DeliveryLog.vue'
@@ -221,17 +188,13 @@ const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 interface RuleChannel { id: number; type: string; name: string }
-interface Rule {
-  id: string; trigger: string; title: string; events?: string[]; min_level?: string
-  send_time?: string; items?: string[]; formats?: Record<string, string>
-  channels: RuleChannel[]; body_template: string; enabled: boolean
-}
+interface Rule { id: string; trigger: string; title: string; events?: string[]; min_level?: string; send_time?: string; items?: string[]; formats?: Record<string,string>; channels: RuleChannel[]; body_template: string; enabled: boolean }
 
 const loading = ref(false)
 const rules = ref<Rule[]>([])
 const availableChannels = ref<RuleChannel[]>([])
 const dailyItems = ref<{ id: string; label: string }[]>([])
-const eventGroups = ref<{ name: string; events: { id: string; title: string }[] }[]>([])
+const eventGroups = ref<{ name: string; events: { id: string }[] }[]>([])
 const showSmtp = ref(false)
 const showEditDrawer = ref(false)
 const showAddWizard = ref(false)
@@ -239,162 +202,108 @@ const showChannelManage = ref(false)
 const editingRule = ref<Rule | null>(null)
 const savingRule = ref(false)
 const wizardStep = ref(0)
-const wizardForm = ref({ trigger: 'event', group: '', channelIds: [] as number[], body_template: '' })
-const templatePlaceholders = ['{{title}}', '{{body}}', '{{level}}', '{{time}}']
+const wf = ref({ trigger: 'event', group: '', channelIds: [] as number[], body_template: '' })
+const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}']
 
-const canAdvanceWizard = computed(() => {
-  if (wizardStep.value === 0) return wizardForm.value.trigger === 'daily' || wizardForm.value.group !== ''
-  if (wizardStep.value === 1) return wizardForm.value.channelIds.length > 0
+const canAdv = computed(() => {
+  if (wizardStep.value === 0) return wf.value.trigger === 'daily' || wf.value.group !== ''
+  if (wizardStep.value === 1) return wf.value.channelIds.length > 0
   return true
 })
-
 const itemLabel = (id: string): string => dailyItems.value.find(d => d.id === id)?.label ?? id
 
 const fetchRules = async (): Promise<void> => {
   loading.value = true
   try {
-    const res = await request.get<{ code: number; data?: {
-      rules: Rule[]; channels: RuleChannel[];
-      catalog: { id: string; title: string; group: string }[];
-      daily_items?: { id: string; label: string }[]
-    } }>('/notification/rules')
+    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels: RuleChannel[]; catalog: { id: string; group: string }[]; daily_items?: { id: string; label: string }[] } }>('/notification/rules')
     rules.value = res.data?.rules ?? []
     availableChannels.value = res.data?.channels ?? []
     dailyItems.value = res.data?.daily_items ?? []
-    const groups: Record<string, Array<{ id: string; title: string }>> = {}
-    for (const e of res.data?.catalog ?? []) {
-      if (!groups[e.group]) groups[e.group] = []
-      groups[e.group].push({ id: e.id, title: e.title })
-    }
-    eventGroups.value = Object.entries(groups).map(([name, events]) => ({ name, events }))
-  } catch (e) { console.error(e) }
-  finally { loading.value = false }
+    const gr: Record<string, Array<{ id: string }>> = {}
+    for (const e of res.data?.catalog ?? []) { if (!gr[e.group]) gr[e.group] = []; gr[e.group].push({ id: e.id }) }
+    eventGroups.value = Object.entries(gr).map(([name, events]) => ({ name, events }))
+  } catch (e) { console.error(e) } finally { loading.value = false }
 }
 
 const toggleRule = async (rule: Rule): Promise<void> => {
   savingRule.value = true
-  try {
-    await request.post(`/notification/rules/${rule.id}`, { enabled: rule.enabled, min_level: rule.min_level, body_template: rule.body_template })
-  } catch { rule.enabled = !rule.enabled }
+  try { await request.post(`/notification/rules/${rule.id}`, { enabled: rule.enabled, min_level: rule.min_level, body_template: rule.body_template }) }
+  catch { rule.enabled = !rule.enabled }
   finally { savingRule.value = false }
 }
 
-const editRule = (rule: Rule): void => { editingRule.value = { ...rule }; showEditDrawer.value = true }
+const editRule = (r: Rule): void => { editingRule.value = { ...r }; showEditDrawer.value = true }
 
 const saveRule = async (): Promise<void> => {
   if (!editingRule.value || savingRule.value) return
   savingRule.value = true
   try {
-    await request.post(`/notification/rules/${editingRule.value.id}`, {
-      enabled: editingRule.value.enabled, min_level: editingRule.value.min_level,
-      body_template: editingRule.value.body_template, send_time: editingRule.value.send_time,
-      items: editingRule.value.items, formats: editingRule.value.formats,
-    })
+    await request.post(`/notification/rules/${editingRule.value.id}`, { enabled: editingRule.value.enabled, min_level: editingRule.value.min_level, body_template: editingRule.value.body_template, send_time: editingRule.value.send_time, items: editingRule.value.items })
     mfaAwareSuccess(t('app.notification.rules.saved'))
-    showEditDrawer.value = false
-    await fetchRules()
-  } catch (e) { console.error(e) }
-  finally { savingRule.value = false }
+    showEditDrawer.value = false; await fetchRules()
+  } catch (e) { console.error(e) } finally { savingRule.value = false }
 }
 
 const testRule = async (rule: Rule): Promise<void> => {
-  for (const ch of rule.channels) {
-    try { await request.post(`/notification/channels/${ch.id}/test`) } catch { /* */ }
-  }
+  for (const ch of rule.channels) { try { await request.post(`/notification/channels/${ch.id}/test`) } catch { /* */ } }
   mfaAwareSuccess(t('app.notification.rules.testSent'))
 }
 
 const previewDaily = async (): Promise<void> => {
-  try {
-    const res = await request.post<{ code: number; data?: { content: string } }>('/notification/daily/preview', { format: 'markdown' })
-    if (res.data?.content) window.open('', '_blank')?.document.write(`<pre>${res.data.content}</pre>`)
-  } catch { /* */ }
+  try { const res = await request.post<{ data?: { content: string } }>('/notification/daily/preview', { format: 'markdown' }); if (res.data?.content) window.open('', '_blank')?.document.write(`<pre>${res.data.content}</pre>`) } catch { /* */ }
 }
 
-const toggleChannel = (id: number): void => {
-  const idx = wizardForm.value.channelIds.indexOf(id)
-  if (idx >= 0) wizardForm.value.channelIds.splice(idx, 1)
-  else wizardForm.value.channelIds.push(id)
-}
+const togCh = (id: number): void => { const i = wf.value.channelIds.indexOf(id); if (i >= 0) wf.value.channelIds.splice(i, 1); else wf.value.channelIds.push(id) }
+const renderPreview = (): string => (wf.value.body_template || '{{title}}\n{{body}}').replace(/\{\{title\}\}/g, '证书续签失败').replace(/\{\{body\}\}/g, '证书 3 天后过期').replace(/\{\{level\}\}/g, 'critical').replace(/\{\{time\}\}/g, '2026-11-18 09:00')
 
-const renderPreview = (): string => {
-  const tpl = wizardForm.value.body_template || '{{title}}\n{{body}}'
-  return tpl.replace(/\{\{title\}\}/g, '证书续签失败').replace(/\{\{body\}\}/g, '证书 3 天后过期')
-    .replace(/\{\{level\}\}/g, 'critical').replace(/\{\{time\}\}/g, '2026-11-18 09:00')
-}
-
-const saveWizardRule = async (): Promise<void> => {
+const saveWiz = async (): Promise<void> => {
   savingRule.value = true
   try {
-    const ruleId = wizardForm.value.trigger === 'daily' ? 'daily' : `group:${wizardForm.value.group}`
-    await request.post(`/notification/rules/${ruleId}`, {
-      enabled: true, min_level: 'warn', body_template: wizardForm.value.body_template,
-      send_time: wizardForm.value.trigger === 'daily' ? '09:00' : '',
-      items: wizardForm.value.trigger === 'daily' ? ['requests', 'blocked', 'attack_top'] : [],
-    })
+    const rid = wf.value.trigger === 'daily' ? 'daily' : `group:${wf.value.group}`
+    await request.post(`/notification/rules/${rid}`, { enabled: true, min_level: 'warn', body_template: wf.value.body_template, send_time: wf.value.trigger === 'daily' ? '09:00' : '', items: wf.value.trigger === 'daily' ? ['requests', 'blocked', 'attack_top'] : [] })
     mfaAwareSuccess(t('app.notification.rules.saved'))
     showAddWizard.value = false; wizardStep.value = 0
-    wizardForm.value = { trigger: 'event', group: '', channelIds: [], body_template: '' }
+    wf.value = { trigger: 'event', group: '', channelIds: [], body_template: '' }
     await fetchRules()
-  } catch (e) { console.error(e) }
-  finally { savingRule.value = false }
+  } catch (e) { console.error(e) } finally { savingRule.value = false }
 }
 
 onMounted(() => { void fetchRules() })
 </script>
 
 <style scoped>
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-.page-title { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 600; margin: 0; }
-.title-icon { color: var(--el-color-primary); }
-.page-desc { font-size: 13px; color: #6b7280; margin: 4px 0 0; }
-.header-actions { display: flex; gap: 8px; }
+/* 系统 Dashboard 同构：card-header/card-title/title-icon 全局类复用 */
+.rule-el-card { margin-bottom: 16px; }
+.is-paused { opacity: 0.6; }
+.rule-desc { font-size: 13px; color: #6b7280; margin-bottom: 8px; }
+.rule-items { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+.rule-level { margin-left: 4px; font-weight: 600; color: #e67e22; }
+.rule-channels { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.rule-ch-tag { }
+.rule-no-ch { font-size: 12px; color: #e67e22; }
+.rule-tpl code { font-size: 11px; color: #374151; background: var(--el-fill-color-extra-light); padding: 2px 6px; }
+.rule-ops { display: flex; gap: 4px; justify-content: flex-end; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 6px; margin-top: 4px; }
 
-.rules-list { display: flex; flex-direction: column; gap: 12px; }
-.rule-card { border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 16px; background: var(--el-bg-color); transition: box-shadow 0.15s; }
-.rule-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-.rule-paused { opacity: 0.6; }
-.rule-card-head { display: flex; align-items: center; gap: 12px; }
-.rule-icon { width: 42px; height: 42px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex: none; }
-.rule-icon-event { background: #eff6ff; color: #3b82f6; }
-.rule-icon-daily { background: #f5f3ff; color: #8b5cf6; }
-.rule-title-area { flex: 1; min-width: 0; }
-.rule-title { font-size: 15px; font-weight: 600; color: #111827; }
-.rule-trigger-desc { font-size: 12px; color: #6b7280; margin-top: 2px; }
-.rule-level { margin-left: 6px; font-weight: 600; color: #e67e22; }
-.rule-items { color: #6b7280; }
-.rule-channels { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; padding-left: 54px; }
-.rule-channels-label { font-size: 12px; color: #6b7280; }
-.rule-no-channels { font-size: 12px; color: #e67e22; font-style: italic; }
-.rule-template { display: flex; align-items: baseline; gap: 8px; margin: 4px 0; padding-left: 54px; }
-.rule-template-label { font-size: 12px; color: #6b7280; }
-.rule-template-preview { font-size: 11px; color: #374151; background: var(--el-fill-color-extra-light); padding: 2px 6px; border-radius: 4px; }
-.rule-actions { display: flex; gap: 4px; justify-content: flex-end; margin-top: 6px; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; }
-
-.wizard-steps { margin-bottom: 20px; }
-.wizard-body { min-height: 200px; }
-.wizard-option { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 2px solid var(--el-border-color-lighter); border-radius: 10px; cursor: pointer; margin-bottom: 10px; transition: all 0.15s; color: #6b7280; }
-.wizard-option:hover { border-color: var(--el-color-primary-light-5); }
-.wizard-option.selected { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
-.wizard-option-title { font-size: 15px; font-weight: 600; color: #111827; }
-.wizard-option-desc { font-size: 12px; color: #6b7280; margin-top: 2px; }
-.wizard-event-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
-.wizard-event-group { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
-.wizard-event-group:hover { border-color: var(--el-color-primary-light-5); }
-.wizard-event-group.selected { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
-.wizard-event-count { margin-left: auto; font-size: 11px; color: #6b7280; background: var(--el-fill-color); border-radius: 4px; padding: 1px 6px; }
-.wizard-channel-list { display: flex; flex-direction: column; gap: 8px; }
-.wizard-channel-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 2px solid var(--el-border-color-lighter); border-radius: 10px; cursor: pointer; transition: all 0.15s; }
-.wizard-channel-item:hover { border-color: var(--el-color-primary-light-5); }
-.wizard-channel-item.selected { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
-.wizard-channel-type { font-size: 11px; color: #6b7280; }
-.wizard-check { margin-left: auto; color: var(--el-color-primary); }
-.wizard-no-channels { text-align: center; padding: 30px; }
-.wizard-preview { background: var(--el-fill-color-extra-light); border-radius: 6px; padding: 10px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; margin: 0; }
-
-.form-muted { color: #6b7280; }
-.form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
-.mono :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.wiz-body { min-height: 200px; }
+.wiz-opt { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--el-border-color); cursor: pointer; margin-bottom: 10px; color: #6b7280; }
+.wiz-opt:hover { border-color: var(--el-color-primary); }
+.wiz-opt.sel { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.wiz-t { font-size: 15px; font-weight: 600; color: #111827; }
+.wiz-d { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.wiz-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.wiz-grp { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--el-border-color); cursor: pointer; }
+.wiz-grp:hover { border-color: var(--el-color-primary); }
+.wiz-grp.sel { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.wiz-cnt { font-size: 11px; color: #6b7280; background: var(--el-fill-color); padding: 1px 6px; }
+.wiz-chs { display: flex; flex-direction: column; gap: 8px; }
+.wiz-ch { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--el-border-color); cursor: pointer; }
+.wiz-ch:hover { border-color: var(--el-color-primary); }
+.wiz-ch.sel { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.wiz-ct { font-size: 11px; color: #6b7280; }
+.wiz-ck { margin-left: auto; color: var(--el-color-primary); }
+.wiz-empty { text-align: center; padding: 30px; }
+.wiz-prev { background: var(--el-fill-color-extra-light); padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; }
 </style>

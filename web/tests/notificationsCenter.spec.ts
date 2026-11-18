@@ -48,7 +48,7 @@ test('通知页规则模式投影：规则列表+向导+最近投递', () => {
   assert.match(text, /request\.get<[^>]*>\('\/notification\/rules'\)/, '必须消费规则聚合端点')
   assert.match(text, /request\.post\(`\/notification\/rules\/\$\{[^}]*\}`/, '必须支持规则更新')
   // 规则卡片（非 tabs/table）
-  assert.match(text, /class="rule-card"/, '规则卡片形态必须在位')
+  assert.match(text, /rule-el-card/, '规则卡片形态必须在位')
   assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, '通知中心不得回潮 tabs')
   // 向导（三步）
   assert.match(text, /wizardStep/, '添加规则向导必须在位')
