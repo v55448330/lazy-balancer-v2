@@ -152,11 +152,13 @@
         <el-form :label-width="$flw('110px')" :disabled="saving">
           <template v-if="drawerForm.type === 'webhook'">
             <el-form-item :label="t('app.notification.channels.styleMethod')">
-              <el-radio-group v-model="styleForm.method" size="small">
-                <el-radio-button value="POST">POST</el-radio-button>
-                <el-radio-button value="GET">GET</el-radio-button>
-              </el-radio-group>
-              <div class="form-hint">{{ t('app.notification.channels.styleMethodHint') }}</div>
+              <div class="field-col">
+                <el-radio-group v-model="styleForm.method" size="small">
+                  <el-radio-button value="POST">POST</el-radio-button>
+                  <el-radio-button value="GET">GET</el-radio-button>
+                </el-radio-group>
+                <div class="form-hint">{{ t('app.notification.channels.styleMethodHint') }}</div>
+              </div>
             </el-form-item>
             <el-form-item :label="t('app.notification.channels.styleHeaders')" class="headers-form-item">
               <div class="header-rows">
@@ -746,6 +748,7 @@ defineExpose({ fetchChannels })
 .bind-receiver { word-break: break-all; color: #059669; }
 .bind-success-alert { margin-bottom: 8px; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
+.field-col { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 /* 自定义请求头：label 与右侧第一行输入框（无行时与添加按钮）垂直对齐 */
 .headers-form-item { align-items: flex-start; }
 .headers-form-item :deep(.el-form-item__label) { line-height: 24px; }

@@ -376,7 +376,7 @@
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
-              <el-checkbox-group v-model="dailyRule.items" size="small" @change="saveDailyItems(dailyRule)">
+              <el-checkbox-group v-model="dailyRule.items" size="small" class="daily-items" @change="saveDailyItems(dailyRule)">
                 <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
               </el-checkbox-group>
             </div>
@@ -1203,6 +1203,8 @@ onMounted(() => {
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
 .daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; line-height: 24px; }
+.daily-items { max-width: 640px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.daily-items :deep(.el-checkbox) { margin-right: 0; height: 24px; }
 .daily-value { font-size: 13px; font-weight: 600; color: #111827; }
 .daily-ch-select { flex: 1; min-width: 0; }
 .daily-ch-select :deep(.el-checkbox) { margin-right: 12px; margin-bottom: 6px; }

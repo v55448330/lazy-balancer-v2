@@ -182,12 +182,11 @@
       <el-table-column :label="t('common.app.views.keys.updatedAt')" width="170">
         <template #default="scope">{{ formatDate(scope.row.updated_at) || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="200">
+      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="120">
         <template #default="scope">
-          <div class="cell-tags">
-            <span v-if="scope.row.expires_at" class="cell-time">{{ formatDate(scope.row.expires_at) }}</span>
+          <el-tooltip :disabled="!scope.row.expires_at" :content="formatDate(scope.row.expires_at)" placement="top">
             <el-tag :type="expiryTag(asKey(scope.row)).type" size="small" effect="plain">{{ expiryTag(asKey(scope.row)).text }}</el-tag>
-          </div>
+          </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column :label="t('common.app.views.keys.lastUsed')" width="170">

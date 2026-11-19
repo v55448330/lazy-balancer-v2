@@ -451,7 +451,7 @@ func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error 
 		ContentTemplate string `json:"content_template"`
 	}
 	_ = json.Unmarshal([]byte(targetJSON), &styled)
-	return SendWxText(ctx, targetJSON, formatBotTextWithTemplate(styled.ContentTemplate, msg, time.Now()))
+	return SendWxText(ctx, targetJSON, renderBotMessage(styled.ContentTemplate, msg, time.Now(), "wx_clawbot"))
 }
 
 // Test 所属 bot 连接离线时返回明确错误；在线则发测试文本。

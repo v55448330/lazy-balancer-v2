@@ -54,10 +54,11 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 		body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
 	}
 	tlsEnabled, insecure := smtpTLSOptions()
-	// 日报渲染底座产出 HTML，须以 text/html 发送（否则客户端原样显示 HTML）；
-	// 事件邮件 body_format=html 时包裹品牌+时间版式。
-	htmlBody := cfg.BodyFormat == "html" || msg.EventType == EvtDailyReport
-	if htmlBody && msg.EventType != EvtDailyReport {
+	// 日报渲染底座产出 HTML，须 text/html；事件邮件缺省（无正文模板且非显式 text）
+	// 用内联样式 HTML 卡片（品牌+时间），与全站精美裁定同口径；显式 text 才纯文本。
+	defaultHTML := cfg.BodyTemplate == "" && cfg.BodyFormat != "text" && msg.EventType != EvtDailyReport
+	htmlBody := cfg.BodyFormat == "html" || msg.EventType == EvtDailyReport || defaultHTML
+	if htmlBody && msg.EventType != EvtDailyReport && cfg.BodyTemplate == "" {
 		body = wrapEmailHTML(subject, body, ts)
 	}
 	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, htmlBody, tlsEnabled, insecure)

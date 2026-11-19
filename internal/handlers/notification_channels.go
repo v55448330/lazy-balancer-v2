@@ -404,9 +404,9 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
-	var typ, target, name string
+	var typ, target, name, style string
 	var owner int64
-	if err := db.DB.QueryRow(`SELECT user_id, type, target, name FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &target, &name); err != nil {
+	if err := db.DB.QueryRow(`SELECT user_id, type, target, name, COALESCE(style_config,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &target, &name, &style); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
 		return
 	}
@@ -416,7 +416,8 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	err := notify.TestChannel(ctx, typ, target)
+	// 测试与真实投递同口径：样式（method/headers/模板）合并进 target，否则 GET/自定义头不生效。
+	err := notify.TestChannel(ctx, typ, notify.MergeStyleIntoTarget(target, style))
 	ok := err == nil
 	_, _ = db.DB.Exec(`UPDATE notification_channels SET last_test_at=datetime('now'), last_test_ok=? WHERE id=?`, boolToInt(ok), id)
 	// 通道测试留痕投递记录（用户裁定：所有外发消息含测试均可见）。

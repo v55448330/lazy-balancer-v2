@@ -45,6 +45,7 @@ export default {
         'sys.startup_abnormal': 'System startup abnormal',
         'sys.daily_report': 'Daily report',
         'notify.channel_down': 'Notification channel offline',
+        'channel.test': 'Channel test',
       },
       eventGroups: {
         '认证': 'Authentication',
@@ -56,8 +57,12 @@ export default {
       },
       dailyItems: {
         requests: 'Requests',
+        allowed: 'Allowed count',
+        logged: 'Logged count',
+        distinct_ips: 'Unique IPs',
         blocked: 'Blocked count',
         attack_top: 'Top attack rules',
+        top_ip: 'Top attack source',
         autoban: 'Auto-ban count',
         cert_status: 'Certificate status',
         cluster_status: 'Cluster status',

@@ -49,6 +49,7 @@ export default {
         'sys.startup_abnormal': '系统启动异常',
         'sys.daily_report': '每日日报',
         'notify.channel_down': '通知通道离线',
+        'channel.test': '通道测试',
       },
       // 事件分组多语言（键=后端 catalogGroup 中文分组名）
       eventGroups: {
@@ -62,8 +63,12 @@ export default {
       // 日报可定制项目多语言（键=后端 DailyItemIDs）
       dailyItems: {
         requests: '请求数',
+        allowed: '放行次数',
+        logged: '观察次数',
+        distinct_ips: '独立 IP 数',
         blocked: '拦截次数',
         attack_top: '攻击 TOP 规则',
+        top_ip: 'TOP 攻击源',
         autoban: '自动封禁次数',
         cert_status: '证书状态',
         cluster_status: '集群状态',

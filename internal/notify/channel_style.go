@@ -109,3 +109,25 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 	)
 	return r.Replace(tpl)
 }
+
+// defaultEventTemplate 事件消息缺省精美模板（通道未自定义 content_template 时
+// 的回退形态，与前端 defaultTplFor 同构）：QQ=markdown 富文本、微信=纯文本分隔线。
+// 日报不走此回退（渲染底座已含分节+署名）。
+func defaultEventTemplate(typ string) string {
+	switch typ {
+	case "qq":
+		return "# {{title}}\n\n> {{body}}\n\n**级别**：{{level}}　**事件**：{{event}}\n**时间**：{{time}}\n\n> {{brand}}"
+	case "wx_clawbot":
+		return "【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}} | 事件：{{event}}\n时间：{{time}}\n—— {{brand}}"
+	}
+	return ""
+}
+
+// renderBotMessage 机器人消息渲染：自定义模板优先；缺省且非日报=通道默认精美
+// 模板；日报/无模板回退 formatBotText（标题+正文+署名）。
+func renderBotMessage(tpl string, msg Message, ts time.Time, typ string) string {
+	if strings.TrimSpace(tpl) == "" && msg.EventType != EvtDailyReport {
+		tpl = defaultEventTemplate(typ)
+	}
+	return formatBotTextWithTemplate(tpl, msg, ts)
+}

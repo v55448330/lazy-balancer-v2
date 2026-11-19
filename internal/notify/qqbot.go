@@ -158,11 +158,12 @@ func (qqSender) Send(ctx context.Context, targetJSON string, msg Message) error 
 		ContentTemplate string `json:"content_template"`
 	}
 	_ = json.Unmarshal([]byte(targetJSON), &styled) // 样式键缺失/坏 JSON=文本默认
-	text := formatBotTextWithTemplate(styled.ContentTemplate, msg, time.Now())
-	if styled.MsgType == "markdown" {
-		return SendQQC2CMarkdown(ctx, targetJSON, text)
+	text := renderBotMessage(styled.ContentTemplate, msg, time.Now(), "qq")
+	// QQ 官方支持 markdown（msg_type=2）；缺省即 markdown 富文本，显式 text 才纯文本。
+	if styled.MsgType == "text" {
+		return SendQQC2C(ctx, targetJSON, text)
 	}
-	return SendQQC2C(ctx, targetJSON, text)
+	return SendQQC2CMarkdown(ctx, targetJSON, text)
 }
 
 // Test 所属 bot 连接离线时返回明确错误（面板「测试」按钮的语义：连接不在位即不可发）。
