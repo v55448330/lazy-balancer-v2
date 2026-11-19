@@ -161,9 +161,10 @@ func applyWxHeaders(req *http.Request, token string) {
 type wxSender struct{}
 
 func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error {
-	// 停止语义（用户裁定，同 QQ）：连接任务未运行=机器人服务不在位，出站
-	// 投递直接失败（落 failed+原因）。iLink 仅文本，无 markdown 形态。
-	if connected, lastErr, _ := WxLinkStatus(); !connected {
+	// 任务即服务（用户裁定，同 QQ）：出站闸门=引擎真实运行态（IsRunning），
+	// 停止常驻任务=无法处理发送。iLink 仅文本，无 markdown 形态。
+	connected, lastErr, _ := WxLinkStatus()
+	if !botServiceRunning("wx-bot-connection", connected) {
 		if lastErr != "" {
 			return fmt.Errorf("微信机器人服务未运行: %s", lastErr)
 		}
@@ -179,7 +180,7 @@ func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error 
 // Test 连接离线时返回明确错误；在线则发测试文本。
 func (wxSender) Test(ctx context.Context, targetJSON string) error {
 	connected, lastErr, _ := WxLinkStatus()
-	if !connected {
+	if !botServiceRunning("wx-bot-connection", connected) {
 		if lastErr != "" {
 			return fmt.Errorf("微信机器人连接离线: %s", lastErr)
 		}

@@ -255,6 +255,11 @@ func persistCaddyApplyBanner(text string) {
 	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：横幅持久化
 	// best-effort 运维可见性记账（脱敏后落库，失败仅 warn——「重启后真实失败
 	// 不可见」已点名），中止持久化无害。
+	// 写前复核 nil：后台 goroutine 可能与测试/重置并发置空 db.DB（上文
+	// Publish 可让出），防 TOCTOU nil 解引用；生产 db.DB 启动后不为 nil。
+	if db.DB == nil {
+		return
+	}
 	if _, derr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, visible); derr != nil {
 		services.Logf("warn", "caddy_apply_error_persist_failed: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", derr)
 	}

@@ -47,9 +47,11 @@ func QQLinkStatus() (bool, string, time.Time) {
 type qqSender struct{}
 
 func (qqSender) Send(ctx context.Context, targetJSON string, msg Message) error {
-	// 停止语义（用户裁定）：连接任务未运行=机器人服务不在位，出站投递直接
-	// 失败（落 failed+原因），不静默滞留 pending。连接在线态由连接 Daemon 维护。
-	if connected, lastErr, _ := QQLinkStatus(); !connected {
+	// 任务即服务（用户裁定）：出站发送闸门=统一任务引擎的真实运行态
+	// （IsRunning 探针），停止常驻任务=无法处理发送，直接失败不静默滞留。
+	// 链接态仅作未装配探针时的回退与 UI 展示，不作发送权威。
+	connected, lastErr, _ := QQLinkStatus()
+	if !botServiceRunning("qq-bot-connection", connected) {
 		if lastErr != "" {
 			return fmt.Errorf("QQ 机器人服务未运行: %s", lastErr)
 		}
@@ -70,7 +72,7 @@ func (qqSender) Send(ctx context.Context, targetJSON string, msg Message) error 
 // Test 连接离线时返回明确错误（面板「测试」按钮的语义：连接不在位即不可发）。
 func (qqSender) Test(ctx context.Context, targetJSON string) error {
 	connected, lastErr, _ := QQLinkStatus()
-	if !connected {
+	if !botServiceRunning("qq-bot-connection", connected) {
 		if lastErr != "" {
 			return fmt.Errorf("QQ 机器人连接离线: %s", lastErr)
 		}

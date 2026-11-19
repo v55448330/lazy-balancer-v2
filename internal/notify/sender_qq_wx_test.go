@@ -192,3 +192,23 @@ func TestWxConnectionStopClearsLinkAndBlocksSend(t *testing.T) {
 		t.Errorf("停止后出站 Send 应失败含「服务未运行」, got %v", err)
 	}
 }
+
+// 发送闸门权威=调度器运行态（用户裁定）：探针优先于链接标志。探针 false
+// 即使链接在线也拒发；探针 true 即使链接离线也放行过闸（后续凭据/目标校验
+// 另行 fail-loud，不属于「服务未运行」）。
+func TestBotSendGateUsesEngineRunningState(t *testing.T) {
+	newNotifyConnectorDB(t)
+	t.Cleanup(func() { SetTaskRunningProbe(nil) })
+	qqLink.set(true, "")
+	SetTaskRunningProbe(func(string) bool { return false })
+	err := qqSender{}.Send(context.Background(), `{"openid":"o1"}`, Message{Title: "t"})
+	if err == nil || !strings.Contains(err.Error(), "服务未运行") {
+		t.Errorf("探针 false（任务停止）即使链接在线也应拒发, got %v", err)
+	}
+	qqLink.set(false, "")
+	SetTaskRunningProbe(func(string) bool { return true })
+	err = qqSender{}.Send(context.Background(), `{"openid":"o1"}`, Message{Title: "t"})
+	if err != nil && strings.Contains(err.Error(), "服务未运行") {
+		t.Errorf("探针 true（任务运行）不应以「服务未运行」拒发, got %v", err)
+	}
+}

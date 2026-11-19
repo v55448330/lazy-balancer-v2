@@ -1017,6 +1017,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// StartLoop 副作用（启动记录/首轮执行）之前跳过；否则先启动再 StopLoop
 	// 会留下假启动记录并可能实际跑一轮。
 	registerNotificationTasks(te)
+	// 任务即服务：通知出站发送闸门注入调度器真实运行态（engine.IsRunning），
+	// 停止连接任务=发送直接失败；notify 不反向依赖 services，经探针倒置。
+	notify.SetTaskRunningProbe(te.IsRunning)
 	taskLoopPrefs := loadTaskLoopPrefs()
 	// 装配期服务屏障：部署面常驻任务（cert-issuance）的 Run 体起步即真实接管
 	// 服务（cert-issuance → StartACME → CA 队列/证书部署重试 → Caddy /load），

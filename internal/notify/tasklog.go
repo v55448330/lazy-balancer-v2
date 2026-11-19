@@ -43,3 +43,20 @@ func taskLogWarn(ctx context.Context, stage, format string, args ...any) {
 	}
 	log.Printf("WARN: "+format, args...)
 }
+
+// taskRunningProbe 调度器真实运行态探针（依赖倒置：services 装配时注入
+// engine.IsRunning）。任务即服务——出站发送的唯一闸门是「常驻任务是否在
+// 运行」，由统一任务引擎裁定，而非任务自报心跳或 UI 链接标志。停止任务=
+// IsRunning false=发送直接失败。未注入（测试/未装配）回退链接在线态。
+var taskRunningProbe func(taskID string) bool
+
+// SetTaskRunningProbe 由 services.InitTaskEngine 注入 engine.IsRunning。
+func SetTaskRunningProbe(fn func(taskID string) bool) { taskRunningProbe = fn }
+
+// botServiceRunning 出站发送闸门：优先调度器运行态；未注入时回退链接态。
+func botServiceRunning(taskID string, linkConnected bool) bool {
+	if taskRunningProbe != nil {
+		return taskRunningProbe(taskID)
+	}
+	return linkConnected
+}
