@@ -65,6 +65,7 @@
         <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveSettings">
           {{ t('app.notification.creds.save') }}
         </el-button>
+        <div v-if="smtpDirty && !smtpTestOk" class="form-hint">{{ t('app.notification.creds.smtpSaveGateHint') }}</div>
       </el-form-item>
     </el-form>
   </el-card>
@@ -74,7 +75,7 @@
 // 邮件凭据（SMTP）：通知中心唯一保留的手工凭据面。QQ/微信凭据单源=
 // 扫码绑定自动落库（通道向导承载，本页不再展示）；MCP 全局开关归
 // MCP 会话卡（API 接入页）。
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Message } from '@element-plus/icons-vue'
@@ -104,6 +105,14 @@ const form = ref({
 // 服务端已配置布尔（GET 只回布尔不回明文），保存成功后重查刷新
 const smtpPassConfigured = ref(false)
 const smtpTesting = ref(false)
+const smtpTestOk = ref(false) // 当前表单配置已测试通过
+const smtpSavedSnapshot = ref('') // 已保存配置快照（不含 pass，GET 不回明文）
+const smtpSnapshot = (f: typeof form.value): string => JSON.stringify({
+  host: f.smtpHost.trim(), port: f.smtpPort, user: f.smtpUser, from: f.smtpFrom, tls: f.smtpTls, insecure: f.smtpInsecure,
+})
+// 变动=与已保存配置不同或输入新密码；变动后须重新测试通过才允许保存。
+const smtpDirty = computed(() => smtpSnapshot(form.value) !== smtpSavedSnapshot.value || form.value.smtpPass !== '')
+watch(form, () => { smtpTestOk.value = false }, { deep: true })
 let settingsRequestSeq = 0
 
 // SMTP 连通性测试：发送当前表单草稿（host/port/user/pass/from/tls/insecure），
@@ -125,6 +134,7 @@ const testSMTP = async (): Promise<void> => {
       }, { silent: true })
     if (res.code === 0 || res.code === 200) {
       mfaAwareSuccess(t('app.notification.creds.smtpTestOk'))
+      smtpTestOk.value = true
     } else {
       ElMessage.error(res.message || t('app.notification.creds.smtpTestFailed'))
     }
@@ -141,7 +151,7 @@ const portValid = computed(() => {
   return port === 0 || (Number.isInteger(port) && port >= 1 && port <= 65535)
 })
 
-const canSave = computed(() => portValid.value)
+const canSave = computed(() => portValid.value && (!smtpDirty.value || smtpTestOk.value))
 
 const fetchSettings = async (): Promise<void> => {
   const seq = ++settingsRequestSeq
@@ -161,6 +171,8 @@ const fetchSettings = async (): Promise<void> => {
       smtpInsecure: data?.smtp?.insecure === true,
     }
     smtpPassConfigured.value = data?.smtp?.pass_configured === true
+    smtpSavedSnapshot.value = smtpSnapshot(form.value)
+    smtpTestOk.value = false
     loadError.value = false
   } catch (error: unknown) {
     console.error('Failed to fetch notification settings:', error)

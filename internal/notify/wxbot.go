@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -940,8 +941,15 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 		return "", false, err
 	}
 	req.Header.Set("iLink-App-ClientVersion", "1")
-	resp, err := (&http.Client{Timeout: wxSendTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: wxLongPollTimeout}).Do(req)
 	if err != nil {
+		// get_qrcode_status 为长轮询（服务端挂起 ~35s）。客户端本地超时按协议
+		// 等价 wait 继续轮询，而非错误——旧 10s 短超时必超时→502 刷屏、扫码
+		// 确认无法检出（用户实测客户端网络错误/弹框久卡根因）。
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return "wait", false, nil
+		}
 		return "", false, fmt.Errorf("扫码状态轮询失败: %w", err)
 	}
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

@@ -288,7 +288,7 @@
         <div class="tpl-section-label">{{ t('app.notification.rules.sendTo') }}</div>
         <div class="rule-ch-select">
           <el-checkbox-group v-model="tplSelectedChannels">
-            <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small">
+            <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.last_test_ok !== true" :title="ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined">
               {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
             </el-checkbox>
           </el-checkbox-group>
@@ -384,7 +384,7 @@
               <span class="daily-label">{{ t('app.notification.daily.channelsLabel') }}</span>
               <div class="daily-ch-select">
                 <el-checkbox-group v-model="dailyChannelSelection" @change="saveDailyChannels(dailyRule)">
-                  <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small">
+                  <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.last_test_ok !== true" :title="ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined">
                     {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
                   </el-checkbox>
                 </el-checkbox-group>
@@ -468,7 +468,7 @@ const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 const activeTab = ref('overview')
 
-interface RuleChannel { id: number; type: string; name: string }
+interface RuleChannel { id: number; type: string; name: string; last_test_ok?: boolean }
 interface Rule {
   id: string; trigger: string; title: string; events?: string[]
   event_titles?: Record<string, string>; event_levels?: Record<string, string>; min_level?: string; send_time?: string
