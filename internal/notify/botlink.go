@@ -25,15 +25,7 @@ type botLinkState struct {
 }
 
 func (s *botLinkState) set(connected bool, err string) {
-	s.mu.Lock()
-	// 仅「在线→离线」沿触发掉线告警：重连期间的逐次失败不再重复发布
-	// （退避重连每分钟可产生多次事件，逐次发布会刷屏）。
-	transition := s.connected && !connected
-	s.connected = connected
-	s.lastChange = time.Now()
-	s.lastErr = err
-	s.mu.Unlock()
-	if transition {
+	if s.apply(connected, err) {
 		// 通道掉线自监控：经其它还活着的通道告警（Publish→delivery；
 		// 若投递通道同样依赖本连接，sender 会返回离线错误并留痕，不会死循环阻塞）。
 		Publish(Event{
@@ -41,6 +33,18 @@ func (s *botLinkState) set(connected bool, err string) {
 			Title: "通知通道离线", Body: err,
 		})
 	}
+}
+
+// apply 更新连接态并返回是否「在线→离线」沿（不发布告警）。重连期间逐次
+// 失败不重复发布（退避重连每分钟可多次事件，逐次发布会刷屏）。
+func (s *botLinkState) apply(connected bool, err string) bool {
+	s.mu.Lock()
+	transition := s.connected && !connected
+	s.connected = connected
+	s.lastChange = time.Now()
+	s.lastErr = err
+	s.mu.Unlock()
+	return transition
 }
 
 // botLinkRegistry per-bot 连接态登记表（多机器人入站会话各持其态）。
@@ -97,11 +101,13 @@ func (r *botLinkRegistry) status(botID string) (bool, string, time.Time) {
 	return s.connected, s.lastErr, s.lastChange
 }
 
-// stopAll 任务停止收尾：仅在线 bot 置离线（在线→离线沿触发一次掉线告警，
-// 与单 bot 时代停止语义等价）；已离线 bot 保留其具体 lastErr（如「登录态
-// 过期，需重新扫码」）供排障，不被泛化停止原因覆盖。计划内回收（凭据轮换/
-// 删通道）不经此路径——worker 退出不置离线，由 unregister 收口，无假告警。
-// 先快照再释锁——set 的掉线告警经 Publish→sender 可能回调 status，持锁会死锁。
+// stopAll 任务停止收尾：在线 bot 统一置离线，并**聚合发布一次**掉线告警
+// （而非每 bot 一次）。该事件默认订阅=全部启用通道，逐 bot 发布会使 N 个
+// 在线 bot × N 个订阅通道=每通道收 N 次（用户实测重启每通道收 2 次根因）。
+// 已离线 bot 保留其具体 lastErr（如「登录态过期，需重新扫码」）供排障，不被
+// 泛化停止原因覆盖。计划内回收（凭据轮换/删通道）不经此路径——worker 退出
+// 不置离线，由 unregister 收口，无假告警。先快照再释锁——Publish→sender 可能
+// 回调 status，持锁会死锁。
 func (r *botLinkRegistry) stopAll(err string) {
 	r.mu.Lock()
 	states := make([]*botLinkState, 0, len(r.links))
@@ -109,13 +115,22 @@ func (r *botLinkRegistry) stopAll(err string) {
 		states = append(states, s)
 	}
 	r.mu.Unlock()
+	anyDown := false
 	for _, s := range states {
 		s.mu.Lock()
 		online := s.connected
 		s.mu.Unlock()
-		if online {
-			s.set(false, err)
+		// 仅在线 bot 置离线：已离线 bot 保留其具体 lastErr（登录态过期等）
+		// 供排障，不被泛化停止原因覆盖。
+		if online && s.apply(false, err) {
+			anyDown = true
 		}
+	}
+	if anyDown {
+		Publish(Event{
+			Type: EvtNotifyChannelDown, Level: LevelWarn,
+			Title: "通知通道离线", Body: err,
+		})
 	}
 }
 

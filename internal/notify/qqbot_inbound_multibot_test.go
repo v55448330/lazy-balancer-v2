@@ -458,3 +458,47 @@ func TestQQInboundPinnedOnlyBot(t *testing.T) {
 		t.Error("停止后 pinned-only bot 应离线")
 	}
 }
+
+// 停机聚合回归（用户实测：重启时每机器人通道收 2 次「连接任务已停止」）：
+// 2 个在线 bot 清洁停止只发布**一次**通道离线事件（而非每 bot 一次），
+// 避免 N 在线 bot × N 订阅通道=每通道收 N 次。
+func TestQQStopAggregatesSingleChannelDown(t *testing.T) {
+	newNotifyConnectorDB(t)
+	setupQQPlatformMock(t)
+	ws := setupQQWSMock(t)
+	seedQQGlobalCred(t, "APP_A", "SEC_A")
+	if _, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target) VALUES (7, 'qq', 'botB', '{"openid":"oB","appid":"APP_B","secret":"SEC_B"}')`); err != nil {
+		t.Fatalf("播种第二 bot 通道失败: %v", err)
+	}
+	oldQueue := queue
+	queue = make(chan Event, 64)
+	t.Cleanup(func() { queue = oldQueue })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- RunQQBotConnection(ctx) }()
+	ws.waitReady(t, "APP_A", "APP_B")
+	waitLinkConnected(t, func() (bool, string, time.Time) { return QQLinkStatusFor("APP_A") }, true)
+	waitLinkConnected(t, func() (bool, string, time.Time) { return QQLinkStatusFor("APP_B") }, true)
+	drainNotifyEvents() // 建连期基线清空
+
+	cancel() // 两 bot 均在线时清洁停止
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("清洁停止 Run 应返回 nil, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("停止后 Run 未在时限内返回")
+	}
+	downs := 0
+	for _, e := range drainNotifyEvents() {
+		if e.Type == EvtNotifyChannelDown {
+			downs++
+		}
+	}
+	if downs != 1 {
+		t.Errorf("2 在线 bot 停机应聚合为一次通道离线告警, got %d", downs)
+	}
+}

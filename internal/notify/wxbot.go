@@ -173,6 +173,9 @@ func WxPinChannelTarget(targetJSON string) string {
 	if wxConfirmedPin != nil {
 		c := *wxConfirmedPin
 		pending = &c
+		// 钉住即消费：清除本次扫码凭据，防止下一个新通道弹框再自动回填
+		// 上一次扫码者的旧 id（用户实测"多次填旧 id"脏状态根因）。
+		wxConfirmedPin = nil
 	}
 	wxCtxMu.Unlock()
 	cred, ok := loadWxBotCred()
@@ -761,6 +764,8 @@ func WxQRLoginStart(ctx context.Context) (qrURL string, err error) {
 	}
 	wxCtxMu.Lock()
 	wxPendingQR = qr.Qrcode
+	// 新扫码会话丢弃旧的入站捕获，防新通道回填上一个会话的旧接收者。
+	wxPendingInbound = wxInboundCapture{}
 	wxCtxMu.Unlock()
 	return qr.QRImgContent, nil
 }

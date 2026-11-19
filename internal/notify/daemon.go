@@ -135,7 +135,11 @@ func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []de
 	sentAny := false
 	for _, ch := range channels {
 		chMsg := msg
-		chMsg.Title = msg.Title + "（" + ch.Type + "）"
+		chName := ch.Name
+		if chName == "" {
+			chName = ch.Type
+		}
+		chMsg.Title = msg.Title + "（" + chName + "）"
 		eventTpl := channelTpls[ch.ChannelID]
 		if eventTpl == "" {
 			eventTpl = subscriptionTemplateFor(userID, msg.EventType)

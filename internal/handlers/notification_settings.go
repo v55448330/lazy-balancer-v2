@@ -177,11 +177,23 @@ func (h *Handlers) TestSMTPSettings(c *gin.Context) {
 	}
 	var req struct {
 		TestTo string `json:"test_to"`
+		// 草稿（测试先于保存）：host 非空时用未保存配置测试，pass 空沿用已存。
+		Host     string `json:"host"`
+		Port     string `json:"port"`
+		User     string `json:"user"`
+		Pass     string `json:"pass"`
+		From     string `json:"from"`
+		TLS      bool   `json:"tls"`
+		Insecure bool   `json:"insecure"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	if err := notify.SmtpConnectivityTest(ctx, req.TestTo); err != nil {
+	var draft *notify.SMTPDraft
+	if req.Host != "" {
+		draft = &notify.SMTPDraft{Host: req.Host, Port: req.Port, User: req.User, Pass: req.Pass, From: req.From, TLS: req.TLS, Insecure: req.Insecure}
+	}
+	if err := notify.SmtpConnectivityTest(ctx, req.TestTo, draft); err != nil {
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_8e353bc9", err.Error()), MessageKey: "k_8e353bc9"})
 		return
 	}

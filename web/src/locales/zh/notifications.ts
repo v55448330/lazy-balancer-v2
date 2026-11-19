@@ -281,9 +281,9 @@ export default {
       },
       creds: {
         smtpTestTo: '测试收件人',
-        smtpTestToHint: '留空=仅握手与认证，不投递',
+        smtpTestToHint: '留空=发送测试邮件给自己',
         smtpTest: '发送测试',
-        smtpTestHint: '使用已保存的 SMTP 配置；改完请先保存再测试',
+        smtpTestHint: '可直接用当前填写的配置测试，无需先保存；密码留空沿用已保存密码',
         smtpTestOk: 'SMTP 测试通过',
         smtpTestFailed: 'SMTP 测试失败',
         smtpSection: 'SMTP 邮件',

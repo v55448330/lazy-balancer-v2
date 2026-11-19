@@ -274,9 +274,9 @@ export default {
       },
       creds: {
         smtpTestTo: 'Test recipient',
-        smtpTestToHint: 'Empty = handshake & auth only, no delivery',
+        smtpTestToHint: 'Empty = send the test email to yourself',
         smtpTest: 'Send test',
-        smtpTestHint: 'Uses the saved SMTP config; save before testing',
+        smtpTestHint: 'Test with the current form values without saving first; empty password reuses the saved one',
         smtpTestOk: 'SMTP test passed',
         smtpTestFailed: 'SMTP test failed',
         smtpSection: 'SMTP email',

@@ -17,6 +17,7 @@ import (
 	"mime"
 	"net"
 	"net/smtp"
+	"strings"
 	"time"
 )
 
@@ -51,7 +52,8 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	if cfg.BodyTemplate != "" {
 		body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
 	}
-	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, cfg.BodyFormat == "html")
+	tlsEnabled, insecure := smtpTLSOptions()
+	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, cfg.BodyFormat == "html", tlsEnabled, insecure)
 }
 
 func (s emailSender) Test(ctx context.Context, targetJSON string) error {
@@ -89,7 +91,7 @@ const (
 
 // sendSMTPMail 完成一次 SMTP 会话（隐式 TLS 于 465 端口；其余端口服务端
 // 宣告 STARTTLS 则升级；认证仅在服务端宣告 AUTH 且已配置用户名时进行）。
-func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject, body string, htmlBody bool) error {
+func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject, body string, htmlBody, tlsEnabled, insecure bool) error {
 	dialer := net.Dialer{Timeout: smtpDialTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
@@ -97,7 +99,7 @@ func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(smtpTotalTimeout))
-	tlsEnabled, insecure := smtpTLSOptions()
+	// TLS 由调用方传入（全局设置或测试草稿），不再内部读全局。
 	if tlsEnabled && port == "465" {
 		conn = tlsClient(conn, host, insecure)
 	}
@@ -114,8 +116,16 @@ func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject
 		}
 	}
 	if user != "" {
-		if ok, _ := c.Extension("AUTH"); ok {
-			if err := c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil {
+		if ok, mechs := c.Extension("AUTH"); ok {
+			// Office365/Outlook 仅宣告 LOGIN（PLAIN 报 504 5.7.4 Unrecognized
+			// authentication type）；按服务端宣告机制选 LOGIN/PLAIN。
+			var auth smtp.Auth
+			if strings.Contains(strings.ToUpper(mechs), "LOGIN") {
+				auth = loginAuth{user: user, pass: pass}
+			} else {
+				auth = smtp.PlainAuth("", user, pass, host)
+			}
+			if err := c.Auth(auth); err != nil {
 				return fmt.Errorf("SMTP 认证失败: %w", err)
 			}
 		}
@@ -165,20 +175,65 @@ func buildRFC822Message(from, to, subject, body string, htmlBody bool) []byte {
 	return b.Bytes()
 }
 
-// SmtpConnectivityTest SMTP 连通性测试：用当前全局凭据握手+AUTH（可选发信
-// 到 testTo 非空时的指定收件人——发一封标记邮件；空=仅握手不投递）。
-func SmtpConnectivityTest(ctx context.Context, testTo string) error {
+// SMTPDraft 未保存的 SMTP 配置草稿（测试先于保存：用户可先验证再保存，
+// 避免保存无效配置）。Pass 空=沿用已保存密码。
+type SMTPDraft struct {
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	User     string `json:"user"`
+	Pass     string `json:"pass"`
+	From     string `json:"from"`
+	TLS      bool   `json:"tls"`
+	Insecure bool   `json:"insecure"`
+}
+
+// SmtpConnectivityTest SMTP 连通性测试：draft 非空且 Host 非空用草稿（测试
+// 先于保存），否则用已保存全局凭据。testTo 空=发给自己（握手+投递验证）。
+func SmtpConnectivityTest(ctx context.Context, testTo string, draft *SMTPDraft) error {
 	host, port, user, pass, from, err := smtpSettings()
-	if err != nil {
+	tlsEnabled, insecure := smtpTLSOptions()
+	if draft != nil && draft.Host != "" {
+		host, port, user, from = draft.Host, draft.Port, draft.User, draft.From
+		if draft.Pass != "" {
+			pass = draft.Pass
+		}
+		tlsEnabled, insecure = draft.TLS, draft.Insecure
+		if port == "" {
+			port = "25"
+		}
+		if from == "" {
+			from = user
+		}
+		if host == "" || from == "" {
+			return errors.New("SMTP 草稿缺少服务器或发件人")
+		}
+	} else if err != nil {
 		return err
 	}
-	if testTo == "" {
-		// 仅握手：连不上/认证失败原样返回（连通性语义）
-		return sendSMTPMail(ctx, host, port, user, pass, from, from,
-			"Lazy Balancer SMTP 测试", "这是一封 SMTP 连通性测试邮件（系统凭据页触发）。", false)
+	to := testTo
+	if to == "" {
+		to = from
 	}
-	return sendSMTPMail(ctx, host, port, user, pass, from, testTo,
-		"Lazy Balancer SMTP 测试", "这是一封 SMTP 连通性测试邮件（系统凭据页触发）。", false)
+	return sendSMTPMail(ctx, host, port, user, pass, from, to,
+		"Lazy Balancer SMTP 测试", "这是一封 SMTP 连通性测试邮件（系统凭据页触发）。", false, tlsEnabled, insecure)
+}
+
+// loginAuth AUTH LOGIN（Office365/Outlook 等仅宣告 LOGIN 的服务器；net/smtp
+// 只内置 PLAIN/CRAMMD5）。c.Auth 负责 base64 编解码，Next 收解码后的提示。
+type loginAuth struct{ user, pass string }
+
+func (a loginAuth) Start(*smtp.ServerInfo) (string, []byte, error) { return "LOGIN", nil, nil }
+func (a loginAuth) Next(from []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch {
+	case strings.Contains(strings.ToLower(string(from)), "username"):
+		return []byte(a.user), nil
+	case strings.Contains(strings.ToLower(string(from)), "password"):
+		return []byte(a.pass), nil
+	}
+	return nil, fmt.Errorf("unexpected AUTH LOGIN challenge: %q", from)
 }
 
 // smtpTLSOptions TLS 启用（缺省启用，"0"=明文）与忽略证书校验（"1"=跳过）。

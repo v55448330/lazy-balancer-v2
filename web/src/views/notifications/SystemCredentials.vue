@@ -6,9 +6,6 @@
           <el-icon class="title-icon"><Message /></el-icon>
           <span>{{ t('app.notification.creds.smtpSection') }}</span>
         </div>
-        <el-tag :type="smtpPassConfigured ? 'success' : 'info'" size="small">
-          {{ smtpPassConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
-        </el-tag>
       </div>
     </template>
 
@@ -109,14 +106,23 @@ const smtpPassConfigured = ref(false)
 const smtpTesting = ref(false)
 let settingsRequestSeq = 0
 
-// SMTP 连通性测试：test_to 非空=发标记邮件；空=仅握手+AUTH（保存后测试
-// 用已落库配置；未保存的草稿 host 不参与——按钮 disabled 条件已拦）
+// SMTP 连通性测试：发送当前表单草稿（host/port/user/pass/from/tls/insecure），
+// 无需先保存即可验证；pass 留空沿用已保存密码。test_to 空=发给自己。
 const testSMTP = async (): Promise<void> => {
   if (smtpTesting.value) return
   smtpTesting.value = true
   try {
     const res = await request.post<{ code: number; message?: string }>('/notification/settings/smtp-test',
-      { test_to: form.value.smtpTestTo.trim() }, { silent: true })
+      {
+        test_to: form.value.smtpTestTo.trim(),
+        host: form.value.smtpHost.trim(),
+        port: form.value.smtpPort ? String(form.value.smtpPort) : '',
+        user: form.value.smtpUser,
+        pass: form.value.smtpPass,
+        from: form.value.smtpFrom,
+        tls: form.value.smtpTls,
+        insecure: form.value.smtpInsecure,
+      }, { silent: true })
     if (res.code === 0 || res.code === 200) {
       mfaAwareSuccess(t('app.notification.creds.smtpTestOk'))
     } else {
