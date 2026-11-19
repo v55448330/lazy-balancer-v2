@@ -27,7 +27,17 @@ func (h *Handlers) PostBindSession(c *gin.Context) {
 		return
 	}
 	uid := contextUserID(c)
-	notify.StartBindSession(uid, req.Type, req.ScannerID, req.BotKey)
+	// QQ 待绑定 secret（qqBoundByUser）随会话携带，supervisor 提前建连破死锁；
+	// wx 凭据经 wxConfirmedPin 枚举，secret 留空。
+	secret := ""
+	if req.Type == "qq" {
+		qqTaskMu.Lock()
+		if b, ok := qqBoundByUser[uid]; ok && b.AppID == req.BotKey {
+			secret = b.Secret
+		}
+		qqTaskMu.Unlock()
+	}
+	notify.StartBindSessionWithCred(uid, req.Type, req.ScannerID, req.BotKey, secret)
 	recordAudit(c, "绑定", "通知通道", "发起绑定会话（"+req.Type+"，待发送绑定测试）")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"phase":     "awaiting_message",

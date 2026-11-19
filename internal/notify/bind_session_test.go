@@ -12,6 +12,15 @@ func clearBindSessions() {
 	bindSessionMu.Lock()
 	bindSessions = map[string]*BindSession{}
 	bindSessionMu.Unlock()
+	// 排空残留唤醒：无 supervisor 消费时缓冲留存，会污染后续连接测试的对账时序。
+	select {
+	case <-qqWakeCh:
+	default:
+	}
+	select {
+	case <-wxWakeCh:
+	default:
+	}
 }
 
 func TestBindSessionFlow(t *testing.T) {
@@ -80,5 +89,45 @@ func TestBindConfirmReplyBrand(t *testing.T) {
 	// 无 branding 文件（测试库 DataDir 空）回退默认品牌名
 	if !strings.Contains(reply, "Lazy Balancer") || !strings.Contains(reply, "绑定成功") {
 		t.Errorf("确认文案应含品牌名+绑定成功, got %q", reply)
+	}
+}
+
+// 破「连接测试↔保存门控」死锁回归：supervisor 枚举须含待绑定凭据（QQ 会话携带
+// secret / wx 二登 pin），否则二登 bot 扫码后不建连（QQ 卡连接测试/wx 客户端网络错误）。
+func TestEnumerateIncludesPendingBindCreds(t *testing.T) {
+	newNotifyConnectorDB(t)
+	clearBindSessions()
+	t.Cleanup(func() {
+		clearBindSessions()
+		wxCtxMu.Lock()
+		wxConfirmedPin = nil
+		wxCtxMu.Unlock()
+		// 排空残留唤醒（无 supervisor 消费时缓冲留存，污染后续连接测试对账时序）。
+		select {
+		case <-qqWakeCh:
+		default:
+		}
+	})
+	StartBindSessionWithCred(7, "qq", "scanner1", "APP_PENDING", "SEC_PENDING")
+	foundQQ := false
+	for _, b := range qqEnumerateBots() {
+		if b.AppID == "APP_PENDING" && b.Secret == "SEC_PENDING" {
+			foundQQ = true
+		}
+	}
+	if !foundQQ {
+		t.Errorf("qqEnumerateBots 应含待绑定凭据 APP_PENDING（破死锁）")
+	}
+	wxCtxMu.Lock()
+	wxConfirmedPin = &wxBotCred{Token: "T_PIN", AccountID: "B_PIN", UserID: "U_PIN"}
+	wxCtxMu.Unlock()
+	foundWx := false
+	for _, b := range wxEnumerateBots() {
+		if wxCredKey(b) == "B_PIN" {
+			foundWx = true
+		}
+	}
+	if !foundWx {
+		t.Errorf("wxEnumerateBots 应含二登 pin B_PIN（破死锁）")
 	}
 }

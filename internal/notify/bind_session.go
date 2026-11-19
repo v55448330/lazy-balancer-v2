@@ -25,6 +25,7 @@ type BindSession struct {
 	Type         string // qq / wx_clawbot
 	ScannerID    string // openid / wxid（扫码者）
 	BotKey       string // appid / wx account_id
+	BotSecret    string // QQ appSecret（待绑定凭据，supervisor 提前建连破保存门控死锁）
 	Phase        string // awaiting_message / confirmed
 	Receiver     string // 确认后捕获的接收者
 	ContextToken string // wx 会话上下文
@@ -42,15 +43,44 @@ func bindSessionKey(typ, scannerID, botKey string) string {
 
 // StartBindSession 弹框扫码确认后注册会话（待发送「绑定测试」）。
 func StartBindSession(userID int64, typ, scannerID, botKey string) {
+	StartBindSessionWithCred(userID, typ, scannerID, botKey, "")
+}
+
+// StartBindSessionWithCred 注册会话并携带 bot 凭据（QQ secret）。supervisor 枚举
+// 待绑定凭据提前建连——否则「连接测试→发消息→确认→保存」与「保存才注册凭据」
+// 互为前置形成死锁（二登 bot 卡连接测试根因）。wx 凭据经 wxConfirmedPin 枚举。
+func StartBindSessionWithCred(userID int64, typ, scannerID, botKey, secret string) {
 	if scannerID == "" {
 		return
 	}
 	bindSessionMu.Lock()
-	defer bindSessionMu.Unlock()
 	bindSessions[bindSessionKey(typ, scannerID, botKey)] = &BindSession{
-		UserID: userID, Type: typ, ScannerID: scannerID, BotKey: botKey,
+		UserID: userID, Type: typ, ScannerID: scannerID, BotKey: botKey, BotSecret: secret,
 		Phase: "awaiting_message", UpdatedAt: time.Now(),
 	}
+	bindSessionMu.Unlock()
+	// 唤醒 supervisor 立即对账建连（不等周期）。
+	if typ == "qq" {
+		select {
+		case qqWakeCh <- struct{}{}:
+		default:
+		}
+	} else {
+		wakeWxBotConnection()
+	}
+}
+
+// PendingBindQQCreds 活跃绑定会话携带的 QQ 待绑定凭据（supervisor 枚举用）。
+func PendingBindQQCreds() []qqBotCred {
+	bindSessionMu.Lock()
+	defer bindSessionMu.Unlock()
+	var out []qqBotCred
+	for _, s := range bindSessions {
+		if s.Type == "qq" && s.BotKey != "" && s.BotSecret != "" {
+			out = append(out, qqBotCred{AppID: s.BotKey, Secret: s.BotSecret})
+		}
+	}
+	return out
 }
 
 // PollBindSession 弹框轮询会话 phase（无会话=idle）。

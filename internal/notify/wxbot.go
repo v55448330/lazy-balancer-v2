@@ -121,6 +121,14 @@ func wxEnumerateBots() []wxBotCred {
 	if cred, ok := loadWxBotCred(); ok {
 		add(cred)
 	}
+	// 二登待钉住凭据（wxConfirmedPin）：提前建连破「连接测试↔保存门控」死锁
+	// （否则扫码后 supervisor 不建连，微信客户端报网络错误）。
+	wxCtxMu.Lock()
+	pin := wxConfirmedPin
+	wxCtxMu.Unlock()
+	if pin != nil {
+		add(*pin)
+	}
 	if db.DB != nil {
 		rows, err := db.DB.Query(`SELECT target FROM notification_channels WHERE type='wx_clawbot' ORDER BY id`)
 		if err == nil {

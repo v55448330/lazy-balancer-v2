@@ -76,6 +76,10 @@ func qqEnumerateBots() []qqBotCred {
 	if appid, secret, ok := qqBotCredentials(); ok {
 		add(appid, secret)
 	}
+	// 待绑定凭据（弹框绑定会话携带）：提前建连破「连接测试↔保存门控」死锁。
+	for _, b := range PendingBindQQCreds() {
+		add(b.AppID, b.Secret)
+	}
 	if db.DB != nil {
 		rows, err := db.DB.Query(`SELECT target FROM notification_channels WHERE type='qq' ORDER BY id`)
 		if err == nil {
