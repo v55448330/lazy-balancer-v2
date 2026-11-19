@@ -448,6 +448,7 @@ const checkWxLoggedIn = async (): Promise<void> => {
 // 切换通道类型：重置绑定态；切到微信探测全局登录态（提示无需重复扫码）。
 watch(() => drawerForm.value.type, (typ) => {
   bindPhase.value = 'idle'
+  bindRegistered = false
   bindScannerID.value = ''
   bindBotKey.value = ''
   bindQrImg.value = ''
@@ -459,6 +460,7 @@ watch(() => drawerForm.value.type, (typ) => {
 const startBind = async (): Promise<void> => {
   bindLoading.value = true
   bindPhase.value = 'scanning'
+  bindRegistered = false
   try {
     const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/qr/start'
     const res = await request.post<{ data?: { qr_content?: string; expires_in?: number } }>(endpoint, {})
@@ -467,7 +469,7 @@ const startBind = async (): Promise<void> => {
       const QRCode = (await import('qrcode')).default
       bindQrImg.value = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
       pollScan()
-      startQrCountdown(res.data?.expires_in)
+      startQrCountdown(Math.min(res.data?.expires_in ?? 300, 300)) // 统一 5min；wx 服务端更早 expired 优先
     }
   } catch (e) { console.error(e) } finally { bindLoading.value = false }
 }
@@ -478,11 +480,12 @@ const stopBindPolling = (): void => {
   if (bindTimeout !== null) { clearTimeout(bindTimeout); bindTimeout = null }
   if (bindCountTimer !== null) { clearInterval(bindCountTimer); bindCountTimer = null }
 }
-// 扫码轮询：confirmed 后取 scanner_id/bot_key（QQ=openid/appid）注册绑定会话。
+// 扫码轮询（顺序 setTimeout 链：wx qr/status 为长轮询 ≤40s，setInterval 会并发
+// 堆积且 confirmed 时多回调重复注册；顺序轮询避免）。confirmed/bound/expired 即停。
 const pollScan = (): void => {
   stopBindPolling()
   const isQQ = drawerForm.value.type === 'qq'
-  bindTimer = setInterval(async () => {
+  const tick = async (): Promise<void> => {
     try {
       if (isQQ) {
         const res = await request.get<{ data?: { bound?: boolean; openid?: string; appid?: string; expired?: boolean; status?: number } }>('/notification/qq/bind-code', { silent: true })
@@ -493,27 +496,35 @@ const pollScan = (): void => {
           bindQrImg.value = ''
           stopBindPolling()
           void registerBindSession()
+          return
         } else if (res.data?.expired || res.data?.status === 3) {
-          bindPhase.value = 'expired'; bindQrImg.value = ''; stopBindPolling()
+          bindPhase.value = 'expired'; bindQrImg.value = ''; stopBindPolling(); return
         }
       } else {
         const qs = await request.get<{ data?: { confirmed?: boolean; scanner_id?: string; bot_key?: string; status?: string } }>('/notification/wx/qr/status', { silent: true })
         if (qs.data?.confirmed) {
           bindScannerID.value = qs.data.scanner_id ?? ''
           bindBotKey.value = qs.data.bot_key ?? ''
+          drawerForm.value.targetValue = qs.data.scanner_id ?? ''
           bindQrImg.value = ''
           stopBindPolling()
           void registerBindSession()
+          return
         } else if (qs.data?.status === 'expired') {
-          bindPhase.value = 'expired'; bindQrImg.value = ''; stopBindPolling()
+          bindPhase.value = 'expired'; bindQrImg.value = ''; stopBindPolling(); return
         }
       }
     } catch { /* keep polling */ }
-  }, 3000)
+    bindTimer = setTimeout(() => { void tick() }, 3000)
+  }
+  bindTimer = setTimeout(() => { void tick() }, 1000)
   bindTimeout = setTimeout(() => { stopBindPolling(); if (bindPhase.value === 'scanning') bindPhase.value = 'expired' }, 300000)
 }
-// 注册绑定会话→连接测试→轮询入站「绑定测试」确认。
+// 注册绑定会话→连接测试→轮询入站「绑定测试」确认（bindRegistered 防重复注册）。
+let bindRegistered = false
 const registerBindSession = async (): Promise<void> => {
+  if (bindRegistered) return
+  bindRegistered = true
   bindPhase.value = 'connecting'
   try {
     await request.post('/notification/bind-session', { type: drawerForm.value.type, scanner_id: bindScannerID.value, bot_key: bindBotKey.value }, { silent: true })
@@ -523,7 +534,7 @@ const registerBindSession = async (): Promise<void> => {
 const pollBindSession = (): void => {
   stopBindPolling()
   const q = `/notification/bind-session?type=${encodeURIComponent(drawerForm.value.type)}&scanner_id=${encodeURIComponent(bindScannerID.value)}&bot_key=${encodeURIComponent(bindBotKey.value)}`
-  bindTimer = setInterval(async () => {
+  const tick = async (): Promise<void> => {
     try {
       const res = await request.get<{ data?: { phase?: string; receiver?: string; connected?: boolean } }>(q, { silent: true })
       const d = res.data
@@ -535,7 +546,9 @@ const pollBindSession = (): void => {
       }
       bindPhase.value = d?.connected ? 'awaiting_message' : 'connecting'
     } catch { /* keep polling */ }
-  }, 2500)
+    bindTimer = setTimeout(() => { void tick() }, 2500)
+  }
+  bindTimer = setTimeout(() => { void tick() }, 500)
   bindTimeout = setTimeout(stopBindPolling, 600000)
 }
 onUnmounted(stopBindPolling)
@@ -545,6 +558,7 @@ const resetDrawer = (): void => {
   bindQrImg.value = ''
   bindQrExpiresAt.value = null
   bindPhase.value = 'idle'
+  bindRegistered = false
   bindScannerID.value = ''
   bindBotKey.value = ''
   wxAlreadyLoggedIn.value = false

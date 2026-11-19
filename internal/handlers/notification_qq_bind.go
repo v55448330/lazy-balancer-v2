@@ -47,7 +47,7 @@ func (h *Handlers) PostQQBindCode(c *gin.Context) {
 	qqTaskMu.Unlock()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"qr_content": qrContent,
-		"expires_in": 600,
+		"expires_in": 300, // 统一绑定窗口 5min（与 wx 一致；超时提示获取新码）
 	}})
 }
 
@@ -62,7 +62,7 @@ func (h *Handlers) GetQQBindCode(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"bound": false, "has_task": false}})
 		return
 	}
-	if time.Since(task.CreatedAt) > 10*time.Minute {
+	if time.Since(task.CreatedAt) > 5*time.Minute {
 		qqTaskMu.Lock()
 		delete(qqTaskByUser, uid)
 		qqTaskMu.Unlock()
