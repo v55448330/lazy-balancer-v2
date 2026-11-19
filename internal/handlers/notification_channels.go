@@ -46,6 +46,7 @@ type notificationChannelDTO struct {
 	StyleConfig   string `json:"style_config"`
 	LinkConnected bool   `json:"link_connected"` // qq/wx 实时入站在线态
 	LinkState     string `json:"link_state"`     // online/offline/none
+	SessionReady  bool   `json:"session_ready"`  // wx 接收者会话上下文就绪=可主动发送（在线≠就绪）
 }
 
 // isAdminRequest 角色门（与 API Key 管理同口径：apiKeyAuth 注入 role）。
@@ -94,6 +95,9 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 		}
 		if r.Type == "qq" || r.Type == "wx_clawbot" {
 			r.LinkConnected, r.LinkState = notify.ChannelLinkStatus(r.Type, r.Target)
+			if r.Type == "wx_clawbot" {
+				r.SessionReady = notify.WxSessionReady(r.Target)
+			}
 		} else {
 			r.LinkState = "none"
 		}

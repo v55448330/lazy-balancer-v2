@@ -529,7 +529,9 @@ func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
 	}
 	out := make([]dayStat, 0, 7)
 	for i := 6; i >= 0; i-- {
-		day := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
+		// created_at 以 UTC 落库（evt.Time.UTC()/datetime('now')），日桶须同用 UTC，
+		// 否则本地时区午夜窗口（如 UTC+8 00:00-08:00）会漏计当日投递。
+		day := time.Now().UTC().AddDate(0, 0, -i).Format("2006-01-02")
 		var total, sent int
 		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=?`, uid, day).Scan(&total)
 		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=? AND status IN ('sent','partial')`, uid, day).Scan(&sent)

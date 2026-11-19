@@ -59,6 +59,9 @@
               <span v-if="ch.type === 'qq' || ch.type === 'wx_clawbot'" class="ch-link" :class="ch.link_connected ? 'is-online' : 'is-offline'">
                 <i class="ch-link-dot" />{{ ch.link_connected ? t('app.notification.channels.linkOnline') : t('app.notification.channels.linkOffline') }}
               </span>
+              <span v-if="ch.type === 'wx_clawbot'" class="ch-session" :class="ch.session_ready ? 'is-ready' : 'is-pending'" :title="t('app.notification.channels.sessionHint')">
+                {{ ch.session_ready ? t('app.notification.channels.sessionReady') : t('app.notification.channels.sessionPending') }}
+              </span>
               <span class="ch-test" :class="testStateClass(ch)">
                 <i class="ch-test-dot" :class="!ch.last_test_at ? 'is-none' : ch.last_test_ok ? 'is-ok' : 'is-fail'" />
                 {{ testStateText(ch) }}
@@ -118,10 +121,14 @@
                  保存不依赖入站捕获；扫码/自动回填仅作辅助。 -->
             <el-input v-model="drawerForm.targetValue" :placeholder="drawerForm.type === 'qq' ? t('app.notification.channels.botOpenidPlaceholder') : t('app.notification.channels.botReceiverPlaceholder')" />
             <div class="bind-helper">
+              <el-alert v-if="bindSuccessMsg" type="success" :closable="false" show-icon class="bind-success-alert">
+                <template #title>{{ bindSuccessMsg }}</template>
+              </el-alert>
               <template v-if="drawerForm.type === 'wx_clawbot'">
                 <el-tag v-if="wxBotReady" type="success" effect="plain">{{ t('app.notification.channels.wxLoggedIn') }}</el-tag>
                 <el-button v-else size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
                 <el-button size="small" link type="primary" @click="startReceiverPoll">{{ t('app.notification.channels.autoFill') }}</el-button>
+                <div v-if="wxAlreadyLoggedIn && !wxBotReady && !bindQrImg" class="bind-hint">{{ t('app.notification.channels.wxAlreadyLoggedInHint') }}</div>
               </template>
               <template v-else>
                 <el-button size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
@@ -186,7 +193,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChatDotRound, ChatLineRound, Edit, Link, Message, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -392,8 +399,27 @@ const saveDrawer = async (): Promise<void> => {
 const bindLoading = ref(false)
 const bindQrImg = ref('')
 const wxBotReady = ref(false) // 微信扫码已登录（bot_ready），等待入站消息回填 receiver
+const bindSuccessMsg = ref('') // 扫码成功后的下一步引导（wx 须发消息建立会话；qq 保存即可）
+const wxAlreadyLoggedIn = ref(false) // 全局已有微信登录态→提示无需重复扫码
+// 打开微信绑定面时探测全局登录态：已登录则提示无需重复扫码（避免频繁扫码）。
+const checkWxLoggedIn = async (): Promise<void> => {
+  try {
+    const res = await request.get<{ data?: { bot_ready?: boolean } }>('/notification/wx/bind-state', { silent: true })
+    wxAlreadyLoggedIn.value = res.data?.bot_ready === true
+  } catch { wxAlreadyLoggedIn.value = false }
+}
+// 切换通道类型：重置扫码态；切到微信探测全局登录态（提示无需重复扫码）。
+watch(() => drawerForm.value.type, (typ) => {
+  bindSuccessMsg.value = ''
+  wxBotReady.value = false
+  bindQrImg.value = ''
+  stopBindPolling()
+  if (typ === 'wx_clawbot') void checkWxLoggedIn()
+  else wxAlreadyLoggedIn.value = false
+})
 const startBind = async (): Promise<void> => {
   bindLoading.value = true
+  bindSuccessMsg.value = ''
   try {
     const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/qr/start'
     const res = await request.post<{ data?: { qr_content?: string } }>(endpoint, {})
@@ -420,7 +446,7 @@ const pollBind = (): void => {
       if (isQQ) {
         const res = await request.get<{ data?: { openid?: string } }>('/notification/qq/bind-code', { silent: true })
         const val = res.data?.openid ?? ''
-        if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; stopBindPolling(); return }
+        if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; bindSuccessMsg.value = t('app.notification.channels.qqBindSuccess'); stopBindPolling(); return }
       } else {
         // 接收者回填（bind-state 仅用于捕获入站接收者，不判定登录）。
         const bs = await request.get<{ data?: { receiver?: string } }>('/notification/wx/bind-state', { silent: true })
@@ -428,7 +454,7 @@ const pollBind = (): void => {
         if (recv) { drawerForm.value.targetValue = recv; bindQrImg.value = ''; stopBindPolling(); return }
         // 登录判定=本次二维码 confirmed（不读全局历史登录态，防未扫码跳「已登录」）。
         const qs = await request.get<{ data?: { confirmed?: boolean } }>('/notification/wx/qr/status', { silent: true })
-        if (qs.data?.confirmed) { wxBotReady.value = true; bindQrImg.value = '' }
+        if (qs.data?.confirmed) { wxBotReady.value = true; bindQrImg.value = ''; bindSuccessMsg.value = t('app.notification.channels.wxBindSuccess') }
       }
     } catch { /* keep polling */ }
   }, 3000)
@@ -442,6 +468,8 @@ const resetDrawer = (): void => {
   stopBindPolling()
   bindQrImg.value = ''
   wxBotReady.value = false
+  bindSuccessMsg.value = ''
+  wxAlreadyLoggedIn.value = false
   drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
   styleForm.value = emptyStyle()
   headerRows.value = []
@@ -456,6 +484,7 @@ const openCreate = (): void => {
 const openEdit = (ch: NotificationChannel): void => {
   editTarget.value = ch
   drawerForm.value = { type: ch.type, name: ch.name, targetValue: parseTargetValue(ch) }
+  if (ch.type === 'wx_clawbot') void checkWxLoggedIn()
   // 回填既有样式（style_config JSON → 表单；缺省键=默认形态）
   const s = emptyStyle()
   const rows: HeaderRow[] = []
@@ -507,7 +536,10 @@ const testChannel = async (ch: NotificationChannel): Promise<void> => {
   if (writeBlocked.value || testingId.value !== null) return
   // 操作确认标准：测试会真实外发消息，需弹框确认。
   try {
-    await ElMessageBox.confirm(t('app.notification.channels.testConfirm', { name: ch.name }), t('app.notification.channels.confirmTitle'), { type: 'warning' })
+    const msg = (ch.type === 'wx_clawbot' && !ch.session_ready)
+      ? t('app.notification.channels.testConfirmWxNoSession', { name: ch.name })
+      : t('app.notification.channels.testConfirm', { name: ch.name })
+    await ElMessageBox.confirm(msg, t('app.notification.channels.confirmTitle'), { type: 'warning' })
   } catch { return }
   await doTestChannel(ch)
 }
@@ -599,6 +631,9 @@ defineExpose({ fetchChannels })
 .ch-link.is-online .ch-link-dot { background: #059669; }
 .ch-link.is-offline { color: #f56c6c; }
 .ch-link.is-offline .ch-link-dot { background: #f56c6c; }
+.ch-session { font-size: 12px; padding: 1px 6px; border-radius: 3px; }
+.ch-session.is-ready { color: #059669; background: #ecfdf5; }
+.ch-session.is-pending { color: #d97706; background: #fffbeb; }
 .ch-test { margin-right: auto; }
 .test-ok { color: #059669; }
 .test-fail { color: #f56c6c; }
@@ -612,6 +647,7 @@ defineExpose({ fetchChannels })
 .bind-helper { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .bind-qr-img { width: 200px; height: 200px; }
 .bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
+.bind-success-alert { margin-bottom: 8px; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
 /* 自定义请求头：label 与右侧第一行输入框（无行时与添加按钮）垂直对齐 */
 .headers-form-item { align-items: flex-start; }

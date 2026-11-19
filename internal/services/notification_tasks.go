@@ -121,7 +121,7 @@ func registerNotificationTasks(te *taskengine.Engine) {
 				TaskLogfWarnContext(rc.Ctx, "notification-delivery-retention", "cleanup", "投递保留清理失败：本轮已删投递 %d 条 · 通道结果 %d 行后中止：%v", result.Deliveries, result.Channels, err)
 				return err
 			}
-			TaskLogfContext(rc.Ctx, "notification-delivery-retention", "cleanup", "投递保留清理完成：删除投递 %d 条 · 通道结果 %d 行（无过期为 0）", result.Deliveries, result.Channels)
+			TaskLogfContext(rc.Ctx, "notification-delivery-retention", "cleanup", "投递保留清理完成：删除投递 %d 条 · 通道结果 %d 行 · 微信会话上下文 %d 条（无过期为 0）", result.Deliveries, result.Channels, result.WxContexts)
 			return nil
 		},
 	})

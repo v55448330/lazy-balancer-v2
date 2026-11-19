@@ -614,11 +614,18 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_ndc_delivery ON notification_delivery_channels(delivery_id);
 	CREATE INDEX IF NOT EXISTS idx_ndc_user_created ON notification_delivery_channels(user_id, created_at);
 
-	-- 通知中心管理设置（KV）：notify.smtp_*（SMTP 发信）、notify.qq_appid/
-	-- notify.qq_secret、notify.mcp_enabled（'1'/'0'）、notify.attack_warn_at/
-	-- notify.attack_critical_at（聚合升级阈值，缺省 50/200）、notify.wx_bot_cred
-	-- （微信扫码登录态，连接器域）。secret 类值仅落库，REST 响应只回
-	-- 「已配置」布尔。
+	-- 通知中心管理设置（KV，key/value）。键命名约束（前缀划分语义域，新增须遵守）：
+	--   notify.smtp_*        SMTP 发信配置（host/port/user/from/pass/tls/insecure）
+	--   notify.qq_appid      QQ 首 bot 标识（非密）
+	--   notify.qq_secret     QQ 首 bot 密钥（敏感）
+	--   notify.wx_bot_cred   微信首 bot 扫码登录态 JSON（敏感）
+	--   notify.wx_ctx:<botKey>:<receiver>  微信会话上下文（敏感，per-bot per-receiver
+	--                        隔离；值=token\x1f<unixsec>，投递保留任务周期 prune）
+	--   notify.mcp_enabled / notify.api_enabled  对外接入开关（'1'/'0'）
+	--   notify.attack_warn_at / notify.attack_critical_at  聚合升级阈值（缺省 50/200）
+	-- 敏感键（smtp_pass/qq_secret/wx_bot_cred/wx_ctx:*）经 notify.secretbox AES-GCM
+	-- 静态加密落库（enc:v1: 前缀）；REST 响应只回「已配置」布尔，不回明文。
+	-- 主密钥文件 <data>/.notify_secret_key（0600）须随数据卷一同备份。
 	CREATE TABLE IF NOT EXISTS notify_settings (
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL DEFAULT ''
@@ -634,11 +641,6 @@ func createTables() error {
 		code TEXT PRIMARY KEY,
 		user_id INTEGER NOT NULL,
 		expires_at DATETIME NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS notify_settings (
-		key TEXT PRIMARY KEY,
-		value TEXT NOT NULL
 	);
 
 	CREATE TABLE IF NOT EXISTS mcp_sessions (

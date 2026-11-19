@@ -299,6 +299,14 @@ func WxDefaultReceiver() string {
 	return ""
 }
 
+// wxContextKeyPrefix 会话上下文持久化键前缀（复用 notify_settings KV，与
+// wx_bot_cred 同表，无新表）；命名空间 per-bot per-receiver 隔离（多通道共存）。
+const wxContextKeyPrefix = "notify.wx_ctx:"
+
+func wxContextKey(botKey, receiver string) string {
+	return wxContextKeyPrefix + botKey + ":" + receiver
+}
+
 func cacheWxContextToken(botKey, from, token string) {
 	wxCtxMu.Lock()
 	m := wxContextTokens[botKey]
@@ -308,12 +316,101 @@ func cacheWxContextToken(botKey, from, token string) {
 	}
 	m[from] = token
 	wxCtxMu.Unlock()
+	// 持久化复用 notify_settings KV（值经 SetSettings 静态加密），扛面板重启。
+	// 微信侧会话本身仍可能过期，过期须对方再发消息刷新（协议约束）。
+	_ = SetSettings(map[string]string{wxContextKey(botKey, from): token + wxContextSep + strconv.FormatInt(time.Now().Unix(), 10)})
 }
 
 func wxContextTokenFor(botKey, to string) string {
 	wxCtxMu.Lock()
-	defer wxCtxMu.Unlock()
-	return wxContextTokens[botKey][to]
+	tok := wxContextTokens[botKey][to]
+	wxCtxMu.Unlock()
+	if tok != "" {
+		return tok
+	}
+	// 内存未命中（如重启后）→ 读持久化 KV（GetSetting 自动解密）回填内存。
+	persisted := GetSetting(wxContextKey(botKey, to))
+	token := wxContextDecodeToken(persisted)
+	if token == "" {
+		return ""
+	}
+	wxCtxMu.Lock()
+	m := wxContextTokens[botKey]
+	if m == nil {
+		m = map[string]string{}
+		wxContextTokens[botKey] = m
+	}
+	m[to] = token
+	wxCtxMu.Unlock()
+	return token
+}
+
+// wxContextSep 持久化值分隔符：token\x1f<unixsec>（嵌入更新时间供 TTL 清理；
+// KV 无 per-row 时间戳，复用 notify_settings 的代价以此弥补）。
+const wxContextSep = "\x1f"
+
+func wxContextDecodeToken(stored string) string {
+	if stored == "" {
+		return ""
+	}
+	return strings.SplitN(stored, wxContextSep, 2)[0]
+}
+
+func wxContextDecodeTime(stored string) int64 {
+	parts := strings.SplitN(stored, wxContextSep, 2)
+	if len(parts) < 2 {
+		return 0 // 遗留无时间戳值视为最旧（清理后对方再发消息即重建）
+	}
+	ts, _ := strconv.ParseInt(parts[1], 10, 64)
+	return ts
+}
+
+// PruneWxContextTokens 清理超过 maxAge 未刷新的会话上下文 KV（防 notify_settings
+// 无界增长）。context_token 服务端早已过期，清掉仅意味着对方需再发一条消息重建
+// （协议本就要求周期性互动）。挂投递保留任务周期执行。
+func PruneWxContextTokens(maxAge time.Duration) (int, error) {
+	if db.DB == nil {
+		return 0, nil
+	}
+	rows, err := db.DB.Query(`SELECT key FROM notify_settings WHERE key LIKE ?`, wxContextKeyPrefix+"%")
+	if err != nil {
+		return 0, err
+	}
+	var keys []string
+	for rows.Next() {
+		var k string
+		if rows.Scan(&k) == nil {
+			keys = append(keys, k)
+		}
+	}
+	rows.Close()
+	cutoff := time.Now().Add(-maxAge).Unix()
+	deleted := 0
+	for _, k := range keys {
+		if wxContextDecodeTime(GetSetting(k)) < cutoff {
+			if _, err := db.DB.Exec(`DELETE FROM notify_settings WHERE key=?`, k); err == nil {
+				deleted++
+			}
+		}
+	}
+	return deleted, nil
+}
+
+// WxSessionReady 微信通道接收者是否已有会话上下文（context_token）=可主动发送。
+// 供通道卡「会话就绪/待建立」指示与保存/测试前预警（连接在线≠会话就绪）。
+func WxSessionReady(targetJSON string) bool {
+	var cfg struct {
+		Receiver string `json:"receiver"`
+	}
+	_ = json.Unmarshal([]byte(targetJSON), &cfg)
+	if cfg.Receiver == "" {
+		return false
+	}
+	key := wxTargetBotKey(targetJSON)
+	if key == "" {
+		return false
+	}
+	return wxContextTokenFor(key, cfg.Receiver) != ""
 }
 
 func wxUIN() string {

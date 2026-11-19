@@ -32,7 +32,9 @@ var secretSettingKeys = map[string]bool{
 	KeyWxBotCred: true,
 }
 
-func isSecretSettingKey(key string) bool { return secretSettingKeys[key] }
+func isSecretSettingKey(key string) bool {
+	return secretSettingKeys[key] || strings.HasPrefix(key, wxContextKeyPrefix)
+}
 
 // secretKeyPath 主密钥文件路径（var 供测试覆写）。data dir 未初始化返回空。
 var secretKeyPath = func() string {

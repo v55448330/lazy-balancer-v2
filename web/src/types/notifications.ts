@@ -27,6 +27,8 @@ export interface NotificationChannel {
   /** qq/wx 实时入站连接态（常驻会话 per-bot）；webhook/email=none。 */
   link_connected?: boolean
   link_state?: 'online' | 'offline' | 'none'
+  /** wx 接收者会话上下文就绪=可主动发送（连接在线≠会话就绪）。 */
+  session_ready?: boolean
 }
 
 export type NotificationChannelsResponse = APIResponse<{ channels: NotificationChannel[] }>

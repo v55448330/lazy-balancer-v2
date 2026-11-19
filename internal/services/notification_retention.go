@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 )
 
 // NotificationDeliveryRetentionResult 清理构成（任务日志按构成披露）。
 type NotificationDeliveryRetentionResult struct {
 	Deliveries int // 主表删除行数
 	Channels   int // 每通道结果删除行数
+	WxContexts int // 过期微信会话上下文 KV 清理数
 }
 
 // NotificationDeliveryRetentionCleanup 按保留期删除过期投递记录（分批，
@@ -70,6 +72,11 @@ func NotificationDeliveryRetentionCleanup(ctx context.Context) (NotificationDeli
 			return result, nil
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+	// 顺带清理过期微信会话上下文 KV（防 notify_settings 无界增长；7 天远超
+	// 微信会话窗口，清掉仅须对方再发消息重建）。失败不阻断投递清理结果。
+	if n, err := notify.PruneWxContextTokens(7 * 24 * time.Hour); err == nil {
+		result.WxContexts = n
 	}
 	return result, nil
 }
