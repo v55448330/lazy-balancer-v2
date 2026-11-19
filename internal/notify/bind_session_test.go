@@ -172,3 +172,20 @@ func TestAbortBindSessionClearsGhost(t *testing.T) {
 		}
 	}
 }
+
+// 重扫同 bot 回归：待绑定新 secret 覆盖陈旧全局 secret（防旧 secret 掩蔽致
+// 鉴权 100016），且保持全局在前的首 bot 序。
+func TestEnumerateFreshBindSecretOverridesStaleGlobal(t *testing.T) {
+	newNotifyConnectorDB(t)
+	clearBindSessions()
+	t.Cleanup(clearBindSessions)
+	seedQQGlobalCred(t, "APP_SAME", "SECRET_OLD")
+	StartBindSessionWithCred(7, "qq", "oSame", "APP_SAME", "SECRET_NEW")
+	bots := qqEnumerateBots()
+	if len(bots) == 0 || bots[0].AppID != "APP_SAME" {
+		t.Fatalf("首 bot 应为全局 APP_SAME, got %+v", bots)
+	}
+	if bots[0].Secret != "SECRET_NEW" {
+		t.Errorf("重扫同 bot 应用新 secret SECRET_NEW, got %q", bots[0].Secret)
+	}
+}

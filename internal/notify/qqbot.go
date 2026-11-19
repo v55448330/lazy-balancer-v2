@@ -76,10 +76,6 @@ func qqEnumerateBots() []qqBotCred {
 	if appid, secret, ok := qqBotCredentials(); ok {
 		add(appid, secret)
 	}
-	// 待绑定凭据（弹框绑定会话携带）：提前建连破「连接测试↔保存门控」死锁。
-	for _, b := range PendingBindQQCreds() {
-		add(b.AppID, b.Secret)
-	}
 	if db.DB != nil {
 		rows, err := db.DB.Query(`SELECT target FROM notification_channels WHERE type='qq' ORDER BY id`)
 		if err == nil {
@@ -97,6 +93,21 @@ func qqEnumerateBots() []qqBotCred {
 					add(cfg.AppID, cfg.Secret)
 				}
 			}
+		}
+	}
+	// 待绑定凭据（最新扫码）对同 appid 覆盖陈旧 secret（重扫同 bot 防旧 secret
+	// 掩蔽致鉴权 100016）；新 appid 追加。保持全局在前的首 bot 序。
+	for _, b := range PendingBindQQCreds() {
+		replaced := false
+		for i := range bots {
+			if bots[i].AppID == b.AppID {
+				bots[i].Secret = b.Secret
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			bots = append(bots, b)
 		}
 	}
 	return bots
