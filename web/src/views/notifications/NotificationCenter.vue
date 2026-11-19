@@ -177,14 +177,21 @@
           <div class="daily-body">
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.dailySendTime') }}</span>
-              <el-time-select v-model="dailyRule.send_time" start="00:00" step="00:30" end="23:30" size="small" style="width:110px" @change="saveRuleField(dailyRule)" />
+              <span class="daily-value">{{ dailyRule.send_time || '09:00' }}</span>
               <span class="form-hint">{{ t('app.notification.rules.dailyTimeHint') }}</span>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
-              <el-checkbox-group v-model="dailyRule.items" size="small" @change="saveDailyItems(dailyRule)">
-                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
-              </el-checkbox-group>
+              <div class="tag-wrap">
+                <el-tag v-for="it in (dailyRule.items || [])" :key="it" size="small" effect="plain">{{ dailyItemLabel(it) }}</el-tag>
+              </div>
+            </div>
+            <div class="daily-field">
+              <span class="daily-label">{{ t('app.notification.rules.sendTo') }}</span>
+              <div class="tag-wrap">
+                <el-tag v-for="ch in userChannels" :key="ch.id" size="small" effect="plain">{{ ch.name }}</el-tag>
+                <span v-if="!userChannels.length" class="ev-more">{{ t('app.notification.rules.noChannelsHint') }}</span>
+              </div>
             </div>
             <span class="form-hint">{{ t('app.notification.daily.configHint') }}</span>
           </div>
@@ -216,10 +223,9 @@
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.events')" min-width="280">
               <template #default="{ row }">
-                <el-tag v-for="ev in (row.events || []).slice(0, 6)" :key="ev" size="small" effect="plain" class="mr4">{{ eventTitle(asRule(row), ev) }}</el-tag>
-                <el-tooltip v-if="(row.events?.length || 0) > 6" :content="remainingEventTitles(asRule(row))" placement="top">
-                  <span class="ev-more">+{{ row.events!.length - 6 }}</span>
-                </el-tooltip>
+                <div class="tag-wrap">
+                  <el-tag v-for="ev in (row.events || [])" :key="ev" size="small" effect="plain">{{ eventTitle(asRule(row), ev) }}</el-tag>
+                </div>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.minLevel')" width="120" align="center">
@@ -233,13 +239,10 @@
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.sendTo')" min-width="130">
               <template #default="{ row }">
-                <template v-if="row.channel_ids && row.channel_ids.length === 0">
-                  <span class="ev-more">{{ t('app.notification.rules.noDelivery') }}</span>
-                </template>
-                <template v-else>
-                  <el-tag v-for="ch in (row.channels || []).slice(0, 2)" :key="ch.id" size="small" effect="plain" class="mr4">{{ ch.name }}</el-tag>
-                  <span v-if="(row.channels?.length || 0) > 2" class="ev-more">+{{ row.channels!.length - 2 }}</span>
-                </template>
+                <span v-if="row.channel_ids && row.channel_ids.length === 0" class="ev-more">{{ t('app.notification.rules.noDelivery') }}</span>
+                <div v-else class="tag-wrap">
+                  <el-tag v-for="ch in (row.channels || [])" :key="ch.id" size="small" effect="plain">{{ ch.name }}</el-tag>
+                </div>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.bodyTemplate')" width="90" align="center">
@@ -334,37 +337,67 @@
       </template>
     </el-dialog>
 
-    <!-- 日报通道配置弹窗：每通道渲染格式（写日报规则 formats）+ QQ/微信内容模板（写通道 style_config） -->
-    <el-dialog v-model="dailyConfigVisible" class="dialog-body-inset daily-config-dialog" width="min(760px, 94vw)" top="5vh">
+    <!-- 日报配置弹窗：基本配置（时间/项目）+ 每通道格式/内容模板。
+         机器人协议固定（QQ=Markdown 高亮/微信=纯文本），webhook/email 格式可选。 -->
+    <el-dialog v-model="dailyConfigVisible" class="dialog-body-inset daily-config-dialog" width="min(860px, 94vw)" top="5vh">
       <template #header>
         <DialogHeader :icon="Calendar" :title="t('app.notification.daily.configTitle')" :subtitle="t('app.notification.daily.configSubtitle')" tone="primary" />
       </template>
-      <div v-loading="dailyConfigLoading" class="daily-config-rows">
-        <div v-for="ch in userChannels" :key="ch.id" class="daily-config-row">
-          <div class="daily-config-head">
-            <span class="daily-config-name">{{ ch.name }}</span>
-            <el-tag size="small" effect="plain">{{ channelTypeLabel(ch.type) }}</el-tag>
-          </div>
-          <div class="daily-config-format">
-            <span class="daily-config-label">{{ t('app.notification.daily.formatLabel') }}</span>
-            <el-select :model-value="dailyRule ? dailyFormatOf(dailyRule, ch.type) : 'auto'" size="small" style="width: 170px" @change="(v: string) => { if (dailyRule) saveDailyFormat(dailyRule, ch.type, v) }">
-              <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
-            </el-select>
-          </div>
-          <!-- 内容模板=通道 style_config.content_template（后端白名单仅 QQ/微信），空模板=回退默认形态 -->
-          <template v-if="ch.type === 'qq' || ch.type === 'wx_clawbot'">
-            <div class="daily-config-label">{{ t('app.notification.daily.contentTemplate') }}</div>
-            <el-input v-model="dailyTplDrafts[ch.id]" type="textarea" :rows="3" :maxlength="2000" :placeholder="t('app.notification.daily.contentTemplatePlaceholder')" />
-            <div class="daily-config-actions">
-              <el-button size="small" type="primary" plain :loading="savingTplChannelId === ch.id" @click="saveChannelContentTemplate(ch)">{{ t('app.notification.daily.saveTemplate') }}</el-button>
-              <span class="form-hint">{{ t('app.notification.daily.contentTemplateHint') }}</span>
+      <div v-loading="dailyConfigLoading" class="daily-config-body">
+        <template v-if="dailyRule">
+          <DialogSectionHeader :title="t('app.notification.daily.basicSection')" />
+          <div class="daily-config-basic">
+            <div class="daily-field">
+              <span class="daily-label">{{ t('app.notification.rules.dailySendTime') }}</span>
+              <el-time-select v-model="dailyRule.send_time" start="00:00" end="23:30" step="00:30" style="width: 120px" @change="saveRuleField(dailyRule)" />
+              <span class="form-hint">{{ t('app.notification.rules.dailyTimeHint') }}</span>
             </div>
-          </template>
-          <div class="daily-config-preview">
-            <el-button size="small" link type="primary" :loading="previewChannelId === ch.id" @click="previewChannelDaily(ch)">{{ t('app.notification.rules.preview') }}</el-button>
+            <div class="daily-field">
+              <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
+              <el-checkbox-group v-model="dailyRule.items" size="small" @change="saveDailyItems(dailyRule)">
+                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
+              </el-checkbox-group>
+            </div>
           </div>
-        </div>
-        <el-empty v-if="!dailyConfigLoading && userChannels.length === 0" :description="t('app.notification.rules.noChannelsHint')" :image-size="60" />
+          <el-divider />
+          <DialogSectionHeader :title="t('app.notification.daily.channelSection')" :description="t('app.notification.daily.botFormatHint')" />
+          <div class="daily-config-rows">
+            <div v-for="ch in userChannels" :key="ch.id" class="daily-config-row">
+              <div class="daily-config-head">
+                <span class="daily-config-name">{{ ch.name }}</span>
+                <el-tag size="small" effect="plain" type="info">{{ channelTypeLabel(ch.type) }}</el-tag>
+                <div class="daily-config-format">
+                  <span class="daily-config-label">{{ t('app.notification.daily.formatLabel') }}</span>
+                  <el-tag v-if="isBotChannel(ch.type)" size="small" effect="plain">{{ dailyFormatLabel(fixedDailyFormat(ch.type)) }}</el-tag>
+                  <el-select v-else :model-value="dailyFormatOf(dailyRule, ch.type)" size="small" style="width: 170px" @change="(v: string) => saveDailyFormat(dailyRule, ch.type, v)">
+                    <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
+                  </el-select>
+                </div>
+              </div>
+              <!-- 机器人内容模板=通道 style_config.content_template：预置日报模板+变量插入+按协议高亮 -->
+              <template v-if="isBotChannel(ch.type)">
+                <div class="tpl-section-head">
+                  <div class="tpl-section-label">{{ t('app.notification.daily.contentTemplate') }}</div>
+                  <el-button size="small" link type="primary" @click="resetDailyTpl(ch)">{{ t('app.notification.rules.tplDefault') }}</el-button>
+                </div>
+                <CodeEditor v-if="ch.type === 'qq'" v-model="dailyTplDrafts[ch.id]" language="markdown" height="180px" :aria-label="t('app.notification.daily.contentTemplate')" />
+                <el-input v-else v-model="dailyTplDrafts[ch.id]" type="textarea" :rows="6" :maxlength="2000" :placeholder="t('app.notification.daily.contentTemplatePlaceholder')" />
+                <div class="ph-row">
+                  <el-tag v-for="ph in dailyPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="dailyTplDrafts[ch.id] = (dailyTplDrafts[ch.id] || '') + ph">{{ ph }}</el-tag>
+                </div>
+                <div class="form-hint">{{ t('app.notification.daily.contentTemplateHint') }}</div>
+                <div class="daily-config-actions">
+                  <el-button size="small" type="primary" plain :loading="savingTplChannelId === ch.id" @click="saveChannelContentTemplate(ch)">{{ t('app.notification.daily.saveTemplate') }}</el-button>
+                  <el-button size="small" link type="primary" :loading="previewChannelId === ch.id" @click="previewChannelDaily(ch)">{{ t('app.notification.rules.preview') }}</el-button>
+                </div>
+              </template>
+              <div v-else class="daily-config-actions">
+                <el-button size="small" link type="primary" :loading="previewChannelId === ch.id" @click="previewChannelDaily(ch)">{{ t('app.notification.rules.preview') }}</el-button>
+              </div>
+            </div>
+            <el-empty v-if="!dailyConfigLoading && userChannels.length === 0" :description="t('app.notification.rules.noChannelsHint')" :image-size="60" />
+          </div>
+        </template>
       </div>
       <template #footer>
         <el-button @click="dailyConfigVisible = false">{{ t('app.notification.rules.cancel') }}</el-button>
@@ -377,7 +410,7 @@
       <template #header>
         <DialogHeader :icon="Calendar" :title="t('app.notification.daily.previewTitle')" :subtitle="dailyPreviewSource" tone="primary" />
       </template>
-      <div class="daily-preview-toolbar">
+      <div v-if="!dailyPreviewFmtLocked" class="daily-preview-toolbar">
         <el-radio-group v-model="dailyPreviewFmt" size="small" @change="renderDailyPreview">
           <el-radio-button v-for="f in dailyPreviewFormatOptions" :key="f.value" :value="f.value">{{ f.label }}</el-radio-button>
         </el-radio-group>
@@ -405,6 +438,7 @@ import { hasOwn } from '@/utils/hasOwn'
 import type { NotificationChannel } from '@/types/notifications.ts'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
 import ChannelCards from './ChannelCards.vue'
@@ -436,8 +470,6 @@ const eventGroup = (group: string): string => {
   const m = (tm('app.notification.eventGroups') || {}) as Record<string, string>
   return hasOwn(m, group) ? m[group] : group
 }
-const remainingEventTitles = (row: Rule): string =>
-  (row.events || []).slice(6).map(ev => eventTitle(row, ev)).join('、')
 
 const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
 const rulesUserId = ref<number>(0) // 管理员视角用户（0=未初始化，adminUsers 到达后默认本人）；非管理员恒本人
@@ -556,7 +588,7 @@ const dailyFormatLabel = (v: string): string => {
   const m = (tm('app.notification.dailyFormats') || {}) as Record<string, string>
   return hasOwn(m, v) ? m[v] : v
 }
-const dailyFormatOptions = computed(() => ['auto', 'markdown', 'text', 'html'].map(v => ({ value: v, label: dailyFormatLabel(v) })))
+const dailyFormatOptions = computed(() => ['auto', 'markdown', 'text', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) })))
 
 // ===== 规则编辑弹窗（通道选择 + 每通道模板） =====
 const tplDialogVisible = ref(false)
@@ -699,7 +731,7 @@ const testDaily = async (): Promise<void> => {
   } catch (e) { console.error(e) } finally { testingDaily.value = false }
 }
 
-// ===== 日报通道配置弹窗（每通道渲染格式 + QQ/微信内容模板） =====
+// ===== 日报配置弹窗（基本配置 + 每通道格式/内容模板） =====
 const dailyConfigVisible = ref(false)
 const dailyConfigLoading = ref(false)
 const dailyFullChannels = ref<NotificationChannel[]>([])
@@ -707,19 +739,61 @@ const dailyTplDrafts = ref<Record<number, string>>({})
 const savingTplChannelId = ref<number | null>(null)
 const previewChannelId = ref<number | null>(null)
 
+// 机器人协议固定：QQ=Markdown、微信=纯文本（格式不可选，仅决定编辑高亮与预览样式）
+const isBotChannel = (typ: string): boolean => typ === 'qq' || typ === 'wx_clawbot'
+const fixedDailyFormat = (typ: string): string => (typ === 'qq' ? 'markdown' : 'text')
+// 日报变量（后端派发时从日报载荷 values 替换）
+const dailyPh = ['{{date}}', '{{requests}}', '{{blocked}}', '{{attack_top}}', '{{autoban}}', '{{cert_status}}', '{{cluster_status}}']
+// 精美预置日报模板：QQ=Markdown 标题/列表，微信=纯文本分行
+const defaultDailyTplFor = (typ: string): string => {
+  if (typ === 'qq') return [
+    '# Lazy Balancer 日报（{{date}}）',
+    '',
+    '## 流量概览',
+    '- 请求数：{{requests}}',
+    '- 拦截次数：{{blocked}}',
+    '',
+    '## 攻击与封禁',
+    '- 攻击 TOP 规则：{{attack_top}}',
+    '- 自动封禁次数：{{autoban}}',
+    '',
+    '## 证书与集群',
+    '- 证书状态：{{cert_status}}',
+    '- 集群状态：{{cluster_status}}',
+  ].join('\n')
+  return [
+    'Lazy Balancer 日报（{{date}}）',
+    '────────────',
+    '请求数：{{requests}}',
+    '拦截次数：{{blocked}}',
+    '攻击 TOP 规则：{{attack_top}}',
+    '自动封禁次数：{{autoban}}',
+    '证书状态：{{cert_status}}',
+    '集群状态：{{cluster_status}}',
+  ].join('\n')
+}
+const resetDailyTpl = (ch: RuleChannel): void => { dailyTplDrafts.value[ch.id] = defaultDailyTplFor(ch.type) }
+
 const openDailyConfig = async (): Promise<void> => {
   dailyConfigVisible.value = true
   dailyConfigLoading.value = true
+  // 先以规则通道摘要预置草稿（机器人=精美预置模板），保证编辑器 modelValue 恒为字符串；
+  // 全量通道到达后再以既有 content_template 覆盖（fetch 失败不致 undefined 传入 CodeEditor）。
+  const seed: Record<number, string> = {}
+  for (const ch of userChannels.value) seed[ch.id] = isBotChannel(ch.type) ? defaultDailyTplFor(ch.type) : ''
+  dailyTplDrafts.value = seed
   try {
     // rules 端点的通道摘要不含 style_config——内容模板读写需全量通道 DTO
     const res = await request.get<{ data?: { channels?: NotificationChannel[] } }>('/notification/channels', { silent: true })
     const full = res.data?.channels ?? []
     dailyFullChannels.value = full
-    const drafts: Record<number, string> = {}
+    const drafts: Record<number, string> = { ...seed }
     for (const ch of full) {
       let tpl: unknown
       try { tpl = (JSON.parse(ch.style_config || '{}') as Record<string, unknown>).content_template } catch { tpl = undefined }
-      drafts[ch.id] = typeof tpl === 'string' ? tpl : ''
+      const saved = typeof tpl === 'string' ? tpl : ''
+      // 机器人草稿预置精美模板（未保存过=预置形态，保存后写入通道配置）
+      drafts[ch.id] = saved || (isBotChannel(ch.type) ? defaultDailyTplFor(ch.type) : '')
     }
     dailyTplDrafts.value = drafts
   } catch (e) { console.error(e) } finally { dailyConfigLoading.value = false }
@@ -820,6 +894,7 @@ const dailyPreviewText = ref('')
 const dailyPreviewFmt = ref('markdown')
 const dailyPreviewSource = ref('')
 const dailyPreviewLoading = ref(false)
+const dailyPreviewFmtLocked = ref(false) // 机器人预览格式随协议固定（隐藏切换器）
 const dailyPreviewFormatOptions = ['markdown', 'text', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
 
 const fetchDailyPreview = async (format: string): Promise<void> => {
@@ -842,28 +917,29 @@ const previewDaily = (): void => {
   if (dailyPreviewLoading.value) return
   dailyPreviewSource.value = ''
   dailyPreviewFmt.value = 'markdown'
+  dailyPreviewFmtLocked.value = false
   dailyPreviewText.value = ''
   dailyPreviewVisible.value = true
   void fetchDailyPreview('markdown')
 }
 
-// 通道级自动映射（与后端 renderDailyForChannel 同构：webhook=json/email=html/qq·wx=markdown）
+// 通道自动映射（webhook=json/email=html；机器人协议固定：QQ=markdown、微信=纯文本）
 const autoDailyFormat = (typ: string): string => {
   switch (typ) {
     case 'webhook': return 'json'
     case 'email': return 'html'
-    case 'qq':
-    case 'wx_clawbot': return 'markdown'
+    case 'qq': return 'markdown'
     default: return 'text'
   }
 }
-// 通道格式预览：按该通道生效格式（日报页覆盖 > 类型自动映射）渲染同一份日报
+// 通道格式预览：机器人随协议固定格式；webhook/email 按生效格式（日报覆盖 > 类型自动映射）
 const previewChannelDaily = (ch: RuleChannel): void => {
   if (previewChannelId.value !== null || dailyPreviewLoading.value) return
   const configured = dailyRule.value ? dailyFormatOf(dailyRule.value, ch.type) : 'auto'
-  const fmt = configured === 'auto' ? autoDailyFormat(ch.type) : configured
+  const fmt = isBotChannel(ch.type) ? fixedDailyFormat(ch.type) : configured === 'auto' ? autoDailyFormat(ch.type) : configured
   dailyPreviewSource.value = ch.name
   dailyPreviewFmt.value = fmt
+  dailyPreviewFmtLocked.value = isBotChannel(ch.type)
   dailyPreviewText.value = ''
   dailyPreviewVisible.value = true
   previewChannelId.value = ch.id
@@ -906,7 +982,7 @@ onMounted(() => {
 .privacy-hint { font-size: 12px; color: #9ca3af; }
 .rule-name-cell { display: flex; align-items: center; gap: 8px; }
 .rule-name-text { font-weight: 600; }
-.mr4 { margin-right: 4px; }
+.tag-wrap { display: flex; flex-wrap: wrap; gap: 4px; }
 .ev-more { font-size: 11px; color: #6b7280; }
 .tpl-channel-switch { margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
@@ -927,15 +1003,18 @@ onMounted(() => {
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
 .daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; padding-top: 5px; }
-/* 日报通道配置弹窗：通道卡片行（名称+类型 / 格式 / 内容模板 / 预览） */
-.daily-config-rows { display: flex; flex-direction: column; gap: 12px; min-height: 80px; }
-.daily-config-row { border: 1px solid #ebeef5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.daily-config-head { display: flex; align-items: center; gap: 8px; }
+.daily-value { font-size: 13px; font-weight: 600; color: #111827; padding-top: 4px; }
+/* 日报配置弹窗：基本配置 + 通道卡片行（名称+类型+格式 / 内容模板 / 操作） */
+.daily-config-body { min-height: 80px; }
+.daily-config-basic { display: flex; flex-direction: column; gap: 12px; }
+.daily-config-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
+.daily-config-rows { display: flex; flex-direction: column; gap: 12px; }
+.daily-config-row { border: 1px solid #ebeef5; border-radius: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.daily-config-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .daily-config-name { font-weight: 600; font-size: 13px; color: #111827; }
-.daily-config-format { display: flex; align-items: center; gap: 8px; }
+.daily-config-format { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .daily-config-label { font-size: 12px; color: #6b7280; flex: none; }
 .daily-config-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.daily-config-preview { display: flex; justify-content: flex-end; }
 /* 日报预览弹窗 */
 .daily-preview-toolbar { margin-bottom: 10px; }
 .daily-html-preview { width: 100%; height: 340px; border: 1px solid #e5e7eb; background: #fff; }

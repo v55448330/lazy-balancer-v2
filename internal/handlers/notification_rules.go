@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
+	"lazy-balancer-v2/internal/services"
 )
 
 // NotificationRule 聚合规则视图（前端消费的唯一形态）。
@@ -327,6 +329,16 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		return
 	}
 
+	// 审计留痕（Explicit：规则名+结果；管理员代管注明目标用户）。
+	ruleTitle := "每日摘要"
+	if strings.HasPrefix(ruleID, "group:") {
+		ruleTitle = ruleID[6:]
+	}
+	proxy := ""
+	if uid != contextUserID(c) {
+		proxy = "管理员代管用户 " + strconv.FormatInt(uid, 10)
+	}
+	recordAudit(c, "修改", "通知规则", services.FormatAuditDetail(proxy, "规则「"+ruleTitle+"」", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
@@ -360,10 +372,16 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_1d8f5b94", group), MessageKey: "k_1d8f5b94"})
 		return
 	}
+	proxy := ""
+	if uid != contextUserID(c) {
+		proxy = "管理员代管用户 " + strconv.FormatInt(uid, 10)
+	}
 	if err := notify.EnqueueTestDelivery(uid, eventType); err != nil {
+		recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(proxy, "规则「"+group+"」", services.AuditResultPart("failed")))
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
 		return
 	}
+	recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(proxy, "规则「"+group+"」", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_75aeb7a0"), MessageKey: "k_75aeb7a0"})
 }
 
@@ -411,13 +429,15 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 	}
 	_ = db.DB.QueryRow(chQuery, scopeArgs...).Scan(&totalChannels)
 	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions`+scope, scopeArgs...).Scan(&totalRules)
+	// 投递统计读主库（notification_deliveries 在主库，非指标库）；
+	// 成功口径=sent+partial（partial=部分通道成功）。
 	dlQuery := `SELECT COUNT(*) FROM notification_deliveries` + scope
-	_ = db.MetricsDB.QueryRow(dlQuery, scopeArgs...).Scan(&totalDeliveries)
-	sentQuery := `SELECT COUNT(*) FROM notification_deliveries WHERE status='sent'`
+	_ = db.DB.QueryRow(dlQuery, scopeArgs...).Scan(&totalDeliveries)
+	sentQuery := `SELECT COUNT(*) FROM notification_deliveries WHERE status IN ('sent','partial')`
 	if scope != "" {
 		sentQuery += ` AND user_id=?`
 	}
-	_ = db.MetricsDB.QueryRow(sentQuery, scopeArgs...).Scan(&sentDeliveries)
+	_ = db.DB.QueryRow(sentQuery, scopeArgs...).Scan(&sentDeliveries)
 	rate := float64(0)
 	if totalDeliveries > 0 {
 		rate = float64(sentDeliveries) / float64(totalDeliveries)
@@ -490,7 +510,7 @@ func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
 		day := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
 		var total, sent int
 		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=?`, uid, day).Scan(&total)
-		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=? AND status='sent'`, uid, day).Scan(&sent)
+		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=? AND status IN ('sent','partial')`, uid, day).Scan(&sent)
 		rate := float64(0)
 		if total > 0 {
 			rate = float64(sent) / float64(total)

@@ -213,8 +213,8 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
 	var owner int64
-	var typ string
-	if err := db.DB.QueryRow(`SELECT user_id, type FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ); err != nil {
+	var typ, name string
+	if err := db.DB.QueryRow(`SELECT user_id, type, name FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
 		return
 	}
@@ -267,7 +267,19 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 			return
 		}
 	}
-	recordAudit(c, "修改", "通知通道", services.FormatAuditDetail("通道 #"+strconv.FormatInt(id, 10), "", services.AuditResultPart("success")))
+	// 审计详情=通道名+结果（禁「通道 #id」形态）；改名以新名为准。
+	auditName := req.Name
+	if auditName == "" {
+		auditName = name
+	}
+	if auditName == "" {
+		auditName = typ
+	}
+	subject := "通道「" + auditName + "」"
+	if owner != uid {
+		subject = "管理员修改用户" + subject
+	}
+	recordAudit(c, "修改", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
@@ -279,13 +291,14 @@ func boolToInt(b bool) int {
 }
 
 // DeleteNotificationChannel DELETE /notification/channels/:id——属主或管理员，
-// 删除审计留痕（跨属主注明管理员代删；Generic 分类=中间件不复记）。
+// 删除审计留痕（跨属主注明管理员代删；Explicit 分类=中间件不复记）。
 func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
 	var owner int64
-	if err := db.DB.QueryRow(`SELECT user_id FROM notification_channels WHERE id=?`, id).Scan(&owner); err != nil {
+	var typ, name string
+	if err := db.DB.QueryRow(`SELECT user_id, type, name FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
 		return
 	}
@@ -297,22 +310,27 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("删除通知通道失败", err)})
 		return
 	}
-	if owner != uid {
-		recordAudit(c, "删除", "通知通道", "管理员删除用户通道 #"+strconv.FormatInt(id, 10))
-	} else {
-		recordAudit(c, "删除", "通知通道", services.FormatAuditDetail("通道 #"+strconv.FormatInt(id, 10), "", services.AuditResultPart("success")))
+	auditName := name
+	if auditName == "" {
+		auditName = typ
 	}
+	subject := "通道「" + auditName + "」"
+	if owner != uid {
+		subject = "管理员删除用户" + subject
+	}
+	recordAudit(c, "删除", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
 // TestNotificationChannel POST /notification/channels/:id/test——发送测试消息。
+// 审计留痕（Explicit：通道名+结果，成功/失败均记录；详情不含目标 URL）。
 func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
-	var typ, target string
+	var typ, target, name string
 	var owner int64
-	if err := db.DB.QueryRow(`SELECT user_id, type, target FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &target); err != nil {
+	if err := db.DB.QueryRow(`SELECT user_id, type, target, name FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &target, &name); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
 		return
 	}
@@ -320,20 +338,28 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_435eb4ab"), MessageKey: "k_435eb4ab"})
 		return
 	}
-	msg := notify.Message{
-		EventType: "test", Level: string(notify.LevelInfo),
-		Title: "通知测试", Body: "这是一条测试通知（" + typ + "）——收到即代表通道可用。",
-	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 	err := notify.TestChannel(ctx, typ, target)
 	ok := err == nil
 	_, _ = db.DB.Exec(`UPDATE notification_channels SET last_test_at=datetime('now'), last_test_ok=? WHERE id=?`, boolToInt(ok), id)
+	auditName := name
+	if auditName == "" {
+		auditName = typ
+	}
+	subject := "通道「" + auditName + "」"
+	if owner != uid {
+		subject = "管理员测试用户" + subject
+	}
+	if ok {
+		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
+	} else {
+		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("failed")))
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_8e353bc9", err.Error()), MessageKey: "k_8e353bc9"})
 		return
 	}
-	_ = msg
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4bde3724"), MessageKey: "k_4bde3724"})
 }
 

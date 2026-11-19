@@ -7,8 +7,8 @@ import type { APIResponse } from './index.ts'
 /** 事件级别（与 internal/notify Level 同串）。 */
 type NotificationLevel = 'info' | 'warn' | 'critical'
 
-/** 投递状态（internal/notify/deliveries.go 状态机：pending → sent / failed / dead）。 */
-export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'dead'
+/** 投递状态（internal/notify/deliveries.go 状态机：pending → sent / partial / failed / dead）。 */
+export type DeliveryStatus = 'pending' | 'sent' | 'partial' | 'failed' | 'dead'
 
 /** 通道类型（internal/handlers/notification_channels.go 白名单）。 */
 export type NotificationChannelType = 'webhook' | 'email' | 'qq' | 'wx_clawbot'
@@ -40,6 +40,8 @@ export interface NotificationDelivery {
   title: string
   body: string
   status: DeliveryStatus
+  /** 测试发送标记（通道测试/规则测试/日报测试落库行；备注列展示）。 */
+  is_test: boolean
   attempts: number
   error: string
   created_at: string

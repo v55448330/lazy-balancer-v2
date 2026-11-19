@@ -1,6 +1,6 @@
 <template>
   <div>
-    <!-- 通道管理：工具栏入卡头（全站 list-card 规范），类型筛选置卡体首行 -->
+    <!-- 通道管理：工具栏入卡头（全站 list-card 规范），类型筛选置卡头 -->
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
@@ -28,61 +28,66 @@
         </div>
       </template>
 
-    <!-- 通道卡片网格（Dashboard 同构：彩色图标+状态+内联操作） -->
-    <el-row v-loading="loading" :gutter="16">
-      <el-col v-for="ch in filteredChannels" :key="ch.id" :xs="24" :sm="12" :lg="8" class="ch-col">
-        <el-card class="ch-card" :class="[`ch-${ch.type}`, { 'ch-disabled': !ch.enabled }]">
-          <div class="ch-card-head">
-            <div class="ch-icon" :class="`ch-icon-${ch.type}`">
-              <el-icon :size="20"><component :is="typeIcon(ch.type)" /></el-icon>
+      <!-- 通道卡片网格：统一尺寸/间距/层级（名称+类型 tag+接收者+传输摘要+测试态+操作） -->
+      <el-row v-loading="loading" :gutter="16">
+        <el-col v-for="ch in filteredChannels" :key="ch.id" :xs="24" :sm="12" :lg="8" class="ch-col">
+          <el-card class="ch-card" :class="[`ch-${ch.type}`, { 'ch-disabled': !ch.enabled }]">
+            <div class="ch-card-head">
+              <div class="ch-icon" :class="`ch-icon-${ch.type}`">
+                <el-icon :size="20"><component :is="typeIcon(ch.type)" /></el-icon>
+              </div>
+              <div class="ch-head-info">
+                <div class="ch-name" :title="ch.name">{{ ch.name }}</div>
+                <div class="ch-tags">
+                  <el-tag size="small" effect="plain" type="info">{{ typeLabel(ch.type) }}</el-tag>
+                  <el-tag v-if="!isMine(ch)" size="small" effect="plain">{{ t('app.notification.channels.ownerTag', { id: ch.user_id }) }}</el-tag>
+                </div>
+              </div>
+              <el-switch v-model="ch.enabled" size="small" :disabled="writeBlocked" @change="toggleEnabled(ch)" />
             </div>
-            <div class="ch-head-info">
-              <div class="ch-name">{{ ch.name }}</div>
-              <div class="ch-type-text">{{ typeLabel(ch.type) }}<el-tag v-if="!isMine(ch)" size="small" effect="plain" class="ch-owner">{{ t('app.notification.channels.ownerTag', { id: ch.user_id }) }}</el-tag></div>
+            <div class="ch-target">
+              <span class="ch-target-label">{{ targetLabelShort(ch.type) }}</span>
+              <code class="ch-target-value" :title="displayTarget(ch)">{{ displayTarget(ch) }}</code>
             </div>
-            <el-switch v-model="ch.enabled" size="small" :disabled="writeBlocked" @change="toggleEnabled(ch)" />
+            <div class="ch-transport">
+              <span class="ch-transport-label">{{ t('app.notification.channels.transportSection') }}</span>
+              <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
+            </div>
+            <div class="ch-meta">
+              <span class="ch-test" :class="testStateClass(ch)">
+                <i class="ch-test-dot" :class="!ch.last_test_at ? 'is-none' : ch.last_test_ok ? 'is-ok' : 'is-fail'" />
+                {{ testStateText(ch) }}
+              </span>
+            </div>
+            <div class="ch-actions">
+              <el-button size="small" link type="primary" :loading="testingId === ch.id" :disabled="writeBlocked" @click="testChannel(ch)">
+                {{ t('app.notification.channels.test') }}
+              </el-button>
+              <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">
+                {{ t('app.notification.channels.edit') }}
+              </el-button>
+              <el-button size="small" link type="danger" :loading="deletingIds.has(ch.id)" :disabled="writeBlocked" @click="deleteChannel(ch)">
+                {{ t('app.notification.channels.delete') }}
+              </el-button>
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
+      <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
+        <template #title>
+          <div class="polling-error-title">
+            <span>{{ t('app.notification.channels.loadFailed') }}</span>
+            <el-button link type="danger" @click="fetchChannels">{{ t('common.app.views.audit.retryNow') }}</el-button>
           </div>
-          <div class="ch-target">
-            <span class="ch-target-label">{{ targetLabelShort(ch.type) }}</span>
-            <code class="ch-target-value">{{ displayTarget(ch) }}</code>
-          </div>
-          <div class="ch-transport">
-            <span class="ch-transport-label">{{ t('app.notification.channels.transportSection') }}</span>
-            <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
-          </div>
-          <div class="ch-meta">
-            <span class="ch-test" :class="testStateClass(ch)">
-              <i class="ch-test-dot" :class="ch.last_test_ok ? 'is-ok' : 'is-fail'" />
-              {{ testStateText(ch) }}
-            </span>
-          </div>
-          <div class="ch-actions">
-            <el-button size="small" text type="primary" :loading="testingId === ch.id" :disabled="writeBlocked" @click="testChannel(ch)">
-              {{ t('app.notification.channels.test') }}
-            </el-button>
-            <el-button size="small" text type="primary" :disabled="writeBlocked" @click="openEdit(ch)">
-              {{ t('app.notification.channels.edit') }}
-            </el-button>
-            <el-button size="small" text type="danger" :loading="deletingIds.has(ch.id)" :disabled="writeBlocked" @click="deleteChannel(ch)">
-              {{ t('app.notification.channels.delete') }}
-            </el-button>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-    <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
-      <template #title>
-        <div class="polling-error-title">
-          <span>{{ t('app.notification.channels.loadFailed') }}</span>
-          <el-button link type="danger" @click="fetchChannels">{{ t('common.app.views.audit.retryNow') }}</el-button>
-        </div>
-      </template>
-    </el-alert>
-    <el-empty v-if="!loading && filteredChannels.length === 0 && !loadError"
-      :description="t('app.notification.channels.emptyText')" :image-size="80" />
+        </template>
+      </el-alert>
+      <el-empty v-if="!loading && filteredChannels.length === 0 && !loadError"
+        :description="t('app.notification.channels.emptyText')" :image-size="80" />
     </el-card>
 
-    <!-- 编辑弹窗（DialogHeader 规范 + 消息样式编辑） -->
+    <!-- 编辑弹窗（DialogHeader 规范）：基本信息 + 传输配置分组。
+         机器人协议固定（QQ=Markdown/微信=纯文本），无传输配置区；
+         webhook 保留 method/headers，email 保留 subject/body_format。 -->
     <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(600px, 94vw)" top="6vh"
       :close-on-click-modal="false" @close="resetDrawer">
       <template #header>
@@ -103,14 +108,14 @@
         </el-form-item>
         <el-form-item v-else :label="targetLabel(drawerForm.type)">
           <div class="bind-area">
-            <!-- 接收者/openid 手动输入为主：一个用户可绑定多个机器人通道（不同接收者），
+            <!-- 接收者手动输入为主：一个用户可绑定多个机器人通道（不同接收者），
                  保存不依赖入站捕获；扫码/自动回填仅作辅助。 -->
             <el-input v-model="drawerForm.targetValue" :placeholder="drawerForm.type === 'qq' ? t('app.notification.channels.botOpenidPlaceholder') : t('app.notification.channels.botReceiverPlaceholder')" />
             <div class="bind-helper">
               <template v-if="drawerForm.type === 'wx_clawbot'">
                 <el-tag v-if="wxBotReady" type="success" effect="plain">{{ t('app.notification.channels.wxLoggedIn') }}</el-tag>
                 <el-button v-else size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
-                <el-button size="small" text type="primary" @click="startReceiverPoll">{{ t('app.notification.channels.autoFill') }}</el-button>
+                <el-button size="small" link type="primary" @click="startReceiverPoll">{{ t('app.notification.channels.autoFill') }}</el-button>
               </template>
               <template v-else>
                 <el-button size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
@@ -122,11 +127,10 @@
         </el-form-item>
       </el-form>
 
-      <!-- 传输配置（编辑既有通道时）：请求方式/请求头/消息类型/日报格式。
+      <!-- 传输配置（编辑既有 webhook/email 通道）：请求方式/请求头/标题/正文格式。
            消息正文模板已归通知规则（每通道模板），此处不再编辑模板。 -->
-      <template v-if="editTarget">
-        <el-collapse v-model="transportExpanded" class="transport-collapse">
-          <el-collapse-item :title="t('app.notification.channels.transportSection')" name="transport">
+      <template v-if="editTarget && (drawerForm.type === 'webhook' || drawerForm.type === 'email')">
+        <DialogSectionHeader :title="t('app.notification.channels.transportSection')" class="ch-form-section" />
         <el-form :label-width="$flw('110px')" :disabled="saving">
           <template v-if="drawerForm.type === 'webhook'">
             <el-form-item :label="t('app.notification.channels.styleMethod')">
@@ -148,7 +152,7 @@
               </div>
             </el-form-item>
           </template>
-          <template v-else-if="drawerForm.type === 'email'">
+          <template v-else>
             <el-form-item :label="t('app.notification.channels.styleSubjectTpl')">
               <el-input v-model="styleForm.subject_template" :placeholder="t('app.notification.channels.styleSubjectPlaceholder')" />
             </el-form-item>
@@ -159,20 +163,10 @@
               </el-radio-group>
             </el-form-item>
           </template>
-          <template v-else>
-            <el-form-item v-if="drawerForm.type === 'qq'" :label="t('app.notification.channels.styleMsgType')">
-              <el-radio-group v-model="styleForm.msg_type" size="small">
-                <el-radio-button value="text">{{ t('app.notification.channels.styleMsgText') }}</el-radio-button>
-                <el-radio-button value="markdown">{{ t('app.notification.channels.styleMsgMd') }}</el-radio-button>
-              </el-radio-group>
-              <div v-if="styleForm.msg_type === 'markdown'" class="form-hint">{{ t('app.notification.channels.styleMsgMdHint') }}</div>
-            </el-form-item>
-          </template>
           <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.transportMovedHint') }}</span></div>
         </el-form>
-          </el-collapse-item>
-        </el-collapse>
       </template>
+      <div v-else-if="editTarget" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.botProtocolHint') }}</span></div>
       <template #footer>
         <el-button @click="drawerVisible = false">{{ t('app.notification.channels.cancel') }}</el-button>
         <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDrawer">{{ t('app.notification.channels.save') }}</el-button>
@@ -189,6 +183,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import type { NotificationChannel, NotificationChannelType, NotificationChannelsResponse } from '@/types/notifications.ts'
 
 const { t } = useI18n()
@@ -206,7 +201,6 @@ const isAdminUser = computed(() => authStore.user?.role === 'admin')
 const testingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
 const drawerVisible = ref(false)
-const transportExpanded = ref<string[]>([]) // 传输配置高级区默认折叠
 const editTarget = ref<NotificationChannel | null>(null)
 let fetchSeq = 0
 
@@ -265,13 +259,13 @@ const displayTarget = (ch: NotificationChannel): string => {
   return v || '-'
 }
 
-// 卡片传输配置摘要（style_config 单源；日报渲染格式已归规则日报区，不在此展示）
+// 卡片传输摘要（机器人协议固定：QQ=Markdown、微信=纯文本；webhook=请求方式、email=正文格式）
 const transportSummary = (ch: NotificationChannel): string => {
   let sc: Record<string, string> = {}
   try { sc = JSON.parse(ch.style_config || '{}') as Record<string, string> } catch { sc = {} }
   if (ch.type === 'webhook') return (sc.method || 'POST').toUpperCase()
   if (ch.type === 'email') return sc.body_format === 'html' ? 'HTML' : t('app.notification.channels.styleFormatText')
-  if (ch.type === 'qq') return sc.msg_type === 'markdown' ? 'Markdown' : t('app.notification.channels.styleMsgText')
+  if (ch.type === 'qq') return 'Markdown'
   return t('app.notification.channels.styleFormatText') // 微信 iLink 仅文本
 }
 
@@ -303,9 +297,10 @@ const saving = ref(false)
 const canSave = computed(() => drawerForm.value.name.trim() !== '' && drawerForm.value.targetValue.trim() !== '')
 
 // 传输配置表单（键白名单=后端 validateChannelStyle；模板键保留回填不编辑——
-// 正文模板已归通知规则，保存时原样透传既有模板键避免覆盖丢失）
+// 正文模板已归通知规则，保存时原样透传既有模板键避免覆盖丢失。
+// 机器人协议固定：QQ 恒 msg_type=markdown，微信纯文本，无表单控件）
 interface HeaderRow { name: string; value: string }
-const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', msg_type: 'text', body_format: 'text', daily_format: '', method: 'POST' })
+const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', body_format: 'text', daily_format: '', method: 'POST' })
 const styleForm = ref(emptyStyle())
 const headerRows = ref<HeaderRow[]>([])
 const addHeaderRow = (): void => { if (headerRows.value.length < 8) headerRows.value.push({ name: '', value: '' }) }
@@ -330,7 +325,7 @@ const buildStyleConfig = (): Record<string, unknown> => {
   }
   if (typ === 'qq' || typ === 'wx_clawbot') {
     if (s.content_template.trim()) out.content_template = s.content_template
-    if (typ === 'qq' && s.msg_type === 'markdown') out.msg_type = 'markdown'
+    if (typ === 'qq') out.msg_type = 'markdown'
   }
   if (s.daily_format) out.daily_format = s.daily_format
   return out
@@ -341,7 +336,7 @@ const targetLabel = (typ: NotificationChannelType): string => {
   return map[typ] ?? 'Target'
 }
 const targetPlaceholder = (typ: NotificationChannelType): string => {
-  const map: Record<string, string> = { webhook: t('app.notification.channels.targetWebhookPlaceholder'), email: t('app.notification.channels.targetEmailPlaceholder'), qq: t('app.notification.channels.targetQQHint'), wx_clawbot: t('app.notification.channels.targetWxPlaceholder') }
+  const map: Record<string, string> = { webhook: t('app.notification.channels.targetWebhookPlaceholder'), email: t('app.notification.channels.targetEmailPlaceholder') }
   return map[typ] ?? ''
 }
 
@@ -531,18 +526,16 @@ defineExpose({ fetchChannels })
 .card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
-.transport-collapse { margin-top: 8px; border-top: none; }
-.transport-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; }
-.ch-col { margin-bottom: 16px; }
 
-/* 通道卡片（Dashboard 同构视觉） */
-.ch-card { margin-bottom: 0; }
-.ch-card :deep(.el-card__body) { padding: 16px; }
+/* 通道卡片：等高网格（flex 列齐高），统一间距/层级，全站直角 */
+.ch-col { margin-bottom: 16px; display: flex; }
+.ch-card { width: 100%; margin-bottom: 0; display: flex; flex-direction: column; }
+.ch-card :deep(.el-card__body) { padding: 16px; flex: 1; display: flex; flex-direction: column; }
 .ch-disabled { opacity: 0.6; }
 
 .ch-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .ch-icon {
-  width: 44px; height: 44px; border-radius: 10px;
+  width: 40px; height: 40px; border-radius: 0;
   display: flex; align-items: center; justify-content: center;
   flex: none;
 }
@@ -551,41 +544,41 @@ defineExpose({ fetchChannels })
 .ch-icon-qq { background: #eff6ff; color: #3b82f6; }
 .ch-icon-wx_clawbot { background: #f0fdf4; color: #22c55e; }
 
-.ch-head-info { flex: 1; min-width: 0; }
-.ch-name { font-size: 15px; font-weight: 600; color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ch-type-text { font-size: 12px; color: #6b7280; margin-top: 2px; display: flex; align-items: center; gap: 4px; }
-.ch-owner { margin-left: 2px; }
+.ch-head-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ch-name { font-size: 14px; font-weight: 600; color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-tags { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 
 .ch-target {
   display: flex; align-items: baseline; gap: 8px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   background: var(--el-fill-color-extra-light);
-  border-radius: 6px;
-  margin-bottom: 10px;
+  border-radius: 0;
+  margin-bottom: 8px;
 }
-.ch-target-label { flex: none; font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; }
+.ch-target-label { flex: none; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
 .ch-target-value { font-size: 12px; color: #374151; word-break: break-all; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ch-transport { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.ch-transport { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .ch-transport-label { flex: none; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
 .ch-transport-value { font-size: 12px; color: #374151; }
 
-.ch-meta { margin-bottom: 8px; }
+.ch-meta { margin-bottom: 10px; }
 .ch-test { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
 .ch-test-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .ch-test-dot.is-ok { background: #10b981; }
 .ch-test-dot.is-fail { background: #ef4444; }
+.ch-test-dot.is-none { background: #9ca3af; }
 .test-ok { color: #10b981; }
 .test-fail { color: #ef4444; }
 .test-none { color: #9ca3af; }
 
-.ch-actions { display: flex; gap: 4px; justify-content: flex-end; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; }
+.ch-actions { display: flex; gap: 4px; justify-content: flex-end; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; margin-top: auto; }
+
+/* 编辑弹窗：绑定辅助区 + 传输配置分组 */
+.ch-form-section { margin-top: 4px; }
 .bind-area { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; }
 .bind-helper { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .bind-qr-img { width: 200px; height: 200px; }
 .bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
-.style-section-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 12px; }
-.ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
-.ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
 .header-rows { width: 100%; display: flex; flex-direction: column; gap: 6px; }
 .header-row { display: flex; gap: 8px; align-items: center; }

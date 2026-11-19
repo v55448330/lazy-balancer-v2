@@ -546,13 +546,10 @@ var genericRouteRegistry = []struct {
 	{"/api/v1/caddy/stop", "StopCaddy", false},
 	{"/api/v1/caddy/restart", "RestartCaddy", false},
 	// 通知通道（Generic 分类见 auditRoutePolicies）：
-	// 创建/测试由中间件经映射记录（handler 不自记）；
-	// 删除为 Explicit（handler 对属主与跨属主删除均显式留痕）。
+	// 创建由中间件经映射记录（handler 不自记）；
+	// 更新/删除/测试为 Explicit（handler 显式留痕名称+结果）。
 	{"/api/v1/notification/channels", "CreateNotificationChannel", false},
-	{"/api/v1/notification/rules/:id", "UpdateNotificationRule", false},
-	{"/api/v1/notification/rules/:id/test", "TestNotificationRule", false},
 	{"/api/v1/notification/daily/test", "TestNotificationDaily", false},
-	{"/api/v1/notification/channels/:id/test", "TestNotificationChannel", false},
 	// SMTP 连通性测试：中间件经映射记录（handler 不自记）。
 	{"/api/v1/notification/settings/smtp-test", "TestSMTPSettings", false},
 }
@@ -639,13 +636,13 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		// 114=113 基线+日报配置保存/手动触发合并为 daily/trigger 1 条显式留痕
-		// 动作（旧 daily-report/trigger 端点已删，统一 daily/trigger）；
-		// 7=5 基线+通知通道创建/测试 Generic 两族；19=16 基线+日报预览（只读
-		// 渲染不落库）+QQ/微信扫码产码（绑定完成时 handler 记一次「绑定」，
-		// 产码不复记）3 条 skip。新增见 auditpolicy.go 各自登记处注释。
-		wantExplicit = 114
-		wantGeneric  = 11 // +1：POST /notification/rules/:id/test（规则测试发送）；+1：POST /notification/daily/test（日报测试发送），均 Generic
+		// 117=114 基线+通知规则更新/规则测试/通道测试 3 路由升 Explicit
+		// （handler 记名称+结果，中间件不复记）；8=11-3（升显式 3 条）；
+		// 19=16 基线+日报预览（只读渲染不落库）+QQ/微信扫码产码（绑定完成时
+		// handler 记一次「绑定」，产码不复记）3 条 skip。新增见 auditpolicy.go
+		// 各自登记处注释。
+		wantExplicit = 117
+		wantGeneric  = 8
 		wantSkip     = 19
 	)
 	explicitCount, genericCount, skipCount := 0, 0, 0

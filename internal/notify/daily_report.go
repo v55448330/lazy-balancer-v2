@@ -48,8 +48,10 @@ func DefaultFormatForChannel(channelType string) string {
 		return "json"
 	case "email":
 		return "html"
-	case "qq", "wx_clawbot":
+	case "qq":
 		return "markdown"
+	case "wx_clawbot":
+		return "text" // 微信 iLink 仅纯文本协议，缺省不裹 markdown
 	}
 	return "text"
 }
@@ -141,7 +143,7 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 			taskLogWarn(ctx, "daily", "日报数据采集失败（user=%d）: %v", u, err)
 			continue
 		}
-		if err := deliverDaily(u, cfg, data, now); err != nil {
+		if err := deliverDaily(u, cfg, data, now, false); err != nil {
 			taskLogWarn(ctx, "daily", "日报投递失败（user=%d）: %v", u, err)
 			continue
 		}
@@ -154,8 +156,8 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 // deliverDaily 日报落 pending 投递：body 存**数据载荷 JSON**（非成品正文）
 // ——投递 Daemon 派发时按通道格式渲染（用户裁定「不同通道用不同样式」；
 // renderDailyForChannel 单源）。事件键 sys.daily_report 仅作投递记录展示
-// （不在事件目录）。
-func deliverDaily(userID int64, cfg DailyConfig, data DailyData, now time.Time) error {
+// （不在事件目录）。isTest=单用户测试发送标记（定时全员日报=false）。
+func deliverDaily(userID int64, cfg DailyConfig, data DailyData, now time.Time, isTest bool) error {
 	values := dailyValues(data)
 	payload, err := json.Marshal(map[string]any{
 		"date": data.Date, "items": cfg.Items, "values": values, "formats": cfg.Formats,
@@ -163,10 +165,14 @@ func deliverDaily(userID int64, cfg DailyConfig, data DailyData, now time.Time) 
 	if err != nil {
 		return err
 	}
+	testFlag := 0
+	if isTest {
+		testFlag = 1
+	}
 	_, err = db.DB.Exec(`INSERT INTO notification_deliveries
-		(user_id, event_type, level, title, body, status, attempts, created_at)
-		VALUES (?,?,?,?,?, 'pending', 0, ?)`,
-		userID, EvtDailyReport, LevelInfo, "每日日报", string(payload),
+		(user_id, event_type, level, title, body, status, attempts, is_test, created_at)
+		VALUES (?,?,?,?,?, 'pending', 0, ?, ?)`,
+		userID, EvtDailyReport, LevelInfo, "每日日报", string(payload), testFlag,
 		now.UTC().Format("2006-01-02 15:04:05"))
 	return err
 }
@@ -244,7 +250,7 @@ func RenderDaily(data DailyData, items []string, format string) string {
 
 // renderDailyForChannel 投递派发时的按通道格式渲染（deliverOne 挂钩）：
 // body 为日报数据载荷 JSON→用户 per-channel 配置优先，缺省自动映射
-// （webhook=JSON、email=HTML、QQ/微信=markdown、未知=text）；
+// （webhook=JSON、email=HTML、QQ=markdown、微信=纯文本、未知=text）；
 // 非日报事件原样透传。
 func renderDailyForChannel(msg Message, channelType, styleFormat string) string {
 	if msg.EventType != EvtDailyReport {
@@ -267,6 +273,24 @@ func renderDailyForChannel(msg Message, channelType, styleFormat string) string 
 		format = DefaultFormatForChannel(channelType)
 	}
 	return renderDailyFromValues(payload.Date, payload.Values, payload.Items, format)
+}
+
+// DailyFieldsFromBody 解析日报载荷→模板变量映射（含 date），供内容模板
+// {{requests}} 等日报变量替换；非日报/解析失败返回 nil（不替换）。
+func DailyFieldsFromBody(body string) map[string]string {
+	var payload struct {
+		Date   string            `json:"date"`
+		Values map[string]string `json:"values"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Date == "" {
+		return nil
+	}
+	fields := make(map[string]string, len(payload.Values)+1)
+	for k, v := range payload.Values {
+		fields[k] = v
+	}
+	fields["date"] = payload.Date
+	return fields
 }
 
 // renderDailyFromValues 渲染底座（值映射→格式化文本；html 转义）。

@@ -584,7 +584,9 @@ func createTables() error {
 		attempts INTEGER NOT NULL DEFAULT 0,
 		error TEXT DEFAULT '',
 		created_at TEXT NOT NULL,
-		sent_at DATETIME
+		sent_at DATETIME,
+		is_test INTEGER NOT NULL DEFAULT 0,
+		retry_channel_ids TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status ON notification_deliveries(status, id);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_user ON notification_deliveries(user_id, id);
@@ -1310,16 +1312,21 @@ var newColumnsRegistry = map[string]string{
 	"notification_subscriptions.channel_ids":       "TEXT NOT NULL DEFAULT ''",
 	"notification_subscriptions.channel_templates": "TEXT NOT NULL DEFAULT ''",
 	"notification_delivery_channels.channel_name":  "TEXT NOT NULL DEFAULT ''",
-	"users.display_name":                           "VARCHAR(100)",
-	"users.is_enabled":                             "BOOLEAN NOT NULL DEFAULT 1",
-	"users.is_setup_admin":                         "INTEGER NOT NULL DEFAULT 0",
-	"api_keys.is_enabled":                          "BOOLEAN DEFAULT TRUE",
-	"api_keys.mcp_enabled":                         "INTEGER DEFAULT 0",
-	"api_keys.read_only":                           "INTEGER DEFAULT 0",
-	"api_keys.mcp_ip_whitelist":                    "TEXT DEFAULT ''",
-	"api_keys.api_enabled":                         "INTEGER DEFAULT 1",
-	"api_keys.api_read_only":                       "INTEGER DEFAULT 0",
-	"api_keys.mcp_read_only":                       "INTEGER DEFAULT 0",
+	// 通知投递语义两列（2026-11-19 通知重构）：is_test=测试发送标记
+	// （规则测试/单用户日报测试=1，定时日报与真实事件=0）；retry_channel_ids=
+	// failed_only 重发的失败通道过滤（JSON 数组，派发消费后清空，''=全量）。
+	"notification_deliveries.is_test":           "INTEGER NOT NULL DEFAULT 0",
+	"notification_deliveries.retry_channel_ids": "TEXT NOT NULL DEFAULT ''",
+	"users.display_name":                        "VARCHAR(100)",
+	"users.is_enabled":                          "BOOLEAN NOT NULL DEFAULT 1",
+	"users.is_setup_admin":                      "INTEGER NOT NULL DEFAULT 0",
+	"api_keys.is_enabled":                       "BOOLEAN DEFAULT TRUE",
+	"api_keys.mcp_enabled":                      "INTEGER DEFAULT 0",
+	"api_keys.read_only":                        "INTEGER DEFAULT 0",
+	"api_keys.mcp_ip_whitelist":                 "TEXT DEFAULT ''",
+	"api_keys.api_enabled":                      "INTEGER DEFAULT 1",
+	"api_keys.api_read_only":                    "INTEGER DEFAULT 0",
+	"api_keys.mcp_read_only":                    "INTEGER DEFAULT 0",
 	// ALTER ADD COLUMN 禁非常量默认（SQLite 限制）：updated_at 补列无默认，
 	// 存量行由 newColumnBackfills 回填 created_at；fresh DDL 仍有 DEFAULT。
 	"api_keys.updated_at":                 "DATETIME",

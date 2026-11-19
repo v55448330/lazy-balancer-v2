@@ -60,11 +60,11 @@
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colChannels')" min-width="180">
         <template #default="scope">
-          <template v-if="scope.row.channels?.length">
+          <div v-if="scope.row.channels?.length" class="ch-tags">
             <el-tooltip v-for="ch in scope.row.channels" :key="ch.channel_id" :content="ch.status === 'sent' ? t('app.notification.deliveries.chSent') : (ch.error || t('app.notification.deliveries.chFailed'))" placement="top">
-              <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small" effect="plain" class="mr4">{{ ch.channel_name }}</el-tag>
+              <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small" effect="plain">{{ ch.channel_name }}</el-tag>
             </el-tooltip>
-          </template>
+          </div>
           <span v-else class="ev-more">—</span>
         </template>
       </el-table-column>
@@ -83,16 +83,19 @@
       <el-table-column :label="t('app.notification.deliveries.colAttempts')" width="70" align="center">
         <template #default="scope">{{ scope.row.attempts }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colError')" min-width="200" show-overflow-tooltip>
-        <template #default="scope">{{ scope.row.error || '-' }}</template>
+      <el-table-column :label="t('app.notification.deliveries.colNote')" width="100" align="center">
+        <template #default="scope">
+          <el-tag v-if="scope.row.is_test" size="small" type="info" effect="plain">{{ t('app.notification.deliveries.noteTest') }}</el-tag>
+          <span v-else class="ev-more">—</span>
+        </template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colAction')" width="110" align="center">
         <template #default="scope">
           <el-button
             v-if="isResendable(scope.row as NotificationDelivery)"
             size="small"
-            type="warning"
-            plain
+            link
+            type="primary"
             :loading="resendingId === scope.row.id"
             @click="resend(scope.row as NotificationDelivery)"
           >
@@ -121,6 +124,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { List } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { hasOwn } from '@/utils/hasOwn'
@@ -134,8 +138,9 @@ const { t, tm } = useI18n()
 
 // 契约：page_size 默认 50 上限 200；?status= 过滤；恒全量（投递记录不区分用户视角）。
 const DELIVERY_PAGE_SIZE = 50
-const STATUSES: readonly DeliveryStatus[] = ['pending', 'sent', 'failed', 'dead']
-/** 失败态（failed / dead）提供重发入口；pending 由投递任务接管、sent 无需重发。 */
+const STATUSES: readonly DeliveryStatus[] = ['pending', 'sent', 'partial', 'failed', 'dead']
+/** 失败态（failed / dead）重发全部通道；partial 仅重发失败通道（failed_only）。
+ *  pending 由投递任务接管、sent 无需重发。 */
 const RESENDABLE: readonly DeliveryStatus[] = ['failed', 'dead']
 
 const deliveries = ref<NotificationDelivery[]>([])
@@ -161,6 +166,7 @@ const statusLabel = (status: DeliveryStatus): string => {
   switch (status) {
     case 'pending': return t('app.notification.deliveries.statusPending')
     case 'sent': return t('app.notification.deliveries.statusSent')
+    case 'partial': return t('app.notification.deliveries.statusPartial')
     case 'failed': return t('app.notification.deliveries.statusFailed')
     case 'dead': return t('app.notification.deliveries.statusDead')
   }
@@ -170,7 +176,8 @@ const statusTagType = (status: DeliveryStatus): 'info' | 'success' | 'warning' |
   switch (status) {
     case 'pending': return 'info'
     case 'sent': return 'success'
-    case 'failed': return 'warning'
+    case 'partial': return 'warning'
+    case 'failed': return 'danger'
     case 'dead': return 'danger'
   }
 }
@@ -193,7 +200,7 @@ const levelTagType = (level: NotificationDelivery['level']): 'info' | 'warning' 
   }
 }
 
-const isResendable = (row: NotificationDelivery): boolean => RESENDABLE.includes(row.status)
+const isResendable = (row: NotificationDelivery): boolean => RESENDABLE.includes(row.status) || row.status === 'partial'
 
 const fetchDeliveries = async (): Promise<void> => {
   const seq = ++deliveriesRequestSeq
@@ -219,9 +226,17 @@ const fetchDeliveries = async (): Promise<void> => {
 
 const resend = async (row: NotificationDelivery): Promise<void> => {
   if (resendingId.value !== null) return
+  // 重发为写操作需确认；partial 仅重发失败通道（failed_only），其余重发全部。
+  const partial = row.status === 'partial'
+  try {
+    await ElMessageBox.confirm(
+      partial ? t('app.notification.deliveries.resendPartialConfirm') : t('app.notification.deliveries.resendConfirm'),
+      t('app.notification.deliveries.confirmTitle'), { type: 'warning' })
+  } catch { return }
   resendingId.value = row.id
   try {
-    await request.post(`/notification/deliveries/${row.id}/resend`)
+    if (partial) await request.post(`/notification/deliveries/${row.id}/resend`, { failed_only: true })
+    else await request.post(`/notification/deliveries/${row.id}/resend`)
     mfaAwareSuccess(t('app.notification.deliveries.resendSuccess'))
     await fetchDeliveries()
   } catch (error: unknown) {
@@ -261,6 +276,8 @@ defineExpose({ fetchDeliveries })
 .scope-hint { font-size: 12px; color: var(--text-secondary, #6b7280); }
 .deliveries-footer { margin-top: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: nowrap; }
 .deliveries-pagination { flex: 0 0 auto; white-space: nowrap; }
+.ch-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.ev-more { font-size: 11px; color: #6b7280; }
 /* 展开行：分通道投递结果（通道-状态-错误一一对应） */
 .ch-expand { padding: 4px 12px 8px 36px; display: flex; flex-direction: column; gap: 6px; }
 .ch-expand-row { display: flex; align-items: flex-start; gap: 8px; }

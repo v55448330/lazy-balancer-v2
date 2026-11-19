@@ -5,8 +5,11 @@ package handlers
 // 留审计。
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -27,6 +30,7 @@ type notificationDeliveryDTO struct {
 	Title      string               `json:"title"`
 	Body       string               `json:"body"`
 	Status     string               `json:"status"`
+	IsTest     bool                 `json:"is_test"`
 	Attempts   int                  `json:"attempts"`
 	Error      string               `json:"error"`
 	CreatedAt  string               `json:"created_at"`
@@ -54,7 +58,7 @@ func maskDeliveryBody(body string) string {
 
 // ListNotificationDeliveries GET /notification/deliveries——投递流水恒全量
 // （投递记录不区分用户视角；用户/通道维度经行内 username+channels 呈现）。
-// 跨属主正文截断脱敏；?status= ∈ pending/sent/failed/dead；分页 ?page/&page_size
+// 跨属主正文截断脱敏；?status= ∈ pending/sent/partial/failed/dead；分页 ?page/&page_size
 // （默认 50 上限 200）+ total（底部统计，审计页同口径）。
 func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	uid := contextUserID(c)
@@ -80,7 +84,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	status := c.Query("status")
 	if status != "" {
 		switch status {
-		case "pending", "sent", "failed", "dead":
+		case "pending", "sent", "partial", "failed", "dead":
 		default:
 			msg := apimsg.Tf(c, "k_0d569dd0", status)
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg, MessageKey: "k_0d569dd0"})
@@ -101,7 +105,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		return
 	}
 	// 用户列：显示名优先（无显示名回退用户名）
-	query := `SELECT d.id, d.user_id, COALESCE(NULLIF(u.display_name,''), u.username, ''), d.event_type, d.level, d.title, d.body, d.status, d.attempts, COALESCE(d.error,''), d.created_at, COALESCE(d.sent_at,'')
+	query := `SELECT d.id, d.user_id, COALESCE(NULLIF(u.display_name,''), u.username, ''), d.event_type, d.level, d.title, d.body, d.status, d.attempts, COALESCE(d.error,''), d.created_at, COALESCE(d.sent_at,''), d.is_test
 		FROM notification_deliveries d LEFT JOIN users u ON u.id = d.user_id` + where + ` ORDER BY d.id DESC LIMIT ? OFFSET ?`
 	args = append(args, pageSize, (page-1)*pageSize)
 
@@ -121,11 +125,12 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	ids := make([]int64, 0, pageSize)
 	for rows.Next() {
 		var d notificationDeliveryDTO
-		var attempts int
-		if err := rows.Scan(&d.ID, &d.UserID, &d.Username, &d.EventType, &d.Level, &d.Title, &d.Body, &d.Status, &attempts, &d.Error, &d.CreatedAt, &d.SentAt); err != nil {
+		var attempts, isTest int
+		if err := rows.Scan(&d.ID, &d.UserID, &d.Username, &d.EventType, &d.Level, &d.Title, &d.Body, &d.Status, &attempts, &d.Error, &d.CreatedAt, &d.SentAt, &isTest); err != nil {
 			continue
 		}
 		d.Attempts = attempts
+		d.IsTest = isTest != 0
 		d.EventTitle = d.EventType
 		if t, ok := titles[d.EventType]; ok {
 			d.EventTitle = t
@@ -177,17 +182,28 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 
 // ResendNotificationDelivery POST /notification/deliveries/:id/resend——
 // 属主或管理员把非 pending 投递重置回 pending 并唤醒投递循环。
+// body {"failed_only": bool}：failed_only 且 partial 时只重发失败通道
+// （retry_channel_ids 过滤，派发消费后清空）；否则重发全部通道。空 body=全量。
+// 审计详情=投递标题+通道名（禁「投递 #id」形态）。
 func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
+	var req struct {
+		FailedOnly bool `json:"failed_only"`
+	}
+	// 空 body 兼容（旧客户端无 body 全量重发）：EOF 视同缺省，坏 JSON 仍 400。
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		return
+	}
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
 	var owner int64
-	var status string
-	if err := db.DB.QueryRow(`SELECT user_id, status FROM notification_deliveries WHERE id=?`, id).Scan(&owner, &status); err != nil {
+	var status, title string
+	if err := db.DB.QueryRow(`SELECT user_id, status, title FROM notification_deliveries WHERE id=?`, id).Scan(&owner, &status, &title); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_e742ee3f"), MessageKey: "k_e742ee3f"})
 		return
 	}
@@ -199,7 +215,9 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_c16c1667"), MessageKey: "k_c16c1667"})
 		return
 	}
-	found, reset, err := notify.ResendDelivery(id)
+	// 审计通道名在重置前取快照（重置唤醒投递后结果行可能追加）。
+	names := resendAuditChannelNames(id, req.FailedOnly && status == "partial")
+	found, reset, err := notify.ResendDelivery(id, req.FailedOnly)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("重发通知失败", err)})
 		return
@@ -209,10 +227,39 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_c16c1667"), MessageKey: "k_c16c1667"})
 		return
 	}
-	if owner != uid {
-		recordAudit(c, "重发", "通知投递", "管理员重发用户投递 #"+strconv.FormatInt(id, 10))
-	} else {
-		recordAudit(c, "重发", "通知投递", services.FormatAuditDetail("投递 #"+strconv.FormatInt(id, 10), "", services.AuditResultPart("success")))
+	subject := "重发投递「" + title + "」"
+	if len(names) > 0 {
+		subject += "（通道：" + strings.Join(names, "、") + "）"
 	}
+	if owner != uid {
+		subject = "管理员" + subject
+	}
+	recordAudit(c, "重发", "通知投递", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_07b47533"), MessageKey: "k_07b47533"})
+}
+
+// resendAuditChannelNames 重发审计通道名：每通道取最新结果行（重发追加行，
+// 历史行不计）；failedOnly 仅取最新仍失败的通道。名优先现表名 > 结果行快照名 >
+// 通道类型（审计详情禁「通道 #id」形态）。
+func resendAuditChannelNames(id int64, failedOnly bool) []string {
+	rows, err := db.DB.Query(`SELECT COALESCE(NULLIF(c.name,''), NULLIF(nc.channel_name,''), nc.channel_type), nc.status
+		FROM notification_delivery_channels nc LEFT JOIN notification_channels c ON c.id=nc.channel_id
+		WHERE nc.delivery_id=? AND nc.id IN (SELECT MAX(id) FROM notification_delivery_channels WHERE delivery_id=? GROUP BY channel_id)
+		ORDER BY nc.channel_id`, id, id)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name, status string
+		if rows.Scan(&name, &status) != nil {
+			continue
+		}
+		if failedOnly && status != "failed" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }

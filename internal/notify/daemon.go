@@ -42,8 +42,8 @@ func RunDeliveryLoop(ctx context.Context) error { //scope-exempt: daemon-run-bod
 }
 
 // processPendingBatch 一批 pending：逐行取用户启用通道并发送。
-// 单行多通道：任一通道成功即 sent；全部失败重试 1 次后 failed；无启用通道
-// 的行直接 dead（无处投递，留痕可见）。
+// 单行多通道：全部成功 sent；有成功有失败 partial；全部失败重试 1 次后
+// failed；无启用通道的行直接 dead（无处投递，留痕可见）。
 func processPendingBatch(ctx context.Context) {
 	batch, err := pendingDeliveries(deliveryBatchSize)
 	if err != nil {
@@ -60,9 +60,16 @@ func processPendingBatch(ctx context.Context) {
 	}
 }
 
-// deliverOne 单行投递：展开订阅选定通道→逐通道发送（失败重试 1 次）→
-// 每通道结果落 notification_delivery_channels（概览分布统计事实源）→主表状态收口。
+// deliverOne 单行投递：展开订阅选定通道→failed_only 重发过滤（retry_channel_ids
+// 非空时仅发指定通道，消费后清空）→逐通道发送（失败重试 1 次）→每通道结果落
+// notification_delivery_channels（概览分布统计事实源）→主表状态收口
+// （全成功 sent / 部分失败 partial / 全失败 failed）。
 func deliverOne(ctx context.Context, id, userID int64, msg Message) {
+	retryIDs := deliveryRetryChannelIDs(id)
+	// 日报模板变量：把载荷 values 注入 msg.Fields，供内容模板 {{requests}} 等替换。
+	if msg.EventType == EvtDailyReport {
+		msg.Fields = DailyFieldsFromBody(msg.Body)
+	}
 	channels, err := channelsForUser(userID)
 	if err != nil {
 		taskLogWarn(ctx, "delivery", "notify 通道查询失败（delivery=%d）: %v", id, err)
@@ -73,6 +80,7 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 	// 非空数组=仅发选定通道。
 	sel := subscriptionChannelSelectionFor(userID, msg.EventType)
 	if sel.explicitEmpty {
+		clearDeliveryRetryChannels(id)
 		markDelivery(id, "dead", true, "规则未选择接收通道（不投递）")
 		return
 	}
@@ -85,18 +93,34 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 		}
 		channels = filtered
 	}
+	if len(retryIDs) > 0 {
+		filtered := channels[:0]
+		for _, ch := range channels {
+			if retryIDs[ch.ChannelID] {
+				filtered = append(filtered, ch)
+			}
+		}
+		channels = filtered
+		clearDeliveryRetryChannels(id)
+	}
 	if len(channels) == 0 {
+		if len(retryIDs) > 0 {
+			markDelivery(id, "dead", true, "重发通道均不可用（已删除或停用）")
+			return
+		}
 		markDelivery(id, "dead", true, "无启用的通知通道")
 		return
 	}
 	errs, sentAny := sendToChannels(ctx, id, userID, channels, sel.templates, msg)
 	if sentAny {
-		reason := ""
 		if len(errs) > 0 {
-			reason = "部分通道失败: " + strings.Join(errs, "; ")
+			reason := "部分通道失败: " + strings.Join(errs, "; ")
+			markDelivery(id, "partial", true, reason)
+			taskLogf(ctx, "delivery", "投递 %d 部分成功（user=%d event=%s）%s", id, userID, msg.EventType, reason)
+			return
 		}
-		markDelivery(id, "sent", true, reason)
-		taskLogf(ctx, "delivery", "投递 %d 已发送（user=%d event=%s）%s", id, userID, msg.EventType, reason)
+		markDelivery(id, "sent", true, "")
+		taskLogf(ctx, "delivery", "投递 %d 已发送（user=%d event=%s）", id, userID, msg.EventType)
 		return
 	}
 	markDelivery(id, "failed", true, strings.Join(errs, "; "))
@@ -142,8 +166,8 @@ func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []de
 
 // EnqueueTestDelivery 规则测试发送（导出：handlers 通知规则「测试」按钮）：
 // 以目录模板+样例参数渲染真实事件形态消息，落 pending 投递行（标题带
-// 【测试】标记）并唤醒投递循环——与真实投递同管线：订阅通道选择、每通道
-// 模板渲染、每通道结果落行、投递记录可见（用户裁定：测试消息必须留痕）。
+// 【测试】标记、is_test=1）并唤醒投递循环——与真实投递同管线：订阅通道选择、
+// 每通道模板渲染、每通道结果落行、投递记录可见（用户裁定：测试消息必须留痕）。
 func EnqueueTestDelivery(userID int64, eventType string) error {
 	entry, ok := catalogByID(eventType)
 	if !ok {
@@ -177,8 +201,8 @@ func EnqueueTestDelivery(userID int64, eventType string) error {
 	title := "【测试】" + renderTitle(entry, sample)
 	body := renderBody(entry, sample)
 	_, err = db.DB.Exec(`INSERT INTO notification_deliveries
-		(user_id, event_type, level, title, body, status, attempts, created_at)
-		VALUES (?,?,?,?,?, 'pending', 0, ?)`,
+		(user_id, event_type, level, title, body, status, attempts, is_test, created_at)
+		VALUES (?,?,?,?,?, 'pending', 0, 1, ?)`,
 		userID, eventType, string(entry.Level), title, body,
 		time.Now().UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
@@ -192,7 +216,8 @@ func EnqueueTestDelivery(userID int64, eventType string) error {
 }
 
 // DeliverDailyForUser 单用户日报测试发送（导出：每日摘要卡「测试发送」）：
-// 与定时日报同管线（数据载荷落 pending → 派发侧按通道格式渲染）。
+// 与定时日报同管线（数据载荷落 pending → 派发侧按通道格式渲染），is_test=1
+// 区分定时全员日报（is_test=0）。
 func DeliverDailyForUser(userID int64, now time.Time) error {
 	cfg, err := GetDailyConfig(userID)
 	if err != nil {
@@ -202,7 +227,7 @@ func DeliverDailyForUser(userID int64, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	if err := deliverDaily(userID, cfg, data, now); err != nil {
+	if err := deliverDaily(userID, cfg, data, now, true); err != nil {
 		return err
 	}
 	select {

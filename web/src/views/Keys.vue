@@ -141,62 +141,50 @@
       <el-table-column :label="t('common.app.views.keys.name')" min-width="160">
         <template #default="scope">
           <el-button link type="primary" class="key-name-cell" @click="openKeyDetail(asKey(scope.row))">{{ scope.row.name }}</el-button>
-          <el-tag v-if="isAdmin && !keysMineOnly && scope.row.created_by !== authStore.user?.id" size="small" effect="plain" class="ml4">{{ scope.row.username }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.status')" width="90" align="center">
+      <el-table-column :label="t('common.app.views.keys.status')" width="120" align="center">
         <template #default="scope">
-          <el-tag v-if="keyExpired(asKey(scope.row))" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
-          <el-tag v-else :type="scope.row.is_enabled ? 'success' : 'info'" size="small">
-            {{ scope.row.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}
-          </el-tag>
+          <div class="status-cell">
+            <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+              <div>
+                <!-- 受控绑定（:model-value 而非 v-model）：确认取消/请求失败时数据未变，开关自动保持原态，无需乐观翻转+回滚 -->
+                <el-switch
+                  :model-value="scope.row.is_enabled"
+                  :aria-label="t('common.app.views.keys.switchAria', { name: scope.row.name })"
+                  :loading="togglePendingId === scope.row.id"
+                  :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== scope.row.id) || deletingIds.has(scope.row.id)"
+                  @change="(val: string | number | boolean) => toggleKey(asKey(scope.row), val === true)"
+                />
+              </div>
+            </el-tooltip>
+            <el-tag v-if="keyExpired(asKey(scope.row))" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
+          </div>
         </template>
       </el-table-column>
       <el-table-column :label="t('common.app.views.keys.features')" min-width="200">
         <template #default="scope">
           <div class="feature-tags">
-            <el-tag :type="scope.row.api_enabled ? 'primary' : 'info'" size="small" effect="plain">
-              API {{ scope.row.api_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}
-            </el-tag>
-            <el-tag :type="scope.row.mcp_enabled ? 'primary' : 'info'" size="small" effect="plain">
-              MCP {{ scope.row.mcp_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}
-            </el-tag>
-            <el-tag :type="scope.row.api_read_only ? 'warning' : 'success'" size="small" effect="plain">
-              API {{ scope.row.api_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
-            </el-tag>
-            <el-tag :type="scope.row.mcp_read_only ? 'warning' : 'success'" size="small" effect="plain">
-              MCP {{ scope.row.mcp_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
-            </el-tag>
+            <el-tag :type="apiFeatureTag(asKey(scope.row)).type" size="small" effect="plain">{{ apiFeatureTag(asKey(scope.row)).text }}</el-tag>
+            <el-tag :type="mcpFeatureTag(asKey(scope.row)).type" size="small" effect="plain">{{ mcpFeatureTag(asKey(scope.row)).text }}</el-tag>
             <el-tooltip v-if="whitelistEntries(asKey(scope.row).mcp_ip_whitelist).length" :content="whitelistSummary(asKey(scope.row).mcp_ip_whitelist)" placement="top">
               <el-tag type="warning" size="small" effect="plain">{{ t('common.app.views.keys.ipWhitelist') }}</el-tag>
             </el-tooltip>
           </div>
         </template>
       </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.createdBy')" width="120" show-overflow-tooltip>
+        <template #default="scope">{{ scope.row.username || ('#' + scope.row.created_by) }}</template>
+      </el-table-column>
       <el-table-column :label="t('common.app.views.keys.createdAt')" width="170">
         <template #default="scope">{{ formatDate(scope.row.created_at) || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.updatedAt')" width="170">
-        <template #default="scope">
-          {{ formatDate(scope.row.updated_at) || '-' }}
-          <span v-if="scope.row.updated_by_username" class="ev-more">· {{ scope.row.updated_by_username }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.lastUsed')" width="170">
-        <template #default="scope">{{ formatDate(scope.row.last_used) || t('common.app.views.keys.neverUsed') }}</template>
-      </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="170">
-        <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
-      </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colAction')" width="170" align="right" fixed="right">
+      <el-table-column :label="t('app.notification.deliveries.colAction')" width="110" align="right" fixed="right">
         <template #default="scope">
           <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
             <div class="row-actions">
               <el-button size="small" link type="primary" :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)" @click="openFeatureDialog(asKey(scope.row))">
                 {{ t('common.app.views.keys.featureConfig') }}
-              </el-button>
-              <el-button size="small" link :type="scope.row.is_enabled ? 'warning' : 'success'" :loading="togglePendingId === scope.row.id" :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== scope.row.id) || deletingIds.has(scope.row.id)" @click="toggleKey(asKey(scope.row))">
-                {{ scope.row.is_enabled ? t('common.app.views.keys.disable') : t('common.app.views.keys.enable') }}
               </el-button>
               <el-button size="small" link type="danger" :loading="deletingIds.has(scope.row.id)" :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)" @click="deleteKey(scope.row.id)">
                 {{ t('common.app.views.keys.delete') }}
@@ -494,15 +482,14 @@
         <el-descriptions-item :label="t('common.app.views.keys.owner')">{{ keyDetailTarget.username || ('#' + keyDetailTarget.created_by) }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.features')">
           <div class="feature-tags">
-            <el-tag :type="keyDetailTarget.api_enabled ? 'primary' : 'info'" size="small" effect="plain">API {{ keyDetailTarget.api_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}</el-tag>
-            <el-tag :type="keyDetailTarget.mcp_enabled ? 'primary' : 'info'" size="small" effect="plain">MCP {{ keyDetailTarget.mcp_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}</el-tag>
-            <el-tag :type="keyDetailTarget.api_read_only ? 'warning' : 'success'" size="small" effect="plain">API {{ keyDetailTarget.api_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}</el-tag>
-            <el-tag :type="keyDetailTarget.mcp_read_only ? 'warning' : 'success'" size="small" effect="plain">MCP {{ keyDetailTarget.mcp_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}</el-tag>
+            <el-tag :type="apiFeatureTag(keyDetailTarget).type" size="small" effect="plain">{{ apiFeatureTag(keyDetailTarget).text }}</el-tag>
+            <el-tag :type="mcpFeatureTag(keyDetailTarget).type" size="small" effect="plain">{{ mcpFeatureTag(keyDetailTarget).text }}</el-tag>
           </div>
         </el-descriptions-item>
         <el-descriptions-item v-if="whitelistEntries(keyDetailTarget.mcp_ip_whitelist).length" :label="t('common.app.views.keys.ipWhitelist')">{{ whitelistSummary(keyDetailTarget.mcp_ip_whitelist) }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.createdAt')">{{ formatDate(keyDetailTarget.created_at) || '-' }}</el-descriptions-item>
-        <el-descriptions-item :label="t('common.app.views.keys.updatedAt')">{{ formatDate(keyDetailTarget.updated_at) || '-' }}<span v-if="keyDetailTarget.updated_by_username" class="ev-more"> · {{ keyDetailTarget.updated_by_username }}</span></el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.updatedAt')">{{ formatDate(keyDetailTarget.updated_at) || '-' }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.updatedBy')">{{ keyDetailTarget.updated_by_username || ('#' + keyDetailTarget.updated_by) }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.lastUsed')">{{ formatDate(keyDetailTarget.last_used) || t('common.app.views.keys.neverUsed') }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.expiresAt')">{{ formatDate(keyDetailTarget.expires_at) || t('common.app.views.keys.neverExpires') }}</el-descriptions-item>
       </el-descriptions>
@@ -764,6 +751,15 @@ const keyExpired = (key: APIKey): boolean => {
   return Number.isFinite(expiresAt) && expiresAt < Date.now()
 }
 
+// 功能标签单 tag 每协议（开关+读写合并呈现，省列宽）：表格与详情弹框共用同一口径。
+// 颜色沿用合并前语义——只读=warning、读写=success、协议关闭=info。
+const apiFeatureTag = (key: APIKey): { type: 'success' | 'warning' | 'info'; text: string } => key.api_enabled
+  ? { type: key.api_read_only ? 'warning' : 'success', text: t(key.api_read_only ? 'common.app.views.keys.apiOnReadOnly' : 'common.app.views.keys.apiOnReadWrite') }
+  : { type: 'info', text: t('common.app.views.keys.apiOff') }
+const mcpFeatureTag = (key: APIKey): { type: 'success' | 'warning' | 'info'; text: string } => key.mcp_enabled
+  ? { type: key.mcp_read_only ? 'warning' : 'success', text: t(key.mcp_read_only ? 'common.app.views.keys.mcpOnReadOnly' : 'common.app.views.keys.mcpOnReadWrite') }
+  : { type: 'info', text: t('common.app.views.keys.mcpOff') }
+
 const disablePastDate = (date: Date): boolean => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -905,9 +901,8 @@ const deleteKey = async (id: number) => {
   }
 }
 
-const toggleKey = async (key: APIKey) => {
+const toggleKey = async (key: APIKey, isEnabled: boolean) => {
   if (nodeWriteBlocked.value || togglePendingId.value !== null || deletingIds.value.has(key.id)) return
-  const isEnabled = !key.is_enabled
 
   // 占位先于确认（同 TaskMonitor/ClusterSettings 范式）：确认框悬挂期也是「操作在途」，
   // 此时没有门，连点会叠出第二个确认框并重复写。
@@ -1000,8 +995,9 @@ onMounted(() => {
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
 .keys-table { width: 100%; margin-bottom: 4px; }
-.key-name-cell { font-weight: 600; padding: 0; height: auto; }
-.ml4 { margin-left: 4px; }
+.key-name-cell { font-weight: 600; padding: 0; height: auto; max-width: 100%; }
+.key-name-cell :deep(> span) { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.status-cell { display: inline-flex; align-items: center; gap: 6px; }
 .row-actions { display: inline-flex; gap: 8px; white-space: nowrap; flex-wrap: nowrap; }
 .row-actions .el-button { padding: 0; }
 /* API/MCP 接入卡（双协议同构：端点/鉴权/用途三行） */
@@ -1017,7 +1013,6 @@ code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light)
 /* 停用提示占位槽：两卡常驻等高（提示出现/消失不改变卡片高度） */
 .access-note-slot { min-height: 46px; }
 .access-note-slot .info-note-bar { margin: 8px 0 0; }
-.ev-more { font-size: 11px; color: #6b7280; }
 .perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .perm-col { border: 1px solid #f3f4f6; padding: 12px 14px 4px; }
 .perm-col-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 10px; }

@@ -110,12 +110,19 @@ func formatBotTextWithTemplate(tpl string, msg Message, ts time.Time) string {
 	if event == "" {
 		event = "notification"
 	}
-	r := strings.NewReplacer(
+	pairs := []string{
 		"{{title}}", msg.Title,
 		"{{body}}", msg.Body,
 		"{{level}}", msg.Level,
 		"{{event}}", event,
 		"{{time}}", ts.Format("2006-01-02 15:04"),
-	)
-	return r.Replace(tpl)
+	}
+	// 日报变量（{{date}}/{{requests}}/…）：值来自日报载荷（deliverOne 注入
+	// msg.Fields），用户日报模板可插入包含项目变量；非日报消息 Fields 无这些键不替换。
+	for _, k := range []string{"date", "requests", "blocked", "attack_top", "autoban", "cert_status", "cluster_status"} {
+		if v, ok := msg.Fields[k]; ok {
+			pairs = append(pairs, "{{"+k+"}}", v)
+		}
+	}
+	return strings.NewReplacer(pairs...).Replace(tpl)
 }

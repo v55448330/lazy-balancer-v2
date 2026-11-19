@@ -108,7 +108,7 @@ func TestDeliverOneChannelSelectionAndResults(t *testing.T) {
 		t.Fatalf("结果行 channel=%d status=%s, want 101/sent", chID, chStatus)
 	}
 
-	// 无选择订阅（channel_ids 空）=全部通道：102 失败落行，主表仍 sent（任一成功）
+	// 无选择订阅（channel_ids 空）=全部通道：102 失败落行，主表 partial（有成功有失败）
 	if _, err := db.DB.Exec(`UPDATE notification_subscriptions SET channel_ids='' WHERE user_id=7`); err != nil {
 		t.Fatalf("clear selection: %v", err)
 	}
@@ -117,8 +117,8 @@ func TestDeliverOneChannelSelectionAndResults(t *testing.T) {
 	id2, _ := res2.LastInsertId()
 	deliverOne(context.Background(), id2, 7, Message{EventType: "cert.failed", Level: "critical", Title: "证书失败2", Body: "正文"})
 	_ = db.DB.QueryRow(`SELECT status FROM notification_deliveries WHERE id=?`, id2).Scan(&status)
-	if status != "sent" {
-		t.Fatalf("全通道投递 status=%s, want sent（部分失败仍 sent）", status)
+	if status != "partial" {
+		t.Fatalf("全通道投递 status=%s, want partial（部分失败）", status)
 	}
 	var sentRows, failedRows int
 	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_delivery_channels WHERE delivery_id=? AND status='sent'`, id2).Scan(&sentRows)

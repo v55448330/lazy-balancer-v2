@@ -353,29 +353,22 @@ func auditRetentionRound(ctx context.Context) (auditDeleted int, runsDeleted int
 	return auditDeleted, runsDeleted, errors.Join(auditErr, runsErr)
 }
 
-// FormatAuditAction 中间件侧通用审计的动作映射。仅保留 5 条 Generic
-// 路由（auditpolicy.go 分类）中由中间件记录的 3 条 caddy/start|stop|restart——
-// 其余全部 Explicit 路由的 handler 自行显式记录且被 HasExplicitAuditEvent 前置
-// 短路，本函数对它们的映射运行时不可达（死代码，含映射不存在路由 /nodes/register
-// 的历史遗留）；死映射的最大风险是「Explicit 清单漂移漏掉某路由时中间件恢复
-// 映射记录 → 与 handler 显式记录叠加成双条」，故全部删除。
+// FormatAuditAction 中间件侧通用审计的动作映射。仅承载由中间件记录的 Generic
+// 路由（通知通道创建/日报测试/SMTP 测试 + caddy/start|stop|restart）；其余全部
+// Explicit 路由的 handler 自行显式记录且被 HasExplicitAuditEvent 前置短路，本函数
+// 对它们的映射运行时不可达（死代码）；死映射的最大风险是「Explicit 清单漂移漏掉
+// 某路由时中间件恢复映射记录 → 与 handler 显式记录叠加成双条」，故全部删除。
 // 新增路由的审计分工：handler 显式记录 → 入 auditRoutePolicies 为 Explicit；
 // 由中间件记录 → 入 Generic 并在本函数补映射 + TestAuditGenericRoutesExactlyOnce
 // 登记表同步。契约绊线见 TestAuditExplicitRoutesMappingEmpty / TestAuditPolicyListsEqual。
 func FormatAuditAction(path string) (action, resource, detail string) {
-	// 通知通道 Generic 路由按完整路径精确匹配（Contains 会把 Explicit 的
-	// PUT :id 与 handler 自记的 DELETE :id 一并吞进来，破坏 exactly-once）。
+	// 通知 Generic 路由按完整路径精确匹配（Contains 会把 Explicit 的
+	// PUT/DELETE/测试 :id 路由一并吞进来，破坏 exactly-once）。
 	switch path {
 	case "/api/v1/notification/channels":
 		return "创建", "通知通道", path
-	case "/api/v1/notification/rules/:id":
-		return "修改", "通知规则", path
-	case "/api/v1/notification/rules/:id/test":
-		return "测试", "通知规则", path
 	case "/api/v1/notification/daily/test":
 		return "测试", "通知日报", path
-	case "/api/v1/notification/channels/:id/test":
-		return "测试", "通知通道", path
 	case "/api/v1/notification/settings/smtp-test":
 		return "测试", "通知设置", path
 	}

@@ -93,7 +93,9 @@ CREATE TABLE notification_deliveries (
 	attempts INTEGER NOT NULL DEFAULT 0,
 	error TEXT DEFAULT '',
 	created_at TEXT NOT NULL,
-	sent_at DATETIME
+	sent_at DATETIME,
+	is_test INTEGER NOT NULL DEFAULT 0,
+	retry_channel_ids TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE notification_delivery_channels (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
