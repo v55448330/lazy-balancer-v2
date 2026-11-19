@@ -25,7 +25,6 @@ import (
 )
 
 const (
-	qqWSGateway = "wss://api.sgroup.qq.com/websocket"
 	qqIntentC2C = 1 << 25 // C2C_MESSAGE_CREATE
 
 	qqHTTPTimeout  = 10 * time.Second
@@ -34,15 +33,16 @@ const (
 	qqReadDeadline = 15 * time.Second // 首帧/拨号读时限基数
 )
 
-// REST 端点 var（测试 mock 覆写；生产=官方开放平台端点，同 qqbind.go 口径）。
+// 端点 var（测试 mock 覆写；生产=官方开放平台端点，同 qqbind.go 口径）。
 var (
-	qqAPIBase  = "https://api.sgroup.qq.com"
-	qqTokenURL = "https://bots.qq.com/app/getAppAccessToken"
+	qqAPIBase   = "https://api.sgroup.qq.com"
+	qqTokenURL  = "https://bots.qq.com/app/getAppAccessToken"
+	qqWSGateway = "wss://api.sgroup.qq.com/websocket"
 )
 
 // qqTokenManager access_token 持有与刷新（包级单例 qqTokens）。token 按
-// appid 隔离缓存：多机器人场景各 bot 凭据独立鉴权互不顶掉；入站 ws 会话
-// （全局首 bot）与 REST 发送（target 钉住凭据）共用同一缓存。
+// appid 隔离缓存：多机器人场景各 bot 凭据独立鉴权互不顶掉；per-bot 入站 ws
+// 会话与 REST 发送（target 钉住凭据）共用同一缓存。
 type qqTokenManager struct {
 	mu     sync.Mutex
 	tokens map[string]qqTokenEntry // appid → token
@@ -63,8 +63,8 @@ func (m *qqTokenManager) invalidate() {
 	m.tokens = nil
 }
 
-// invalidateAppID 作废单个 bot 的缓存 token（op:9 会话失效——只影响入站
-// 首 bot，不波及其它 bot 的出站 token）。
+// invalidateAppID 作废单个 bot 的缓存 token（op:9 会话失效——只影响该 bot
+// 入站会话，不波及其它 bot 的出站 token）。
 func (m *qqTokenManager) invalidateAppID(appid string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -72,7 +72,7 @@ func (m *qqTokenManager) invalidateAppID(appid string) {
 }
 
 // ensureCred 按给定凭据取 token（缓存命中免鉴权；过期前 2 分钟刷新）。
-// 凭据由调用方解析：出站=target 钉住凭据（缺省回退全局），入站=全局首 bot。
+// 凭据由调用方解析：出站=target 钉住凭据（缺省回退全局），入站=会话所属 bot。
 func (m *qqTokenManager) ensureCred(ctx context.Context, appid, secret string) (string, error) {
 	if appid == "" || secret == "" {
 		return "", errors.New("QQ 机器人凭据未配置（全局设置→通知凭据）")
@@ -122,7 +122,7 @@ func (m *qqTokenManager) ensureCred(ctx context.Context, appid, secret string) (
 	return tr.Token, nil
 }
 
-// qqResumeState 断线续传会话态（跨重连持有；仅连接 goroutine 串行访问）。
+// qqResumeState 断线续传会话态（跨重连持有；仅所属 bot 会话 goroutine 串行访问）。
 type qqResumeState struct {
 	sessionID string // READY 下发的会话 ID（空=尚未建立，走 Identify）
 	lastS     atomic.Int64
@@ -137,8 +137,9 @@ func (rs *qqResumeState) reset() {
 // 心跳带最新 seq；超过两个周期无 ACK 即判死断开；读侧逐帧刷新超时兜底
 // 半开连接。服务端请求重连（op:7）与会话失效（op:9）返回错误由外层重连
 // （前者保留会话态走 Resume，后者重置后重新 Identify）。
-func qqBotSession(ctx context.Context, rs *qqResumeState) error {
-	appid, secret, _ := qqBotCredentials()
+// cred/link=会话所属 bot 的凭据与连接态（per-bot 隔离，互不顶掉）。
+func qqBotSession(ctx context.Context, cred qqBotCred, link *botLinkState, rs *qqResumeState) error {
+	appid, secret := cred.AppID, cred.Secret
 	token, err := qqTokens.ensureCred(ctx, appid, secret)
 	if err != nil {
 		return err
@@ -182,7 +183,7 @@ func qqBotSession(ctx context.Context, rs *qqResumeState) error {
 			"token": "QQBot " + token, "session_id": rs.sessionID, "seq": rs.lastS.Load(),
 		}})
 		if err == nil {
-			taskLogf(ctx, "connect", "QQ 机器人尝试断线续传（seq=%d）", rs.lastS.Load())
+			taskLogf(ctx, "connect", "QQ 机器人尝试断线续传（bot=%s seq=%d）", cred.AppID, rs.lastS.Load())
 		}
 	} else {
 		err = send(map[string]any{"op": 2, "d": map[string]any{
@@ -213,7 +214,7 @@ func qqBotSession(ctx context.Context, rs *qqResumeState) error {
 					return
 				}
 				if time.Since(time.UnixMilli(lastAck.Load())) > 2*beat+qqBeatGrace {
-					taskLogWarn(ctx, "connect", "QQ 心跳 ACK 超时，判定连接死亡")
+					taskLogWarn(ctx, "connect", "QQ 心跳 ACK 超时（bot=%s），判定连接死亡", cred.AppID)
 					_ = conn.Close()
 					return
 				}
@@ -257,22 +258,22 @@ func qqBotSession(ctx context.Context, rs *qqResumeState) error {
 				if json.Unmarshal(frame.D, &d) == nil && d.SessionID != "" {
 					rs.sessionID = d.SessionID
 				}
-				qqLink.set(true, "")
-				taskLogf(ctx, "connect", "QQ 机器人连接建立（bot=%s READY，session 已就绪）", qqBotID())
+				link.set(true, "")
+				taskLogf(ctx, "connect", "QQ 机器人连接建立（bot=%s READY，session 已就绪）", cred.AppID)
 			case "RESUMED":
-				taskLogf(ctx, "connect", "QQ 机器人断线续传成功（bot=%s seq=%d）", qqBotID(), rs.lastS.Load())
-				qqLink.set(true, "")
+				taskLogf(ctx, "connect", "QQ 机器人断线续传成功（bot=%s seq=%d）", cred.AppID, rs.lastS.Load())
+				link.set(true, "")
 			case "C2C_MESSAGE_CREATE":
-				handleQQC2CMessage(ctx, frame.D)
+				handleQQC2CMessage(ctx, cred, frame.D)
 			}
 		}
 	}
 }
 
 // handleQQC2CMessage 处理单聊消息：绑定指令「绑定 XXXXXX」→ openid↔user；
-// 回复为被动消息（带 msg_id，免主动额度）。入站 ws 属全局首 bot——通道
-// target 钉住其凭据（多机器人出站鉴权源），回执亦用其 token。
-func handleQQC2CMessage(ctx context.Context, raw json.RawMessage) {
+// 回复为被动消息（带 msg_id，免主动额度）。入站 ws 属会话所属 bot——通道
+// target 钉住该 bot 凭据（多机器人出站鉴权源），回执亦用其 token。
+func handleQQC2CMessage(ctx context.Context, cred qqBotCred, raw json.RawMessage) {
 	var msg struct {
 		Content string `json:"content"`
 		Author  struct {
@@ -283,7 +284,7 @@ func handleQQC2CMessage(ctx context.Context, raw json.RawMessage) {
 	if json.Unmarshal(raw, &msg) != nil || msg.Author.UserOpenID == "" {
 		return
 	}
-	appid, secret, _ := qqBotCredentials()
+	appid, secret := cred.AppID, cred.Secret
 	target := map[string]any{"openid": msg.Author.UserOpenID}
 	if appid != "" && secret != "" {
 		target["appid"], target["secret"] = appid, secret
@@ -293,7 +294,7 @@ func handleQQC2CMessage(ctx context.Context, raw json.RawMessage) {
 	bindBotChannel(code, msg.Author.UserOpenID, "qq", "QQ 机器人", string(targetJSON),
 		func(reply string) {
 			if err := qqSendText(ctx, msg.Author.UserOpenID, reply, msg.ID, appid, secret); err != nil {
-				taskLogWarn(ctx, "bind", "QQ 绑定回复发送失败: %v", err)
+				taskLogWarn(ctx, "bind", "QQ 绑定回复发送失败（bot=%s）: %v", appid, err)
 			}
 		})
 }

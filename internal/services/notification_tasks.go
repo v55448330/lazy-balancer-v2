@@ -75,7 +75,7 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		Run: func(rc taskengine.RunContext) error {
 			// 业务门内置 Run 体（Daemon 不参与 tick 调度，EnabledFn 非法）：
 			// 凭据未配置时间隔等待而非退出——设置保存落库后连接自动起，无需重启任务。
-			for !notify.QQBotConfigured() {
+			for !notify.QQAnyBotConfigured() {
 				select {
 				case <-rc.Ctx.Done():
 					return nil
@@ -96,7 +96,7 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		RunsOn:      taskengine.RoleMasterOnly,
 		Run: func(rc taskengine.RunContext) error {
 			// 业务门内置 Run 体：登录态未配置时间隔等待（同 QQ 口径）。
-			for !notify.WxBotConfigured() {
+			for !notify.WxAnyBotConfigured() {
 				select {
 				case <-rc.Ctx.Done():
 					return nil

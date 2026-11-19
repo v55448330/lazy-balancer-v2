@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // TODO(协议-校准): 以下端点/参数整理自官方 openclaw-weixin v1.0.2 源码的
@@ -55,12 +57,19 @@ type wxBotCred struct {
 	UserID    string `json:"userId"`
 }
 
-var wxLink botLinkState
+// wxLinks per-bot 连接态登记表（通知中心页状态点数据源）。
+var wxLinks botLinkRegistry
 
 // WxBotConfigured 微信 Bot 登录态凭证已配置。
 func WxBotConfigured() bool {
 	_, ok := loadWxBotCred()
 	return ok
+}
+
+// WxAnyBotConfigured 任一 bot 凭据可枚举（全局或通道钉住）——daemon Run 包装
+// 门判据：pinned-only 形态（全局未配置、仅通道带凭据）入站亦可启动。
+func WxAnyBotConfigured() bool {
+	return len(wxEnumerateBots()) > 0
 }
 
 // loadWxBotCred 读全局凭证（notify_settings KV：notify.wx_bot_cred JSON，
@@ -81,6 +90,70 @@ func saveWxBotCred(cred wxBotCred) error {
 		return err
 	}
 	return SetSettings(map[string]string{KeyWxBotCred: string(raw)})
+}
+
+// wxCredKey bot 唯一键（account_id 优先，缺省 token）：在线态登记/游标/
+// context_token 命名空间/枚举去重均用此键。
+func wxCredKey(cred wxBotCred) string {
+	if cred.AccountID != "" {
+		return cred.AccountID
+	}
+	return cred.Token
+}
+
+// wxEnumerateBots 枚举 distinct bots：全局首 bot + 各通道钉住凭据，按
+// account_id/token 去重（全局优先）。序=全局在前、通道按 id 升序（首元素=
+// 首 bot，无参在线态兼容锚点）。缺 token/坏 JSON 的 target 跳过。
+func wxEnumerateBots() []wxBotCred {
+	var bots []wxBotCred
+	seen := map[string]bool{}
+	add := func(cred wxBotCred) {
+		if cred.Token == "" {
+			return
+		}
+		key := wxCredKey(cred)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		bots = append(bots, cred)
+	}
+	if cred, ok := loadWxBotCred(); ok {
+		add(cred)
+	}
+	if db.DB != nil {
+		rows, err := db.DB.Query(`SELECT target FROM notification_channels WHERE type='wx_clawbot' ORDER BY id`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var target string
+				if rows.Scan(&target) != nil {
+					continue
+				}
+				var cfg struct {
+					Token     string `json:"token"`
+					BaseURL   string `json:"baseurl"`
+					AccountID string `json:"account_id"`
+					UserID    string `json:"user_id"`
+				}
+				if json.Unmarshal([]byte(target), &cfg) == nil {
+					add(wxBotCred{Token: cfg.Token, BaseURL: cfg.BaseURL, AccountID: cfg.AccountID, UserID: cfg.UserID})
+				}
+			}
+		}
+	}
+	return bots
+}
+
+// wxWakeCh 凭据/钉住变更唤醒信号（WxPinChannelTarget 钉住成功/
+// WxQRLoginPoll 扫码确认后投递；非阻塞，循环未运行时弃置——下轮对账自然读新凭据）。
+var wxWakeCh = make(chan struct{}, 1)
+
+func wakeWxBotConnection() {
+	select {
+	case wxWakeCh <- struct{}{}:
+	default:
+	}
 }
 
 // WxPinChannelTarget 通道 target 钉住登录凭据（多机器人出站鉴权源，对称
@@ -114,23 +187,50 @@ func WxPinChannelTarget(targetJSON string) string {
 	if err != nil {
 		return targetJSON
 	}
+	wakeWxBotConnection() // 钉住成功唤醒连接任务：新 bot 入站会话不等对账周期上线
 	return string(b)
 }
 
-// WxLinkStatus 连接状态（REST 只读）。
+// WxLinkStatus 连接状态（REST 只读）=首 bot（全局凭据 bot，单 bot 时代兼容
+// 口径）；多机器人按 bot 查询用 WxLinkStatusFor。
 func WxLinkStatus() (bool, string, time.Time) {
-	wxLink.mu.Lock()
-	defer wxLink.mu.Unlock()
-	return wxLink.connected, wxLink.lastErr, wxLink.lastChange
+	return wxLinks.status("")
 }
 
-// 会话路由态（进程内存）：getupdates 游标 + 各会话最近一次 context_token。
+// WxLinkStatusFor 查指定 bot（account_id/token 键）入站会话在线态；空=首 bot；
+// 未登记 bot=离线。
+func WxLinkStatusFor(botID string) (bool, string, time.Time) {
+	return wxLinks.status(botID)
+}
+
+// wxTargetBotKey 解析 target 所属 bot 键（钉住优先/全局回退；空=首 bot）。
+// Send/Test 闸门按 target 查对应 bot 的入站在线态（各 bot 会话独立）。
+func wxTargetBotKey(targetJSON string) string {
+	var cfg struct {
+		Token     string `json:"token"`
+		AccountID string `json:"account_id"`
+		UserID    string `json:"user_id"`
+	}
+	_ = json.Unmarshal([]byte(targetJSON), &cfg)
+	if cfg.Token == "" {
+		cred, ok := loadWxBotCred()
+		if !ok {
+			return ""
+		}
+		return wxCredKey(cred)
+	}
+	return wxCredKey(wxBotCred{Token: cfg.Token, AccountID: cfg.AccountID, UserID: cfg.UserID})
+}
+
+// 会话路由态（进程内存，per-bot 隔离）：getupdates 游标 + 各会话最近一次 context_token。
 // 进程重启后游标清零（错过期间的私聊不补拉——绑定指令可重发）；
 // context_token 缓存清零后需对方再发一条消息恢复主动发送。
 var (
-	wxCtxMu         sync.Mutex
-	wxContextTokens = map[string]string{}
-	wxUpdatesBuf    string
+	wxCtxMu sync.Mutex
+	// wxContextTokens botKey → from → context_token；wxUpdatesBufs botKey → getupdates 游标。
+	// 多 bot 入站会话互不共用游标/会话令牌（二登不重置首 bot）。
+	wxContextTokens = map[string]map[string]string{}
+	wxUpdatesBufs   = map[string]string{}
 	wxPendingQR     string // 进行中的扫码登录二维码令牌
 	// wxConfirmedPin 最近一次扫码确认的新凭据（全局已配置时二登不落全局，
 	// 凭据在此待通道保存钉住；首登落全局时清空）。wxCtxMu 守护。
@@ -189,16 +289,21 @@ func WxDefaultReceiver() string {
 	return ""
 }
 
-func cacheWxContextToken(from, token string) {
+func cacheWxContextToken(botKey, from, token string) {
 	wxCtxMu.Lock()
-	wxContextTokens[from] = token
+	m := wxContextTokens[botKey]
+	if m == nil {
+		m = map[string]string{}
+		wxContextTokens[botKey] = m
+	}
+	m[from] = token
 	wxCtxMu.Unlock()
 }
 
-func wxContextTokenFor(to string) string {
+func wxContextTokenFor(botKey, to string) string {
 	wxCtxMu.Lock()
 	defer wxCtxMu.Unlock()
-	return wxContextTokens[to]
+	return wxContextTokens[botKey][to]
 }
 
 func wxUIN() string {
@@ -221,7 +326,7 @@ type wxSender struct{}
 func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error {
 	// 任务即服务（用户裁定，同 QQ）：出站闸门=引擎真实运行态（IsRunning），
 	// 停止常驻任务=无法处理发送。iLink 仅文本，无 markdown 形态。
-	connected, lastErr, _ := WxLinkStatus()
+	connected, lastErr, _ := WxLinkStatusFor(wxTargetBotKey(targetJSON))
 	if !botServiceRunning("wx-bot-connection", connected) {
 		if lastErr != "" {
 			return fmt.Errorf("微信机器人服务未运行: %s", lastErr)
@@ -235,9 +340,9 @@ func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error 
 	return SendWxText(ctx, targetJSON, formatBotTextWithTemplate(styled.ContentTemplate, msg, time.Now()))
 }
 
-// Test 连接离线时返回明确错误；在线则发测试文本。
+// Test 所属 bot 连接离线时返回明确错误；在线则发测试文本。
 func (wxSender) Test(ctx context.Context, targetJSON string) error {
-	connected, lastErr, _ := WxLinkStatus()
+	connected, lastErr, _ := WxLinkStatusFor(wxTargetBotKey(targetJSON))
 	if !botServiceRunning("wx-bot-connection", connected) {
 		if lastErr != "" {
 			return fmt.Errorf("微信机器人连接离线: %s", lastErr)
@@ -281,7 +386,7 @@ func SendWxText(ctx context.Context, targetJSON, text string) error {
 // 分片发送（每片新 client_id，复用同一 context_token）。
 func sendWxMessage(ctx context.Context, cred wxBotCred, toUserID, text, contextToken string) error {
 	if contextToken == "" {
-		contextToken = wxContextTokenFor(toUserID)
+		contextToken = wxContextTokenFor(wxCredKey(cred), toUserID)
 	}
 	if contextToken == "" {
 		return fmt.Errorf("微信接收方 %s 缺少会话上下文（请先在微信内向机器人发送任意消息以建立会话）", toUserID)
@@ -377,55 +482,138 @@ func splitWxText(text string, limit int) []string {
 	return chunks
 }
 
-// wxBotID 当前微信 Bot 标识（ilink_bot_id，缺省 user_id；日志区分具体机器人）。
-func wxBotID() string {
-	cred, ok := loadWxBotCred()
-	if !ok {
-		return ""
-	}
-	if cred.AccountID != "" {
-		return cred.AccountID
-	}
-	return cred.UserID
+// errWxSessionExpired 登录态过期（-14）哨兵错误：worker 据此终止该 bot 长轮询
+// （fail-loud 留痕），其它 bot 不受影响；重新扫码凭据变更后由 supervisor 重建。
+var errWxSessionExpired = errors.New("微信登录态已过期")
+
+// wxBotWorker 单 bot 入站会话句柄（supervisor 独占 cancel/done；fatal=登录
+// 过期终止标记，仅 worker 退出前写、done 收口后读）。
+type wxBotWorker struct {
+	cred   wxBotCred
+	cancel context.CancelFunc
+	done   chan struct{}
+	fatal  bool
 }
 
-// RunWxBotConnection 连接主循环（对称 RunQQBotConnection；退避重连）。
-// 登录态过期（-14）fail-loud 终止：轮询再无意义，需重新扫码后由任务门重新拉起。
+// RunWxBotConnection 连接 supervisor（对称 RunQQBotConnection）：枚举 distinct
+// bots（全局+通道钉住），每 bot 一个独立长轮询会话 goroutine（WaitGroup 同步
+// 收口，ctx 取消全停），per-bot 游标/在线态/日志（bot=account）与退避重连。
+// 登录态过期（-14）仅终止该 bot（fail-loud 留痕），其它 bot 不受影响；
+// 凭据/钉住变更（wxWakeCh）立即对账，新 bot 上线不等周期。
 func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
 	ctx = withTaskID(ctx, "wx-bot-connection")
-	// 清洁停止置离线（同 QQ 根因）：防 wxLink 残留假在线污染 Send/Test 门。
-	defer wxLink.set(false, "连接任务已停止")
-	// iLink 长轮询出站：wxBotSession（getupdates 挂起 ~35s），断线退避重连。
-	if !WxBotConfigured() {
+	// 清洁停止置离线（同 QQ 根因）：防 per-bot 态残留假在线污染 Send/Test 门。
+	defer wxLinks.stopAll("连接任务已停止")
+	bots := wxEnumerateBots()
+	if len(bots) == 0 {
 		return fmt.Errorf("微信 Bot 登录态未配置（请先扫码登录）")
 	}
-	taskLogf(ctx, "connect", "微信机器人连接任务启动（bot=%s，开始长轮询）", wxBotID())
+	var wg sync.WaitGroup
+	defer wg.Wait() // Run 同步等待全部 bot 会话 goroutine 收口（引擎形态②子协程）
+	workers := map[string]*wxBotWorker{}
+	reconcile := func() {
+		bots := wxEnumerateBots()
+		desired := map[string]wxBotCred{}
+		for _, b := range bots {
+			desired[wxCredKey(b)] = b
+		}
+		// 回收：不再枚举到的 bot / 凭据变更（取消+等待收口+注销登记）。
+		for key, w := range workers {
+			b, ok := desired[key]
+			if ok && b == w.cred {
+				select {
+				case <-w.done:
+					if w.fatal {
+						continue // 登录过期：不自动重建，等重新扫码凭据变更
+					}
+				default:
+					continue // 运行中
+				}
+			}
+			w.cancel()
+			<-w.done
+			wxLinks.unregister(key)
+			delete(workers, key)
+			if ok {
+				taskLogf(ctx, "connect", "微信机器人凭据更新（bot=%s），重建入站会话", key)
+			} else {
+				taskLogf(ctx, "connect", "微信机器人移除（bot=%s），关闭入站会话", key)
+			}
+		}
+		// 新增 bot：独立长轮询会话 goroutine（游标/在线态 per-bot 隔离）。
+		for _, b := range bots {
+			key := wxCredKey(b)
+			if _, ok := workers[key]; ok {
+				continue
+			}
+			wctx, cancel := context.WithCancel(ctx)
+			w := &wxBotWorker{cred: b, cancel: cancel, done: make(chan struct{})}
+			workers[key] = w
+			link := wxLinks.register(key)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer close(w.done)
+				w.fatal = wxBotWorkerRun(wctx, b, link)
+			}()
+			taskLogf(ctx, "connect", "微信机器人入站会话启动（bot=%s，开始长轮询）", key)
+		}
+		if len(bots) > 0 {
+			wxLinks.setFirst(wxCredKey(bots[0]))
+		}
+	}
+	reconcile()
+	ids := make([]string, 0, len(bots))
+	for _, b := range bots {
+		ids = append(ids, wxCredKey(b))
+	}
+	taskLogf(ctx, "connect", "微信机器人连接任务启动（%d 个 bot：%s）", len(bots), strings.Join(ids, ", "))
+	for {
+		select {
+		case <-ctx.Done():
+			for _, w := range workers {
+				w.cancel()
+			}
+			return nil
+		case <-wxWakeCh:
+			reconcile()
+		case <-time.After(botReconcileInterval):
+			reconcile()
+		}
+	}
+}
+
+// wxBotWorkerRun 单 bot 长轮询会话循环：getupdates（挂起 ~35s）→断线退避重连。
+// 登录态过期（-14）返回 fatal=true 终止该 bot（其它 bot 不受影响），supervisor
+// 待重新扫码凭据变更重建；其它错误 per-bot 隔离退避重连。
+func wxBotWorkerRun(ctx context.Context, cred wxBotCred, link *botLinkState) (fatal bool) {
+	// 退出不置离线：计划内回收由 supervisor unregister 收口（无虚假掉线告警），
+	// 清洁停止由 stopAll 统一置离线；fatal 分支自行置离线并保留「登录态过期」原因。
+	key := wxCredKey(cred)
 	attempt := 0
 	for {
 		if ctx.Err() != nil {
-			return nil
-		}
-		cred, ok := loadWxBotCred()
-		if !ok {
-			return fmt.Errorf("微信 Bot 登录态未配置（请先扫码登录）")
+			return false
 		}
 		started := time.Now()
-		err := wxBotSession(ctx, cred)
+		err := wxBotSession(ctx, cred, link)
 		if ctx.Err() != nil {
-			return nil
+			return false
 		}
-		wxLink.set(false, fmt.Sprintf("连接断开: %v", err))
-		if strings.Contains(err.Error(), "-14") {
-			return fmt.Errorf("微信登录态已过期，需重新扫码: %w", err)
+		if errors.Is(err, errWxSessionExpired) {
+			link.set(false, fmt.Sprintf("bot=%s 登录态过期，需重新扫码", key))
+			taskLogWarn(ctx, "connect", "微信机器人登录态过期（bot=%s），停止该 bot 长轮询（其它 bot 不受影响），需重新扫码: %v", key, err)
+			return true
 		}
+		link.set(false, fmt.Sprintf("bot=%s 连接断开: %v", key, err))
 		if time.Since(started) > 5*time.Minute {
 			attempt = 0
 		}
 		attempt++
-		taskLogWarn(ctx, "connect", "微信机器人连接断开（bot=%s 第 %d 次，%v 后重连）: %v", wxBotID(), attempt, botBackoff(attempt), err)
+		taskLogWarn(ctx, "connect", "微信机器人连接断开（bot=%s 第 %d 次，%v 后重连）: %v", key, attempt, botBackoff(attempt), err)
 		select {
 		case <-ctx.Done():
-			return nil
+			return false
 		case <-time.After(botBackoff(attempt)):
 		}
 	}
@@ -443,9 +631,11 @@ type wxInMsg struct {
 	} `json:"item_list"`
 }
 
-// wxBotSession 长轮询会话：getupdates 循环（游标进程内存态）→逐条分发。
-// ret/errcode 非 0 视为失败；-14=登录态过期（fail-loud 上抛）。
-func wxBotSession(ctx context.Context, cred wxBotCred) error {
+// wxBotSession 长轮询会话：getupdates 循环（游标 per-bot 进程内存态）→逐条分发。
+// ret/errcode 非 0 视为失败；-14=登录态过期（errWxSessionExpired fail-loud 上抛）。
+// cred/link=会话所属 bot 的凭据与连接态（per-bot 隔离）。
+func wxBotSession(ctx context.Context, cred wxBotCred, link *botLinkState) error {
+	key := wxCredKey(cred)
 	base := cred.BaseURL
 	if base == "" {
 		base = wxAPIBaseDefault
@@ -456,7 +646,7 @@ func wxBotSession(ctx context.Context, cred wxBotCred) error {
 			return nil
 		}
 		wxCtxMu.Lock()
-		buf := wxUpdatesBuf
+		buf := wxUpdatesBufs[key]
 		wxCtxMu.Unlock()
 		payload, err := json.Marshal(map[string]any{
 			"get_updates_buf": buf,
@@ -495,19 +685,19 @@ func wxBotSession(ctx context.Context, cred wxBotCred) error {
 				code = ur.Errcode
 			}
 			if code == -14 {
-				return fmt.Errorf("会话过期（ret=%d errmsg=%s）", ur.Ret, ur.Errmsg)
+				return fmt.Errorf("%w（ret=%d errmsg=%s）", errWxSessionExpired, ur.Ret, ur.Errmsg)
 			}
 			return fmt.Errorf("getupdates 业务错误 ret=%d errcode=%d errmsg=%s", ur.Ret, ur.Errcode, ur.Errmsg)
 		}
 		if ur.GetUpdatesBuf != "" {
 			wxCtxMu.Lock()
-			wxUpdatesBuf = ur.GetUpdatesBuf
+			wxUpdatesBufs[key] = ur.GetUpdatesBuf
 			wxCtxMu.Unlock()
 		}
 		if first {
 			first = false
-			wxLink.set(true, "")
-			taskLogf(ctx, "connect", "微信机器人长轮询建立（bot=%s 首批 getupdates 成功，在线）", wxBotID())
+			link.set(true, "")
+			taskLogf(ctx, "connect", "微信机器人长轮询建立（bot=%s 首批 getupdates 成功，在线）", key)
 		}
 		for _, m := range ur.Msgs {
 			handleWxInbound(ctx, cred, m)
@@ -522,7 +712,7 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 		return
 	}
 	if m.ContextToken != "" {
-		cacheWxContextToken(m.FromUserID, m.ContextToken)
+		cacheWxContextToken(wxCredKey(cred), m.FromUserID, m.ContextToken)
 	}
 	// 任意私聊均登记捕获槽（通道向导「发送任意消息自动回填 receiver」；
 	// 领取即清——「绑定 XXX」指令形态并存不受影响）。
@@ -534,7 +724,7 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 		}
 	}
 	code := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text.String()), "绑定"))
-	// 入站长轮询属全局首 bot——通道 target 钉住其凭据（多机器人出站鉴权源）。
+	// 入站长轮询属会话所属 bot——通道 target 钉住该 bot 凭据（多机器人出站鉴权源）。
 	target, _ := json.Marshal(map[string]any{
 		"receiver": m.FromUserID, "token": cred.Token, "baseurl": cred.BaseURL,
 		"account_id": cred.AccountID, "user_id": cred.UserID,
@@ -542,7 +732,7 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 	bindBotChannel(code, m.FromUserID, "wx_clawbot", "微信机器人", string(target),
 		func(reply string) {
 			if err := sendWxMessage(ctx, cred, m.FromUserID, reply, m.ContextToken); err != nil {
-				taskLogWarn(ctx, "bind", "微信绑定回复发送失败: %v", err)
+				taskLogWarn(ctx, "bind", "微信绑定回复发送失败（bot=%s）: %v", wxCredKey(cred), err)
 			}
 		})
 }
@@ -578,8 +768,9 @@ func WxQRLoginStart(ctx context.Context) (qrURL string, err error) {
 }
 
 // WxQRLoginPoll 轮询扫码状态：wait/scaned/confirmed/expired。confirmed 时
-// 首登凭证落全局并重置会话态；全局已配置（二登）不覆盖——入站仍首 bot，
-// 新凭据待通道保存钉住（WxPinChannelTarget）。返回 confirmed=true。
+// 首登凭证落全局并重置会话态；全局已配置（二登）不覆盖——首 bot 入站会话
+// 不受影响，新凭据待通道保存钉住（WxPinChannelTarget 钉住成功唤醒连接任务，
+// 第二 bot 入站自动上线）。返回 confirmed=true。
 func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err error) {
 	wxCtxMu.Lock()
 	qr := wxPendingQR
@@ -620,13 +811,13 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 		}
 		cred := wxBotCred{Token: pr.BotToken, BaseURL: pr.BaseURL, AccountID: pr.BotID, UserID: pr.UserID}
 		if _, ok := loadWxBotCred(); !ok {
-			// 首登：落全局（入站长轮询鉴权单源）并重置会话态。
+			// 首登：落全局（首 bot 入站鉴权源）并重置会话态。
 			if err := saveWxBotCred(cred); err != nil {
 				return pr.Status, false, err
 			}
 			wxCtxMu.Lock()
-			wxUpdatesBuf = ""
-			wxContextTokens = map[string]string{}
+			wxUpdatesBufs = map[string]string{}
+			wxContextTokens = map[string]map[string]string{}
 			wxConfirmedPin = nil
 			wxPendingQR = ""
 			wxCtxMu.Unlock()
@@ -638,6 +829,7 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 			wxPendingQR = ""
 			wxCtxMu.Unlock()
 		}
+		wakeWxBotConnection()
 		taskLogf(ctx, "bind", "微信机器人扫码登录成功（bot=%s）", pr.BotID)
 	}
 	return pr.Status, pr.Status == "confirmed", nil

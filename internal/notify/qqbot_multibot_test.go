@@ -3,7 +3,7 @@ package notify
 // QQ 多机器人凭据回归（覆盖根因：绑第二个 bot 覆盖全局凭据→老 bot 掉线）：
 // ①SaveQQBotCredentialsIfAbsent 仅全局未配置时写入；②token 缓存按 appid 隔离；
 // ③出站用 target 钉住的 appid/secret 鉴权，存量 target 无凭据回退全局；
-// ④QQ 内「绑定」指令建通道时钉住当前全局（入站首 bot）凭据。
+// ④QQ 内「绑定」指令建通道时钉住会话所属 bot 凭据（首 bot 会话=全局凭据）。
 
 import (
 	"context"
@@ -155,16 +155,17 @@ func TestQQSendUsesTargetPinnedCredentials(t *testing.T) {
 	}
 }
 
-// QQ 内「绑定」指令：通道 target 钉住入站 bot（全局首 bot）凭据。
-func TestQQBindCommandPinsGlobalCredentials(t *testing.T) {
+// QQ 内「绑定」指令：通道 target 钉住入站会话所属 bot（首 bot=全局）凭据。
+func TestQQBindCommandPinsSessionCredentials(t *testing.T) {
 	newNotifyConnectorDB(t)
 	m := setupQQPlatformMock(t)
 	seedQQGlobalCred(t, "APP_G", "SEC_G")
 	if _, err := db.DB.Exec(`INSERT INTO qq_bind_codes (code, user_id, expires_at) VALUES ('CODE9', 7, datetime('now', '+1 hour'))`); err != nil {
 		t.Fatalf("播种绑定码失败: %v", err)
 	}
-	// When 入站绑定指令
-	handleQQC2CMessage(context.Background(), json.RawMessage(`{"content":"绑定 CODE9","author":{"user_openid":"o9"},"id":"MSG9"}`))
+	// When 入站绑定指令（首 bot 会话：凭据=全局）
+	appid, secret, _ := qqBotCredentials()
+	handleQQC2CMessage(context.Background(), qqBotCred{AppID: appid, Secret: secret}, json.RawMessage(`{"content":"绑定 CODE9","author":{"user_openid":"o9"},"id":"MSG9"}`))
 	// Then 通道 target 含 openid+appid+secret
 	var target string
 	if err := db.DB.QueryRow(`SELECT target FROM notification_channels WHERE type='qq'`).Scan(&target); err != nil {

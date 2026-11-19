@@ -41,6 +41,22 @@ func newNotifyConnectorDB(t *testing.T) {
 	t.Cleanup(func() {
 		db.DB = old
 		_ = database.Close()
+		// per-bot 态隔离：登记表与 wx 会话路由态清零，防跨测试污染。
+		qqLinks.mu.Lock()
+		qqLinks.links = nil
+		qqLinks.first = ""
+		qqLinks.mu.Unlock()
+		wxLinks.mu.Lock()
+		wxLinks.links = nil
+		wxLinks.first = ""
+		wxLinks.mu.Unlock()
+		wxCtxMu.Lock()
+		wxContextTokens = map[string]map[string]string{}
+		wxUpdatesBufs = map[string]string{}
+		wxConfirmedPin = nil
+		wxPendingQR = ""
+		wxPendingInbound = wxInboundCapture{}
+		wxCtxMu.Unlock()
 	})
 }
 
@@ -62,7 +78,8 @@ func TestSendQQC2CTargetValidation(t *testing.T) {
 
 func TestQQSenderTestOfflineClearError(t *testing.T) {
 	newNotifyConnectorDB(t)
-	qqLink.set(false, "")
+	qqLinks.setFirst("APP_OFF")
+	qqLinks.register("APP_OFF").set(false, "")
 	err := qqSender{}.Test(context.Background(), `{"openid":"o123"}`)
 	if err == nil || !strings.Contains(err.Error(), "离线") {
 		t.Errorf("连接离线应明确报错含「离线」, got %v", err)
@@ -97,7 +114,8 @@ func TestWxSenderSendFailsLoudWithoutContextToken(t *testing.T) {
 
 func TestWxSenderTestOfflineClearError(t *testing.T) {
 	newNotifyConnectorDB(t)
-	wxLink.set(false, "")
+	wxLinks.setFirst("B_OFF")
+	wxLinks.register("B_OFF").set(false, "")
 	err := wxSender{}.Test(context.Background(), `{"receiver":"wx1"}`)
 	if err == nil || !strings.Contains(err.Error(), "离线") {
 		t.Errorf("连接离线应明确报错, got %v", err)
@@ -162,15 +180,16 @@ func TestBindBotChannelUpsert(t *testing.T) {
 
 // 停止语义回归（用户裁定+实测根因）：连接任务清洁停止必须置离线，且出站
 // Send 因「服务未运行」直接失败（不静默滞留 pending）。此前早退路径不清
-// qqLink/wxLink，残留假在线使 Send/Test 门放行。
+// per-bot 链接态，残留假在线使 Send/Test 门放行。
 func TestQQConnectionStopClearsLinkAndBlocksSend(t *testing.T) {
 	newNotifyConnectorDB(t)
-	qqLink.set(true, "") // 模拟停止前在线
+	qqLinks.setFirst("APP_STOP")
+	qqLinks.register("APP_STOP").set(true, "") // 模拟停止前在线
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_ = RunQQBotConnection(ctx) // 清洁停止（ctx 已取消）
 	if connected, _, _ := QQLinkStatus(); connected {
-		t.Fatal("连接任务停止后 qqLink 应置离线（残留假在线=根因）")
+		t.Fatal("连接任务停止后首 bot 应置离线（残留假在线=根因）")
 	}
 	err := qqSender{}.Send(context.Background(), `{"openid":"o123"}`, Message{Title: "t", Body: "b"})
 	if err == nil || !strings.Contains(err.Error(), "服务未运行") {
@@ -180,12 +199,13 @@ func TestQQConnectionStopClearsLinkAndBlocksSend(t *testing.T) {
 
 func TestWxConnectionStopClearsLinkAndBlocksSend(t *testing.T) {
 	newNotifyConnectorDB(t)
-	wxLink.set(true, "")
+	wxLinks.setFirst("B_STOP")
+	wxLinks.register("B_STOP").set(true, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_ = RunWxBotConnection(ctx)
 	if connected, _, _ := WxLinkStatus(); connected {
-		t.Fatal("连接任务停止后 wxLink 应置离线")
+		t.Fatal("连接任务停止后首 bot 应置离线")
 	}
 	err := wxSender{}.Send(context.Background(), `{"receiver":"wxid_1"}`, Message{Title: "t", Body: "b"})
 	if err == nil || !strings.Contains(err.Error(), "服务未运行") {
@@ -199,13 +219,15 @@ func TestWxConnectionStopClearsLinkAndBlocksSend(t *testing.T) {
 func TestBotSendGateUsesEngineRunningState(t *testing.T) {
 	newNotifyConnectorDB(t)
 	t.Cleanup(func() { SetTaskRunningProbe(nil) })
-	qqLink.set(true, "")
+	gateLink := qqLinks.register("APP_GATE")
+	qqLinks.setFirst("APP_GATE")
+	gateLink.set(true, "")
 	SetTaskRunningProbe(func(string) bool { return false })
 	err := qqSender{}.Send(context.Background(), `{"openid":"o1"}`, Message{Title: "t"})
 	if err == nil || !strings.Contains(err.Error(), "服务未运行") {
 		t.Errorf("探针 false（任务停止）即使链接在线也应拒发, got %v", err)
 	}
-	qqLink.set(false, "")
+	gateLink.set(false, "")
 	SetTaskRunningProbe(func(string) bool { return true })
 	err = qqSender{}.Send(context.Background(), `{"openid":"o1"}`, Message{Title: "t"})
 	if err != nil && strings.Contains(err.Error(), "服务未运行") {

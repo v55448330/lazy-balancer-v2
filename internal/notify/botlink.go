@@ -43,6 +43,88 @@ func (s *botLinkState) set(connected bool, err string) {
 	}
 }
 
+// botLinkRegistry per-bot 连接态登记表（多机器人入站会话各持其态）。
+// first=首 bot（枚举首元素=全局凭据 bot）：无参状态查询保持单 bot 兼容。
+// worker spawn 时 register、回收时 unregister；任务停止 stopAll 统一置离线。
+type botLinkRegistry struct {
+	mu    sync.Mutex
+	links map[string]*botLinkState
+	first string
+}
+
+// register 取 bot 状态（缺则创建；不改首 bot，首 bot 由 setFirst 显式指定）。
+func (r *botLinkRegistry) register(botID string) *botLinkState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.links == nil {
+		r.links = map[string]*botLinkState{}
+	}
+	s := r.links[botID]
+	if s == nil {
+		s = &botLinkState{}
+		r.links[botID] = s
+	}
+	return s
+}
+
+func (r *botLinkRegistry) unregister(botID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.links, botID)
+}
+
+// setFirst 指定首 bot（supervisor 每轮对账置为枚举首元素）。
+func (r *botLinkRegistry) setFirst(botID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.first = botID
+}
+
+// status 查 bot 在线态：botID 空=首 bot；未登记 bot=离线（零值）。
+func (r *botLinkRegistry) status(botID string) (bool, string, time.Time) {
+	r.mu.Lock()
+	id := botID
+	if id == "" {
+		id = r.first
+	}
+	s := r.links[id]
+	r.mu.Unlock()
+	if s == nil {
+		return false, "", time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connected, s.lastErr, s.lastChange
+}
+
+// stopAll 任务停止收尾：仅在线 bot 置离线（在线→离线沿触发一次掉线告警，
+// 与单 bot 时代停止语义等价）；已离线 bot 保留其具体 lastErr（如「登录态
+// 过期，需重新扫码」）供排障，不被泛化停止原因覆盖。计划内回收（凭据轮换/
+// 删通道）不经此路径——worker 退出不置离线，由 unregister 收口，无假告警。
+// 先快照再释锁——set 的掉线告警经 Publish→sender 可能回调 status，持锁会死锁。
+func (r *botLinkRegistry) stopAll(err string) {
+	r.mu.Lock()
+	states := make([]*botLinkState, 0, len(r.links))
+	for _, s := range r.links {
+		states = append(states, s)
+	}
+	r.mu.Unlock()
+	for _, s := range states {
+		s.mu.Lock()
+		online := s.connected
+		s.mu.Unlock()
+		if online {
+			s.set(false, err)
+		}
+	}
+}
+
+// botReconcileInterval bot 枚举对账周期：新钉住通道的 bot 在此窗口内上线。
+// 取短周期（1s）兜底唤醒时序竞态——钉住唤醒先于通道落库（handler 先算
+// target 后 INSERT）或唤醒信号合并丢弃时，对账仍在秒级捕获新凭据；
+// 凭据变更/钉住唤醒（qqWakeCh/wxWakeCh）命中时立即对账，不等周期。
+const botReconcileInterval = 1 * time.Second
+
 // botBackoff 断线重连退避（1s→2s→…→60s 封顶）。
 func botBackoff(attempt int) time.Duration {
 	d := time.Second

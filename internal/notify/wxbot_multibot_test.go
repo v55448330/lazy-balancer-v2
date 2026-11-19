@@ -55,8 +55,8 @@ func TestWxSendUsesTargetPinnedCredentials(t *testing.T) {
 	newNotifyConnectorDB(t)
 	m := setupWxSendMock(t)
 	seedWxGlobalCred(t, "T_GLOBAL", m.server.URL)
-	cacheWxContextToken("r1", "ctx-1")
-	cacheWxContextToken("r2", "ctx-2")
+	cacheWxContextToken("B2", "r1", "ctx-1")
+	cacheWxContextToken("AG", "r2", "ctx-2")
 	ctx := context.Background()
 	// When 第二 bot target 出站
 	if err := SendWxText(ctx, `{"receiver":"r1","token":"T_B","baseurl":"`+m.server.URL+`","account_id":"B2","user_id":"U2"}`, "hi"); err != nil {
@@ -106,8 +106,8 @@ func TestWxQRSecondLoginKeepsGlobal(t *testing.T) {
 		wxCtxMu.Lock()
 		wxPendingQR = ""
 		wxConfirmedPin = nil
-		wxContextTokens = map[string]string{}
-		wxUpdatesBuf = ""
+		wxContextTokens = map[string]map[string]string{}
+		wxUpdatesBufs = map[string]string{}
 		wxPendingInbound = wxInboundCapture{}
 		wxCtxMu.Unlock()
 	})
@@ -124,9 +124,9 @@ func TestWxQRSecondLoginKeepsGlobal(t *testing.T) {
 		t.Fatalf("首登全局=%+v ok=%v, want T1", cred, ok)
 	}
 	// 首 bot 已建立的会话态
-	cacheWxContextToken("r1", "ctx-1")
+	cacheWxContextToken("B1", "r1", "ctx-1")
 	wxCtxMu.Lock()
-	wxUpdatesBuf = "cursor"
+	wxUpdatesBufs["B1"] = "cursor"
 	wxCtxMu.Unlock()
 
 	// When 第二 bot 扫码登录
@@ -140,11 +140,11 @@ func TestWxQRSecondLoginKeepsGlobal(t *testing.T) {
 	if cred, ok := loadWxBotCred(); !ok || cred.Token != "T1" {
 		t.Errorf("二登覆盖全局: %+v ok=%v, want T1", cred, ok)
 	}
-	if wxContextTokenFor("r1") != "ctx-1" {
+	if wxContextTokenFor("B1", "r1") != "ctx-1" {
 		t.Error("二登清空了首 bot 的 context_token 缓存")
 	}
 	wxCtxMu.Lock()
-	buf := wxUpdatesBuf
+	buf := wxUpdatesBufs["B1"]
 	wxCtxMu.Unlock()
 	if buf != "cursor" {
 		t.Error("二登清空了首 bot 的 getupdates 游标")
