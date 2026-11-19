@@ -322,6 +322,9 @@
           <!-- JSON/HTML/Markdown 高亮编辑（CodeEditor 全站单源）；纯文本用 textarea -->
           <CodeEditor v-if="tplEditorLang !== 'text'" v-model="tplText" :language="tplEditorLang" height="220px" :aria-label="tplEditorLabel" />
           <el-input v-else v-model="tplText" type="textarea" :rows="7" :placeholder="tplPlaceholder" />
+          <div v-if="tplLengthLimit > 0" class="tpl-length-row">
+            <span class="form-hint" :class="{ 'tpl-length-over': tplText.length > tplLengthLimit }">{{ tplText.length }} / {{ tplLengthLimit }}</span>
+          </div>
           <div class="ph-row">
             <el-tag v-for="ph in tplActivePh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag>
           </div>
@@ -332,6 +335,7 @@
           <div v-else-if="isBotChannel(tplActiveChannel?.type || '')" class="form-hint">{{ t('app.notification.daily.contentTemplateHint') }}</div>
           <div v-else-if="tplActiveChannel?.type === 'webhook'" class="form-hint">{{ t('app.notification.daily.webhookTplHint') }}</div>
           <div v-else class="form-hint">{{ t('app.notification.daily.emailTplHint') }}</div>
+          <div v-if="tplLengthLimit > 0 && tplText.length > tplLengthLimit" class="info-note-bar"><span class="info-note-desc">{{ tplActiveChannel?.type === 'email' ? t('app.notification.daily.bodyTemplateTooLong') : t('app.notification.daily.templateTooLong') }}</span></div>
         </div>
 
         <el-divider />
@@ -652,7 +656,7 @@ const tplFormats = ref<Record<string, string>>({}) // rule 模式：通道 ID �
 const htmlPreviewMode = ref<'render' | 'source'>('render')
 const tplPreviewOpen = ref<string[]>([]) // 预览区默认折叠（防弹框超屏），开弹框时复位
 const savingTpl = ref(false)
-const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{node}}']
+const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{node}}', '{{brand}}']
 const tplFormatOptions = ['text', 'markdown', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
 
 // 模板 tab 通道集：rule 模式=选定通道（未选=全部，仍可编辑模板，保存后不投递）；daily 模式=全部通道
@@ -694,10 +698,10 @@ const tplEditorLabel = computed(() => {
   if (typ === 'email') return t('app.notification.rules.tplBody')
   return t('app.notification.rules.tplText')
 })
-// 占位符集：rule 模式=事件变量；daily 模式机器人=日报+事件变量（content_template
-// 两类同时替换），webhook/email=事件变量（renderStyleTemplate 不替换日报变量）。
+// 占位符集：rule 模式=事件变量；daily 模式机器人/邮件=日报+事件变量（后端日报
+// 派发对 content_template/renderStyleTemplate 两类同时替换）；webhook 载荷模板仅事件变量。
 const tplActivePh = computed<string[]>(() => {
-  if (tplMode.value === 'daily' && isBotChannel(tplActiveChannel.value?.type || '')) return [...dailyPh, ...tplPh]
+  if (tplMode.value === 'daily' && tplActiveChannel.value?.type !== 'webhook') return [...dailyPh, ...tplPh]
   return tplPh
 })
 const tplPlaceholder = computed(() => {
@@ -705,41 +709,89 @@ const tplPlaceholder = computed(() => {
   return tplMode.value === 'daily' ? defaultChannelTplFor(typ) : defaultTplFor(typ)
 })
 
-// 精美预置模板（各通道最佳实践形态）：
-// - QQ：markdown 富文本（官方 msg_type=2；标题+引用正文+元信息行）
-// - 微信：iLink 纯文本协议，清晰分隔线形态（无 markdown 能力）
+// 精美预置模板（各通道最佳实践形态，事件与日报同族版式）：
+// - QQ：markdown 富文本（官方 msg_type=2；## 标题+emoji 分节+指标表+引用正文+品牌时间署名）
+// - 微信：iLink 纯文本协议（【标题】+分隔线+键值对齐+署名，无 markdown 标记）
 // - webhook：完整六键 JSON（与默认载荷同构）
-// - email：内联样式 HTML 卡片（邮件客户端兼容：table 布局+内联 CSS）
-const defaultTplFor = (typ: string): string => {
-  if (typ === 'webhook') return JSON.stringify({ level: '{{level}}', time: '{{time}}', node: '{{node}}', title: '{{title}}', body: '{{body}}', event: '{{event}}' }, null, 2)
-  if (typ === 'email') return [
-    '<div style="max-width:560px;margin:0 auto;font-family:\'Helvetica Neue\',Arial,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;">',
-    '  <div style="background:#1e293b;padding:18px 24px;">',
-    '    <span style="color:#f8fafc;font-size:16px;font-weight:600;">{{brand}}</span>',
-    '    <span style="float:right;background:#ef4444;color:#fff;font-size:11px;padding:2px 10px;border-radius:10px;">{{level}}</span>',
+// - email：统一内联样式 HTML 卡片（emailCardTpl 单源：品牌头+级别徽章+标题+元信息表+正文+署名）
+// 邮件卡片统一版式（事件/日报同族）：max-width 640、深色品牌头+级别徽章、标题、
+// 元信息 table、正文、品牌时间署名。内联样式+table 布局（邮件客户端兼容），直角对齐全站设计语言。
+const emailCardTpl = (titleTpl: string, bodyHtml: string, metaRows: [string, string][]): string => {
+  const meta = metaRows.map(([k, v]) => `      <tr><td style="padding:6px 0;color:#64748b;">${k}</td><td style="padding:6px 0;text-align:right;color:#334155;">${v}</td></tr>`).join('\n')
+  return [
+    '<div style="max-width:640px;margin:0 auto;font-family:\'Helvetica Neue\',Arial,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;">',
+    '  <div style="background:#1e293b;padding:16px 24px;">',
+    '    <table style="width:100%;border-collapse:collapse;"><tr>',
+    '      <td style="color:#f8fafc;font-size:16px;font-weight:600;">{{brand}}</td>',
+    '      <td style="text-align:right;"><span style="background:#3b82f6;color:#fff;font-size:11px;padding:2px 10px;">{{level}}</span></td>',
+    '    </tr></table>',
     '  </div>',
     '  <div style="border:1px solid #e2e8f0;border-top:none;padding:24px;">',
-    '    <h2 style="margin:0 0 12px;font-size:18px;color:#0f172a;">{{title}}</h2>',
-    '    <p style="margin:0 0 16px;font-size:14px;line-height:1.7;color:#334155;">{{body}}</p>',
-    '    <table style="width:100%;font-size:12px;color:#64748b;border-top:1px solid #f1f5f9;padding-top:12px;">',
-    '      <tr><td style="padding:4px 0;">事件</td><td style="text-align:right;">{{event}}</td></tr>',
-    '      <tr><td style="padding:4px 0;">节点</td><td style="text-align:right;">{{node}}</td></tr>',
-    '      <tr><td style="padding:4px 0;">时间</td><td style="text-align:right;">{{time}}</td></tr>',
+    `    <h2 style="margin:0 0 16px;font-size:18px;color:#0f172a;">${titleTpl}</h2>`,
+    bodyHtml,
+    '    <table style="width:100%;font-size:12px;border-top:1px solid #f1f5f9;margin-top:16px;border-collapse:collapse;">',
+    meta,
     '    </table>',
     '  </div>',
     '  <p style="text-align:center;font-size:11px;color:#94a3b8;margin:16px 0;">此邮件由 {{brand}} 通知中心自动发送 · {{time}}</p>',
     '</div>',
   ].join('\n')
-  if (typ === 'qq') return '# {{title}}\n\n> {{body}}\n\n**级别**：{{level}}　**事件**：{{event}}\n**节点**：{{node}}　**时间**：{{time}}\n\n> {{brand}}'
-  return '【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}} | 事件：{{event}}\n节点：{{node}} | 时间：{{time}}\n—— {{brand}}'
+}
+const defaultTplFor = (typ: string): string => {
+  if (typ === 'webhook') return JSON.stringify({ level: '{{level}}', time: '{{time}}', node: '{{node}}', title: '{{title}}', body: '{{body}}', event: '{{event}}' }, null, 2)
+  if (typ === 'email') return emailCardTpl('{{title}}',
+    '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
+    [['事件', '{{event}}'], ['节点', '{{node}}'], ['时间', '{{time}}']])
+  if (typ === 'qq') return [
+    '## 🔔 {{title}}',
+    '',
+    '> {{body}}',
+    '',
+    '### 📋 事件详情',
+    '',
+    '| 指标 | 数值 |',
+    '| --- | --- |',
+    '| 级别 | {{level}} |',
+    '| 事件 | {{event}} |',
+    '| 节点 | {{node}} |',
+    '| 时间 | {{time}} |',
+    '',
+    '> {{brand}} · {{time}}',
+  ].join('\n')
+  return [
+    '【{{title}}】',
+    '────────────',
+    '{{body}}',
+    '────────────',
+    '级别：{{level}}',
+    '事件：{{event}}',
+    '节点：{{node}}',
+    '时间：{{time}}',
+    '—— {{brand}} · {{time}}',
+  ].join('\n')
 }
 const resetTplToDefault = (): void => {
   const ch = tplActiveChannel.value
   if (!ch) return
   tplText.value = tplMode.value === 'daily' ? defaultChannelTplFor(ch.type) : defaultTplFor(ch.type)
 }
-// 日报预览样例值（daily 模式机器人模板预览；键集=后端 dailyValues）
-const dailySampleValues = { date: '2026-11-18', requests: '128340', allowed: '120111', logged: '7026', distinct_ips: '3204', blocked: '1203', attack_top: 'SQLi × 321', top_ip: '45.33.32.9', autoban: '17', cert_status: 'OK', cluster_status: '3/3' }
+// 日报预览样例值（daily 模式预览；键集=契约日报 ID 全集+date，
+// top_ips/top_paths/cert_expiring 为多行文本列表样例）
+const dailySampleValues = {
+  date: '2026-11-18',
+  requests: '128340', allowed: '120111', logged: '7026', distinct_ips: '3204',
+  bandwidth: '1.2 GB', peak_qps: '340',
+  blocked: '1203', attack_top: 'SQLi × 321',
+  top_ips: '45.33.32.9 × 321\n1.2.3.4 × 120',
+  top_paths: '/login × 200\n/api × 150',
+  cc_triggered: '3', autoban: '17',
+  cert_status: 'OK', cert_expiring: 'a.com · 2026-11-25\nb.com · 2026-11-28',
+  cluster_status: '3/3', uptime: '32 天',
+  threat_db: 'CRS 4.0 · IP库 2026-11', app_version: 'v2.4.4',
+  api_calls: '1200', mcp_calls: '300',
+  task_status: '成功 12 / 失败 1', backup_status: '成功 7 / 失败 0',
+  login_status: '成功 40 / 失败 3 / MFA失败 1',
+}
 const previewText = computed(() => {
   let text = tplText.value
     .replace(/\{\{title\}\}/g, t('app.notification.rules.previewSampleTitle'))
@@ -749,10 +801,19 @@ const previewText = computed(() => {
     .replace(/\{\{node\}\}/g, 'node-a')
     .replace(/\{\{time\}\}/g, '2026-11-18 09:00')
     .replace(/\{\{brand\}\}/g, 'Lazy Balancer')
-  if (tplMode.value === 'daily' && isBotChannel(tplActiveChannel.value?.type || '')) {
+  if (tplMode.value === 'daily' && tplActiveChannel.value?.type !== 'webhook') {
     for (const [k, v] of Object.entries(dailySampleValues)) text = text.split(`{{${k}}}`).join(v)
   }
   return text
+})
+// 长度校验提示（后端 validateChannelStyle 同口径）：daily 模式机器人 content_template
+// ≤2000、email body_template ≤4000；rule 模式与 webhook 无长度限制（webhook 保存校验 JSON 可解析）。
+const tplLengthLimit = computed<number>(() => {
+  if (tplMode.value !== 'daily') return 0
+  const typ = tplActiveChannel.value?.type || ''
+  if (isBotChannel(typ)) return 2000
+  if (typ === 'email') return 4000
+  return 0
 })
 
 const fetchRules = async (): Promise<void> => {
@@ -863,11 +924,15 @@ const previewChannelId = ref<number | null>(null)
 // 机器人协议固定：QQ=Markdown、微信=纯文本（格式不可选，仅决定编辑高亮与预览样式）
 const isBotChannel = (typ: string): boolean => typ === 'qq' || typ === 'wx_clawbot'
 const fixedDailyFormat = (typ: string): string => (typ === 'qq' ? 'markdown' : 'text')
-// 日报变量（后端派发时从日报载荷 values 替换）
-const dailyPh = ['{{date}}', '{{requests}}', '{{blocked}}', '{{attack_top}}', '{{autoban}}', '{{cert_status}}', '{{cluster_status}}']
-// 精美预置日报模板（对齐后端运营日报视觉：emoji+分节+指标表）：
-// QQ=Markdown 分节表格，微信=纯文本分节行（iLink 协议无 markdown 能力）
+// 日报变量（后端派发时从日报载荷 values 替换；键集=DailyItemIDs 全集+date）
+const dailyPh = ['{{date}}', '{{requests}}', '{{allowed}}', '{{logged}}', '{{blocked}}', '{{distinct_ips}}', '{{bandwidth}}', '{{peak_qps}}', '{{attack_top}}', '{{top_ips}}', '{{top_paths}}', '{{cc_triggered}}', '{{autoban}}', '{{cert_status}}', '{{cert_expiring}}', '{{cluster_status}}', '{{uptime}}', '{{threat_db}}', '{{app_version}}', '{{api_calls}}', '{{mcp_calls}}', '{{task_status}}', '{{backup_status}}', '{{login_status}}']
+// 精美预置日报模板（事件与日报同族版式；分节=全局概览/安全风险/证书/集群与系统/运行状态）：
+// QQ=Markdown 分节表格（含 top_ips/top_paths/cert_expiring 多行变量），
+// 微信=纯文本分节行（iLink 协议无 markdown 能力），email=统一 HTML 卡片（日报版式）。
 const defaultDailyTplFor = (typ: string): string => {
+  if (typ === 'email') return emailCardTpl('{{title}}（{{date}}）',
+    '    <div style="font-size:14px;line-height:1.7;color:#334155;">{{body}}</div>',
+    [['日期', '{{date}}'], ['时间', '{{time}}']])
   if (typ === 'qq') return [
     '## 📊 {{brand}} 日报（{{date}}）',
     '',
@@ -879,6 +944,8 @@ const defaultDailyTplFor = (typ: string): string => {
     '| 放行次数 | {{allowed}} |',
     '| 观察次数 | {{logged}} |',
     '| 独立 IP 数 | {{distinct_ips}} |',
+    '| 带宽 | {{bandwidth}} |',
+    '| 峰值 QPS | {{peak_qps}} |',
     '',
     '### 🛡 安全风险',
     '',
@@ -886,7 +953,9 @@ const defaultDailyTplFor = (typ: string): string => {
     '| --- | --- |',
     '| 拦截次数 | {{blocked}} |',
     '| 攻击 TOP 规则 | {{attack_top}} |',
-    '| TOP 攻击源 | {{top_ip}} |',
+    '| TOP 攻击源 | {{top_ips}} |',
+    '| TOP 攻击路径 | {{top_paths}} |',
+    '| CC 触发次数 | {{cc_triggered}} |',
     '| 自动封禁次数 | {{autoban}} |',
     '',
     '### 🔒 证书状态',
@@ -894,41 +963,74 @@ const defaultDailyTplFor = (typ: string): string => {
     '| 指标 | 数值 |',
     '| --- | --- |',
     '| 证书状态 | {{cert_status}} |',
+    '| 即将过期 | {{cert_expiring}} |',
     '',
-    '### 🖥 集群状态',
+    '### 🖥 集群与系统',
     '',
     '| 指标 | 数值 |',
     '| --- | --- |',
     '| 集群状态 | {{cluster_status}} |',
+    '| 运行时长 | {{uptime}} |',
+    '| 规则库 | {{threat_db}} |',
+    '| 版本 | {{app_version}} |',
+    '| API 调用 | {{api_calls}} |',
+    '| MCP 调用 | {{mcp_calls}} |',
+    '',
+    '### ⚙️ 运行状态',
+    '',
+    '| 指标 | 数值 |',
+    '| --- | --- |',
+    '| 定时任务 | {{task_status}} |',
+    '| 备份 | {{backup_status}} |',
+    '| 登录 | {{login_status}} |',
     '',
     '> {{brand}} · {{time}}',
   ].join('\n')
   return [
     '📊 {{brand}} 日报（{{date}}）',
+    '────────────',
     '',
     '🌐 全局概览',
     '请求数：{{requests}}',
     '放行次数：{{allowed}}',
     '观察次数：{{logged}}',
     '独立 IP 数：{{distinct_ips}}',
+    '带宽：{{bandwidth}}',
+    '峰值 QPS：{{peak_qps}}',
     '',
     '🛡 安全风险',
     '拦截次数：{{blocked}}',
     '攻击 TOP 规则：{{attack_top}}',
-    'TOP 攻击源：{{top_ip}}',
+    'TOP 攻击源：',
+    '{{top_ips}}',
+    'TOP 攻击路径：',
+    '{{top_paths}}',
+    'CC 触发次数：{{cc_triggered}}',
     '自动封禁次数：{{autoban}}',
     '',
     '🔒 证书状态',
     '证书状态：{{cert_status}}',
+    '即将过期：',
+    '{{cert_expiring}}',
     '',
-    '🖥 集群状态',
+    '🖥 集群与系统',
     '集群状态：{{cluster_status}}',
+    '运行时长：{{uptime}}',
+    '规则库：{{threat_db}}',
+    '版本：{{app_version}}',
+    'API 调用：{{api_calls}}',
+    'MCP 调用：{{mcp_calls}}',
+    '',
+    '⚙️ 运行状态',
+    '定时任务：{{task_status}}',
+    '备份：{{backup_status}}',
+    '登录：{{login_status}}',
     '',
     '—— {{brand}} · {{time}}',
   ].join('\n')
 }
-// 通道模式预置：机器人=精美日报模板；webhook=JSON 载荷模板（占位符不裹引号，
-// 与保存侧 probe 校验同口径）；email=内联样式 HTML 卡片（与规则模式预置同源）。
+// 通道模式预置（日报）：机器人=分节日报模板；email=统一 HTML 卡片（日报版式）；
+// webhook=JSON 载荷模板（占位符不裹引号，与保存侧 probe 校验同口径）。
 const defaultChannelTplFor = (typ: string): string => {
   if (typ === 'webhook') return [
     '{',
@@ -940,33 +1042,43 @@ const defaultChannelTplFor = (typ: string): string => {
     '  "event": {{event}}',
     '}',
   ].join('\n')
-  if (typ === 'email') return defaultTplFor('email')
   return defaultDailyTplFor(typ)
+}
+
+// 弹框打开即时刷新（不依赖页面刷新）：rules=日报配置/规则勾选+通道摘要测试态；
+// channels=全量 DTO（enabled/style_config——规则端点摘要不含样式键）。
+// 管理员代管 user_id 与规则视角同口径。
+const refreshDialogState = async (): Promise<void> => {
+  await fetchRules()
+  const url = isAdmin.value && rulesUserId.value > 0 ? `/notification/channels?user_id=${rulesUserId.value}` : '/notification/channels'
+  const res = await request.get<{ data?: { channels?: NotificationChannel[] } }>(url, { silent: true })
+  dailyFullChannels.value = res.data?.channels ?? []
+}
+
+// 日报草稿库：既有正文模板 > 通道形态预置（逐通道；未保存过=预置形态）
+const seedDailyTplDrafts = (): void => {
+  const drafts: Record<number, string> = {}
+  for (const ch of userChannels.value) {
+    const full = dailyFullChannels.value.find(c => c.id === ch.id)
+    let style: Record<string, unknown> = {}
+    try { style = JSON.parse(full?.style_config || '{}') as Record<string, unknown> } catch { style = {} }
+    const tpl = style[channelBodyTplKey(ch.type)]
+    const saved = typeof tpl === 'string' ? tpl : ''
+    drafts[ch.id] = saved || defaultChannelTplFor(ch.type)
+  }
+  dailyTplDrafts.value = drafts
 }
 
 const openDailyConfig = async (): Promise<void> => {
   dailyConfigVisible.value = true
   dailyConfigLoading.value = true
-  // 先以规则通道摘要预置草稿（每通道类型预置模板），保证编辑器 modelValue 恒为字符串；
-  // 全量通道到达后再以既有正文模板覆盖（fetch 失败不致 undefined 传入 CodeEditor）。
+  // 先以预置模板铺底（编辑器 modelValue 恒为字符串）；刷新到达后以既有模板覆盖
   const seed: Record<number, string> = {}
   for (const ch of userChannels.value) seed[ch.id] = defaultChannelTplFor(ch.type)
   dailyTplDrafts.value = seed
   try {
-    // rules 端点的通道摘要不含 style_config——正文模板读写需全量通道 DTO
-    const res = await request.get<{ data?: { channels?: NotificationChannel[] } }>('/notification/channels', { silent: true })
-    const full = res.data?.channels ?? []
-    dailyFullChannels.value = full
-    const drafts: Record<number, string> = { ...seed }
-    for (const ch of full) {
-      let style: Record<string, unknown> = {}
-      try { style = JSON.parse(ch.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-      const tpl = style[channelBodyTplKey(ch.type)]
-      const saved = typeof tpl === 'string' ? tpl : ''
-      // 未保存过=预置形态，保存后写入通道配置
-      drafts[ch.id] = saved || defaultChannelTplFor(ch.type)
-    }
-    dailyTplDrafts.value = drafts
+    await refreshDialogState()
+    seedDailyTplDrafts()
   } catch (e) { console.error(e) } finally { dailyConfigLoading.value = false }
 }
 
@@ -999,10 +1111,15 @@ const saveChannelBodyTemplate = async (ch: RuleChannel): Promise<boolean> => {
   } catch (e) { console.error(e); return false } finally { savingTplChannelId.value = null }
 }
 
-// 通道模式入口（日报配置每通道「编辑模板」）：打开与事件规则共享的模板弹框
-const openChannelTplDialog = (ch: RuleChannel): void => {
+// 通道模式入口（日报配置每通道「编辑模板」）：打开与事件规则共享的模板弹框；
+// 打开即重拉 rules+channels（测试态/既有模板即时，不依赖日报弹框打开时的快照）
+const openChannelTplDialog = async (ch: RuleChannel): Promise<void> => {
   tplMode.value = 'daily'
   tplEditingRule.value = null
+  try {
+    await refreshDialogState()
+    seedDailyTplDrafts()
+  } catch (e) { console.error(e) }
   const drafts: Record<string, string> = {}
   for (const c of userChannels.value) drafts[String(c.id)] = dailyTplDrafts.value[c.id] ?? defaultChannelTplFor(c.type)
   tplTexts.value = drafts
@@ -1019,18 +1136,21 @@ const saveChannelTplFromDialog = async (): Promise<void> => {
   if (await saveChannelBodyTemplate(ch)) tplDialogVisible.value = false
 }
 
-const editTemplate = (rule: Rule): void => {
+const editTemplate = async (rule: Rule): Promise<void> => {
+  // 打开即重拉 rules+channels：勾选/测试态以最新为准（不依赖页面刷新）
+  try { await refreshDialogState() } catch (e) { console.error(e) }
+  const fresh = rules.value.find(r => r.id === rule.id) ?? rule
   tplMode.value = 'rule'
-  tplEditingRule.value = rule
+  tplEditingRule.value = fresh
   // channel_ids 三态：undefined=缺省（全部通道，UI 呈现为全选）；[]=显式不投递
-  tplSelectedChannels.value = rule.channel_ids === undefined || rule.channel_ids === null
+  tplSelectedChannels.value = fresh.channel_ids === undefined || fresh.channel_ids === null
     ? userChannels.value.map(ch => ch.id)
-    : [...rule.channel_ids]
+    : [...fresh.channel_ids]
   // 草稿初始化：既有每通道模板 > 事件级模板 > 通道形态预置；格式=类型缺省
   const drafts: Record<string, string> = {}
   const formats: Record<string, string> = {}
   for (const ch of userChannels.value) {
-    drafts[String(ch.id)] = rule.channel_templates?.[String(ch.id)] || rule.body_template || defaultTplFor(ch.type)
+    drafts[String(ch.id)] = fresh.channel_templates?.[String(ch.id)] || fresh.body_template || defaultTplFor(ch.type)
     formats[String(ch.id)] = ch.type === 'webhook' ? 'json' : ch.type === 'email' ? 'html' : fixedDailyFormat(ch.type)
   }
   tplTexts.value = drafts
@@ -1223,4 +1343,8 @@ onMounted(() => {
 /* 日报预览弹窗 */
 .daily-preview-toolbar { margin-bottom: 10px; }
 .daily-html-preview { width: 100%; height: 340px; border: 1px solid #e5e7eb; background: #fff; }
+/* 模板长度计数：右对齐贴编辑器；超限红字+info-note-bar 明示（保存侧同口径拦截） */
+.tpl-length-row { display: flex; justify-content: flex-end; margin-top: 4px; }
+.tpl-length-row .form-hint { margin-top: 0; font-variant-numeric: tabular-nums; }
+.tpl-length-over { color: #ef4444; font-weight: 600; }
 </style>

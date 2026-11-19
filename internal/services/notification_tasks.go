@@ -12,6 +12,13 @@ import (
 
 // registerNotificationTasks 注册通知相关任务（由 InitTaskEngine 调用）。
 func registerNotificationTasks(te *taskengine.Engine) {
+	// 日报「API 调用(今日)」数据源注入（避免 notify→services 循环依赖）。
+	notify.DailyRESTCalls = func() int64 { return GetRESTCallOverview().TodayCalls }
+	// 任务失败事件钩子（taskengine 不直接依赖 notify，解循环）。
+	taskengine.TaskFailedHook = func(taskID, message string) {
+		notify.Publish(notify.Event{Type: notify.EvtTaskFailed, Level: notify.LevelWarn,
+			Fields: map[string]string{"1": taskID, "2": message}})
+	}
 	mustRegisterTask(te, taskengine.Descriptor{
 		ID:          "notification-delivery",
 		Family:      "notification",
@@ -123,6 +130,19 @@ func registerNotificationTasks(te *taskengine.Engine) {
 			}
 			TaskLogfContext(rc.Ctx, "notification-delivery-retention", "cleanup", "投递保留清理完成：删除投递 %d 条 · 通道结果 %d 行 · 微信会话上下文 %d 条 · 绑定会话 %d 个（无过期为 0）", result.Deliveries, result.Channels, result.WxContexts, result.BindSessions)
 			return nil
+		},
+	})
+
+	mustRegisterTask(te, taskengine.Descriptor{
+		ID:          "notification-apikey-expiry",
+		Family:      "notification",
+		Name:        "API 密钥临期预警",
+		Description: "每日扫描 7 天内到期的启用 API 密钥，发布临期预警事件（apikey.expiry_warning）",
+		Category:    "通知",
+		Kind:        taskengine.KindPeriodic,
+		IntervalFn:  func() time.Duration { return 24 * time.Hour },
+		Run: func(rc taskengine.RunContext) error {
+			return notify.CheckAPIKeyExpiry()
 		},
 	})
 }

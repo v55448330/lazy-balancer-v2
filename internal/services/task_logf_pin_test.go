@@ -201,6 +201,7 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 	"qq-bot-connection":         taskengine.KindDaemon,
 	"wx-bot-connection":         taskengine.KindDaemon,
 	"notification-daily-report": taskengine.KindScheduled,
+	"notification-apikey-expiry": taskengine.KindPeriodic,
 }
 
 // Given v2.0 四类型标准全量注册。

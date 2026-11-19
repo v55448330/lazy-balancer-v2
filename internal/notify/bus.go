@@ -59,6 +59,7 @@ func Publish(evt Event) {
 		log.Printf("WARN: notify.Publish 事件 %q 不在目录中，已丢弃", evt.Type)
 		return
 	}
+	noteAuthEvent(evt.Type) // 日报认证日计数（登录成功/失败/MFA 失败）
 	if evt.Time.IsZero() {
 		evt.Time = time.Now()
 	}

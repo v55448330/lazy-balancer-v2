@@ -250,7 +250,7 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 	wantPeriodic := map[string]int{
 		"config-watchdog": 60, "log-cleanup": 86400, "audit-retention": 86400,
 		"security-events-retention": 86400, "metrics-orphan-cleanup": 86400,
-		"notification-delivery-retention": 86400,
+		"notification-delivery-retention": 86400, "notification-apikey-expiry": 86400,
 		"cert-renewal-scan":               21600, "cert-reconcile": 21600, "cert-manual-poll": 600,
 		"cert-waiting-ca": 30, "autoban": 60,
 		"metrics-history-cleanup": 86400,

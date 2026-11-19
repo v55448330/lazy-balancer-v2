@@ -141,6 +141,7 @@ func run() error {
 	ownership.SetLogf(services.Logf)
 	// dnsprovider 各实现的 TXT 残留告警接缝（修复前裸 log.Printf）。
 	dnspod.SetLogf(services.Logf)
+	notify.AppVersion = cfg.Version // 日报「应用版本」单源（config APP_VERSION 同源）
 	dnspod.SetUserAgent(cfg.Version)
 	aliyun.SetUserAgent(cfg.Version)
 	tencent.SetLogf(services.Logf)

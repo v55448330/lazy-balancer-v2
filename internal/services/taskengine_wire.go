@@ -1042,7 +1042,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		"threat", "crs", "ip2region", "auto-backup",
 		// 通知中心（2026-11-18）：投递常驻/日报定时/QQ+微信长连出站
 		"notification-delivery", "notification-daily-report",
-		"qq-bot-connection", "wx-bot-connection",
+		"qq-bot-connection", "wx-bot-connection", "notification-apikey-expiry",
 	} {
 		if enabled, found := taskLoopPrefs[id]; found && !enabled {
 			continue

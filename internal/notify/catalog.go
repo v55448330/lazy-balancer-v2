@@ -16,46 +16,49 @@ import "strings"
 
 // 事件 ID 常量（发布方使用；订阅矩阵 event_type 存同一字符串）。
 const (
-	EvtLoginSuccess       = "auth.login_success"
-	EvtLoginFailed        = "auth.login_failed"
-	EvtPasswordChanged    = "auth.password_changed"
-	EvtMFAChanged         = "auth.mfa_changed"
-	EvtMFAVerifyFailed    = "auth.mfa_verify_failed" // MFA 验证码校验失败（安全可观测）
-	EvtUserCreated        = "auth.user_created"
-	EvtUserDeleted        = "auth.user_deleted"
-	EvtUserStatusChanged  = "auth.user_status_changed" // 启用/禁用
-	EvtPasswordReset      = "auth.password_reset"      // 管理员重置密码
-	EvtAPIKeyCreated      = "auth.apikey_created"
-	EvtAPIKeyDeleted      = "auth.apikey_deleted"
-	EvtRuleCreated        = "cfg.rule_created"
-	EvtRuleUpdated        = "cfg.rule_updated"
-	EvtRuleDeleted        = "cfg.rule_deleted"
-	EvtRuleToggled        = "cfg.rule_toggled"
-	EvtGlobalChanged      = "cfg.global_changed"
-	EvtCaddyApplyFailed   = "cfg.caddy_apply_failed"
-	EvtCaddyRecovered     = "cfg.caddy_recovered" // 应用失败标记清除的恢复 info（与 caddy_apply_failed 同受众默认订阅）
-	EvtImportDone         = "cfg.import_done"
-	EvtImportFailed       = "cfg.import_failed"
-	EvtBackupDone         = "cfg.backup_done"
-	EvtBackupFailed       = "cfg.backup_failed"
-	EvtRestoreDone        = "cfg.restore_done"
-	EvtRestoreFailed      = "cfg.restore_failed"
-	EvtBlockedAggregate   = "sec.blocked_aggregate"
-	EvtCCTriggered        = "sec.cc_triggered"
-	EvtAutobanTriggered   = "sec.autoban_triggered"
-	EvtAutobanExpired     = "sec.autoban_expired"
-	EvtCertIssued         = "cert.issued"
-	EvtCertFailed         = "cert.failed"
-	EvtCertExpiryWarning  = "cert.expiry_warning"
-	EvtClusterOffline     = "cluster.offline"
-	EvtClusterRoleChanged = "cluster.role_changed"
-	EvtClusterNodeJoined  = "cluster.node_joined"
-	EvtClusterNodeRemoved = "cluster.node_removed"
-	EvtClusterSyncDrift   = "cluster.sync_drift"
-	EvtStartupCompleted   = "sys.startup_completed"
-	EvtStartupAbnormal    = "sys.startup_abnormal"
-	EvtDailyReport        = "sys.daily_report"
-	EvtNotifyChannelDown  = "notify.channel_down" // 通道掉线自监控（走其它还活着的通道告警）
+	EvtLoginSuccess           = "auth.login_success"
+	EvtLoginFailed            = "auth.login_failed"
+	EvtPasswordChanged        = "auth.password_changed"
+	EvtMFAChanged             = "auth.mfa_changed"
+	EvtMFAVerifyFailed        = "auth.mfa_verify_failed" // MFA 验证码校验失败（安全可观测）
+	EvtUserCreated            = "auth.user_created"
+	EvtUserDeleted            = "auth.user_deleted"
+	EvtUserStatusChanged      = "auth.user_status_changed" // 启用/禁用
+	EvtPasswordReset          = "auth.password_reset"      // 管理员重置密码
+	EvtAPIKeyCreated          = "auth.apikey_created"
+	EvtAPIKeyDeleted          = "auth.apikey_deleted"
+	EvtRuleCreated            = "cfg.rule_created"
+	EvtRuleUpdated            = "cfg.rule_updated"
+	EvtRuleDeleted            = "cfg.rule_deleted"
+	EvtRuleToggled            = "cfg.rule_toggled"
+	EvtGlobalChanged          = "cfg.global_changed"
+	EvtCaddyApplyFailed       = "cfg.caddy_apply_failed"
+	EvtCaddyRecovered         = "cfg.caddy_recovered" // 应用失败标记清除的恢复 info（与 caddy_apply_failed 同受众默认订阅）
+	EvtImportDone             = "cfg.import_done"
+	EvtImportFailed           = "cfg.import_failed"
+	EvtBackupDone             = "cfg.backup_done"
+	EvtBackupFailed           = "cfg.backup_failed"
+	EvtRestoreDone            = "cfg.restore_done"
+	EvtRestoreFailed          = "cfg.restore_failed"
+	EvtBlockedAggregate       = "sec.blocked_aggregate"
+	EvtCCTriggered            = "sec.cc_triggered"
+	EvtAutobanTriggered       = "sec.autoban_triggered"
+	EvtAutobanExpired         = "sec.autoban_expired"
+	EvtCertIssued             = "cert.issued"
+	EvtCertFailed             = "cert.failed"
+	EvtCertExpiryWarning      = "cert.expiry_warning"
+	EvtClusterOffline         = "cluster.offline"
+	EvtClusterRoleChanged     = "cluster.role_changed"
+	EvtClusterNodeJoined      = "cluster.node_joined"
+	EvtClusterNodeRemoved     = "cluster.node_removed"
+	EvtClusterSyncDrift       = "cluster.sync_drift"
+	EvtStartupCompleted       = "sys.startup_completed"
+	EvtStartupAbnormal        = "sys.startup_abnormal"
+	EvtDailyReport            = "sys.daily_report"
+	EvtNotifyChannelDown      = "notify.channel_down"      // 通道掉线自监控（走其它还活着的通道告警）
+	EvtNotifyChannelRecovered = "notify.channel_recovered" // 通道恢复（与掉线成对）
+	EvtTaskFailed             = "task.failed"              // 定时任务执行失败
+	EvtAPIKeyExpiryWarning    = "apikey.expiry_warning"    // API 密钥临期预警
 )
 
 // catalogEntry 事件目录条目。
@@ -110,6 +113,9 @@ var catalog = []catalogEntry{
 	// sys.daily_report 不进目录：日报已拆独立区块（per-user 配置+直接落投递，
 	// 不走订阅矩阵事件订阅面）；事件键保留供投递记录展示。
 	{EvtNotifyChannelDown, LevelWarn, true, "通知通道离线", "通知通道「%s」已离线（%s）——事件将暂存重投"},
+	{EvtNotifyChannelRecovered, LevelInfo, true, "通知通道恢复", "通知通道已恢复（%s），投递正常"},
+	{EvtTaskFailed, LevelWarn, true, "定时任务失败", "任务 %s 执行失败：%s"},
+	{EvtAPIKeyExpiryWarning, LevelWarn, true, "API 密钥临期", "API 密钥「%s」将于 %s 到期（剩余 %d 天）"},
 }
 
 // defaultSubscribedFor 新用户默认订阅集：critical+warn 全开，info 与日报默认关。
@@ -139,7 +145,7 @@ type CatalogItem struct {
 // sys.* 与 notify.*（通道自监控）归入「系统」）。
 func catalogGroup(id string) string {
 	switch {
-	case strings.HasPrefix(id, "auth."):
+	case strings.HasPrefix(id, "auth."), strings.HasPrefix(id, "apikey."):
 		return "认证"
 	case strings.HasPrefix(id, "cfg."):
 		return "配置"

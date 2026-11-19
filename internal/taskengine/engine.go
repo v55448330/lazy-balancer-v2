@@ -2663,6 +2663,9 @@ func updateTaskRunTerminal(runID int64, status string, durMs int64, message stri
 			_, err = taskRunTerminalExec(`UPDATE task_runs SET status=?, finished_at=?, duration_ms=? WHERE id=?`, status, finishedAt, durMs, runID)
 		}
 		if err == nil {
+			if status == "failed" {
+				publishTaskFailed(runID, message)
+			}
 			return
 		}
 		if attempt < terminalWriteAttempts {
@@ -2674,6 +2677,25 @@ func updateTaskRunTerminal(runID int64, status string, durMs int64, message stri
 
 func (e *Engine) finishRun(runID int64, status string, durMs int64) {
 	updateTaskRunTerminal(runID, status, durMs, "")
+}
+
+// TaskFailedHook 任务失败回调（services 注入 notify.Publish，避免 taskengine→notify
+// 循环依赖：notify/tasklog 已依赖 taskengine）。nil=不发布。
+var TaskFailedHook func(taskID, message string)
+
+// publishTaskFailed 任务失败事件：读 task_id 作参数1，失败原因参数2，经钩子发布。
+func publishTaskFailed(runID int64, message string) {
+	if TaskFailedHook == nil {
+		return
+	}
+	var taskID string
+	if err := db.DB.QueryRow(`SELECT task_id FROM task_runs WHERE id=?`, runID).Scan(&taskID); err != nil {
+		taskID = fmt.Sprintf("#%d", runID)
+	}
+	if message == "" {
+		message = "执行失败"
+	}
+	TaskFailedHook(taskID, message)
 }
 
 func (e *Engine) finishRunWithMessage(runID int64, status string, durMs int64, message string) {

@@ -79,6 +79,7 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 		"{{time}}", ts.Format("2006-01-02 15:04"),
 		"{{node}}", msg.Node,
 		"{{brand}}", BrandName(),
+		"{{date}}", templateDate(msg, ts),
 	)
 	return r.Replace(tpl)
 }
@@ -106,8 +107,17 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 		"{{time}}", enc(ts.Format(time.RFC3339)),
 		"{{node}}", enc(msg.Node),
 		"{{brand}}", enc(BrandName()),
+		"{{date}}", enc(templateDate(msg, ts)),
 	)
 	return r.Replace(tpl)
+}
+
+// templateDate 日报日期变量：优先载荷 Fields["date"]（昨日），缺省=消息时间日期。
+func templateDate(msg Message, ts time.Time) string {
+	if d := msg.Fields["date"]; d != "" {
+		return d
+	}
+	return ts.Format("2006-01-02")
 }
 
 // defaultEventTemplate 事件消息缺省精美模板（通道未自定义 content_template 时

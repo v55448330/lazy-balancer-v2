@@ -58,7 +58,10 @@ func DefaultFormatForChannel(channelType string) string {
 
 // DailyItemIDs 日报可定制项目（勾选清单契约）。
 var DailyItemIDs = []string{
-	"requests", "allowed", "logged", "distinct_ips", "blocked", "attack_top", "top_ip", "autoban", "cert_status", "cluster_status",
+	"requests", "allowed", "logged", "distinct_ips", "bandwidth", "peak_qps",
+	"blocked", "attack_top", "top_ip", "top_ips", "top_paths", "cc_triggered", "autoban",
+	"cert_status", "cert_expiring", "cluster_status", "uptime", "threat_db", "app_version",
+	"api_calls", "mcp_calls", "task_status", "backup_status", "login_status",
 }
 
 // DailyItemLabels 项目中文标签（前端渲染+正文模板共用）。
@@ -67,12 +70,26 @@ var DailyItemLabels = map[string]string{
 	"allowed":        "放行次数",
 	"logged":         "观察次数",
 	"distinct_ips":   "独立 IP 数",
+	"bandwidth":      "总带宽",
+	"peak_qps":       "峰值请求/窗",
 	"blocked":        "拦截次数",
 	"attack_top":     "攻击 TOP 规则",
 	"top_ip":         "TOP 攻击源",
+	"top_ips":        "TOP 攻击源 IP",
+	"top_paths":      "TOP 攻击路径",
+	"cc_triggered":   "CC 触发次数",
 	"autoban":        "自动封禁次数",
 	"cert_status":    "证书状态",
+	"cert_expiring":  "临期证书明细",
 	"cluster_status": "集群状态",
+	"uptime":         "运行时长",
+	"threat_db":      "威胁库版本",
+	"app_version":    "应用版本",
+	"api_calls":      "API 调用(今日)",
+	"mcp_calls":      "MCP 调用",
+	"task_status":    "定时任务",
+	"backup_status":  "自动备份",
+	"login_status":   "登录认证",
 }
 
 // GetDailyConfig 读单用户配置（无行=默认：启用+全项目+09:00+markdown）。
@@ -188,12 +205,26 @@ func dailyValues(data DailyData) map[string]string {
 		"allowed":        fmt.Sprintf("%d", data.Allowed),
 		"logged":         fmt.Sprintf("%d", data.Logged),
 		"distinct_ips":   fmt.Sprintf("%d", data.DistinctIPs),
+		"bandwidth":      data.Bandwidth,
+		"peak_qps":       fmt.Sprintf("%d", data.PeakQPS),
 		"blocked":        fmt.Sprintf("%d", data.Blocked),
 		"attack_top":     data.TopRule,
 		"top_ip":         data.TopIP,
+		"top_ips":        data.TopIPs,
+		"top_paths":      data.TopPaths,
+		"cc_triggered":   fmt.Sprintf("%d", data.CCTriggered),
 		"autoban":        fmt.Sprintf("%d", data.Autobans),
 		"cert_status":    fmt.Sprintf("活跃 %d / 失败 %d", data.CertsActive, data.CertsFailed),
+		"cert_expiring":  data.CertExpiring,
 		"cluster_status": data.ClusterNote,
+		"uptime":         data.Uptime,
+		"threat_db":      data.ThreatDB,
+		"app_version":    data.AppVersion,
+		"api_calls":      fmt.Sprintf("%d", data.APICalls),
+		"mcp_calls":      fmt.Sprintf("%d", data.MCPCalls),
+		"task_status":    fmt.Sprintf("成功 %d / 失败 %d", data.TaskOK, data.TaskFailed),
+		"backup_status":  fmt.Sprintf("成功 %d / 失败 %d", data.BackupOK, data.BackupFailed),
+		"login_status":   fmt.Sprintf("成功 %d / 失败 %d / MFA失败 %d", data.LoginOK, data.LoginFailed, data.MFAFailed),
 	}
 }
 
@@ -219,19 +250,37 @@ func AllDailySendTimes() ([]string, error) {
 
 // DailyData 昨日摘要数据（渲染输入）。
 type DailyData struct {
-	Date        string
-	Requests    int64
-	Allowed     int64
-	Logged      int64
-	DistinctIPs int64
-	Blocked     int64
-	TopRule     string
-	TopIP       string
-	Autobans    int64
-	CertsActive int64
-	CertsFailed int64
-	ClusterOK   bool
-	ClusterNote string
+	Date         string
+	Requests     int64
+	Allowed      int64
+	Logged       int64
+	DistinctIPs  int64
+	Bandwidth    string
+	PeakQPS      int64
+	Blocked      int64
+	TopRule      string
+	TopIP        string
+	TopIPs       string
+	TopPaths     string
+	CCTriggered  int64
+	Autobans     int64
+	CertsActive  int64
+	CertsFailed  int64
+	CertExpiring string
+	ClusterOK    bool
+	ClusterNote  string
+	Uptime       string
+	ThreatDB     string
+	AppVersion   string
+	APICalls     int64
+	MCPCalls     int64
+	TaskOK       int64
+	TaskFailed   int64
+	BackupOK     int64
+	BackupFailed int64
+	LoginOK      int64
+	LoginFailed  int64
+	MFAFailed    int64
 }
 
 // CollectDailyData 采集昨日摘要（全项目数据一次查询；未勾选项目由渲染层裁剪）。
@@ -258,6 +307,32 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	_ = db.DB.QueryRowContext(ctx, `SELECT COALESCE(is_master,1) FROM global_config WHERE id=1`).Scan(&master)
 	d.ClusterOK = master == 1
 	d.ClusterNote = map[bool]string{true: "正常（主节点）", false: "从节点/未启用"}[d.ClusterOK && master == 1]
+	// 流量：带宽（入+出）与峰值请求/采样窗。
+	var bw int64
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes_in+bytes_out),0) FROM metrics_history WHERE timestamp>=? AND timestamp<?`, f0, f1).Scan(&bw)
+	d.Bandwidth = formatBytes(bw)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COALESCE(MAX(requests_total),0) FROM metrics_history WHERE timestamp>=? AND timestamp<?`, f0, f1).Scan(&d.PeakQPS)
+	// 安全明细：TOP 攻击源 IP / TOP 路径（各 5）/ CC 触发。
+	d.TopIPs = joinLimitRows(topPairs(ctx, `SELECT client_ip, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY client_ip ORDER BY COUNT(*) DESC LIMIT 5`, f0, f1))
+	d.TopPaths = joinLimitRows(topPairs(ctx, `SELECT uri, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY uri ORDER BY COUNT(*) DESC LIMIT 5`, f0, f1))
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND event_type='cc'`, f0, f1).Scan(&d.CCTriggered)
+	// 证书临期明细：30 天内到期的已签发证书（域名+到期日）。
+	d.CertExpiring = certExpiringList(ctx, now)
+	// 系统运行：时长/威胁库版本/应用版本。
+	d.Uptime = formatUptime(time.Since(processStartedAt))
+	d.ThreatDB = threatDBVersion(ctx)
+	d.AppVersion = AppVersion
+	// 接入与任务：REST 当日调用/MCP 昨日调用/任务/备份。
+	if DailyRESTCalls != nil {
+		d.APICalls = DailyRESTCalls()
+	}
+	_ = db.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(calls),0) FROM mcp_tool_stats WHERE date=?`, y0.Format("2006-01-02")).Scan(&d.MCPCalls)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='success'`, f0, f1).Scan(&d.TaskOK)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='failed'`, f0, f1).Scan(&d.TaskFailed)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='success'`, f0, f1).Scan(&d.BackupOK)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='failed'`, f0, f1).Scan(&d.BackupFailed)
+	// 用户认证：当日登录成功/失败/MFA 失败（Publish 累加）。
+	d.LoginOK, d.LoginFailed, d.MFAFailed = readAuthCounters()
 	return d, nil
 }
 
@@ -318,10 +393,12 @@ var dailySections = []struct {
 	title string
 	items []string
 }{
-	{"🌐", "全局概览", []string{"requests", "allowed", "logged", "distinct_ips"}},
-	{"🛡", "安全风险", []string{"blocked", "attack_top", "top_ip", "autoban"}},
-	{"🔒", "证书状态", []string{"cert_status"}},
-	{"🖥", "集群状态", []string{"cluster_status"}},
+	{"🌐", "全局概览", []string{"requests", "allowed", "logged", "distinct_ips", "bandwidth", "peak_qps"}},
+	{"🛡", "安全风险", []string{"blocked", "attack_top", "top_ips", "top_paths", "cc_triggered", "autoban"}},
+	{"🔒", "证书状态", []string{"cert_status", "cert_expiring"}},
+	{"🖥", "集群与运行", []string{"cluster_status", "uptime", "threat_db", "app_version"}},
+	{"🔌", "接入与任务", []string{"api_calls", "mcp_calls", "task_status", "backup_status"}},
+	{"👤", "用户认证", []string{"login_status"}},
 }
 
 // renderDailyFromValues 渲染底座（值映射→分节格式化文本；html 转义）。

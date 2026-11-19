@@ -19,12 +19,14 @@ import (
 type botLinkState struct {
 	mu         sync.Mutex
 	connected  bool
+	downActive bool // 曾发布掉线告警且未恢复——仅真实 outage 后的上线才发恢复事件
 	lastChange time.Time
 	lastErr    string
 }
 
 func (s *botLinkState) set(connected bool, err string) {
-	if s.apply(connected, err) {
+	down, up := s.apply(connected, err)
+	if down {
 		// 通道掉线自监控：经其它还活着的通道告警（Publish→delivery；
 		// 若投递通道同样依赖本连接，sender 会返回离线错误并留痕，不会死循环阻塞）。
 		Publish(Event{
@@ -32,18 +34,32 @@ func (s *botLinkState) set(connected bool, err string) {
 			Title: "通知通道离线", Body: err,
 		})
 	}
+	if up {
+		// 离线→在线恢复沿：与掉线成对，告知受众通道已恢复。
+		Publish(Event{
+			Type: EvtNotifyChannelRecovered, Level: LevelInfo,
+			Title: "通知通道恢复", Body: "连接已恢复，通知投递正常",
+		})
+	}
 }
 
-// apply 更新连接态并返回是否「在线→离线」沿（不发布告警）。重连期间逐次
-// 失败不重复发布（退避重连每分钟可多次事件，逐次发布会刷屏）。
-func (s *botLinkState) apply(connected bool, err string) bool {
+// apply 更新连接态并返回「在线→离线」/「离线→在线」沿（不发布告警）。重连期间
+// 逐次失败不重复发布（退避重连每分钟可多次事件，逐次发布会刷屏）。
+func (s *botLinkState) apply(connected bool, err string) (down, up bool) {
 	s.mu.Lock()
-	transition := s.connected && !connected
+	down = s.connected && !connected
+	up = !s.connected && connected && s.downActive
+	if down {
+		s.downActive = true
+	}
+	if !s.connected && connected {
+		s.downActive = false
+	}
 	s.connected = connected
 	s.lastChange = time.Now()
 	s.lastErr = err
 	s.mu.Unlock()
-	return transition
+	return down, up
 }
 
 // botLinkRegistry per-bot 连接态登记表（多机器人入站会话各持其态）。
@@ -121,8 +137,10 @@ func (r *botLinkRegistry) stopAll(err string) {
 		s.mu.Unlock()
 		// 仅在线 bot 置离线：已离线 bot 保留其具体 lastErr（登录态过期等）
 		// 供排障，不被泛化停止原因覆盖。
-		if online && s.apply(false, err) {
-			anyDown = true
+		if online {
+			if down, _ := s.apply(false, err); down {
+				anyDown = true
+			}
 		}
 	}
 	if anyDown {

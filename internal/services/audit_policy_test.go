@@ -132,8 +132,8 @@ func TestTaskTriggerSelfRecordsAudit_familySplit(t *testing.T) {
 			t.Fatalf("自记族 %s 应报告 true（handler 复记会双审计，违反单记口径）", id)
 		}
 	}
-	// When/Then 12 个非自记可触发族报告 false（handler 显式补记「触发/任务监控」）
-	handlerRecorded := []string{"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention", "metrics-orphan-cleanup", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca", "autoban", "metrics-history-cleanup", "notification-daily-report", "notification-delivery-retention"}
+	// When/Then 13 个非自记可触发族报告 false（handler 显式补记「触发/任务监控」）
+	handlerRecorded := []string{"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention", "metrics-orphan-cleanup", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca", "autoban", "metrics-history-cleanup", "notification-daily-report", "notification-delivery-retention", "notification-apikey-expiry"}
 	for _, id := range handlerRecorded {
 		if TaskTriggerSelfRecordsAudit(id) {
 			t.Fatalf("非自记族 %s 应报告 false（任务体零审计，handler 不补记则手动触发无痕）", id)
