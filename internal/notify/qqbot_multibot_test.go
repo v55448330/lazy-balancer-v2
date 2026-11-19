@@ -3,7 +3,7 @@ package notify
 // QQ 多机器人凭据回归（覆盖根因：绑第二个 bot 覆盖全局凭据→老 bot 掉线）：
 // ①SaveQQBotCredentialsIfAbsent 仅全局未配置时写入；②token 缓存按 appid 隔离；
 // ③出站用 target 钉住的 appid/secret 鉴权，存量 target 无凭据回退全局；
-// ④QQ 内「绑定」指令建通道时钉住会话所属 bot 凭据（首 bot 会话=全局凭据）。
+// ④QQ 内「绑定测试」确认弹框会话（被动回执用会话 bot token；建通道交保存路径）。
 
 import (
 	"context"
@@ -155,33 +155,44 @@ func TestQQSendUsesTargetPinnedCredentials(t *testing.T) {
 	}
 }
 
-// QQ 内「绑定」指令：通道 target 钉住入站会话所属 bot（首 bot=全局）凭据。
-func TestQQBindCommandPinsSessionCredentials(t *testing.T) {
+// QQ 内「绑定测试」：确认弹框注册的会话（首 bot=全局凭据），被动回执用其
+// token；入站不建通道（旧「绑定 <验证码>」自动建通道已移除，不向后兼容）。
+func TestQQBindTestMessageConfirmsSession(t *testing.T) {
 	newNotifyConnectorDB(t)
 	m := setupQQPlatformMock(t)
 	seedQQGlobalCred(t, "APP_G", "SEC_G")
-	if _, err := db.DB.Exec(`INSERT INTO qq_bind_codes (code, user_id, expires_at) VALUES ('CODE9', 7, datetime('now', '+1 hour'))`); err != nil {
-		t.Fatalf("播种绑定码失败: %v", err)
+	clearBindSessions()
+	t.Cleanup(clearBindSessions)
+	StartBindSessionWithCred(7, "qq", "o9", "APP_G", "SEC_G")
+	// When 入站「绑定测试」（首 bot 会话：凭据=全局）
+	handleQQC2CMessage(context.Background(), qqBotCred{AppID: "APP_G", Secret: "SEC_G"}, json.RawMessage(`{"content":"绑定测试","author":{"user_openid":"o9"},"id":"MSG9"}`))
+	// Then 会话 confirmed + receiver 捕获
+	phase, receiver := PollBindSession("qq", "o9", "APP_G")
+	if phase != "confirmed" || receiver != "o9" {
+		t.Fatalf("确认后 phase=%q receiver=%q, want confirmed/o9", phase, receiver)
 	}
-	// When 入站绑定指令（首 bot 会话：凭据=全局）
-	appid, secret, _ := qqBotCredentials()
-	handleQQC2CMessage(context.Background(), qqBotCred{AppID: appid, Secret: secret}, json.RawMessage(`{"content":"绑定 CODE9","author":{"user_openid":"o9"},"id":"MSG9"}`))
-	// Then 通道 target 含 openid+appid+secret
-	var target string
-	if err := db.DB.QueryRow(`SELECT target FROM notification_channels WHERE type='qq'`).Scan(&target); err != nil {
-		t.Fatalf("通道行未落库: %v", err)
-	}
-	var tm map[string]any
-	if err := json.Unmarshal([]byte(target), &tm); err != nil {
-		t.Fatalf("target 非 JSON: %v", err)
-	}
-	if tm["openid"] != "o9" || tm["appid"] != "APP_G" || tm["secret"] != "SEC_G" {
-		t.Errorf("绑定 target=%s, want openid/appid/secret 钉住全局凭据", target)
+	// Then 入站不建通道（建通道交弹框保存路径）
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("入站绑定测试不应建通道: n=%d err=%v", n, err)
 	}
 	// Then 被动回执用全局 bot token
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if len(m.sentAuth) != 1 || m.sentAuth[0] != "QQBot token-APP_G" {
 		t.Errorf("绑定回执 Authorization=%v, want [QQBot token-APP_G]", m.sentAuth)
+	}
+	m.mu.Unlock()
+	// When 重复「绑定测试」→幂等不重复回执
+	handleQQC2CMessage(context.Background(), qqBotCred{AppID: "APP_G", Secret: "SEC_G"}, json.RawMessage(`{"content":"绑定测试","author":{"user_openid":"o9"},"id":"MSG9R"}`))
+	// When 旧「绑定 <验证码>」形态→不建通道/不回执（不向后兼容）
+	handleQQC2CMessage(context.Background(), qqBotCred{AppID: "APP_G", Secret: "SEC_G"}, json.RawMessage(`{"content":"绑定 CODE9","author":{"user_openid":"o9"},"id":"MSG9O"}`))
+	m.mu.Lock()
+	nReply := len(m.sentAuth)
+	m.mu.Unlock()
+	if nReply != 1 {
+		t.Errorf("重复/旧形态指令回执数=%d, want 1（幂等+旧指令已移除）", nReply)
+	}
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("旧绑定指令不应建通道: n=%d err=%v", n, err)
 	}
 }

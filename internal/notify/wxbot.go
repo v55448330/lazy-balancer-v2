@@ -258,8 +258,7 @@ type wxInboundCapture struct {
 	At       time.Time
 }
 
-// noteWxInboundCapture 记录最近入站（向导轮询领取用；任意文本均捕获——
-// 「绑定 XXX」指令路径同时保留，两形态并存）。
+// noteWxInboundCapture 记录最近入站（向导轮询领取用；任意文本均捕获）。
 func noteWxInboundCapture(receiver string) {
 	wxCtxMu.Lock()
 	wxPendingInbound = wxInboundCapture{Receiver: receiver, At: time.Now()}
@@ -846,7 +845,7 @@ func wxBotSession(ctx context.Context, cred wxBotCred, link *botLinkState) error
 	}
 }
 
-// handleWxInbound 单条入站：缓存 context_token →「绑定 XXX」指令处理
+// handleWxInbound 单条入站：缓存 context_token →「绑定测试」会话确认
 // （回执走被动形态=回传本条 context_token）。
 func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 	if m.FromUserID == "" || strings.HasSuffix(m.FromUserID, "@im.bot") {
@@ -864,28 +863,15 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 			text.WriteString(it.TextItem.Text)
 		}
 	}
-	// 弹框绑定会话：「绑定测试」匹配活跃会话→confirmed+品牌确认回复（不自动建
-	// 通道，建通道交弹框保存）。无活跃会话则落回旧「绑定 <验证码>」指令。
+	// 统一新流程：「绑定测试」匹配活跃会话→confirmed+品牌确认回复（不自动建
+	// 通道，建通道交弹框保存）。旧「绑定 <验证码>」自动建通道已移除。
 	if IsBindTestMessage(text.String()) {
 		if ConfirmBindSessionByInbound("wx_clawbot", m.FromUserID, cred.AccountID, m.FromUserID, m.ContextToken) {
 			if err := sendWxMessage(ctx, cred, m.FromUserID, BindConfirmReply(), m.ContextToken); err != nil {
 				taskLogWarn(ctx, "bind", "微信绑定确认回复发送失败（bot=%s）: %v", wxCredKey(cred), err)
 			}
-			return
 		}
 	}
-	code := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text.String()), "绑定"))
-	// 入站长轮询属会话所属 bot——通道 target 钉住该 bot 凭据（多机器人出站鉴权源）。
-	target, _ := json.Marshal(map[string]any{
-		"receiver": m.FromUserID, "token": cred.Token, "baseurl": cred.BaseURL,
-		"account_id": cred.AccountID, "user_id": cred.UserID,
-	})
-	bindBotChannel(code, m.FromUserID, "wx_clawbot", "微信机器人", string(target),
-		func(reply string) {
-			if err := sendWxMessage(ctx, cred, m.FromUserID, reply, m.ContextToken); err != nil {
-				taskLogWarn(ctx, "bind", "微信绑定回复发送失败（bot=%s）: %v", wxCredKey(cred), err)
-			}
-		})
 }
 
 // WxQRLoginStart 发起扫码登录：返回可直接渲染为二维码的 URL（qrcode_img_content）。

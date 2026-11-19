@@ -173,14 +173,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go version -m lazy-balancer | grep -q 'go1.27.3' || { echo ">>> 后端二进制未使用 go1.27.3 构建" >&2; exit 1; }
 
 # Final image
-FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # 版本号注入（ARG VERSION + ENV APP_VERSION）刻意放在下方 CRS/xdb 下载层之后
 # ——见该层前的层序说明。此处不得放 ENV：版本号每次发版必变，提前注入会让
 # 之后所有外网下载层缓存失效。
 # 构建机网络受限时经 --build-arg HTTP(S)_PROXY 透传给本阶段下载步骤
 # （CRS/ip2region 钉版下载）：Docker 预定义代理参数传入后自动注入 RUN 环境，
 # 无需 ARG 声明；未传参时为空值，行为不变。
-# 安全修复：显式钉版 openssl=3.5.9-r0（CVE 修复版）——openssl 经 curl 的
+# 安全修复：显式钉版 openssl=3.5.9-r1（CVE 修复版）——openssl 经 curl 的
 # libssl3/libcrypto3 依赖隐式装入，钉版保证镜像可复现且不携带旧版；
 # 升级源超出此版本时构建会失败提示，届时同步更新钉版值。
 # 不装 shadow——全仓（entrypoint/Dockerfile RUN 链/docs/compose）无
@@ -189,9 +189,9 @@ FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c
 # 沿 openssl 钉版先例显式升级（sqlite 依赖隐式装入 zlib）。
 # 安全修复（CVE 扫描）：musl 1.2.6-r6 目前只存在于 alpine edge 仓库——3.24
 # 分支最新仍为 r3。这里只对 musl/musl-utils 两个包指定 edge 仓库并精确钉版，
-# 基础系统（busybox/apk/openssl/zlib）仍来自 3.24.3；实测仅这两个包升级，
+# 基础系统（busybox/apk/openssl/zlib）仍来自 3.24.4；实测仅这两个包升级，
 # apk 正常运行。edge 若移除 r6，构建在此显性失败（不会静默用回 r3）。
-RUN apk add --no-cache ca-certificates sqlite tzdata tini openssl=3.5.9-r0 zlib=1.3.2-r1 && \
+RUN apk add --no-cache ca-certificates sqlite tzdata tini openssl=3.5.9-r1 zlib=1.3.2-r1 && \
     apk add --no-cache --repository https://dl-cdn.alpinelinux.org/alpine/edge/main \
       musl=1.2.6-r6 musl-utils=1.2.6-r6 && \
     apk list -I | grep -Eq '^musl-1\.2\.6-r6 ' && \

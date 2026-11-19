@@ -2,8 +2,8 @@ package notify
 
 // bot 连接器骨架（QQ/微信共用）：鉴权/心跳/重连状态机单源，协议编解码由
 // 两个连接器分实现。形态=出站长连（免公网）：Daemon Run 内循环——配置缺失
-// 即退出（EnabledFn 同口径）；断线指数退避重连；收到 C2C/私聊「绑定 XXX」
-// 指令 → openid/wxid↔user 绑定；通道掉线触发 notify_channel_down 告警
+// 即退出（EnabledFn 同口径）；断线指数退避重连；收到 C2C/私聊「绑定测试」
+// → 匹配弹框绑定会话确认（建通道交弹框保存）；通道掉线触发 notify_channel_down 告警
 // （走其它还活着的通道，自监控闭环）。
 
 import (
@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"lazy-balancer-v2/internal/db"
 )
 
 // botLinkState 连接状态（通知中心页状态点数据源）。
@@ -150,38 +148,6 @@ func botBackoff(attempt int) time.Duration {
 }
 
 var errBotNotConnected = errors.New("bot 连接未建立")
-
-// bindBotChannel bot 连接器共用的绑定码落库：qq_bind_codes 校验有效期 →
-// 通道 target（externalID 的 JSON 字面量）upsert 到 notification_channels →
-// 消费绑定码 → 回执。typ/targetJSON 各连接器传入（qq={"openid":...}，
-// wx_clawbot={"receiver":...}）。reply 的失败由调用方自行留痕。
-func bindBotChannel(code, externalID, typ, name, targetJSON string, reply func(string)) {
-	if code == "" || externalID == "" || db.DB == nil {
-		return
-	}
-	var userID int64
-	err := db.DB.QueryRow(`SELECT user_id FROM qq_bind_codes WHERE code=? AND expires_at>datetime('now')`, code).Scan(&userID)
-	if err != nil {
-		reply("绑定码无效或已过期，请在面板重新生成")
-		return
-	}
-	var channelID int64
-	err = db.DB.QueryRow(`SELECT id FROM notification_channels WHERE user_id=? AND type=? AND target=?`,
-		userID, typ, targetJSON).Scan(&channelID)
-	if err != nil {
-		_, err = db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, 1, datetime('now'), datetime('now'))`, userID, typ, name, targetJSON)
-		if err != nil {
-			reply("绑定失败：通道写入异常，请稍后重试")
-			return
-		}
-	} else if _, err = db.DB.Exec(`UPDATE notification_channels SET enabled=1, updated_at=datetime('now') WHERE id=?`, channelID); err != nil {
-		reply("绑定失败：通道更新异常，请稍后重试")
-		return
-	}
-	_, _ = db.DB.Exec(`DELETE FROM qq_bind_codes WHERE code=?`, code)
-	reply("绑定成功")
-}
 
 // quoteJSON 字符串转 JSON 字面量（绑定 target 组装用）。
 func quoteJSON(s string) string {

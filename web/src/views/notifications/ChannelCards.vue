@@ -96,7 +96,7 @@
     <!-- 编辑弹窗（DialogHeader 规范）：基本信息 + 传输配置分组。
          机器人协议固定（QQ=Markdown/微信=纯文本），无传输配置区；
          webhook 保留 method/headers，email 保留 subject/body_format。 -->
-    <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(600px, 94vw)" top="6vh"
+    <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(720px, 94vw)" top="6vh"
       :close-on-click-modal="false" @close="resetDrawer">
       <template #header>
         <DialogHeader :icon="editTarget ? Edit : Plus" :title="editTarget ? t('app.notification.channels.edit') : t('app.notification.channels.add')" :subtitle="typeLabel(drawerForm.type)" tone="primary" />
@@ -115,11 +115,9 @@
         <el-form-item v-if="drawerForm.type === 'webhook' || drawerForm.type === 'email'" :label="targetLabel(drawerForm.type)">
           <el-input v-model="drawerForm.targetValue" :placeholder="targetPlaceholder(drawerForm.type)" />
         </el-form-item>
-        <el-form-item v-else :label="targetLabel(drawerForm.type)">
-          <div class="bind-area">
-            <!-- 接收者手动输入为主：一个用户可绑定多个机器人通道（不同接收者），
-                 保存不依赖入站捕获；扫码/自动回填仅作辅助。 -->
-            <el-input v-model="drawerForm.targetValue" :placeholder="drawerForm.type === 'qq' ? t('app.notification.channels.botOpenidPlaceholder') : t('app.notification.channels.botReceiverPlaceholder')" />
+        <template v-else>
+          <el-divider />
+          <div class="bind-area bind-center">
             <div class="bind-helper">
               <el-button v-if="bindPhase === 'idle'" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
@@ -142,8 +140,9 @@
               <div v-if="bindPhase === 'idle' && drawerForm.type === 'wx_clawbot' && wxAlreadyLoggedIn" class="bind-hint">{{ t('app.notification.channels.wxAlreadyLoggedInHint') }}</div>
               <div class="bind-hint">{{ drawerForm.type === 'qq' ? t('app.notification.channels.qqBindHint') : t('app.notification.channels.wxSendMsgHint') }}</div>
             </div>
+            <div v-if="drawerForm.targetValue" class="bind-hint bind-receiver">{{ t('app.notification.channels.bindReceiverCaptured', { id: drawerForm.targetValue }) }}</div>
           </div>
-        </el-form-item>
+        </template>
       </el-form>
 
       <!-- 传输配置（编辑既有 webhook/email 通道）：请求方式/请求头/标题/正文格式。
@@ -735,10 +734,12 @@ defineExpose({ fetchChannels })
 
 /* 编辑弹窗：绑定辅助区 + 传输配置分组 */
 .ch-form-section { margin-top: 4px; }
-.bind-area { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; }
+.bind-area { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; box-sizing: border-box; }
 .bind-helper { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .bind-qr-img { width: 200px; height: 200px; }
 .bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
+.bind-center { align-items: center; text-align: center; }
+.bind-receiver { word-break: break-all; color: #059669; }
 .bind-success-alert { margin-bottom: 8px; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
 /* 自定义请求头：label 与右侧第一行输入框（无行时与添加按钮）垂直对齐 */

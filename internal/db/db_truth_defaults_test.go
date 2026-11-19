@@ -814,7 +814,6 @@ var freshOriginalColumns = map[string][]string{
 	"notification_subscriptions":     {"user_id", "event_type", "min_level", "body_template", "channel_ids", "channel_templates"},
 	"notify_settings":                {"key", "value"},
 	"path_rules":                     {"id", "rule_id", "sort_order", "match_type", "path", "upstreams_json", "created_at", "updated_at"},
-	"qq_bind_codes":                  {"code", "user_id", "expires_at"},
 	"revoked_jti":                    {"jti_hash", "expires_at"},
 	"security_block_pages":           {"id", "name", "description", "content", "is_default", "created_at", "updated_at"},
 	"security_crawler_sources":       {"id", "name", "display_name", "url", "format", "update_enabled", "entry_count", "version", "update_status", "message", "last_checked", "next_update", "trigger", "started_at", "finished_at", "consecutive_failures", "created_at", "updated_at"},

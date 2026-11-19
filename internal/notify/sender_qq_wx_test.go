@@ -1,7 +1,7 @@
 package notify
 
 // QQ/微信通道适配器错误路径测试（真 sqlite 表，零外呼）：目标校验、连接
-// 离线明确报错、iLink context_token 缺失 fail-loud、绑定码落库闭环。
+// 离线明确报错、iLink context_token 缺失 fail-loud、绑定会话入站确认闭环。
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// newNotifyConnectorDB 通道/绑定码/KV 三表齐全的测试库。
+// newNotifyConnectorDB 通道/KV 两表齐全的测试库。
 func newNotifyConnectorDB(t *testing.T) {
 	t.Helper()
 	old := db.DB
@@ -30,8 +30,6 @@ func newNotifyConnectorDB(t *testing.T) {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(user_id, type, target))`,
-		`CREATE TABLE IF NOT EXISTS qq_bind_codes (
-			code TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL)`,
 	} {
 		if _, err := database.Exec(ddl); err != nil {
 			t.Fatalf("建表失败: %v", err)
@@ -151,37 +149,56 @@ func TestWxSplitTextChunking(t *testing.T) {
 	}
 }
 
-func TestBindBotChannelUpsert(t *testing.T) {
+// 入站「绑定测试」确认语义（替代旧绑定码落库闭环）：弹框注册会话→入站确认
+// （捕获 receiver/context）→幂等不重复确认；无会话→不匹配。入站确认不建
+// 通道（建通道交弹框保存路径）。
+func TestConfirmBindSessionByInboundSemantics(t *testing.T) {
 	newNotifyConnectorDB(t)
-	if _, err := db.DB.Exec(`INSERT INTO qq_bind_codes (code, user_id, expires_at) VALUES ('CODE1', 7, datetime('now', '+1 hour'))`); err != nil {
-		t.Fatalf("播种绑定码失败: %v", err)
+	clearBindSessions()
+	t.Cleanup(clearBindSessions)
+	// Given 弹框扫码注册会话（QQ 携带待绑定凭据）
+	StartBindSessionWithCred(7, "qq", "o456", "APP_A", "SEC_A")
+	if phase, _ := PollBindSession("qq", "o456", "APP_A"); phase != "awaiting_message" {
+		t.Fatalf("注册后应 awaiting_message, got %q", phase)
 	}
-	var replies []string
-	bindBotChannel("CODE1", "o456", "qq", "QQ 机器人", `{"openid":"o456"}`, func(reply string) {
-		replies = append(replies, reply)
-	})
-	if len(replies) != 1 || replies[0] != "绑定成功" {
-		t.Fatalf("绑定回执 = %v, want [绑定成功]", replies)
+	// When 入站确认
+	if !ConfirmBindSessionByInbound("qq", "o456", "APP_A", "o456", "") {
+		t.Fatal("活跃会话应被确认")
 	}
-	var target string
-	var userID int64
-	if err := db.DB.QueryRow(`SELECT user_id, target FROM notification_channels WHERE type='qq'`).Scan(&userID, &target); err != nil {
-		t.Fatalf("通道行未落库: %v", err)
+	phase, receiver := PollBindSession("qq", "o456", "APP_A")
+	if phase != "confirmed" || receiver != "o456" {
+		t.Errorf("确认后 phase=%q receiver=%q, want confirmed/o456", phase, receiver)
 	}
-	if userID != 7 || target != `{"openid":"o456"}` {
-		t.Errorf("通道行 user_id=%d target=%s", userID, target)
+	// Then 幂等：已确认不重复确认（不重复回执）
+	if ConfirmBindSessionByInbound("qq", "o456", "APP_A", "o456", "") {
+		t.Error("已确认会话不应重复确认")
 	}
+	// Then wx 会话捕获 context_token，二次确认不覆盖
+	StartBindSession(7, "wx_clawbot", "wx1", "B1")
+	if !ConfirmBindSessionByInbound("wx_clawbot", "wx1", "B1", "wx1", "ctx-1") {
+		t.Fatal("wx 活跃会话应被确认")
+	}
+	if ConfirmBindSessionByInbound("wx_clawbot", "wx1", "B1", "wx1", "ctx-2") {
+		t.Error("wx 已确认会话不应重复确认")
+	}
+	bindSessionMu.Lock()
+	ctxTok := bindSessions[bindSessionKey("wx_clawbot", "wx1", "B1")].ContextToken
+	bindSessionMu.Unlock()
+	if ctxTok != "ctx-1" {
+		t.Errorf("二次确认改写 context_token: %q, want ctx-1", ctxTok)
+	}
+	// Then 无会话→不匹配（旧「无活跃会话」兜底已移除）
+	if ConfirmBindSessionByInbound("qq", "nobody", "APP_A", "nobody", "") {
+		t.Error("无会话不应被确认")
+	}
+	// Then 旧「绑定 <验证码>」形态不再匹配（不向后兼容）
+	if IsBindTestMessage("绑定 CODE1") {
+		t.Error("旧绑定码指令不应匹配绑定测试")
+	}
+	// Then 入站确认不建通道（建通道交弹框保存）
 	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM qq_bind_codes WHERE code='CODE1'`).Scan(&n); err != nil || n != 0 {
-		t.Errorf("绑定码未消费: n=%d err=%v", n, err)
-	}
-	// 无效绑定码 → 明确回执。
-	replies = nil
-	bindBotChannel("GONE", "o789", "qq", "QQ 机器人", `{"openid":"o789"}`, func(reply string) {
-		replies = append(replies, reply)
-	})
-	if len(replies) != 1 || !strings.Contains(replies[0], "无效或已过期") {
-		t.Errorf("失效绑定码回执 = %v", replies)
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("入站确认不应建通道: n=%d err=%v", n, err)
 	}
 }
 

@@ -17,9 +17,10 @@ import (
 
 // NotificationDeliveryRetentionResult 清理构成（任务日志按构成披露）。
 type NotificationDeliveryRetentionResult struct {
-	Deliveries int // 主表删除行数
-	Channels   int // 每通道结果删除行数
-	WxContexts int // 过期微信会话上下文 KV 清理数
+	Deliveries   int // 主表删除行数
+	Channels     int // 每通道结果删除行数
+	WxContexts   int // 过期微信会话上下文 KV 清理数
+	BindSessions int // 过期绑定会话清理数
 }
 
 // NotificationDeliveryRetentionCleanup 按保留期删除过期投递记录（分批，
@@ -78,5 +79,6 @@ func NotificationDeliveryRetentionCleanup(ctx context.Context) (NotificationDeli
 	if n, err := notify.PruneWxContextTokens(7 * 24 * time.Hour); err == nil {
 		result.WxContexts = n
 	}
+	result.BindSessions = notify.PruneBindSessions(10 * time.Minute)
 	return result, nil
 }

@@ -2,13 +2,12 @@ package notify
 
 // QQ 多机器人入站会话回归（根因：入站只维护全局首 bot 的 WS，第二 bot 无
 // 入站会话→客户端停留「连接中」）：①双 bot 各自独立 WS 会话/鉴权/在线态/
-// 任务日志；②单 bot 断开不影响另一 bot，断线自动 Resume 重连；③入站绑定
-// 钉住会话所属 bot 凭据；④清洁停止全部 bot 置离线；⑤单 bot 形态兼容
+// 任务日志；②单 bot 断开不影响另一 bot，断线自动 Resume 重连；③入站「绑定
+// 测试」确认会话所属 bot 的绑定会话；④清洁停止全部 bot 置离线；⑤单 bot 形态兼容
 // （无参状态=首 bot）；⑥bot 枚举=全局+通道钉住按 appid 去重。
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -143,32 +142,40 @@ func waitLinkConnected(t *testing.T, get func() (bool, string, time.Time), want 
 	t.Fatalf("链接态未收敛: connected=%v want=%v lastErr=%s", c, want, lastErr)
 }
 
-// waitChannelTarget 轮询通道行落库（入站绑定异步处理）。
-func waitChannelTarget(t *testing.T, typ, like string) string {
+// waitBindConfirmed 轮询绑定会话确认（入站「绑定测试」异步处理）。
+func waitBindConfirmed(t *testing.T, typ, scannerID, botKey string) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		var target string
-		err := db.DB.QueryRow(`SELECT target FROM notification_channels WHERE type=? AND target LIKE ?`, typ, "%"+like+"%").Scan(&target)
-		if err == nil {
-			return target
+		if phase, receiver := PollBindSession(typ, scannerID, botKey); phase == "confirmed" {
+			return receiver
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("通道行未落库: type=%s like=%s", typ, like)
+	t.Fatalf("绑定会话未确认: typ=%s scanner=%s bot=%s", typ, scannerID, botKey)
 	return ""
 }
 
 // 双 bot 入站：各自会话/鉴权/在线态/日志互不干扰；单 bot 断开另一 bot 不受
-// 影响且自动重连；入站绑定钉住会话 bot；清洁停止全部离线。
+// 影响且自动重连；入站「绑定测试」确认会话 bot 的绑定会话；清洁停止全部离线。
 func TestQQInboundMultiBotSessions(t *testing.T) {
 	newNotifyConnectorDB(t)
+	clearBindSessions()
+	t.Cleanup(clearBindSessions)
 	m := setupQQPlatformMock(t)
 	ws := setupQQWSMock(t)
 	seedQQGlobalCred(t, "APP_A", "SEC_A")
 	// Given 第二 bot 经通道 target 钉住（全局仍是首 bot APP_A）
 	if _, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target) VALUES (7, 'qq', 'botB', '{"openid":"oB","appid":"APP_B","secret":"SEC_B"}')`); err != nil {
 		t.Fatalf("播种第二 bot 通道失败: %v", err)
+	}
+	// Given 弹框已注册第二 bot 绑定会话（凭据随会话携带）。先于连接任务启动
+	// 注册并排空唤醒：否则 supervisor 消费唤醒后投递 reset 信号，后续单方断连
+	// 走「立即重连」而非退避，离线窗口缩到毫秒级（低于轮询分辨率）。
+	StartBindSessionWithCred(7, "qq", "oBind", "APP_B", "SEC_B")
+	select {
+	case <-qqWakeCh:
+	default:
 	}
 	logDir := t.TempDir()
 	oldLogDir := taskengine.LogDir()
@@ -208,31 +215,42 @@ func TestQQInboundMultiBotSessions(t *testing.T) {
 		t.Errorf("任务日志缺 READY 建连行:\n%s", logText)
 	}
 
-	// When 第二 bot 入站绑定指令
-	if _, err := db.DB.Exec(`INSERT INTO qq_bind_codes (code, user_id, expires_at) VALUES ('CODE_B', 7, datetime('now', '+1 hour'))`); err != nil {
-		t.Fatalf("播种绑定码失败: %v", err)
+	// When 第二 bot 入站「绑定测试」（会话已于 Given 注册）
+	ws.sendC2C("APP_B", "oBind", "绑定测试", "MSG_B")
+	// Then 会话确认且 receiver=扫码者；入站不建通道（建通道交弹框保存）
+	if receiver := waitBindConfirmed(t, "qq", "oBind", "APP_B"); receiver != "oBind" {
+		t.Errorf("绑定会话 receiver=%q, want oBind", receiver)
 	}
-	ws.sendC2C("APP_B", "oBind", "绑定 CODE_B", "MSG_B")
-	// Then 通道 target 钉住会话所属 bot（APP_B），非全局首 bot
-	target := waitChannelTarget(t, "qq", "oBind")
-	var tm map[string]any
-	if err := json.Unmarshal([]byte(target), &tm); err != nil {
-		t.Fatalf("绑定 target 非 JSON: %v", err)
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels WHERE target LIKE '%oBind%'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("入站绑定测试不应建通道: n=%d err=%v", n, err)
 	}
-	if tm["appid"] != "APP_B" || tm["secret"] != "SEC_B" || tm["openid"] != "oBind" {
-		t.Errorf("入站绑定 target=%s, want 钉住会话 bot APP_B", target)
-	}
-	// Then 被动回执用会话 bot token
-	m.mu.Lock()
+	// Then 被动回执用会话 bot token（异步送达）
+	deadline := time.Now().Add(5 * time.Second)
 	replyOK := false
-	for _, a := range m.sentAuth {
-		if a == "QQBot token-APP_B" {
-			replyOK = true
+	for time.Now().Before(deadline) && !replyOK {
+		m.mu.Lock()
+		for _, a := range m.sentAuth {
+			if a == "QQBot token-APP_B" {
+				replyOK = true
+			}
+		}
+		m.mu.Unlock()
+		if !replyOK {
+			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	m.mu.Unlock()
 	if !replyOK {
-		t.Error("绑定回执未用会话 bot APP_B 的 token")
+		t.Fatal("绑定回执未用会话 bot APP_B 的 token")
+	}
+	// Then 幂等：重复「绑定测试」不重复回执
+	ws.sendC2C("APP_B", "oBind", "绑定测试", "MSG_B2")
+	time.Sleep(300 * time.Millisecond)
+	m.mu.Lock()
+	nReply := len(m.sentAuth)
+	m.mu.Unlock()
+	if nReply != 1 {
+		t.Errorf("重复绑定测试回执数=%d, want 1（幂等）", nReply)
 	}
 
 	// When 第二 bot 单方断连

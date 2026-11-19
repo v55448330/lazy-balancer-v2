@@ -3,7 +3,7 @@ package notify
 // 绑定会话状态机（弹框引导统一流程：扫码→连接测试→待发送「绑定测试」→已确认
 // →允许保存）。per-user 内存态，重启作废重新扫码。入站「绑定测试」匹配扫码者
 // →confirmed+品牌确认回复；保存门控由弹框据 phase 决定（confirmed 前禁保存）。
-// 与旧「绑定 <验证码>」自动建通道指令并存（无活跃会话时旧指令仍生效）。
+// 旧「绑定 <验证码>」自动建通道指令已移除（不向后兼容，建通道统一交弹框保存）。
 
 import (
 	"encoding/json"
@@ -92,6 +92,32 @@ func PollBindSession(typ, scannerID, botKey string) (phase, receiver string) {
 		return "idle", ""
 	}
 	return s.Phase, s.Receiver
+}
+
+// ClearBindSessionsByUser 通道保存后清除该用户绑定会话（防内存累积）。
+func ClearBindSessionsByUser(userID int64) {
+	bindSessionMu.Lock()
+	defer bindSessionMu.Unlock()
+	for k, s := range bindSessions {
+		if s.UserID == userID {
+			delete(bindSessions, k)
+		}
+	}
+}
+
+// PruneBindSessions 清理超 maxAge 未更新的绑定会话（保留期兜底，防泄漏）。
+func PruneBindSessions(maxAge time.Duration) int {
+	bindSessionMu.Lock()
+	defer bindSessionMu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	n := 0
+	for k, s := range bindSessions {
+		if s.UpdatedAt.Before(cutoff) {
+			delete(bindSessions, k)
+			n++
+		}
+	}
+	return n
 }
 
 // BindSessionConnected 绑定会话对应 bot 的入站连接态（连接测试判据：API 正确、

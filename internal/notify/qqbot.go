@@ -2,7 +2,7 @@ package notify
 
 // QQ 官方机器人连接 Daemon（WebSocket 出站，免公网）：
 //   AppID+Secret → getAppAccessToken → wss 事件网关（op:2 Identify/op:1 心跳/
-//   op:6 Resume）→ C2C_MESSAGE_CREATE 处理「绑定 XXXXXXX」指令。
+//   op:6 Resume）→ C2C_MESSAGE_CREATE 处理「绑定测试」会话确认指令。
 // 发消息走官方 REST（/v2/users/{openid}/messages，被动回复带 msg_id 免额度；
 // 主动消息受官方额度频控——QQ 通道默认只订 critical）。
 // access_token 经包级单例 qqTokens 按 appid 隔离缓存；入站会话 per-bot 维护

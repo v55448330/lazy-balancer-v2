@@ -3,7 +3,7 @@ package notify
 // QQ 扫码绑定凭据的落库/读取（notify_settings 单源：notify.qq_appid /
 // notify.qq_secret ——入站连接 Daemon 鉴权单源=首个 bot）。多机器人出站
 // 凭据经通道 target 钉住（各用所属 bot），全局仅首 bot、后续绑定不覆盖。
-// 通知通道 target 的 openid 绑定由 bindBotChannel 侧维护（channels 表）。
+// 通知通道 target 的 openid/receiver 由弹框保存路径维护（channels 表）。
 
 import (
 	"lazy-balancer-v2/internal/db"

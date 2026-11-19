@@ -222,6 +222,7 @@ export default {
         bindQrWxHint: '微信二维码有效期较短，请尽快扫码确认',
         bindExpiredHint: '二维码已失效，请刷新获取新二维码重新绑定',
         bindRefresh: '刷新二维码',
+        bindReceiverCaptured: '已捕获接收者：{id}',
         bindConnecting: '连接测试中…正在验证机器人 API 与连接',
         bindAwaitMsg: '连接成功！请在微信/QQ 内向机器人发送「绑定测试」完成绑定（收到后自动回复确认）。',
         bindConfirmed: '绑定成功！已收到确认消息，可保存通道。',

@@ -2,7 +2,7 @@ package notify
 
 // 微信多机器人凭据回归（对称 QQ 根因）：①第二次扫码登录不覆盖全局登录态
 // （入站长轮询仍首 bot），新凭据经通道 target 钉住；②出站用 target 的
-// token/baseurl，存量 target 无凭据回退全局；③「绑定」指令建通道钉住会话凭据。
+// token/baseurl，存量 target 无凭据回退全局；③「绑定测试」确认弹框会话（建通道交保存路径）。
 
 import (
 	"context"
@@ -179,36 +179,58 @@ func TestWxQRSecondLoginKeepsGlobal(t *testing.T) {
 	}
 }
 
-// 微信「绑定」指令：通道 target 钉住入站会话（首 bot）凭据。
-func TestWxBindCommandPinsSessionCredentials(t *testing.T) {
+// 微信「绑定测试」：确认弹框注册的会话（捕获 receiver/context_token），被动
+// 回执用会话 token；入站不建通道（旧「绑定 <验证码>」自动建通道已移除）。
+func TestWxBindTestMessageConfirmsSession(t *testing.T) {
 	newNotifyConnectorDB(t)
 	m := setupWxSendMock(t)
-	if _, err := db.DB.Exec(`INSERT INTO qq_bind_codes (code, user_id, expires_at) VALUES ('CODE8', 7, datetime('now', '+1 hour'))`); err != nil {
-		t.Fatalf("播种绑定码失败: %v", err)
-	}
+	clearBindSessions()
+	t.Cleanup(clearBindSessions)
 	cred := wxBotCred{Token: "T_S", BaseURL: m.server.URL, AccountID: "B_S", UserID: "U_S"}
+	StartBindSession(7, "wx_clawbot", "wx9", "B_S")
 	var in wxInMsg
-	if err := json.Unmarshal([]byte(`{"from_user_id":"wx9","context_token":"ctx-9","item_list":[{"type":1,"text_item":{"text":"绑定 CODE8"}}]}`), &in); err != nil {
+	if err := json.Unmarshal([]byte(`{"from_user_id":"wx9","context_token":"ctx-9","item_list":[{"type":1,"text_item":{"text":"绑定测试"}}]}`), &in); err != nil {
 		t.Fatal(err)
 	}
-	// When 入站绑定指令
+	// When 入站「绑定测试」
 	handleWxInbound(context.Background(), cred, in)
-	// Then 通道 target 含 receiver+token/baseurl/account_id/user_id
-	var target string
-	if err := db.DB.QueryRow(`SELECT target FROM notification_channels WHERE type='wx_clawbot'`).Scan(&target); err != nil {
-		t.Fatalf("通道行未落库: %v", err)
+	// Then 会话 confirmed + receiver/context_token 捕获
+	phase, receiver := PollBindSession("wx_clawbot", "wx9", "B_S")
+	if phase != "confirmed" || receiver != "wx9" {
+		t.Fatalf("确认后 phase=%q receiver=%q, want confirmed/wx9", phase, receiver)
 	}
-	var tm map[string]any
-	if err := json.Unmarshal([]byte(target), &tm); err != nil {
-		t.Fatalf("target 非 JSON: %v", err)
+	bindSessionMu.Lock()
+	ctxTok := bindSessions[bindSessionKey("wx_clawbot", "wx9", "B_S")].ContextToken
+	bindSessionMu.Unlock()
+	if ctxTok != "ctx-9" {
+		t.Errorf("会话 context_token=%q, want ctx-9", ctxTok)
 	}
-	if tm["receiver"] != "wx9" || tm["token"] != "T_S" || tm["baseurl"] != m.server.URL || tm["account_id"] != "B_S" || tm["user_id"] != "U_S" {
-		t.Errorf("绑定 target=%s, want 会话凭据钉住", target)
+	// Then 入站不建通道（建通道交弹框保存路径）
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("入站绑定测试不应建通道: n=%d err=%v", n, err)
 	}
 	// Then 被动回执用会话 token
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if len(m.auths) != 1 || m.auths[0] != "Bearer T_S" {
 		t.Errorf("绑定回执 Authorization=%v, want [Bearer T_S]", m.auths)
+	}
+	m.mu.Unlock()
+	// When 重复「绑定测试」→幂等不重复回执
+	handleWxInbound(context.Background(), cred, in)
+	// When 旧「绑定 <验证码>」形态→不建通道/不回执（不向后兼容）
+	var old wxInMsg
+	if err := json.Unmarshal([]byte(`{"from_user_id":"wx9","context_token":"ctx-9","item_list":[{"type":1,"text_item":{"text":"绑定 CODE8"}}]}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	handleWxInbound(context.Background(), cred, old)
+	m.mu.Lock()
+	nReply := len(m.auths)
+	m.mu.Unlock()
+	if nReply != 1 {
+		t.Errorf("重复/旧形态指令回执数=%d, want 1（幂等+旧指令已移除）", nReply)
+	}
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("旧绑定指令不应建通道: n=%d err=%v", n, err)
 	}
 }

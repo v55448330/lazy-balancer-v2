@@ -153,6 +153,8 @@ func seedWxCred(t *testing.T, cred wxBotCred) {
 // 登录态过期仅自身终止；清洁停止全部离线。
 func TestWxInboundMultiBotSessions(t *testing.T) {
 	newNotifyConnectorDB(t)
+	clearBindSessions()
+	t.Cleanup(clearBindSessions)
 	m := setupWxPollMock(t)
 	seedWxCred(t, wxBotCred{Token: "T1", BaseURL: m.server.URL, AccountID: "B1", UserID: "U1"})
 	// Given 第二 bot 经通道 target 钉住
@@ -197,20 +199,17 @@ func TestWxInboundMultiBotSessions(t *testing.T) {
 		t.Errorf("任务日志缺长轮询建立行:\n%s", logText)
 	}
 
-	// When 第二 bot 入站绑定指令（context_token 随会话隔离缓存）
-	if _, err := db.DB.Exec(`INSERT INTO qq_bind_codes (code, user_id, expires_at) VALUES ('CODE_W', 7, datetime('now', '+1 hour'))`); err != nil {
-		t.Fatalf("播种绑定码失败: %v", err)
-	}
-	m.setMsgs("T2", `[{"from_user_id":"wxU","context_token":"ctx-B2","item_list":[{"type":1,"text_item":{"text":"绑定 CODE_W"}}]}]`)
+	// When 第二 bot 入站「绑定测试」（弹框已注册会话；context_token 随会话隔离缓存）
+	StartBindSession(7, "wx_clawbot", "wxU", "B2")
+	m.setMsgs("T2", `[{"from_user_id":"wxU","context_token":"ctx-B2","item_list":[{"type":1,"text_item":{"text":"绑定测试"}}]}]`)
 	m.poke("T2")
-	// Then 通道 target 钉住会话 bot T2/B2
-	target := waitChannelTarget(t, "wx_clawbot", "wxU")
-	var tm map[string]any
-	if err := json.Unmarshal([]byte(target), &tm); err != nil {
-		t.Fatalf("绑定 target 非 JSON: %v", err)
+	// Then 会话确认且 receiver=扫码者；入站不建通道（建通道交弹框保存）
+	if receiver := waitBindConfirmed(t, "wx_clawbot", "wxU", "B2"); receiver != "wxU" {
+		t.Errorf("绑定会话 receiver=%q, want wxU", receiver)
 	}
-	if tm["token"] != "T2" || tm["account_id"] != "B2" || tm["receiver"] != "wxU" {
-		t.Errorf("入站绑定 target=%s, want 钉住会话 bot T2/B2", target)
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels WHERE target LIKE '%wxU%'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("入站绑定测试不应建通道: n=%d err=%v", n, err)
 	}
 	// Then context_token 按 bot 隔离：B2 命名空间有，B1 命名空间不受影响
 	if got := wxContextTokenFor("B2", "wxU"); got != "ctx-B2" {
@@ -219,17 +218,40 @@ func TestWxInboundMultiBotSessions(t *testing.T) {
 	if got := wxContextTokenFor("B1", "wxU"); got != "" {
 		t.Errorf("B1 命名空间被第二 bot 入站污染: %q", got)
 	}
-	// Then 被动回执用会话 bot token
-	m.mu.Lock()
+	// Then 会话捕获 context_token（保存路径凭据钉住后出站用）
+	bindSessionMu.Lock()
+	ctxTok := bindSessions[bindSessionKey("wx_clawbot", "wxU", "B2")].ContextToken
+	bindSessionMu.Unlock()
+	if ctxTok != "ctx-B2" {
+		t.Errorf("会话 context_token=%q, want ctx-B2", ctxTok)
+	}
+	// Then 被动回执用会话 bot token（异步送达）
+	deadline := time.Now().Add(5 * time.Second)
 	replyOK := false
-	for _, a := range m.auths {
-		if a == "Bearer T2" {
-			replyOK = true
+	for time.Now().Before(deadline) && !replyOK {
+		m.mu.Lock()
+		for _, a := range m.auths {
+			if a == "Bearer T2" {
+				replyOK = true
+			}
+		}
+		m.mu.Unlock()
+		if !replyOK {
+			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	m.mu.Unlock()
 	if !replyOK {
-		t.Error("绑定回执未用会话 bot T2 的 token")
+		t.Fatal("绑定回执未用会话 bot T2 的 token")
+	}
+	// Then 幂等：重复「绑定测试」不重复回执
+	m.setMsgs("T2", `[{"from_user_id":"wxU","context_token":"ctx-B2","item_list":[{"type":1,"text_item":{"text":"绑定测试"}}]}]`)
+	m.poke("T2")
+	time.Sleep(300 * time.Millisecond)
+	m.mu.Lock()
+	nReply := len(m.auths)
+	m.mu.Unlock()
+	if nReply != 1 {
+		t.Errorf("重复绑定测试回执数=%d, want 1（幂等）", nReply)
 	}
 
 	// When 第二 bot 登录态过期（-14 session timeout）

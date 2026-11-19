@@ -143,7 +143,7 @@ func validateChannelTarget(typ, raw string) error {
 		}
 	case channelTypeQQ:
 		if o, _ := m["openid"].(string); o == "" {
-			return errors.New("QQ 通道需先完成扫码绑定（生成绑定码并在 QQ 中发送）")
+			return errors.New("QQ 通道需先完成扫码绑定（扫码后在 QQ 中发送「绑定测试」）")
 		}
 	case channelTypeWx:
 		if r, _ := m["receiver"].(string); r == "" {
@@ -255,6 +255,7 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 	// 是正常路径——openid 不变，二次提交不是错误），并发窗口 INSERT 仍撞
 	// 约束时同口径处理。
 	if id, ok := findExistingNotificationChannel(uid, req.Type, target, req.Target); ok {
+		notify.ClearBindSessionsByUser(uid)
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id, "reused": true}})
 		return
 	}
@@ -263,6 +264,7 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			if id, ok := findExistingNotificationChannel(uid, req.Type, target, req.Target); ok {
+				notify.ClearBindSessionsByUser(uid)
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id, "reused": true}})
 				return
 			}
@@ -271,6 +273,7 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	notify.ClearBindSessionsByUser(uid)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id}})
 }
 

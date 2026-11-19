@@ -552,7 +552,7 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix, key_hash);
 
-	-- 通知中心（通道/订阅/投递留痕/QQ 绑定码/MCP 会话）
+	-- 通知中心（通道/订阅/投递留痕/MCP 会话）
 	CREATE TABLE IF NOT EXISTS notification_channels (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id INTEGER NOT NULL,
@@ -635,12 +635,6 @@ func createTables() error {
 		user_id INTEGER PRIMARY KEY,
 		config TEXT NOT NULL DEFAULT '{}',
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS qq_bind_codes (
-		code TEXT PRIMARY KEY,
-		user_id INTEGER NOT NULL,
-		expires_at DATETIME NOT NULL
 	);
 
 	CREATE TABLE IF NOT EXISTS mcp_sessions (

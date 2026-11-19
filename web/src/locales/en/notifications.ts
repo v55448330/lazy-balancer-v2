@@ -215,6 +215,7 @@ export default {
         bindQrWxHint: 'WeChat QR expires quickly; scan and confirm promptly',
         bindExpiredHint: 'QR code expired; refresh to get a new one and re-bind',
         bindRefresh: 'Refresh QR code',
+        bindReceiverCaptured: 'Receiver captured: {id}',
         bindConnecting: 'Connection test… verifying bot API and connectivity',
         bindAwaitMsg: 'Connected! Send "绑定测试" (bind test) to the bot in WeChat/QQ to complete binding (auto-reply confirmation on receipt).',
         bindConfirmed: 'Bound! Confirmation message received; you may save the channel.',
