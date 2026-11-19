@@ -104,7 +104,7 @@ const apiKeyListColumns = `k.id, k.name, k.key_prefix, k.created_by, k.last_used
 	COALESCE(k.is_enabled,1), COALESCE(k.mcp_enabled,0), COALESCE(k.api_enabled,1), COALESCE(k.read_only,0),
 	COALESCE(k.api_read_only,0), COALESCE(k.mcp_read_only,0),
 	COALESCE(k.mcp_ip_whitelist,''), k.created_at, k.updated_at, COALESCE(k.updated_by,0),
-	u.username, COALESCE(uu.username,'')`
+	u.username, COALESCE(uu.username,''), COALESCE(u.display_name,''), COALESCE(uu.display_name,'')`
 
 // queryAPIKeys 按可选 WHERE 片段查询 API Key 列表（扫描仍走 scanAPIKeys）。
 func queryAPIKeys(where string, args ...any) (*sql.Rows, error) {
@@ -214,11 +214,13 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 		var key models.APIKey
 		var username string
 		var updatedByUsername string
+		var displayName string
+		var updatedByDisplayName string
 		var whitelistJSON string
 		var updatedAt sql.NullTime // 带外 NULL 防御：回退 created_at（迁移回填同口径）
 		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &key.CreatedBy, &key.LastUsed, &key.ExpiresAt,
 			&key.IsEnabled, &key.MCPEnabled, &key.APIEnabled, &key.ReadOnly, &key.APIReadOnly, &key.MCPReadOnly,
-			&whitelistJSON, &key.CreatedAt, &updatedAt, &key.UpdatedBy, &username, &updatedByUsername); err != nil {
+			&whitelistJSON, &key.CreatedAt, &updatedAt, &key.UpdatedBy, &username, &updatedByUsername, &displayName, &updatedByDisplayName); err != nil {
 			return nil, fmt.Errorf("scan API key: %w", err)
 		}
 		key.UpdatedAt = key.CreatedAt
@@ -238,6 +240,8 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 		}
 		resp := models.NewAPIKeyWithUserResponse(key, username)
 		resp.UpdatedByUsername = updatedByUsername
+		resp.DisplayName = displayName
+		resp.UpdatedByDisplayName = updatedByDisplayName
 		keys = append(keys, resp)
 	}
 	if err := rows.Err(); err != nil {

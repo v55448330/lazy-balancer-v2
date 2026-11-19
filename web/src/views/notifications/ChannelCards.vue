@@ -143,12 +143,16 @@
             <el-form-item :label="t('app.notification.channels.styleHeaders')">
               <div class="header-rows">
                 <div v-for="(row, i) in headerRows" :key="i" class="header-row">
-                  <el-input v-model="row.name" size="small" :placeholder="t('app.notification.channels.styleHeaderName')" class="header-name" />
+                  <el-select v-model="row.name" size="small" filterable allow-create default-first-option :placeholder="t('app.notification.channels.styleHeaderName')" class="header-name">
+                    <el-option v-for="h in WEBHOOK_HEADER_PRESETS" :key="h" :value="h" :label="h" />
+                  </el-select>
                   <el-input v-model="row.value" size="small" :placeholder="t('app.notification.channels.styleHeaderValue')" class="header-value" />
-                  <el-button size="small" link type="danger" @click="removeHeaderRow(i)">{{ t('app.notification.channels.delete') }}</el-button>
+                  <el-button size="small" link type="danger" class="header-del" @click="removeHeaderRow(i)">{{ t('app.notification.channels.delete') }}</el-button>
                 </div>
-                <el-button size="small" link type="primary" :disabled="headerRows.length >= 8" @click="addHeaderRow">+ {{ t('app.notification.channels.styleHeaderAdd') }}</el-button>
-                <div class="form-hint">{{ t('app.notification.channels.styleHeadersHint') }}</div>
+                <div class="header-foot">
+                  <el-button size="small" link type="primary" :disabled="headerRows.length >= 8" @click="addHeaderRow">+ {{ t('app.notification.channels.styleHeaderAdd') }}</el-button>
+                  <span class="form-hint">{{ t('app.notification.channels.styleHeadersHint') }}</span>
+                </div>
               </div>
             </el-form-item>
           </template>
@@ -300,6 +304,8 @@ const canSave = computed(() => drawerForm.value.name.trim() !== '' && drawerForm
 // 正文模板已归通知规则，保存时原样透传既有模板键避免覆盖丢失。
 // 机器人协议固定：QQ 恒 msg_type=markdown，微信纯文本，无表单控件）
 interface HeaderRow { name: string; value: string }
+// webhook 请求头预设（后端白名单同口径）：下拉选择+可创建 X-* 自定义头。
+const WEBHOOK_HEADER_PRESETS = ['Authorization', 'X-API-Key', 'Content-Type', 'Accept', 'User-Agent']
 const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', body_format: 'text', daily_format: '', method: 'POST' })
 const styleForm = ref(emptyStyle())
 const headerRows = ref<HeaderRow[]>([])
@@ -402,15 +408,22 @@ const stopBindPolling = (): void => {
 }
 const pollBind = (): void => {
   stopBindPolling()
-  const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/bind-state'
+  const isQQ = drawerForm.value.type === 'qq'
   bindTimer = setInterval(async () => {
     try {
-      const res = await request.get<{ data?: { bound?: boolean; openid?: string; receiver?: string; bot_ready?: boolean } }>(endpoint, { silent: true })
-      const val = res.data?.openid ?? res.data?.receiver ?? ''
-      if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; wxBotReady.value = false; stopBindPolling(); return }
-      // 微信：扫码确认（bot_ready）后清除二维码、提示「向机器人发任意消息」，
-      // 继续轮询 receiver 回填——此前仅查 receiver 导致扫完码无反馈、无法保存。
-      if (drawerForm.value.type === 'wx_clawbot' && res.data?.bot_ready) { wxBotReady.value = true; bindQrImg.value = '' }
+      if (isQQ) {
+        const res = await request.get<{ data?: { openid?: string } }>('/notification/qq/bind-code', { silent: true })
+        const val = res.data?.openid ?? ''
+        if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; stopBindPolling(); return }
+      } else {
+        // 接收者回填（bind-state 仅用于捕获入站接收者，不判定登录）。
+        const bs = await request.get<{ data?: { receiver?: string } }>('/notification/wx/bind-state', { silent: true })
+        const recv = bs.data?.receiver ?? ''
+        if (recv) { drawerForm.value.targetValue = recv; bindQrImg.value = ''; stopBindPolling(); return }
+        // 登录判定=本次二维码 confirmed（不读全局历史登录态，防未扫码跳「已登录」）。
+        const qs = await request.get<{ data?: { confirmed?: boolean } }>('/notification/wx/qr/status', { silent: true })
+        if (qs.data?.confirmed) { wxBotReady.value = true; bindQrImg.value = '' }
+      }
     } catch { /* keep polling */ }
   }, 3000)
   bindTimeout = setTimeout(stopBindPolling, 300000)
@@ -580,8 +593,11 @@ defineExpose({ fetchChannels })
 .bind-qr-img { width: 200px; height: 200px; }
 .bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
-.header-rows { width: 100%; display: flex; flex-direction: column; gap: 6px; }
-.header-row { display: flex; gap: 8px; align-items: center; }
-.header-name { width: 200px; flex: none; }
-.header-value { flex: 1; }
+.header-rows { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.header-row { display: grid; grid-template-columns: 180px 1fr auto; gap: 8px; align-items: center; }
+.header-name { width: 100%; }
+.header-value { width: 100%; }
+.header-del { flex: none; }
+.header-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.header-foot .form-hint { margin: 0; }
 </style>

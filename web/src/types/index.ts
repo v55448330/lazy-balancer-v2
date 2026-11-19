@@ -39,6 +39,7 @@ export interface APIKey {
   readonly key_prefix: string
   readonly created_by: number
   readonly username: string
+  readonly display_name: string
   readonly is_enabled: boolean
   readonly mcp_enabled: boolean
   readonly api_enabled: boolean
@@ -52,6 +53,7 @@ export interface APIKey {
   readonly updated_at: string
   readonly updated_by: number
   readonly updated_by_username: string
+  readonly updated_by_display_name: string
 }
 
 export interface CreateAPIKeyInput {

@@ -37,7 +37,7 @@ const userResponseExample = `{"id":1,"username":"admin","role":"admin","display_
 // 单源：管理列表与自助列表的实际投影都是同一结构（含属主 username 与
 // created_by/key_prefix 等生命周期字段），两处各自手写只会各自缺不同字段。
 // 键集由 TestAPIDocs_apiKeyExamplesMatchImplementation 双向对账。
-const apiKeyWithUserResponseExample = `{"id":1,"name":"ci","key_prefix":"lb_sk_abcd","created_by":1,"last_used":null,"expires_at":null,"is_enabled":true,"mcp_enabled":true,"api_enabled":true,"read_only":false,"api_read_only":false,"mcp_read_only":false,"mcp_ip_whitelist":["10.0.0.0/8"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","updated_by":1,"username":"admin","updated_by_username":"admin"}`
+const apiKeyWithUserResponseExample = `{"id":1,"name":"ci","key_prefix":"lb_sk_abcd","created_by":1,"last_used":null,"expires_at":null,"is_enabled":true,"mcp_enabled":true,"api_enabled":true,"read_only":false,"api_read_only":false,"mcp_read_only":false,"mcp_ip_whitelist":["10.0.0.0/8"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","updated_by":1,"username":"admin","display_name":"管理员","updated_by_username":"admin","updated_by_display_name":"管理员"}`
 
 // certJobListItemExample 是 certJobListItem 的文档示例单源：证书任务列表的
 // data.list[] 与详情 data 是同一投影（字段同源），两处各自手写会让新增字段

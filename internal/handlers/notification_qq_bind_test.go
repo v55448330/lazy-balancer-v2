@@ -57,6 +57,10 @@ type qqBindMockEnv struct {
 	mu      sync.Mutex
 	lastKey []byte
 	server  *httptest.Server
+	// poll completed 下发的凭据（多机器人用例覆写；默认 APP_MOCK 向量）。
+	appID  string
+	secret string
+	openid string
 }
 
 func (e *qqBindMockEnv) handler() http.HandlerFunc {
@@ -77,6 +81,7 @@ func (e *qqBindMockEnv) handler() http.HandlerFunc {
 		case "/lite/poll_bind_result":
 			e.mu.Lock()
 			key := e.lastKey
+			appID, secret, openid := e.appID, e.secret, e.openid
 			e.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			if len(key) != 32 {
@@ -84,8 +89,8 @@ func (e *qqBindMockEnv) handler() http.HandlerFunc {
 				return
 			}
 			_, _ = w.Write([]byte(fmt.Sprintf(
-				`{"retcode":0,"data":{"status":2,"bot_appid":"APP_MOCK","bot_encrypt_secret":%q,"user_openid":"OPENID_MOCK"}}`,
-				encryptForTest(key, "SECRET_MOCK"))))
+				`{"retcode":0,"data":{"status":2,"bot_appid":%q,"bot_encrypt_secret":%q,"user_openid":%q}}`,
+				appID, encryptForTest(key, secret), openid)))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -95,7 +100,7 @@ func (e *qqBindMockEnv) handler() http.HandlerFunc {
 // setupQQBindMock 起 mock q.qq.com 并把包级端点指向它；返回还原函数。
 func setupQQBindMock(t *testing.T) *qqBindMockEnv {
 	t.Helper()
-	env := &qqBindMockEnv{}
+	env := &qqBindMockEnv{appID: "APP_MOCK", secret: "SECRET_MOCK", openid: "OPENID_MOCK"}
 	env.server = httptest.NewServer(env.handler())
 	oldTask, oldPoll := notify.BindTaskURL, notify.BindPollURL
 	notify.BindTaskURL = env.server.URL + "/lite/create_bind_task"
@@ -103,6 +108,9 @@ func setupQQBindMock(t *testing.T) *qqBindMockEnv {
 	t.Cleanup(func() {
 		notify.BindTaskURL, notify.BindPollURL = oldTask, oldPoll
 		env.server.Close()
+		qqTaskMu.Lock()
+		qqBoundByUser = map[int64]qqBoundCred{}
+		qqTaskMu.Unlock()
 	})
 	return env
 }

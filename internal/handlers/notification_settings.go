@@ -29,6 +29,7 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 	}
 	m := notify.GetSettings(
 		notify.KeySMTPHost, notify.KeySMTPPort, notify.KeySMTPUser, notify.KeySMTPPass, notify.KeySMTPFrom,
+		notify.KeySMTPTLS, notify.KeySMTPInsecure,
 		notify.KeyQQAppID, notify.KeyQQSecret,
 		notify.KeyWxBotCred,
 	)
@@ -40,6 +41,8 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 			"user":            m[notify.KeySMTPUser],
 			"from":            m[notify.KeySMTPFrom],
 			"pass_configured": m[notify.KeySMTPPass] != "",
+			"tls":             m[notify.KeySMTPTLS] != "0",
+			"insecure":        m[notify.KeySMTPInsecure] == "1",
 		},
 		// QQ/微信凭据不回显（单源=扫码绑定自动落库；bot 登录态经
 		// /notification/wx/bind-state 供通道向导查询）
@@ -59,11 +62,13 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	}
 	var req struct {
 		SMTP *struct {
-			Host *string `json:"host"`
-			Port *string `json:"port"`
-			User *string `json:"user"`
-			Pass *string `json:"pass"`
-			From *string `json:"from"`
+			Host     *string `json:"host"`
+			Port     *string `json:"port"`
+			User     *string `json:"user"`
+			Pass     *string `json:"pass"`
+			From     *string `json:"from"`
+			TLS      *bool   `json:"tls"`
+			Insecure *bool   `json:"insecure"`
 		} `json:"smtp"`
 		// QQ 凭据不走本端点：扫码绑定完成时自动落库（凭据单源，手工覆盖
 		// 入口已删——避免与扫码态互相踩踏）。
@@ -97,6 +102,22 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		put(notify.KeySMTPUser, req.SMTP.User)
 		put(notify.KeySMTPPass, req.SMTP.Pass)
 		put(notify.KeySMTPFrom, req.SMTP.From)
+		if req.SMTP.TLS != nil {
+			v := "1"
+			if !*req.SMTP.TLS {
+				v = "0"
+			}
+			updates[notify.KeySMTPTLS] = v
+			changed = append(changed, notify.KeySMTPTLS)
+		}
+		if req.SMTP.Insecure != nil {
+			v := "0"
+			if *req.SMTP.Insecure {
+				v = "1"
+			}
+			updates[notify.KeySMTPInsecure] = v
+			changed = append(changed, notify.KeySMTPInsecure)
+		}
 	}
 	if req.MCPEnabled != nil {
 		v := "0"

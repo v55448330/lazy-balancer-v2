@@ -434,6 +434,7 @@ export default {
     'typeCol': 'Type',
     'unknownError': 'Unknown error',
     'usageLabel': 'Usage:',
+    'whitelistNone': 'No source IP restriction',
     'whitelistNote': 'The IP whitelist applies to all REST and MCP calls made with this key.',
     'whitelistPlaceholder': 'One CIDR per line, e.g. 10.0.0.0/8 or 192.168.1.10\nLeave empty for no source IP restriction',
     'whitelistSummary': '{count} entries: {preview}{more}',

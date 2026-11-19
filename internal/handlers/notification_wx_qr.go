@@ -2,7 +2,8 @@ package handlers
 
 // 微信 iLink 扫码登录 REST：二维码获取/状态轮询（管理员，凭据管理页）。
 // 协议实现见 internal/notify/wxbot.go（WxQRLoginStart/Poll——confirmed 时
-// 凭证自动落 notify_settings 并重置会话态，连接 Daemon 随即接管收发）。
+// 首登凭证落 notify_settings 并重置会话态；全局已配置则不覆盖，新凭据
+// 待通道保存钉住，入站长轮询仍首 bot）。
 
 import (
 	"context"
@@ -30,7 +31,7 @@ func (h *Handlers) StartWxQRLogin(c *gin.Context) {
 }
 
 // GetWxQRStatus GET /notification/wx/qr/status——轮询扫码状态
-// （wait/scaned/confirmed/expired；confirmed 时凭证已落库、收发即启用）。
+// （wait/scaned/confirmed/expired；confirmed 时首登凭证已落库，二登凭据待通道钉住）。
 func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
 	defer cancel()
@@ -40,8 +41,9 @@ func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 		return
 	}
 	if confirmed {
-		// 登录确认即凭据落库成功——产码 start 不记（一次登录一次审计）。
-		recordAudit(c, "绑定", "通知设置", "微信机器人扫码登录成功（凭据已落库）")
+		// 登录确认即凭据就绪（首登落全局/二登待通道钉住）——产码 start 不记
+		// （一次登录一次审计）。
+		recordAudit(c, "绑定", "通知设置", "微信机器人扫码登录成功")
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": status, "confirmed": confirmed}})
 }

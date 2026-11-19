@@ -44,8 +44,8 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 	}
 
 	qq := renderDailyForChannel(msg, "qq", "")
-	if !strings.Contains(qq, "- **请求数**：1200") || strings.Contains(qq, "攻击") {
-		t.Fatalf("qq 渲染非 markdown 或未裁剪: %s", qq)
+	if !strings.Contains(qq, "| 请求数 | 1200 |") || strings.Contains(qq, "攻击") {
+		t.Fatalf("qq 渲染非 markdown 表格或未裁剪: %s", qq)
 	}
 
 	wx := renderDailyForChannel(msg, "wx_clawbot", "")
@@ -64,8 +64,8 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 func TestRenderDailyForChannel_styleOverride(t *testing.T) {
 	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil), Title: "每日日报"}
 	got := renderDailyForChannel(msg, "qq", "text")
-	if strings.Contains(got, "**") || got != "Lazy Balancer 日报（2026-11-17）\n请求数：1200\n拦截次数：34\n" {
-		t.Fatalf("qq style 覆盖未生效: %q", got)
+	if strings.Contains(got, "**") || strings.Contains(got, "|") || !strings.Contains(got, "请求数：1200") || !strings.Contains(got, "拦截次数：34") {
+		t.Fatalf("qq style 覆盖未生效（应纯文本分节）: %q", got)
 	}
 	// 日报页 per-channel 配置仍优先于通道样式：payload.formats.qq=html → html 胜出
 	msg.Body = strings.Replace(dailyPayloadBody(nil),

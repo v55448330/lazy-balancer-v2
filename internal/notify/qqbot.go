@@ -5,8 +5,8 @@ package notify
 //   op:6 Resume）→ C2C_MESSAGE_CREATE 处理「绑定 XXXXXXX」指令。
 // 发消息走官方 REST（/v2/users/{openid}/messages，被动回复带 msg_id 免额度；
 // 主动消息受官方额度频控——QQ 通道默认只订 critical）。
-// access_token 经包级单例 qqTokens 复用（连接会话与发送共用，过期自动刷新
-// 并重读全局凭据——支持凭据轮换）。
+// access_token 经包级单例 qqTokens 按 appid 隔离缓存（入站会话=全局首 bot，
+// 出站=通道 target 钉住凭据，多机器人互不顶掉；过期自动刷新）。
 //
 // 协议细节以 QQ 机器人开放平台文档为准（q.qq.com）；本文件为连接生命周期+
 // 通道适配器，协议帧编解码在 qqbot_session.go。
@@ -31,6 +31,16 @@ func qqBotCredentials() (appid, secret string, ok bool) {
 	kv := GetSettings(KeyQQAppID, KeyQQSecret)
 	appid, secret = kv[KeyQQAppID], kv[KeyQQSecret]
 	return appid, secret, appid != "" && secret != ""
+}
+
+// qqResolveCred 出站凭据解析：target 钉住凭据优先（多机器人各用所属 bot）；
+// 缺失回退全局凭据（存量通道行为不变）。
+func qqResolveCred(appid, secret string) (string, string) {
+	if appid != "" && secret != "" {
+		return appid, secret
+	}
+	gAppID, gSecret, _ := qqBotCredentials()
+	return gAppID, gSecret
 }
 
 // qqLink 连接状态单例（通知中心页状态点）。
@@ -82,10 +92,13 @@ func (qqSender) Test(ctx context.Context, targetJSON string) error {
 }
 
 // SendQQC2C 发 QQ 单聊文本（投递 Daemon 通道适配器调用）。
-// ChannelTarget JSON 形如 {"openid":"..."}；错误全部返回（投递留痕）。
+// ChannelTarget JSON 形如 {"openid":"...","appid":"...","secret":"..."}
+// （appid/secret 为绑定/保存时钉住的 bot 凭据，缺省回退全局）；错误全部返回。
 func SendQQC2C(ctx context.Context, targetJSON, text string) error {
 	var cfg struct {
 		OpenID string `json:"openid"`
+		AppID  string `json:"appid"`
+		Secret string `json:"secret"`
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
 		return fmt.Errorf("QQ 通道目标解析失败: %w", err)
@@ -93,14 +106,17 @@ func SendQQC2C(ctx context.Context, targetJSON, text string) error {
 	if cfg.OpenID == "" {
 		return errors.New("QQ 通道目标缺少 openid（请先在 QQ 内发送绑定指令完成绑定）")
 	}
-	return sendQQRESTMessage(ctx, cfg.OpenID, text)
+	appid, secret := qqResolveCred(cfg.AppID, cfg.Secret)
+	return sendQQRESTMessage(ctx, cfg.OpenID, text, appid, secret)
 }
 
 // SendQQC2CMarkdown 发 QQ 单聊 markdown 富文本（msg_type=2；机器人需具备
-// markdown 权限，失败留痕）。
+// markdown 权限，失败留痕）。target 凭据解析同 SendQQC2C。
 func SendQQC2CMarkdown(ctx context.Context, targetJSON, md string) error {
 	var cfg struct {
 		OpenID string `json:"openid"`
+		AppID  string `json:"appid"`
+		Secret string `json:"secret"`
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
 		return fmt.Errorf("QQ 通道目标解析失败: %w", err)
@@ -108,7 +124,8 @@ func SendQQC2CMarkdown(ctx context.Context, targetJSON, md string) error {
 	if cfg.OpenID == "" {
 		return errors.New("QQ 通道目标缺少 openid（请先在 QQ 内发送绑定指令完成绑定）")
 	}
-	return sendQQRESTMarkdown(ctx, cfg.OpenID, md)
+	appid, secret := qqResolveCred(cfg.AppID, cfg.Secret)
+	return sendQQRESTMarkdown(ctx, cfg.OpenID, md, appid, secret)
 }
 
 // qqWakeCh 凭据变更唤醒信号（SaveQQBotCredentials 落库后投递；非阻塞，
@@ -120,6 +137,12 @@ var qqWakeCh = make(chan struct{}, 1)
 // （op:7）或闪断时优先 Resume 补拉遗漏事件；会话失效（op:9）回退重新
 // Identify。长时间在线后重连退避计数归零（长期运行不受历史断连拖累）。
 // 凭据变更（qqWakeCh）立即重置会话态重连，不等退避。
+// qqBotID 当前 QQ 机器人 AppID（日志标识具体机器人，多通道场景可区分）。
+func qqBotID() string {
+	appid, _, _ := qqBotCredentials()
+	return appid
+}
+
 func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
 	ctx = withTaskID(ctx, "qq-bot-connection")
 	// 清洁停止必须置离线：否则 qqLink 残留 connected=true，Send/Test 门被
@@ -129,7 +152,7 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 	if !QQBotConfigured() {
 		return fmt.Errorf("QQ 机器人凭据未配置")
 	}
-	taskLogf(ctx, "connect", "QQ 机器人连接任务启动（凭据已配置，开始鉴权建连）")
+	taskLogf(ctx, "connect", "QQ 机器人连接任务启动（bot=%s，开始鉴权建连）", qqBotID())
 	resume := &qqResumeState{}
 	attempt := 0
 	for {
@@ -146,7 +169,7 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 			attempt = 0
 		}
 		attempt++
-		taskLogWarn(ctx, "connect", "QQ 机器人连接断开（第 %d 次，%v 后重连）: %v", attempt, botBackoff(attempt), err)
+		taskLogWarn(ctx, "connect", "QQ 机器人连接断开（bot=%s 第 %d 次，%v 后重连）: %v", qqBotID(), attempt, botBackoff(attempt), err)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -154,7 +177,7 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 			// 凭据已轮换：旧会话态作废，立即以新凭据重新 Identify。
 			resume.reset()
 			attempt = 0
-			taskLogf(ctx, "connect", "QQ 凭据已轮换，重置会话态立即重连")
+			taskLogf(ctx, "connect", "QQ 凭据已轮换（bot=%s），重置会话态立即重连", qqBotID())
 		case <-time.After(botBackoff(attempt)):
 		}
 	}

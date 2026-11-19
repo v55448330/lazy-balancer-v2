@@ -115,8 +115,10 @@ type APIKeyResponse struct {
 
 type APIKeyWithUserResponse struct {
 	APIKeyResponse
-	Username          string `json:"username"`
-	UpdatedByUsername string `json:"updated_by_username"`
+	Username             string `json:"username"`
+	DisplayName          string `json:"display_name"`
+	UpdatedByUsername    string `json:"updated_by_username"`
+	UpdatedByDisplayName string `json:"updated_by_display_name"`
 }
 
 func NewAPIKeyResponse(key APIKey) APIKeyResponse {

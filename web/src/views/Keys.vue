@@ -138,12 +138,12 @@
       class="keys-table"
       :empty-text="t('common.app.views.keys.emptyText')"
     >
-      <el-table-column :label="t('common.app.views.keys.name')" min-width="160">
+      <el-table-column :label="t('common.app.views.keys.name')" min-width="120">
         <template #default="scope">
           <el-button link type="primary" class="key-name-cell" @click="openKeyDetail(asKey(scope.row))">{{ scope.row.name }}</el-button>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.status')" width="120" align="center">
+      <el-table-column :label="t('common.app.views.keys.status')" width="130">
         <template #default="scope">
           <div class="status-cell">
             <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
@@ -162,7 +162,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.features')" min-width="200">
+      <el-table-column :label="t('common.app.views.keys.features')" min-width="280">
         <template #default="scope">
           <div class="feature-tags">
             <el-tag :type="apiFeatureTag(asKey(scope.row)).type" size="small" effect="plain">{{ apiFeatureTag(asKey(scope.row)).text }}</el-tag>
@@ -174,12 +174,18 @@
         </template>
       </el-table-column>
       <el-table-column :label="t('common.app.views.keys.createdBy')" width="120" show-overflow-tooltip>
-        <template #default="scope">{{ scope.row.username || ('#' + scope.row.created_by) }}</template>
+        <template #default="scope">{{ scope.row.display_name || scope.row.username || ('#' + scope.row.created_by) }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.createdAt')" width="170">
-        <template #default="scope">{{ formatDate(scope.row.created_at) || '-' }}</template>
+      <el-table-column :label="t('common.app.views.keys.updatedAt')" width="160">
+        <template #default="scope">{{ formatDate(scope.row.updated_at) || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colAction')" width="110" align="right" fixed="right">
+      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="160">
+        <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
+      </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.lastUsed')" width="160">
+        <template #default="scope">{{ formatDate(scope.row.last_used) || t('common.app.views.keys.neverUsed') }}</template>
+      </el-table-column>
+      <el-table-column :label="t('app.notification.deliveries.colAction')" width="160" fixed="right">
         <template #default="scope">
           <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
             <div class="row-actions">
@@ -479,17 +485,17 @@
           <el-tag v-if="keyExpired(keyDetailTarget)" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
           <el-tag v-else :type="keyDetailTarget.is_enabled ? 'success' : 'info'" size="small">{{ keyDetailTarget.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}</el-tag>
         </el-descriptions-item>
-        <el-descriptions-item :label="t('common.app.views.keys.owner')">{{ keyDetailTarget.username || ('#' + keyDetailTarget.created_by) }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.owner')">{{ keyDetailTarget.display_name || keyDetailTarget.username || ('#' + keyDetailTarget.created_by) }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.features')">
           <div class="feature-tags">
             <el-tag :type="apiFeatureTag(keyDetailTarget).type" size="small" effect="plain">{{ apiFeatureTag(keyDetailTarget).text }}</el-tag>
             <el-tag :type="mcpFeatureTag(keyDetailTarget).type" size="small" effect="plain">{{ mcpFeatureTag(keyDetailTarget).text }}</el-tag>
           </div>
         </el-descriptions-item>
-        <el-descriptions-item v-if="whitelistEntries(keyDetailTarget.mcp_ip_whitelist).length" :label="t('common.app.views.keys.ipWhitelist')">{{ whitelistSummary(keyDetailTarget.mcp_ip_whitelist) }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.ipWhitelist')">{{ whitelistEntries(keyDetailTarget.mcp_ip_whitelist).length ? whitelistSummary(keyDetailTarget.mcp_ip_whitelist) : t('common.app.views.keys.whitelistNone') }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.createdAt')">{{ formatDate(keyDetailTarget.created_at) || '-' }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.updatedAt')">{{ formatDate(keyDetailTarget.updated_at) || '-' }}</el-descriptions-item>
-        <el-descriptions-item :label="t('common.app.views.keys.updatedBy')">{{ keyDetailTarget.updated_by_username || ('#' + keyDetailTarget.updated_by) }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.updatedBy')">{{ keyDetailTarget.updated_by_display_name || keyDetailTarget.updated_by_username || ('#' + keyDetailTarget.updated_by) }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.lastUsed')">{{ formatDate(keyDetailTarget.last_used) || t('common.app.views.keys.neverUsed') }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.app.views.keys.expiresAt')">{{ formatDate(keyDetailTarget.expires_at) || t('common.app.views.keys.neverExpires') }}</el-descriptions-item>
       </el-descriptions>

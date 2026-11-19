@@ -41,6 +41,12 @@ const (
 	wxTextChunkLimit  = 2000 // 社区兼容口径的文本上限（协议未显式下发）
 )
 
+// 扫码端点 var（测试 mock 覆写；生产=官方 iLink 基址，同 qqbind.go 口径）。
+var (
+	wxQRCodeURL   = wxAPIBaseDefault + "/ilink/bot/get_bot_qrcode"
+	wxQRStatusURL = wxAPIBaseDefault + "/ilink/bot/get_qrcode_status"
+)
+
 // wxBotCred 扫码确认后下发的登录态凭证（原样落库 notify_wx_bot_cred）。
 type wxBotCred struct {
 	Token     string `json:"token"`
@@ -77,6 +83,40 @@ func saveWxBotCred(cred wxBotCred) error {
 	return SetSettings(map[string]string{KeyWxBotCred: string(raw)})
 }
 
+// WxPinChannelTarget 通道 target 钉住登录凭据（多机器人出站鉴权源，对称
+// QQ）：已带 token 原样返回；否则优先最近一次扫码确认的新凭据（全局已配
+// 时二登不落全局，凭据在此待钉），回退全局登录态；均无原样返回（发送侧
+// fail-loud）。target 键：token/baseurl/account_id/user_id。
+func WxPinChannelTarget(targetJSON string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(targetJSON), &m) != nil {
+		return targetJSON
+	}
+	if t, _ := m["token"].(string); t != "" {
+		return targetJSON
+	}
+	wxCtxMu.Lock()
+	var pending *wxBotCred
+	if wxConfirmedPin != nil {
+		c := *wxConfirmedPin
+		pending = &c
+	}
+	wxCtxMu.Unlock()
+	cred, ok := loadWxBotCred()
+	if pending != nil {
+		cred, ok = *pending, true
+	}
+	if !ok {
+		return targetJSON
+	}
+	m["token"], m["baseurl"], m["account_id"], m["user_id"] = cred.Token, cred.BaseURL, cred.AccountID, cred.UserID
+	b, err := json.Marshal(m)
+	if err != nil {
+		return targetJSON
+	}
+	return string(b)
+}
+
 // WxLinkStatus 连接状态（REST 只读）。
 func WxLinkStatus() (bool, string, time.Time) {
 	wxLink.mu.Lock()
@@ -92,6 +132,9 @@ var (
 	wxContextTokens = map[string]string{}
 	wxUpdatesBuf    string
 	wxPendingQR     string // 进行中的扫码登录二维码令牌
+	// wxConfirmedPin 最近一次扫码确认的新凭据（全局已配置时二登不落全局，
+	// 凭据在此待通道保存钉住；首登落全局时清空）。wxCtxMu 守护。
+	wxConfirmedPin *wxBotCred
 	// wxPendingInbound 最近一条入站私聊（通道向导「发送任意消息捕获
 	// receiver」闭环的领取槽）：单 bot 场景全局单槽，领取即清；时间窗外
 	// 视为过期不交付。
@@ -190,10 +233,16 @@ func (wxSender) Test(ctx context.Context, targetJSON string) error {
 }
 
 // SendWxText 发微信文本（投递通道适配器调用）。
-// target JSON 形如 {"receiver":"wxid/群 id"}；错误全部返回（投递留痕）。
+// target JSON 形如 {"receiver":"wxid/群 id","token":"...","baseurl":"...",
+// "account_id":"...","user_id":"..."}（凭据为绑定/保存时钉住的 bot 登录态，
+// 缺省回退全局）；错误全部返回（投递留痕）。
 func SendWxText(ctx context.Context, targetJSON, text string) error {
 	var cfg struct {
-		Receiver string `json:"receiver"`
+		Receiver  string `json:"receiver"`
+		Token     string `json:"token"`
+		BaseURL   string `json:"baseurl"`
+		AccountID string `json:"account_id"`
+		UserID    string `json:"user_id"`
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
 		return fmt.Errorf("微信通道目标解析失败: %w", err)
@@ -201,9 +250,13 @@ func SendWxText(ctx context.Context, targetJSON, text string) error {
 	if cfg.Receiver == "" {
 		return errors.New("微信通道目标缺少 receiver（请先在微信内向机器人发送绑定指令完成绑定）")
 	}
-	cred, ok := loadWxBotCred()
-	if !ok {
-		return errors.New("微信 Bot 登录态未配置（请先扫码登录）")
+	cred := wxBotCred{Token: cfg.Token, BaseURL: cfg.BaseURL, AccountID: cfg.AccountID, UserID: cfg.UserID}
+	if cred.Token == "" {
+		var ok bool
+		cred, ok = loadWxBotCred()
+		if !ok {
+			return errors.New("微信 Bot 登录态未配置（请先扫码登录）")
+		}
 	}
 	return sendWxMessage(ctx, cred, cfg.Receiver, text, "")
 }
@@ -309,6 +362,18 @@ func splitWxText(text string, limit int) []string {
 	return chunks
 }
 
+// wxBotID 当前微信 Bot 标识（ilink_bot_id，缺省 user_id；日志区分具体机器人）。
+func wxBotID() string {
+	cred, ok := loadWxBotCred()
+	if !ok {
+		return ""
+	}
+	if cred.AccountID != "" {
+		return cred.AccountID
+	}
+	return cred.UserID
+}
+
 // RunWxBotConnection 连接主循环（对称 RunQQBotConnection；退避重连）。
 // 登录态过期（-14）fail-loud 终止：轮询再无意义，需重新扫码后由任务门重新拉起。
 func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
@@ -319,7 +384,7 @@ func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 	if !WxBotConfigured() {
 		return fmt.Errorf("微信 Bot 登录态未配置（请先扫码登录）")
 	}
-	taskLogf(ctx, "connect", "微信机器人连接任务启动（登录态已配置，开始长轮询）")
+	taskLogf(ctx, "connect", "微信机器人连接任务启动（bot=%s，开始长轮询）", wxBotID())
 	attempt := 0
 	for {
 		if ctx.Err() != nil {
@@ -342,7 +407,7 @@ func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 			attempt = 0
 		}
 		attempt++
-		taskLogWarn(ctx, "connect", "微信机器人连接断开（第 %d 次，%v 后重连）: %v", attempt, botBackoff(attempt), err)
+		taskLogWarn(ctx, "connect", "微信机器人连接断开（bot=%s 第 %d 次，%v 后重连）: %v", wxBotID(), attempt, botBackoff(attempt), err)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -427,7 +492,7 @@ func wxBotSession(ctx context.Context, cred wxBotCred) error {
 		if first {
 			first = false
 			wxLink.set(true, "")
-			taskLogf(ctx, "connect", "微信机器人长轮询建立（首批 getupdates 成功，在线）")
+			taskLogf(ctx, "connect", "微信机器人长轮询建立（bot=%s 首批 getupdates 成功，在线）", wxBotID())
 		}
 		for _, m := range ur.Msgs {
 			handleWxInbound(ctx, cred, m)
@@ -454,8 +519,12 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 		}
 	}
 	code := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text.String()), "绑定"))
-	bindBotChannel(code, m.FromUserID, "wx_clawbot", "微信机器人",
-		`{"receiver":`+quoteJSON(m.FromUserID)+`}`,
+	// 入站长轮询属全局首 bot——通道 target 钉住其凭据（多机器人出站鉴权源）。
+	target, _ := json.Marshal(map[string]any{
+		"receiver": m.FromUserID, "token": cred.Token, "baseurl": cred.BaseURL,
+		"account_id": cred.AccountID, "user_id": cred.UserID,
+	})
+	bindBotChannel(code, m.FromUserID, "wx_clawbot", "微信机器人", string(target),
 		func(reply string) {
 			if err := sendWxMessage(ctx, cred, m.FromUserID, reply, m.ContextToken); err != nil {
 				taskLogWarn(ctx, "bind", "微信绑定回复发送失败: %v", err)
@@ -467,7 +536,7 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 // REST 端点由凭据管理侧包装暴露（本函数只管协议与凭证落库）。
 func WxQRLoginStart(ctx context.Context) (qrURL string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("%s/ilink/bot/get_bot_qrcode?bot_type=%d", wxAPIBaseDefault, wxQRBotType), nil)
+		fmt.Sprintf("%s?bot_type=%d", wxQRCodeURL, wxQRBotType), nil)
 	if err != nil {
 		return "", err
 	}
@@ -493,19 +562,20 @@ func WxQRLoginStart(ctx context.Context) (qrURL string, err error) {
 	return qr.QRImgContent, nil
 }
 
-// WxQRLoginPoll 轮询扫码状态：wait/scaned/confirmed/expired（confirmed 时
-// 凭证落库并重置会话态，返回 confirmed=true）。
+// WxQRLoginPoll 轮询扫码状态：wait/scaned/confirmed/expired。confirmed 时
+// 首登凭证落全局并重置会话态；全局已配置（二登）不覆盖——入站仍首 bot，
+// 新凭据待通道保存钉住（WxPinChannelTarget）。返回 confirmed=true。
 func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err error) {
 	wxCtxMu.Lock()
 	qr := wxPendingQR
 	wxCtxMu.Unlock()
 	if qr == "" {
-		// 无进行中的扫码（confirmed 后会话态已重置，前端在途轮询会打到
+		// 无进行中的扫码（confirmed 后 wxPendingQR 已清，前端在途轮询会打到
 		// 此分支）——返回 idle 而非错误，避免轮询期报错刷屏。
 		return "idle", false, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		wxAPIBaseDefault+"/ilink/bot/get_qrcode_status?qrcode="+qr, nil)
+		wxQRStatusURL+"?qrcode="+qr, nil)
 	if err != nil {
 		return "", false, err
 	}
@@ -533,14 +603,26 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 		if pr.BotToken == "" {
 			return pr.Status, false, fmt.Errorf("扫码确认响应缺 bot_token: %.256s", string(raw))
 		}
-		if err := saveWxBotCred(wxBotCred{Token: pr.BotToken, BaseURL: pr.BaseURL, AccountID: pr.BotID, UserID: pr.UserID}); err != nil {
-			return pr.Status, false, err
+		cred := wxBotCred{Token: pr.BotToken, BaseURL: pr.BaseURL, AccountID: pr.BotID, UserID: pr.UserID}
+		if _, ok := loadWxBotCred(); !ok {
+			// 首登：落全局（入站长轮询鉴权单源）并重置会话态。
+			if err := saveWxBotCred(cred); err != nil {
+				return pr.Status, false, err
+			}
+			wxCtxMu.Lock()
+			wxUpdatesBuf = ""
+			wxContextTokens = map[string]string{}
+			wxConfirmedPin = nil
+			wxPendingQR = ""
+			wxCtxMu.Unlock()
+		} else {
+			// 二登：不覆盖全局（覆盖=首 bot 长轮询掉线根因），不清首 bot
+			// 会话态；新凭据待通道保存钉住。
+			wxCtxMu.Lock()
+			wxConfirmedPin = &cred
+			wxPendingQR = ""
+			wxCtxMu.Unlock()
 		}
-		wxCtxMu.Lock()
-		wxUpdatesBuf = ""
-		wxContextTokens = map[string]string{}
-		wxPendingQR = ""
-		wxCtxMu.Unlock()
 		taskLogf(ctx, "bind", "微信机器人扫码登录成功（bot=%s）", pr.BotID)
 	}
 	return pr.Status, pr.Status == "confirmed", nil

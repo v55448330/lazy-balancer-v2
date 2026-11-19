@@ -81,3 +81,29 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 	)
 	return r.Replace(tpl)
 }
+
+// renderStyleTemplateJSON webhook payload_template 专用：占位符值经 JSON
+// 编码（加引号+转义）后嵌入，与保存校验「占位符替换为 "probe" 仍合法 JSON」
+// 同口径——模板写 `"title": {{title}}`，运行时产出合法 JSON 字符串值。
+func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
+	if !strings.Contains(tpl, "{{") {
+		return tpl
+	}
+	event := msg.EventType
+	if event == "" {
+		event = "notification"
+	}
+	enc := func(s string) string {
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
+	r := strings.NewReplacer(
+		"{{title}}", enc(msg.Title),
+		"{{body}}", enc(msg.Body),
+		"{{level}}", enc(msg.Level),
+		"{{event}}", enc(event),
+		"{{time}}", enc(ts.Format(time.RFC3339)),
+		"{{node}}", enc(msg.Node),
+	)
+	return r.Replace(tpl)
+}

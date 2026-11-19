@@ -293,7 +293,20 @@ func DailyFieldsFromBody(body string) map[string]string {
 	return fields
 }
 
-// renderDailyFromValues 渲染底座（值映射→格式化文本；html 转义）。
+// dailySection 日报分节（emoji+标题+所属项目），渲染按节聚合出表格/列表，
+// 对齐运营日报视觉（图标+分节+指标表）；items 裁剪仍生效（空节省略）。
+var dailySections = []struct {
+	emoji string
+	title string
+	items []string
+}{
+	{"🌐", "全局概览", []string{"requests"}},
+	{"🛡", "安全风险", []string{"blocked", "attack_top", "autoban"}},
+	{"🔒", "证书状态", []string{"cert_status"}},
+	{"🖥", "集群状态", []string{"cluster_status"}},
+}
+
+// renderDailyFromValues 渲染底座（值映射→分节格式化文本；html 转义）。
 func renderDailyFromValues(date string, values map[string]string, items []string, format string) string {
 	enabled := map[string]bool{}
 	for _, it := range items {
@@ -318,34 +331,58 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		return string(raw)
 	case "html":
 		var b strings.Builder
-		fmt.Fprintf(&b, "<h3>Lazy Balancer 日报（%s）</h3><ul>", html.EscapeString(date))
-		for _, it := range DailyItemIDs {
-			if !enabled[it] {
+		fmt.Fprintf(&b, "<h3>📊 Lazy Balancer 每日报告（%s）</h3>", html.EscapeString(date))
+		for _, sec := range dailySections {
+			rows := secRows(sec.items, enabled, label, val)
+			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, "<li><b>%s</b>：%s</li>", html.EscapeString(label(it)), html.EscapeString(val(it)))
+			fmt.Fprintf(&b, "<h4>%s %s</h4><table border=\"1\" cellspacing=\"0\" cellpadding=\"6\"><tr><th>指标</th><th>数值</th></tr>", sec.emoji, html.EscapeString(sec.title))
+			for _, r := range rows {
+				fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", html.EscapeString(r[0]), html.EscapeString(r[1]))
+			}
+			b.WriteString("</table>")
 		}
-		b.WriteString("</ul>")
 		return b.String()
 	case "markdown":
 		var b strings.Builder
-		fmt.Fprintf(&b, "## Lazy Balancer 日报（%s）\n\n", date)
-		for _, it := range DailyItemIDs {
-			if !enabled[it] {
+		fmt.Fprintf(&b, "## 📊 Lazy Balancer 每日报告（%s）\n\n", date)
+		for _, sec := range dailySections {
+			rows := secRows(sec.items, enabled, label, val)
+			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, "- **%s**：%s\n", label(it), val(it))
+			fmt.Fprintf(&b, "### %s %s\n\n| 指标 | 数值 |\n| --- | --- |\n", sec.emoji, sec.title)
+			for _, r := range rows {
+				fmt.Fprintf(&b, "| %s | %s |\n", r[0], r[1])
+			}
+			b.WriteString("\n")
 		}
 		return b.String()
-	default: // text（白名单兜底；纯文本行）
+	default: // text（白名单兜底；纯文本分节行）
 		var b strings.Builder
-		fmt.Fprintf(&b, "Lazy Balancer 日报（%s）\n", date)
-		for _, it := range DailyItemIDs {
-			if !enabled[it] {
+		fmt.Fprintf(&b, "📊 Lazy Balancer 每日报告（%s）\n", date)
+		for _, sec := range dailySections {
+			rows := secRows(sec.items, enabled, label, val)
+			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, "%s：%s\n", label(it), val(it))
+			fmt.Fprintf(&b, "\n%s %s\n", sec.emoji, sec.title)
+			for _, r := range rows {
+				fmt.Fprintf(&b, "%s：%s\n", r[0], r[1])
+			}
 		}
 		return b.String()
 	}
+}
+
+// secRows 节内启用项目→[label,value] 行（空节省略）。
+func secRows(items []string, enabled map[string]bool, label, val func(string) string) [][2]string {
+	var rows [][2]string
+	for _, it := range items {
+		if enabled[it] {
+			rows = append(rows, [2]string{label(it), val(it)})
+		}
+	}
+	return rows
 }

@@ -45,7 +45,7 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 	if cfg.PayloadTemplate != "" {
 		// 用户 JSON 模板（占位符 {{title}}/{{body}}/{{level}}/{{event}}/
 		// {{time}}/{{node}}；保存时已校验占位符替换后可解析）
-		payload = []byte(renderStyleTemplate(cfg.PayloadTemplate, msg, ts))
+		payload = []byte(renderStyleTemplateJSON(cfg.PayloadTemplate, msg, ts))
 	} else {
 		var err error
 		payload, err = json.Marshal(map[string]any{

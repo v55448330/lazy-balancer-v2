@@ -19,6 +19,8 @@ const (
 	KeySMTPUser         = "notify.smtp_user"
 	KeySMTPPass         = "notify.smtp_pass"
 	KeySMTPFrom         = "notify.smtp_from"
+	KeySMTPTLS          = "notify.smtp_tls"      // TLS 启用（缺省启用；"0"=明文 SMTP）
+	KeySMTPInsecure     = "notify.smtp_insecure" // 忽略证书校验（"1"=跳过，自签证书场景）
 	KeyQQAppID          = "notify.qq_appid"
 	KeyQQSecret         = "notify.qq_secret"
 	KeyMCPEnabled       = "notify.mcp_enabled"

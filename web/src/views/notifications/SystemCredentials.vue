@@ -49,6 +49,14 @@
           </el-tag>
         </div>
       </el-form-item>
+      <el-form-item :label="t('app.notification.creds.smtpTls')">
+        <el-switch v-model="form.smtpTls" />
+        <span class="form-hint creds-inline-hint">{{ t('app.notification.creds.smtpTlsHint') }}</span>
+      </el-form-item>
+      <el-form-item :label="t('app.notification.creds.smtpInsecure')">
+        <el-switch v-model="form.smtpInsecure" :disabled="!form.smtpTls" />
+        <span class="form-hint creds-inline-hint">{{ t('app.notification.creds.smtpInsecureHint') }}</span>
+      </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTestTo')">
         <div class="smtp-test-row">
           <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')" />
@@ -93,6 +101,8 @@ const form = ref({
   smtpFrom: '',
   smtpPass: '',
   smtpTestTo: '',
+  smtpTls: true,
+  smtpInsecure: false,
 })
 // 服务端已配置布尔（GET 只回布尔不回明文），保存成功后重查刷新
 const smtpPassConfigured = ref(false)
@@ -136,11 +146,13 @@ const fetchSettings = async (): Promise<void> => {
     const data = res.data
     form.value = {
       smtpHost: data?.smtp?.host ?? '',
-      smtpPort: data?.smtp?.port ?? 0,
+      smtpPort: Number(data?.smtp?.port) || 0,
       smtpUser: data?.smtp?.user ?? '',
       smtpFrom: data?.smtp?.from ?? '',
       smtpPass: '',
       smtpTestTo: form.value.smtpTestTo,
+      smtpTls: data?.smtp?.tls !== false,
+      smtpInsecure: data?.smtp?.insecure === true,
     }
     smtpPassConfigured.value = data?.smtp?.pass_configured === true
     loadError.value = false
@@ -164,9 +176,11 @@ const saveSettings = async (): Promise<void> => {
     const payload: NotificationSettingsPayload = {
       smtp: {
         host: form.value.smtpHost,
-        port: form.value.smtpPort,
+        port: form.value.smtpPort ? String(form.value.smtpPort) : '',
         user: form.value.smtpUser,
         from: form.value.smtpFrom,
+        tls: form.value.smtpTls,
+        insecure: form.value.smtpInsecure,
         ...(form.value.smtpPass ? { pass: form.value.smtpPass } : {}),
       },
     }
@@ -199,4 +213,5 @@ defineExpose({ fetchSettings })
 .creds-pass-row { display: flex; align-items: center; gap: 10px; width: 100%; }
 .smtp-test-row { display: flex; gap: 8px; width: 100%; align-items: center; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
+.creds-inline-hint { margin-top: 0; margin-left: 12px; }
 </style>

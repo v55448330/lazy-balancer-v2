@@ -55,10 +55,12 @@ export type NotificationDeliveriesResponse = APIResponse<{ deliveries: Notificat
 interface NotificationSettings {
   smtp: {
     host: string
-    port: number
+    port: string
     user: string
     from: string
     pass_configured: boolean
+    tls: boolean
+    insecure: boolean
   }
   qq: {
     appid: string
@@ -81,10 +83,12 @@ export type NotificationSettingsResponse = APIResponse<NotificationSettings>
 export interface NotificationSettingsPayload {
   smtp?: {
     host?: string
-    port?: number
+    port?: string
     user?: string
     from?: string
     pass?: string
+    tls?: boolean
+    insecure?: boolean
   }
   qq?: {
     appid?: string

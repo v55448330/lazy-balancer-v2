@@ -169,15 +169,23 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	// GetDailyConfig 无行返回默认启用配置，err 仅 DB 故障时非 nil）
 	dailyCfg, err := notify.GetDailyConfig(uid)
 	if err == nil {
+		// 日报目标通道= sys.daily_report 订阅行 channel_ids 三态（与事件规则同口径）。
+		var dailyIDs string
+		_ = db.DB.QueryRow(`SELECT COALESCE(channel_ids,'') FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, notify.EvtDailyReport).Scan(&dailyIDs)
+		var chIDs []int64
+		if dailyIDs != "" {
+			_ = json.Unmarshal([]byte(dailyIDs), &chIDs)
+		}
 		rules = append(rules, NotificationRule{
-			ID:       "daily",
-			Trigger:  "daily",
-			Title:    "每日摘要",
-			SendTime: dailyCfg.SendTime,
-			Items:    dailyCfg.Items,
-			Formats:  dailyCfg.Formats,
-			Channels: allChannels,
-			Enabled:  dailyCfg.Enabled,
+			ID:         "daily",
+			Trigger:    "daily",
+			Title:      "每日摘要",
+			SendTime:   dailyCfg.SendTime,
+			Items:      dailyCfg.Items,
+			Formats:    dailyCfg.Formats,
+			Channels:   allChannels,
+			ChannelIDs: chIDs,
+			Enabled:    dailyCfg.Enabled,
 		})
 	}
 
@@ -252,6 +260,17 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		if err := notify.SaveDailyConfig(cfg); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
 			return
+		}
+		// 日报目标通道落 sys.daily_report 订阅行（deliverOne 消费三态）。
+		if req.ChannelIDs != nil {
+			b, _ := json.Marshal(*req.ChannelIDs)
+			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates)
+				VALUES (?,?,?,?,?,?)
+				ON CONFLICT(user_id, event_type) DO UPDATE SET channel_ids=excluded.channel_ids`,
+				uid, notify.EvtDailyReport, "info", "", string(b), ""); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报目标通道失败", err)})
+				return
+			}
 		}
 
 	case len(ruleID) > 6 && ruleID[:6] == "group:":

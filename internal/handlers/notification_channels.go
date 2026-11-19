@@ -142,6 +142,70 @@ func validateChannelTarget(typ, raw string) error {
 	return nil
 }
 
+// pinBotChannelTarget 通道 target 钉住 bot 凭据（多机器人出站鉴权源：各用
+// 所属 bot 凭据，互不覆盖）。target 已带凭据→原样；qq 优先本用户最近扫码
+// 绑定下发的凭据（openid 匹配防误钉），回退全局；wx 经 notify 侧待钉新凭据
+// →全局登录态。
+func pinBotChannelTarget(uid int64, typ, target string) string {
+	switch typ {
+	case channelTypeQQ:
+		return pinQQChannelTarget(uid, target)
+	case channelTypeWx:
+		return notify.WxPinChannelTarget(target)
+	}
+	return target
+}
+
+// pinQQChannelTarget QQ target 钉住 appid/secret（缺凭据才钉；无凭据源
+// 原样返回——发送侧回退全局/fail-loud，行为不变）。
+func pinQQChannelTarget(uid int64, target string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(target), &m) != nil {
+		return target
+	}
+	if a, _ := m["appid"].(string); a != "" {
+		if s, _ := m["secret"].(string); s != "" {
+			return target
+		}
+	}
+	appid, secret := "", ""
+	openid, _ := m["openid"].(string)
+	qqTaskMu.Lock()
+	bound, ok := qqBoundByUser[uid]
+	qqTaskMu.Unlock()
+	if ok && bound.OpenID == openid {
+		appid, secret = bound.AppID, bound.Secret
+	} else {
+		appid, secret, _ = notify.QQBotCredentialsPair()
+	}
+	if appid == "" || secret == "" {
+		return target
+	}
+	m["appid"], m["secret"] = appid, secret
+	b, err := json.Marshal(m)
+	if err != nil {
+		return target
+	}
+	return string(b)
+}
+
+// findExistingNotificationChannel 幂等复用查找：钉住 target 优先，亦匹配
+// 无凭据的存量 target（存量行保持全局回退行为，不重复建行）。
+func findExistingNotificationChannel(uid int64, typ, pinned, raw string) (int64, bool) {
+	var id int64
+	if err := db.DB.QueryRow(`SELECT id FROM notification_channels
+		WHERE user_id=? AND type=? AND target=?`, uid, typ, pinned).Scan(&id); err == nil {
+		return id, true
+	}
+	if pinned != raw {
+		if err := db.DB.QueryRow(`SELECT id FROM notification_channels
+			WHERE user_id=? AND type=? AND target=?`, uid, typ, raw).Scan(&id); err == nil {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
 // CreateNotificationChannel POST /notification/channels。
 func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 	uid := contextUserID(c)
@@ -174,23 +238,20 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		}
 		styleConfig = normalized
 	}
+	// 多机器人：target 钉住 bot 凭据（出站按 target 凭据鉴权）。
+	target := pinBotChannelTarget(uid, req.Type, req.Target)
 	// 同 user+type+target 唯一约束：先查既有行幂等复用（扫码绑定后重复保存
 	// 是正常路径——openid 不变，二次提交不是错误），并发窗口 INSERT 仍撞
 	// 约束时同口径处理。
-	var existingID int64
-	err := db.DB.QueryRow(`SELECT id FROM notification_channels
-		WHERE user_id=? AND type=? AND target=?`, uid, req.Type, req.Target).Scan(&existingID)
-	if err == nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": existingID, "reused": true}})
+	if id, ok := findExistingNotificationChannel(uid, req.Type, target, req.Target); ok {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id, "reused": true}})
 		return
 	}
 	res, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, style_config, enabled, created_at, updated_at)
-		VALUES (?,?,?,?,?,1,datetime('now'),datetime('now'))`, uid, req.Type, req.Name, req.Target, styleConfig)
+		VALUES (?,?,?,?,?,1,datetime('now'),datetime('now'))`, uid, req.Type, req.Name, target, styleConfig)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
-			var id int64
-			if e := db.DB.QueryRow(`SELECT id FROM notification_channels
-				WHERE user_id=? AND type=? AND target=?`, uid, req.Type, req.Target).Scan(&id); e == nil {
+			if id, ok := findExistingNotificationChannel(uid, req.Type, target, req.Target); ok {
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id, "reused": true}})
 				return
 			}
@@ -256,7 +317,8 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		}
 	}
 	if req.Target != "" {
-		if _, err := db.DB.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now') WHERE id=?`, req.Target, id); err != nil {
+		target := pinBotChannelTarget(owner, typ, req.Target)
+		if _, err := db.DB.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now') WHERE id=?`, target, id); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
 			return
 		}

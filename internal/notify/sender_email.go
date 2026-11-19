@@ -97,17 +97,18 @@ func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(smtpTotalTimeout))
-	if port == "465" {
-		conn = tlsClient(conn, host)
+	tlsEnabled, insecure := smtpTLSOptions()
+	if tlsEnabled && port == "465" {
+		conn = tlsClient(conn, host, insecure)
 	}
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return fmt.Errorf("SMTP 握手失败: %w", err)
 	}
 	defer c.Close()
-	if port != "465" {
+	if tlsEnabled && port != "465" {
 		if ok, _ := c.Extension("STARTTLS"); ok {
-			if err := c.StartTLS(tlsConfigFor(host)); err != nil {
+			if err := c.StartTLS(tlsConfigFor(host, insecure)); err != nil {
 				return fmt.Errorf("SMTP STARTTLS 升级失败: %w", err)
 			}
 		}
@@ -180,14 +181,20 @@ func SmtpConnectivityTest(ctx context.Context, testTo string) error {
 		"Lazy Balancer SMTP 测试", "这是一封 SMTP 连通性测试邮件（系统凭据页触发）。", false)
 }
 
-// tlsConfigFor 服务器名只用于证书校验（系统根证书，不跳过验证）。
-func tlsConfigFor(host string) *tls.Config {
-	return &tls.Config{ServerName: host}
+// smtpTLSOptions TLS 启用（缺省启用，"0"=明文）与忽略证书校验（"1"=跳过）。
+func smtpTLSOptions() (enabled, insecure bool) {
+	kv := GetSettings(KeySMTPTLS, KeySMTPInsecure)
+	return kv[KeySMTPTLS] != "0", kv[KeySMTPInsecure] == "1"
+}
+
+// tlsConfigFor 服务器名用于证书校验；insecure=跳过校验（自签证书场景）。
+func tlsConfigFor(host string, insecure bool) *tls.Config {
+	return &tls.Config{ServerName: host, InsecureSkipVerify: insecure}
 }
 
 // tlsClient 在既有 TCP 连接上套隐式 TLS（465 端口形态）。
-func tlsClient(conn net.Conn, host string) net.Conn {
-	return tls.Client(conn, tlsConfigFor(host))
+func tlsClient(conn net.Conn, host string, insecure bool) net.Conn {
+	return tls.Client(conn, tlsConfigFor(host, insecure))
 }
 
 func init() { RegisterSender("email", emailSender{}) }

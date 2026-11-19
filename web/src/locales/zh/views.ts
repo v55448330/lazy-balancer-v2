@@ -434,6 +434,7 @@ export default {
     'typeCol': '类型',
     'unknownError': '未知错误',
     'usageLabel': '使用场景：',
+    'whitelistNone': '不限制来源 IP',
     'whitelistNote': 'IP 白名单约束该密钥的全部 REST 与 MCP 调用。',
     'whitelistPlaceholder': '一行一个 CIDR，例如：10.0.0.0/8 或 192.168.1.10\n留空表示不限制来源 IP',
     'whitelistSummary': '{count} 条：{preview}{more}',

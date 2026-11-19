@@ -21,7 +21,18 @@ import (
 var (
 	qqTaskMu     sync.Mutex
 	qqTaskByUser = map[int64]*notify.BindTask{}
+	// qqBoundByUser 最近一次绑定完成下发的凭据（per-user，qqTaskMu 守护）。
+	// 多机器人：全局仅首 bot（入站 WS），后续 bot 凭据在保存通道时钉入
+	// target——本映射是保存钉住的凭据源（openid 匹配防误钉）。
+	qqBoundByUser = map[int64]qqBoundCred{}
 )
+
+// qqBoundCred 扫码绑定完成下发的凭据+openid。
+type qqBoundCred struct {
+	AppID  string
+	Secret string
+	OpenID string
+}
 
 // PostQQBindCode 生成扫码绑定二维码（旧任务作废）。
 func (h *Handlers) PostQQBindCode(c *gin.Context) {
@@ -73,15 +84,18 @@ func (h *Handlers) GetQQBindCode(c *gin.Context) {
 		return
 	}
 
-	// completed：凭据落 notify_settings（连接 Daemon 鉴权单源）。通道创建
-	// 不在此处——「保存」动作是建通道的唯一入口（此前绑定完成即 upsert
-	// 通道，导致「删除通道→重新绑定→保存」被误判已存在）。
-	if err := notify.SaveQQBotCredentials(result.AppID, result.AppSecret); err != nil {
+	// completed：首个 bot 凭据落全局（入站 WS 鉴权单源）；后续绑定不覆盖
+	// 全局（覆盖=连接 Daemon 重连老 bot 掉线根因），凭据记入 qqBoundByUser
+	// 供保存通道时钉入 target。通道创建不在此处——「保存」动作是建通道的
+	// 唯一入口（此前绑定完成即 upsert 通道，导致「删除通道→重新绑定→保存」
+	// 被误判已存在）。
+	if _, err := notify.SaveQQBotCredentialsIfAbsent(result.AppID, result.AppSecret); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("凭据落库失败", err)})
 		return
 	}
 	qqTaskMu.Lock()
 	delete(qqTaskByUser, uid)
+	qqBoundByUser[uid] = qqBoundCred{AppID: result.AppID, Secret: result.AppSecret, OpenID: result.UserOpenID}
 	qqTaskMu.Unlock()
 
 	recordAudit(c, "绑定", "QQ 机器人", "扫码绑定成功（AppID "+result.AppID+"，openid "+result.UserOpenID+"）")
