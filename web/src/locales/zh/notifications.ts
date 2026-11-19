@@ -218,6 +218,8 @@ export default {
         targetWx: '接收者',
         bindGenerate: '获取绑定二维码',
         bindScanHint: '请扫描二维码并在手机端确认登录…',
+        bindQrCountdown: '二维码剩余有效 {time}，过期请刷新重绑',
+        bindQrWxHint: '微信二维码有效期较短，请尽快扫码确认',
         bindExpiredHint: '二维码已失效，请刷新获取新二维码重新绑定',
         bindRefresh: '刷新二维码',
         bindConnecting: '连接测试中…正在验证机器人 API 与连接',

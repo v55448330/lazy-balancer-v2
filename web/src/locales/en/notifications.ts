@@ -211,6 +211,8 @@ export default {
         targetWx: 'Receiver',
         bindGenerate: 'Get bind QR code',
         bindScanHint: 'Scan the QR code and confirm login on your phone…',
+        bindQrCountdown: 'QR valid for {time} more; refresh to re-bind when expired',
+        bindQrWxHint: 'WeChat QR expires quickly; scan and confirm promptly',
         bindExpiredHint: 'QR code expired; refresh to get a new one and re-bind',
         bindRefresh: 'Refresh QR code',
         bindConnecting: 'Connection test… verifying bot API and connectivity',

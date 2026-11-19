@@ -124,6 +124,8 @@
               <el-button v-if="bindPhase === 'idle'" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
               <div v-if="bindPhase === 'scanning'" class="bind-hint">{{ t('app.notification.channels.bindScanHint') }}</div>
+              <div v-if="bindPhase === 'scanning' && bindQrExpiresAt" class="bind-hint">{{ t('app.notification.channels.bindQrCountdown', { time: bindCountdownText }) }}</div>
+              <div v-if="bindPhase === 'scanning' && !bindQrExpiresAt" class="bind-hint">{{ t('app.notification.channels.bindQrWxHint') }}</div>
               <el-alert v-if="bindPhase === 'expired'" type="error" :closable="false" show-icon class="bind-success-alert">
                 <template #title>{{ t('app.notification.channels.bindExpiredHint') }}</template>
               </el-alert>
@@ -415,6 +417,27 @@ const bindQrImg = ref('')
 const bindPhase = ref<'idle' | 'scanning' | 'connecting' | 'awaiting_message' | 'confirmed' | 'expired'>('idle')
 const bindScannerID = ref('')
 const bindBotKey = ref('')
+const bindQrExpiresAt = ref<number | null>(null) // QQ 已知 TTL（expires_in）；wx 服务端驱动=null
+const bindQrLeft = ref(0)
+let bindCountTimer: ReturnType<typeof setInterval> | null = null
+const bindCountdownText = computed(() => {
+  const s = Math.max(0, bindQrLeft.value)
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+})
+// QQ 产码带 expires_in→倒计时，归零置 expired；wx 无客户端 TTL→不倒计时（提示尽快扫码）。
+const startQrCountdown = (expiresIn: number | undefined): void => {
+  if (bindCountTimer) { clearInterval(bindCountTimer); bindCountTimer = null }
+  if (!expiresIn) { bindQrExpiresAt.value = null; return }
+  bindQrExpiresAt.value = Date.now() + expiresIn * 1000
+  bindQrLeft.value = expiresIn
+  bindCountTimer = setInterval(() => {
+    bindQrLeft.value = Math.max(0, Math.round(((bindQrExpiresAt.value ?? 0) - Date.now()) / 1000))
+    if (bindQrLeft.value <= 0) {
+      if (bindCountTimer) { clearInterval(bindCountTimer); bindCountTimer = null }
+      if (bindPhase.value === 'scanning') { bindPhase.value = 'expired'; bindQrImg.value = ''; stopBindPolling() }
+    }
+  }, 1000)
+}
 const wxAlreadyLoggedIn = ref(false) // 全局已有微信登录态→提示无需重复扫码
 const checkWxLoggedIn = async (): Promise<void> => {
   try {
@@ -428,6 +451,7 @@ watch(() => drawerForm.value.type, (typ) => {
   bindScannerID.value = ''
   bindBotKey.value = ''
   bindQrImg.value = ''
+  bindQrExpiresAt.value = null
   stopBindPolling()
   if (typ === 'wx_clawbot') void checkWxLoggedIn()
   else wxAlreadyLoggedIn.value = false
@@ -437,12 +461,13 @@ const startBind = async (): Promise<void> => {
   bindPhase.value = 'scanning'
   try {
     const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/qr/start'
-    const res = await request.post<{ data?: { qr_content?: string } }>(endpoint, {})
+    const res = await request.post<{ data?: { qr_content?: string; expires_in?: number } }>(endpoint, {})
     const qrUrl = res.data?.qr_content ?? ''
     if (qrUrl) {
       const QRCode = (await import('qrcode')).default
       bindQrImg.value = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
       pollScan()
+      startQrCountdown(res.data?.expires_in)
     }
   } catch (e) { console.error(e) } finally { bindLoading.value = false }
 }
@@ -451,6 +476,7 @@ let bindTimeout: ReturnType<typeof setTimeout> | null = null
 const stopBindPolling = (): void => {
   if (bindTimer !== null) { clearInterval(bindTimer); bindTimer = null }
   if (bindTimeout !== null) { clearTimeout(bindTimeout); bindTimeout = null }
+  if (bindCountTimer !== null) { clearInterval(bindCountTimer); bindCountTimer = null }
 }
 // 扫码轮询：confirmed 后取 scanner_id/bot_key（QQ=openid/appid）注册绑定会话。
 const pollScan = (): void => {
@@ -517,6 +543,7 @@ onUnmounted(stopBindPolling)
 const resetDrawer = (): void => {
   stopBindPolling()
   bindQrImg.value = ''
+  bindQrExpiresAt.value = null
   bindPhase.value = 'idle'
   bindScannerID.value = ''
   bindBotKey.value = ''
