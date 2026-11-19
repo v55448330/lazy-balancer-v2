@@ -124,6 +124,10 @@
               <el-button v-if="bindPhase === 'idle'" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
               <div v-if="bindPhase === 'scanning'" class="bind-hint">{{ t('app.notification.channels.bindScanHint') }}</div>
+              <el-alert v-if="bindPhase === 'expired'" type="error" :closable="false" show-icon class="bind-success-alert">
+                <template #title>{{ t('app.notification.channels.bindExpiredHint') }}</template>
+              </el-alert>
+              <el-button v-if="bindPhase === 'expired'" size="small" type="primary" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindRefresh') }}</el-button>
               <el-alert v-if="bindPhase === 'connecting'" type="info" :closable="false" show-icon class="bind-success-alert">
                 <template #title>{{ t('app.notification.channels.bindConnecting') }}</template>
               </el-alert>
@@ -408,7 +412,7 @@ const bindLoading = ref(false)
 const bindQrImg = ref('')
 // 绑定会话状态机：idle→scanning（扫码）→connecting（连接测试）→awaiting_message
 // （待发送「绑定测试」）→confirmed（入站确认+品牌回复，允许保存）。
-const bindPhase = ref<'idle' | 'scanning' | 'connecting' | 'awaiting_message' | 'confirmed'>('idle')
+const bindPhase = ref<'idle' | 'scanning' | 'connecting' | 'awaiting_message' | 'confirmed' | 'expired'>('idle')
 const bindScannerID = ref('')
 const bindBotKey = ref('')
 const wxAlreadyLoggedIn = ref(false) // 全局已有微信登录态→提示无需重复扫码
@@ -455,7 +459,7 @@ const pollScan = (): void => {
   bindTimer = setInterval(async () => {
     try {
       if (isQQ) {
-        const res = await request.get<{ data?: { bound?: boolean; openid?: string; appid?: string } }>('/notification/qq/bind-code', { silent: true })
+        const res = await request.get<{ data?: { bound?: boolean; openid?: string; appid?: string; expired?: boolean; status?: number } }>('/notification/qq/bind-code', { silent: true })
         if (res.data?.bound && res.data?.openid) {
           bindScannerID.value = res.data.openid
           bindBotKey.value = res.data.appid ?? ''
@@ -463,20 +467,24 @@ const pollScan = (): void => {
           bindQrImg.value = ''
           stopBindPolling()
           void registerBindSession()
+        } else if (res.data?.expired || res.data?.status === 3) {
+          bindPhase.value = 'expired'; bindQrImg.value = ''; stopBindPolling()
         }
       } else {
-        const qs = await request.get<{ data?: { confirmed?: boolean; scanner_id?: string; bot_key?: string } }>('/notification/wx/qr/status', { silent: true })
+        const qs = await request.get<{ data?: { confirmed?: boolean; scanner_id?: string; bot_key?: string; status?: string } }>('/notification/wx/qr/status', { silent: true })
         if (qs.data?.confirmed) {
           bindScannerID.value = qs.data.scanner_id ?? ''
           bindBotKey.value = qs.data.bot_key ?? ''
           bindQrImg.value = ''
           stopBindPolling()
           void registerBindSession()
+        } else if (qs.data?.status === 'expired') {
+          bindPhase.value = 'expired'; bindQrImg.value = ''; stopBindPolling()
         }
       }
     } catch { /* keep polling */ }
   }, 3000)
-  bindTimeout = setTimeout(stopBindPolling, 300000)
+  bindTimeout = setTimeout(() => { stopBindPolling(); if (bindPhase.value === 'scanning') bindPhase.value = 'expired' }, 300000)
 }
 // 注册绑定会话→连接测试→轮询入站「绑定测试」确认。
 const registerBindSession = async (): Promise<void> => {
