@@ -197,10 +197,10 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 	"cluster-sync":        taskengine.KindDaemon,
 	"startup:config-load": taskengine.KindOneshot,
 	// 通知中心（2026-11-18）：投递常驻/日报定时/QQ+微信长连出站
-	"notification-delivery":     taskengine.KindDaemon,
-	"qq-bot-connection":         taskengine.KindDaemon,
-	"wx-bot-connection":         taskengine.KindDaemon,
-	"notification-daily-report": taskengine.KindScheduled,
+	"notification-delivery":      taskengine.KindDaemon,
+	"qq-bot-connection":          taskengine.KindDaemon,
+	"wx-bot-connection":          taskengine.KindDaemon,
+	"notification-daily-report":  taskengine.KindScheduled,
 	"notification-apikey-expiry": taskengine.KindPeriodic,
 }
 
