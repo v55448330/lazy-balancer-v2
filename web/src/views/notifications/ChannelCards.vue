@@ -103,21 +103,21 @@
         </el-form-item>
         <el-form-item v-else :label="targetLabel(drawerForm.type)">
           <div class="bind-area">
-            <template v-if="drawerForm.targetValue">
-              <el-tag type="success" effect="plain">{{ t('app.notification.channels.bindBound') }} · {{ drawerForm.targetValue }}</el-tag>
-              <el-button size="small" text type="primary" @click="drawerForm.targetValue = ''">{{ t('app.notification.channels.bindRebind') }}</el-button>
-            </template>
-            <template v-else>
-              <template v-if="wxBotReady && drawerForm.type === 'wx_clawbot'">
-                <el-tag type="success" effect="plain">{{ t('app.notification.channels.wxLoggedIn') }}</el-tag>
-                <div class="bind-hint">{{ t('app.notification.channels.wxSendMsgHint') }}</div>
+            <!-- 接收者/openid 手动输入为主：一个用户可绑定多个机器人通道（不同接收者），
+                 保存不依赖入站捕获；扫码/自动回填仅作辅助。 -->
+            <el-input v-model="drawerForm.targetValue" :placeholder="drawerForm.type === 'qq' ? t('app.notification.channels.botOpenidPlaceholder') : t('app.notification.channels.botReceiverPlaceholder')" />
+            <div class="bind-helper">
+              <template v-if="drawerForm.type === 'wx_clawbot'">
+                <el-tag v-if="wxBotReady" type="success" effect="plain">{{ t('app.notification.channels.wxLoggedIn') }}</el-tag>
+                <el-button v-else size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
+                <el-button size="small" text type="primary" @click="startReceiverPoll">{{ t('app.notification.channels.autoFill') }}</el-button>
               </template>
               <template v-else>
-                <el-button type="primary" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
-                <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
-                <div v-if="bindQrImg" class="bind-hint">{{ t('app.notification.channels.bindScanHint', { app: drawerForm.type === 'qq' ? 'QQ' : t('app.notification.channels.typeWx') }) }}</div>
+                <el-button size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               </template>
-            </template>
+              <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
+              <div class="bind-hint">{{ drawerForm.type === 'qq' ? t('app.notification.channels.qqBindHint') : t('app.notification.channels.wxSendMsgHint') }}</div>
+            </div>
           </div>
         </el-form-item>
       </el-form>
@@ -420,6 +420,8 @@ const pollBind = (): void => {
   }, 3000)
   bindTimeout = setTimeout(stopBindPolling, 300000)
 }
+// 自动回填（不产码）：机器人已登录时直接轮询入站接收者/openid 回填手动输入框。
+const startReceiverPoll = (): void => { pollBind() }
 onUnmounted(stopBindPolling)
 
 const resetDrawer = (): void => {
@@ -577,9 +579,10 @@ defineExpose({ fetchChannels })
 .test-none { color: #9ca3af; }
 
 .ch-actions { display: flex; gap: 4px; justify-content: flex-end; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; }
-.bind-area { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; }
+.bind-area { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; }
+.bind-helper { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .bind-qr-img { width: 200px; height: 200px; }
-.bind-hint { font-size: 12px; color: #6b7280; }
+.bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
 .style-section-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 12px; }
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
