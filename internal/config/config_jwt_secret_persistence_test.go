@@ -136,6 +136,7 @@ func TestConfigProductionSourcesHaveNoDirectFileWrite(t *testing.T) {
 	exempt := map[string]string{
 		"../cmd/server/main.go":           "监督器 pause 标记协议（与 handlers/caddy.go 同一标记文件）",
 		"db/permissions.go":               "SQLite 文件预建与权限校正，不替换既有快照",
+		"notify/secretbox.go":             "凭据加密主密钥文件生成（随机 32 字节+0600，非配置快照）",
 		"handlers/caddy.go":               "监督器 pause 标记协议",
 		"handlers/config_backup_lbbak.go": "备份包临时解包与 WAF 目录事务恢复",
 		"services/auditlog_rotation.go":   "审计日志轮转专用流式复制",

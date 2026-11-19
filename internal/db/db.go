@@ -31,6 +31,7 @@ var (
 	currentDB     atomic.Value
 	MetricsDB     *sql.DB
 	AuditDB       *sql.DB
+	dataDirPath   string // Initialize 记录的数据目录（供密钥文件等定位，DataDir() 读取）
 	openDatabase  = sql.Open
 	domainProfile = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.VerifyDNSLength(true))
 )
@@ -353,6 +354,10 @@ func GetDB() *sql.DB {
 	return nil
 }
 
+// DataDir 返回 Initialize 记录的数据目录（未初始化返回空串）。供需在该目录
+// 落盘辅助文件（如通知凭据加密主密钥）的子系统定位，避免各自硬编码路径。
+func DataDir() string { return dataDirPath }
+
 func Initialize(dataDir string) (err error) {
 	// lb_trunc_utf8 等驱动级 UDF 只对注册后新建的连接生效——必须在任何
 	// sql.Open 之前注册（连接池会复用先于注册打开的连接，迁移 SQL 将报
@@ -402,6 +407,7 @@ func Initialize(dataDir string) (err error) {
 	}
 
 	DB = database
+	dataDirPath = dataDir
 
 	// Initialize metrics database
 	if err := InitializeMetricsDB(dataDir); err != nil {

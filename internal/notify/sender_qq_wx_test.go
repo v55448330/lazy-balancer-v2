@@ -38,8 +38,15 @@ func newNotifyConnectorDB(t *testing.T) {
 		}
 	}
 	db.DB = database
+	// 凭据静态加密测试接缝：临时主密钥文件（生产经 db.DataDir，测试库 sql.Open 不设）。
+	oldKeyPath := secretKeyPath
+	keyFile := t.TempDir() + "/.notify_secret_key"
+	secretKeyPath = func() string { return keyFile }
+	resetSecretKeyCache()
 	t.Cleanup(func() {
 		db.DB = old
+		secretKeyPath = oldKeyPath
+		resetSecretKeyCache()
 		_ = database.Close()
 		// per-bot 态隔离：登记表与 wx 会话路由态清零，防跨测试污染。
 		qqLinks.mu.Lock()

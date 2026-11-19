@@ -41,6 +41,11 @@ func Stop() { stopOnce.Do(func() { close(stopCh) }) }
 // 循环并做一次 pending 重投兜底（超龄判 dead、近期 pending 留队交投递
 // Daemon 重扫）。库未装配时 requeue 为 no-op；此前的 Publish 按无队列丢弃。
 func Bootstrap() {
+	// 凭据静态加密存量迁移（先于连接器读取凭据）：遗留明文敏感键原地重加密，
+	// 幂等。失败留痕不阻断启动（读路径兼容遗留明文，写路径恒加密）。
+	if err := MigrateSecretSettings(); err != nil {
+		log.Printf("WARN: notify 凭据静态加密迁移失败: %v", err)
+	}
 	Start()
 	requeueStalePending()
 }

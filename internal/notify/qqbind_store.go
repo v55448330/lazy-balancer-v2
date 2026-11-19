@@ -14,16 +14,16 @@ import (
 // 不等退避周期。绑定流程经 SaveQQBotCredentialsIfAbsent 调用（仅全局未配
 // 置时写入，防多机器人互覆）；本函数保留无条件形态供凭据管理侧重置使用。
 func SaveQQBotCredentials(appID, appSecret string) error {
-	_, err := db.DB.Exec(`INSERT INTO notify_settings (key, value) VALUES ('notify.qq_appid', ?), ('notify.qq_secret', ?)
-		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, appID, appSecret)
-	if err == nil {
-		qqTokens.invalidate()
-		select {
-		case qqWakeCh <- struct{}{}:
-		default:
-		}
+	// 经 SetSettings 统一入口：qq_secret 静态加密落库（qq_appid 标识符明文）。
+	if err := SetSettings(map[string]string{KeyQQAppID: appID, KeyQQSecret: appSecret}); err != nil {
+		return err
 	}
-	return err
+	qqTokens.invalidate()
+	select {
+	case qqWakeCh <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 // SaveQQBotCredentialsIfAbsent 仅全局未配置时落库（多机器人根因修复）：
@@ -42,11 +42,9 @@ func SaveQQBotCredentialsIfAbsent(appID, appSecret string) (written bool, err er
 
 // QQBotCredentialsPair 读取绑定下发的凭据（空=未绑定/未配置）。
 func QQBotCredentialsPair() (appID, appSecret string, ok bool) {
-	if db.DB == nil {
-		return "", "", false
-	}
-	_ = db.DB.QueryRow(`SELECT COALESCE((SELECT value FROM notify_settings WHERE key='notify.qq_appid'),''),
-		COALESCE((SELECT value FROM notify_settings WHERE key='notify.qq_secret'),'')`).Scan(&appID, &appSecret)
+	// 经 GetSettings 统一入口：qq_secret 解密读取（遗留明文透传）。
+	kv := GetSettings(KeyQQAppID, KeyQQSecret)
+	appID, appSecret = kv[KeyQQAppID], kv[KeyQQSecret]
 	return appID, appSecret, appID != "" && appSecret != ""
 }
 

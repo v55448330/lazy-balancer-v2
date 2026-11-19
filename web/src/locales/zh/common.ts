@@ -208,6 +208,8 @@ export default {
     modified: '修改',
     disconnected: '断开',
     bound: '绑定',
+    authorized: '授权',
+    unbound: '解绑',
     resent: '重发',
   },
   auditResources: {
@@ -215,6 +217,7 @@ export default {
     apiKey: 'API密钥',
     notificationChannel: '通知通道',
     qqBot: 'QQ 机器人',
+    smtpOAuth: 'SMTP OAuth 授权',
     notificationDelivery: '通知投递',
     notificationRule: '通知规则',
     notificationSubscription: '通知订阅',

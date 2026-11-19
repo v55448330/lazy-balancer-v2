@@ -172,8 +172,15 @@ func TestQQBindScan_e2e(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_appid'`).Scan(&appID); err != nil || appID != "APP_MOCK" {
 		t.Fatalf("notify.qq_appid=%q (err=%v), want APP_MOCK", appID, err)
 	}
-	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_secret'`).Scan(&appSecret); err != nil || appSecret != "SECRET_MOCK" {
-		t.Fatalf("notify.qq_secret=%q (err=%v), want SECRET_MOCK", appSecret, err)
+	// qq_secret 静态加密落库（unify_all）：密文带前缀且不含明文；读路径还原。
+	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_secret'`).Scan(&appSecret); err != nil {
+		t.Fatalf("notify.qq_secret 读取 err=%v", err)
+	}
+	if !strings.HasPrefix(appSecret, "enc:v1:") || strings.Contains(appSecret, "SECRET_MOCK") {
+		t.Fatalf("notify.qq_secret 应密文落库, got %q", appSecret)
+	}
+	if _, sec, ok := notify.QQBotCredentialsPair(); !ok || sec != "SECRET_MOCK" {
+		t.Fatalf("QQBotCredentialsPair secret=%q ok=%v, want SECRET_MOCK", sec, ok)
 	}
 
 	// ④ 绑定动作不再自动建通道（「保存」是唯一创建入口；删除通道后重新

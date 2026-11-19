@@ -67,13 +67,12 @@ func bindQQBot(t *testing.T, router *gin.Engine, env *qqBindMockEnv, appid, secr
 
 func globalQQCred(t *testing.T) (appid, secret string) {
 	t.Helper()
-	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_appid'`).Scan(&appid); err != nil {
-		t.Fatalf("读全局 appid: %v", err)
+	// 经读路径取全局凭据（qq_secret 静态加密落库，QQBotCredentialsPair 解密还原）。
+	a, s, ok := notify.QQBotCredentialsPair()
+	if !ok {
+		t.Fatalf("全局 QQ 凭据未配置")
 	}
-	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_secret'`).Scan(&secret); err != nil {
-		t.Fatalf("读全局 secret: %v", err)
-	}
-	return appid, secret
+	return a, s
 }
 
 func channelTarget(t *testing.T, id int64) map[string]any {

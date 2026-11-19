@@ -6,6 +6,8 @@ package notify
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -28,6 +30,11 @@ const (
 	KeyAttackWarnAt     = "notify.attack_warn_at"
 	KeyAttackCriticalAt = "notify.attack_critical_at"
 	KeyWxBotCred        = "notify.wx_bot_cred" // 微信扫码登录态（连接器域写入）
+	// SMTP OAuth2（XOAUTH2，Outlook/Office365 设备码流；公共客户端无 secret）
+	KeySMTPOAuthTenant       = "notify.smtp_oauth_tenant"
+	KeySMTPOAuthClientID     = "notify.smtp_oauth_client_id"
+	KeySMTPOAuthRefreshToken = "notify.smtp_oauth_refresh_token" // 敏感（静态加密）
+	KeySMTPOAuthScope        = "notify.smtp_oauth_scope"
 )
 
 // GetSetting 取单键值（未配置/库不可用返回空串）。
@@ -39,7 +46,21 @@ func GetSetting(key string) string {
 	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key=?`, key).Scan(&v); err != nil {
 		return ""
 	}
-	return v
+	return openSecretSetting(key, v)
+}
+
+// openSecretSetting 敏感键解密（遗留明文透传）；解密失败留痕并返回空串
+// （视为未配置，不崩溃；fail-loud 经 WARN 日志 + 发送侧认证失败暴露）。
+func openSecretSetting(key, stored string) string {
+	if !isSecretSettingKey(key) {
+		return stored
+	}
+	plain, err := OpenSecret(stored)
+	if err != nil {
+		log.Printf("WARN: notify 凭据 %s 解密失败（视为未配置）: %v", key, err)
+		return ""
+	}
+	return plain
 }
 
 // GetSettings 批量取键值（返回存在的键；库不可用返回空映射）。
@@ -58,7 +79,7 @@ func GetSettings(keys ...string) map[string]string {
 		if err := rows.Scan(&k, &v); err != nil {
 			continue
 		}
-		out[k] = v
+		out[k] = openSecretSetting(k, v)
 	}
 	return out
 }
@@ -74,6 +95,13 @@ func SetSettings(kv map[string]string) error {
 	}
 	defer tx.Rollback()
 	for k, v := range kv {
+		if isSecretSettingKey(k) {
+			sealed, err := SealSecret(v)
+			if err != nil {
+				return fmt.Errorf("凭据 %s 加密失败: %w", k, err)
+			}
+			v = sealed
+		}
 		if _, err := tx.Exec(`INSERT INTO notify_settings (key, value) VALUES (?,?)
 			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, k, v); err != nil {
 			return err

@@ -358,9 +358,9 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
 	}
 	tone := parseFrontendAuditTone(t, data, frontendAuditToneSource)
-	// 当前单源登记 76 条（71+通知中心 绑定/修改/测试/重发 + MCP 会话断开）；
+	// 当前单源登记 78 条（76+SMTP OAuth 授权/解绑）；
 	// 等值门同时拦截整表漏解析与未经审查的新增/删除。
-	const registeredExceptionCount = 76
+	const registeredExceptionCount = 78
 	if len(tone.exceptions) != registeredExceptionCount {
 		t.Fatalf("%s 解析漂移：例外表解析到 %d 条（登记值 %d）——请同步审查映射并更新解析", frontendAuditToneSource, len(tone.exceptions), registeredExceptionCount)
 	}
@@ -636,12 +636,10 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		// 117=114 基线+通知规则更新/规则测试/通道测试 3 路由升 Explicit
-		// （handler 记名称+结果，中间件不复记）；8=11-3（升显式 3 条）；
-		// 19=16 基线+日报预览（只读渲染不落库）+QQ/微信扫码产码（绑定完成时
-		// handler 记一次「绑定」，产码不复记）3 条 skip。新增见 auditpolicy.go
-		// 各自登记处注释。
-		wantExplicit = 117
+		// 119=117 基线+SMTP OAuth 设备码发起/解绑 2 路由 Explicit（handler 记
+		// 「授权」/「解绑」，路径共享 POST/DELETE 故不用 Generic 路径映射）；
+		// 8=Generic 不变；19=skip 不变。新增见 auditpolicy.go 各自登记处注释。
+		wantExplicit = 119
 		wantGeneric  = 8
 		wantSkip     = 19
 	)

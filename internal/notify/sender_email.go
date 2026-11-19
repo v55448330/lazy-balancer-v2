@@ -117,13 +117,19 @@ func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject
 	}
 	if user != "" {
 		if ok, mechs := c.Extension("AUTH"); ok {
-			// 按服务端宣告机制择优 LOGIN > PLAIN > CRAM-MD5：Office365/Outlook
-			// 仅宣告 LOGIN（PLAIN 报 504 5.7.4 Unrecognized authentication type）；
-			// 部分企业/老旧服务器仅宣告 CRAM-MD5（挑战响应，net/smtp 内置）。
-			// 未识别机制回退 PLAIN（保持旧行为）。
+			// 机制择优：配置 OAuth 且服务器宣告 XOAUTH2 → XOAUTH2（Outlook/
+			// Office365 租户禁用基本认证时必需）；否则基本认证 LOGIN > PLAIN >
+			// CRAM-MD5（Office365 仅宣告 LOGIN，PLAIN 报 504 5.7.4；部分企业
+			// 服务器仅 CRAM-MD5）。未识别回退 PLAIN（保持旧行为）。
 			upper := strings.ToUpper(mechs)
 			var auth smtp.Auth
 			switch {
+			case strings.Contains(upper, "XOAUTH2") && OAuthConfigured():
+				token, err := OAuthAccessToken(ctx)
+				if err != nil {
+					return fmt.Errorf("SMTP OAuth 令牌获取失败: %w", err)
+				}
+				auth = xoauth2Auth{user: user, token: token}
 			case strings.Contains(upper, "LOGIN"):
 				auth = loginAuth{user: user, pass: pass}
 			case strings.Contains(upper, "PLAIN"):
@@ -242,6 +248,21 @@ func (a loginAuth) Next(from []byte, more bool) ([]byte, error) {
 		return []byte(a.pass), nil
 	}
 	return nil, fmt.Errorf("unexpected AUTH LOGIN challenge: %q", from)
+}
+
+// xoauth2Auth AUTH XOAUTH2（Outlook/Office365 OAuth2）：认证串
+// "user=<addr>\x01auth=Bearer <token>\x01\x01"。失败时服务器回 base64 JSON
+// 错误挑战，客户端回空串结束会话（net/smtp 据此返回认证错误）。
+type xoauth2Auth struct{ user, token string }
+
+func (a xoauth2Auth) Start(*smtp.ServerInfo) (string, []byte, error) {
+	return "XOAUTH2", []byte("user=" + a.user + "\x01auth=Bearer " + a.token + "\x01\x01"), nil
+}
+func (a xoauth2Auth) Next(from []byte, more bool) ([]byte, error) {
+	if more {
+		return []byte{}, nil
+	}
+	return nil, nil
 }
 
 // smtpTLSOptions TLS 启用（缺省启用，"0"=明文）与忽略证书校验（"1"=跳过）。
