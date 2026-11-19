@@ -227,9 +227,8 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 	// 污染成假在线（停止后仍放行的实测根因）。任何退出路径统一收尾。
 	defer qqLinks.stopAll("连接任务已停止")
 	bots := qqEnumerateBots()
-	if len(bots) == 0 {
-		return fmt.Errorf("QQ 机器人凭据未配置")
-	}
+	// 0 bot 不退出：常驻等待绑定/保存新增凭据（wake/周期对账上线）。早退会使
+	// 首绑 bot 无 supervisor 对账→连接测试永卡（用户实测 QQ 客户端卡连接中根因）。
 	var wg sync.WaitGroup
 	defer wg.Wait() // Run 同步等待全部 bot 会话 goroutine 收口（引擎形态②子协程）
 	workers := map[string]*qqBotWorker{}

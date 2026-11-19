@@ -520,3 +520,45 @@ func TestQQStopAggregatesSingleChannelDown(t *testing.T) {
 		t.Errorf("2 在线 bot 停机应聚合为一次通道离线告警, got %d", downs)
 	}
 }
+
+// 0-bot 启动 supervisor 常驻回归（用户实测 QQ 卡连接中/wx 网络错误根因）：
+// 启动时无任何凭据不退出；随后绑定会话携带凭据→wake 对账→bot 上线。
+func TestQQSupervisorZeroBotsThenBindOnboards(t *testing.T) {
+	newNotifyConnectorDB(t)
+	setupQQPlatformMock(t)
+	ws := setupQQWSMock(t)
+	clearBindSessions()
+	t.Cleanup(func() {
+		clearBindSessions()
+		select {
+		case <-qqWakeCh:
+		default:
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- RunQQBotConnection(ctx) }() // 0 bot 启动，应常驻不退出
+
+	// 启动后无凭据：短暂等待确认 supervisor 未早退（仍运行）
+	select {
+	case <-done:
+		t.Fatal("0-bot 启动 supervisor 不应早退")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// When 绑定会话携带凭据（首绑 bot）→wake 对账上线
+	StartBindSessionWithCred(7, "qq", "oLate", "APP_LATE", "SEC_LATE")
+	ws.waitReady(t, "APP_LATE")
+	waitLinkConnected(t, func() (bool, string, time.Time) { return QQLinkStatusFor("APP_LATE") }, true)
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("清洁停止应返回 nil, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("停止后 Run 未收口")
+	}
+}

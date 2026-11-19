@@ -641,9 +641,8 @@ func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 	// 清洁停止置离线（同 QQ 根因）：防 per-bot 态残留假在线污染 Send/Test 门。
 	defer wxLinks.stopAll("连接任务已停止")
 	bots := wxEnumerateBots()
-	if len(bots) == 0 {
-		return fmt.Errorf("微信 Bot 登录态未配置（请先扫码登录）")
-	}
+	// 0 bot 不退出：常驻等待扫码/保存新增凭据（wake/周期对账上线）。早退会使
+	// 首绑 bot 无 supervisor 对账→getupdates 不运行（客户端网络错误根因）。
 	var wg sync.WaitGroup
 	defer wg.Wait() // Run 同步等待全部 bot 会话 goroutine 收口（引擎形态②子协程）
 	workers := map[string]*wxBotWorker{}
