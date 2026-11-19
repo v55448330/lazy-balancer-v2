@@ -57,3 +57,22 @@ func (h *Handlers) GetBindSession(c *gin.Context) {
 		"connected": notify.BindSessionConnected(typ, botKey),
 	}})
 }
+
+// DeleteBindSession DELETE /notification/bind-session——弹框取消清理绑定会话+
+// 待绑定凭据（防幽灵入站连接）。qq 同步清 qqBoundByUser 匹配项。
+func (h *Handlers) DeleteBindSession(c *gin.Context) {
+	typ := c.Query("type")
+	scannerID := c.Query("scanner_id")
+	botKey := c.Query("bot_key")
+	uid := contextUserID(c)
+	if typ == "qq" {
+		qqTaskMu.Lock()
+		if b, ok := qqBoundByUser[uid]; ok && b.AppID == botKey {
+			delete(qqBoundByUser, uid)
+		}
+		qqTaskMu.Unlock()
+	}
+	notify.AbortBindSession(typ, scannerID, botKey)
+	recordAudit(c, "绑定", "通知通道", "取消绑定会话（"+typ+"）")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
+}

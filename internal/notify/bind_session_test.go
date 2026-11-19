@@ -131,3 +131,44 @@ func TestEnumerateIncludesPendingBindCreds(t *testing.T) {
 		t.Errorf("wxEnumerateBots 应含二登 pin B_PIN（破死锁）")
 	}
 }
+
+// 取消绑定清理回归：AbortBindSession 删会话+清 wx 匹配 pin+qq 待绑定凭据不再
+// 枚举（防未保存通道 bot 的幽灵入站连接）。
+func TestAbortBindSessionClearsGhost(t *testing.T) {
+	newNotifyConnectorDB(t)
+	clearBindSessions()
+	t.Cleanup(func() {
+		clearBindSessions()
+		wxCtxMu.Lock()
+		wxConfirmedPin = nil
+		wxCtxMu.Unlock()
+	})
+	// wx：会话+pin 存在→取消后会话 idle、pin 清、不再枚举
+	StartBindSessionWithCred(7, "wx_clawbot", "wxU", "B_GHOST", "")
+	wxCtxMu.Lock()
+	wxConfirmedPin = &wxBotCred{Token: "T_G", AccountID: "B_GHOST", UserID: "wxU"}
+	wxCtxMu.Unlock()
+	AbortBindSession("wx_clawbot", "wxU", "B_GHOST")
+	if phase, _ := PollBindSession("wx_clawbot", "wxU", "B_GHOST"); phase != "idle" {
+		t.Errorf("取消后 wx 会话应 idle, got %q", phase)
+	}
+	wxCtxMu.Lock()
+	pin := wxConfirmedPin
+	wxCtxMu.Unlock()
+	if pin != nil {
+		t.Errorf("取消应清 wx 匹配 pin")
+	}
+	for _, b := range wxEnumerateBots() {
+		if wxCredKey(b) == "B_GHOST" {
+			t.Errorf("取消后 wx 不应再枚举幽灵 bot")
+		}
+	}
+	// qq：会话携带 secret→取消后不再枚举
+	StartBindSessionWithCred(7, "qq", "oU", "APP_GHOST", "SEC_G")
+	AbortBindSession("qq", "oU", "APP_GHOST")
+	for _, b := range PendingBindQQCreds() {
+		if b.AppID == "APP_GHOST" {
+			t.Errorf("取消后 qq 不应再枚举幽灵凭据")
+		}
+	}
+}

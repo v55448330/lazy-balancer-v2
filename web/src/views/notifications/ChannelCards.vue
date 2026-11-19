@@ -554,6 +554,10 @@ onUnmounted(stopBindPolling)
 
 const resetDrawer = (): void => {
   stopBindPolling()
+  // 取消时清理后端绑定会话+待绑定凭据，防幽灵入站连接（未保存通道的 bot）。
+  if (bindRegistered && bindScannerID.value) {
+    void request.delete(`/notification/bind-session?type=${encodeURIComponent(drawerForm.value.type)}&scanner_id=${encodeURIComponent(bindScannerID.value)}&bot_key=${encodeURIComponent(bindBotKey.value)}`, { silent: true }).catch(() => {})
+  }
   bindQrImg.value = ''
   bindQrExpiresAt.value = null
   bindPhase.value = 'idle'

@@ -120,6 +120,28 @@ func PruneBindSessions(maxAge time.Duration) int {
 	return n
 }
 
+// AbortBindSession 弹框取消时清理绑定会话+待绑定凭据，防「幽灵」入站连接
+// （未保存通道的 bot 被 supervisor 枚举建连）。wx 清匹配 pin；qq 会话删除后
+// PendingBindQQCreds 不再返回→supervisor 对账回收。唤醒 supervisor 立即收口。
+func AbortBindSession(typ, scannerID, botKey string) {
+	bindSessionMu.Lock()
+	delete(bindSessions, bindSessionKey(typ, scannerID, botKey))
+	bindSessionMu.Unlock()
+	if typ == "wx_clawbot" {
+		wxCtxMu.Lock()
+		if wxConfirmedPin != nil && wxConfirmedPin.AccountID == botKey {
+			wxConfirmedPin = nil
+		}
+		wxCtxMu.Unlock()
+		wakeWxBotConnection()
+	} else {
+		select {
+		case qqWakeCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
 // BindSessionConnected 绑定会话对应 bot 的入站连接态（连接测试判据：API 正确、
 // 系统能连上机器人）。
 func BindSessionConnected(typ, botKey string) bool {
