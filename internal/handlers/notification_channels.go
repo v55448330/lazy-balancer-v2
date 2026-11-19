@@ -35,15 +35,17 @@ const (
 )
 
 type notificationChannelDTO struct {
-	ID          int64  `json:"id"`
-	UserID      int64  `json:"user_id"`
-	Type        string `json:"type"`
-	Name        string `json:"name"`
-	Target      string `json:"target"`
-	Enabled     bool   `json:"enabled"`
-	LastTestAt  string `json:"last_test_at"`
-	LastTestOK  bool   `json:"last_test_ok"`
-	StyleConfig string `json:"style_config"`
+	ID            int64  `json:"id"`
+	UserID        int64  `json:"user_id"`
+	Type          string `json:"type"`
+	Name          string `json:"name"`
+	Target        string `json:"target"`
+	Enabled       bool   `json:"enabled"`
+	LastTestAt    string `json:"last_test_at"`
+	LastTestOK    bool   `json:"last_test_ok"`
+	StyleConfig   string `json:"style_config"`
+	LinkConnected bool   `json:"link_connected"` // qq/wx 实时入站在线态
+	LinkState     string `json:"link_state"`     // online/offline/none
 }
 
 // isAdminRequest 角色门（与 API Key 管理同口径：apiKeyAuth 注入 role）。
@@ -89,6 +91,11 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 		r, _, err := scanNotificationChannel(rows.Scan)
 		if err != nil {
 			continue
+		}
+		if r.Type == "qq" || r.Type == "wx_clawbot" {
+			r.LinkConnected, r.LinkState = notify.ChannelLinkStatus(r.Type, r.Target)
+		} else {
+			r.LinkState = "none"
 		}
 		if r.UserID != uid {
 			r.Target = maskChannelTarget(r.Type, r.Target)

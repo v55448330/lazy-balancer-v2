@@ -33,6 +33,7 @@ type NotificationRule struct {
 	Title            string            `json:"title"`             // 显示名
 	Events           []string          `json:"events"`            // 事件类型列表（event 规则）
 	EventTitles      map[string]string `json:"event_titles"`      // 事件 ID → 用户可读标题（禁止裸键展示）
+	EventLevels      map[string]string `json:"event_levels"`      // 事件 ID → 目录默认级别（info/warn/critical，标签配色）
 	MinLevel         string            `json:"min_level"`         // 最低级别
 	SendTime         string            `json:"send_time"`         // 日报投递时间
 	Items            []string          `json:"items"`             // 日报包含项目
@@ -111,12 +112,14 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 			Trigger:     "event",
 			Title:       group,
 			EventTitles: map[string]string{},
+			EventLevels: map[string]string{},
 			Enabled:     true,
 		}
 		hasSub := false
 		for _, e := range entries {
 			rule.Events = append(rule.Events, e.ID)
 			rule.EventTitles[e.ID] = e.Title
+			rule.EventLevels[e.ID] = string(e.Level)
 			if sub, ok := subsByEvent[e.ID]; ok {
 				hasSub = true
 				rule.MinLevel = sub.level

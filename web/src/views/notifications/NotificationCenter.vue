@@ -222,7 +222,7 @@
             <el-table-column :label="t('app.notification.rules.events')" min-width="280">
               <template #default="{ row }">
                 <div class="tag-wrap">
-                  <el-tag v-for="ev in (row.events || [])" :key="ev" size="small" effect="plain">{{ eventTitle(asRule(row), ev) }}</el-tag>
+                  <el-tag v-for="ev in (row.events || [])" :key="ev" size="small" effect="plain" :type="eventTagType(asRule(row), ev)">{{ eventTitle(asRule(row), ev) }}</el-tag>
                 </div>
               </template>
             </el-table-column>
@@ -471,7 +471,7 @@ const activeTab = ref('overview')
 interface RuleChannel { id: number; type: string; name: string }
 interface Rule {
   id: string; trigger: string; title: string; events?: string[]
-  event_titles?: Record<string, string>; min_level?: string; send_time?: string
+  event_titles?: Record<string, string>; event_levels?: Record<string, string>; min_level?: string; send_time?: string
   channels: RuleChannel[]; channel_ids?: number[]; channel_templates?: Record<string, string>
   body_template: string; enabled: boolean
   items?: string[]; formats?: Record<string, string>
@@ -488,6 +488,13 @@ const eventTitle = (row: Rule, ev: string): string => {
 const eventGroup = (group: string): string => {
   const m = (tm('app.notification.eventGroups') || {}) as Record<string, string>
   return hasOwn(m, group) ? m[group] : group
+}
+// 事件标签按目录默认级别配色（info=蓝/warn=橙/critical=红），直观传达分级。
+const eventTagType = (row: Rule, ev: string): 'info' | 'warning' | 'danger' => {
+  const lv = row.event_levels?.[ev]
+  if (lv === 'critical') return 'danger'
+  if (lv === 'warn') return 'warning'
+  return 'info'
 }
 
 const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
@@ -1181,8 +1188,8 @@ onMounted(() => {
 .daily-card { margin-bottom: 16px; }
 .daily-icon { color: #8b5cf6; }
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
-.daily-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; }
+.daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; line-height: 24px; }
 .daily-value { font-size: 13px; font-weight: 600; color: #111827; }
 .daily-ch-select { flex: 1; min-width: 0; }
 .daily-ch-select :deep(.el-checkbox) { margin-right: 12px; margin-bottom: 6px; }

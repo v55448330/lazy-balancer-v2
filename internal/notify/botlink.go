@@ -208,3 +208,32 @@ func formatBotTextWithTemplate(tpl string, msg Message, ts time.Time) string {
 	}
 	return strings.NewReplacer(pairs...).Replace(tpl)
 }
+
+// ChannelLinkStatus 通道实时连接态（qq/wx 常驻入站会话 per-bot 在线态；
+// webhook/email 无长连=none）。target 钉住凭据优先，回退全局首 bot。
+func ChannelLinkStatus(typ, targetJSON string) (bool, string) {
+	switch typ {
+	case "qq":
+		botID := qqTargetBotID(targetJSON)
+		if botID == "" {
+			return false, "none"
+		}
+		c, _, _ := QQLinkStatusFor(botID)
+		return c, linkStateWord(c)
+	case "wx_clawbot":
+		key := wxTargetBotKey(targetJSON)
+		if key == "" {
+			return false, "none"
+		}
+		c, _, _ := WxLinkStatusFor(key)
+		return c, linkStateWord(c)
+	}
+	return false, "none"
+}
+
+func linkStateWord(connected bool) string {
+	if connected {
+		return "online"
+	}
+	return "offline"
+}

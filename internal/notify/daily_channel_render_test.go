@@ -44,8 +44,8 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 	}
 
 	qq := renderDailyForChannel(msg, "qq", "")
-	if !strings.Contains(qq, "- **请求数**：1200") || strings.Contains(qq, "攻击") || strings.Contains(qq, "|") {
-		t.Fatalf("qq 渲染非 markdown 加粗列表（QQ 不支持表格）或未裁剪: %s", qq)
+	if !strings.Contains(qq, "| 请求数 | 1200 |") || strings.Contains(qq, "攻击") {
+		t.Fatalf("qq 渲染非 markdown 表格（QQ 实测支持表格）或未裁剪: %s", qq)
 	}
 
 	wx := renderDailyForChannel(msg, "wx_clawbot", "")

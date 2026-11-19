@@ -24,6 +24,9 @@ export interface NotificationChannel {
   last_test_at: string
   last_test_ok: boolean
   style_config?: string
+  /** qq/wx 实时入站连接态（常驻会话 per-bot）；webhook/email=none。 */
+  link_connected?: boolean
+  link_state?: 'online' | 'offline' | 'none'
 }
 
 export type NotificationChannelsResponse = APIResponse<{ channels: NotificationChannel[] }>

@@ -181,6 +181,8 @@ export default {
         testStateOk: 'Test passed',
         testStateFail: 'Test failed',
         neverTested: 'Not tested',
+        linkOnline: 'Online',
+        linkOffline: 'Offline',
         typeWebhook: 'Webhook',
         typeEmail: 'Email',
         typeQQ: 'QQ bot',

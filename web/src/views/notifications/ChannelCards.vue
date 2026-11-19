@@ -56,6 +56,9 @@
               </div>
             </div>
             <div class="ch-foot">
+              <span v-if="ch.type === 'qq' || ch.type === 'wx_clawbot'" class="ch-link" :class="ch.link_connected ? 'is-online' : 'is-offline'">
+                <i class="ch-link-dot" />{{ ch.link_connected ? t('app.notification.channels.linkOnline') : t('app.notification.channels.linkOffline') }}
+              </span>
               <span class="ch-test" :class="testStateClass(ch)">
                 <i class="ch-test-dot" :class="!ch.last_test_at ? 'is-none' : ch.last_test_ok ? 'is-ok' : 'is-fail'" />
                 {{ testStateText(ch) }}
@@ -79,7 +82,7 @@
         <template #title>
           <div class="polling-error-title">
             <span>{{ t('app.notification.channels.loadFailed') }}</span>
-            <el-button link type="danger" @click="fetchChannels">{{ t('common.app.views.audit.retryNow') }}</el-button>
+            <el-button link type="danger" @click="fetchChannels()">{{ t('common.app.views.audit.retryNow') }}</el-button>
           </div>
         </template>
       </el-alert>
@@ -283,9 +286,9 @@ const testStateText = (ch: NotificationChannel): string => {
 const testStateClass = (ch: NotificationChannel): string =>
   !ch.last_test_at ? 'test-none' : ch.last_test_ok ? 'test-ok' : 'test-fail'
 
-const fetchChannels = async (): Promise<void> => {
+const fetchChannels = async (silent = false): Promise<void> => {
   const seq = ++fetchSeq
-  loading.value = true
+  if (!silent) loading.value = true
   try {
     const url = filterUserId.value ? `/notification/channels?user_id=${filterUserId.value}` : '/notification/channels'
     const res = await request.get<NotificationChannelsResponse>(url)
@@ -525,13 +528,17 @@ const deleteChannel = async (ch: NotificationChannel): Promise<void> => {
   }
 }
 
+let linkPoll: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   void fetchChannels()
+  // 实时连接态：常驻入站会话在线态周期刷新（静默，不闪 loading）。
+  linkPoll = setInterval(() => { void fetchChannels(true) }, 15000)
   if (isAdminUser.value) {
     request.get<{ data?: { users: { id: number; username: string }[] } }>('/notification/admin/overview', { silent: true })
       .then(r => { userList.value = r.data?.users ?? [] }).catch(() => {})
   }
 })
+onUnmounted(() => { if (linkPoll) clearInterval(linkPoll) })
 
 defineExpose({ fetchChannels })
 </script>
@@ -586,6 +593,13 @@ defineExpose({ fetchChannels })
 .ch-test-dot.is-ok { background: #059669; }
 .ch-test-dot.is-fail { background: #f56c6c; }
 .ch-test-dot.is-none { background: #9ca3af; }
+.ch-link { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+.ch-link-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.ch-link.is-online { color: #059669; }
+.ch-link.is-online .ch-link-dot { background: #059669; }
+.ch-link.is-offline { color: #f56c6c; }
+.ch-link.is-offline .ch-link-dot { background: #f56c6c; }
+.ch-test { margin-right: auto; }
 .test-ok { color: #059669; }
 .test-fail { color: #f56c6c; }
 .test-none { color: #9ca3af; }
@@ -599,8 +613,9 @@ defineExpose({ fetchChannels })
 .bind-qr-img { width: 200px; height: 200px; }
 .bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
-/* 自定义请求头：多行内容时 label 与整块垂直居中 */
-.headers-form-item { align-items: center; }
+/* 自定义请求头：label 与右侧第一行输入框（无行时与添加按钮）垂直对齐 */
+.headers-form-item { align-items: flex-start; }
+.headers-form-item :deep(.el-form-item__label) { line-height: 24px; }
 .header-rows { width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .header-row { display: grid; grid-template-columns: 180px 1fr auto; gap: 8px; align-items: center; }
 .header-name { width: 100%; }

@@ -188,6 +188,8 @@ export default {
         testStateOk: '测试通过',
         testStateFail: '测试失败',
         neverTested: '未测试',
+        linkOnline: '连接在线',
+        linkOffline: '连接离线',
         typeWebhook: 'Webhook',
         typeEmail: '邮件',
         typeQQ: 'QQ 机器人',
