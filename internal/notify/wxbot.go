@@ -122,6 +122,13 @@ func wxEnumerateBots() []wxBotCred {
 	if cred, ok := loadWxBotCred(); ok {
 		add(cred)
 	}
+	// 二登待钉住凭据（wxConfirmedPin）：提前建连破「连接测试↔保存门控」死锁。
+	wxCtxMu.Lock()
+	pin := wxConfirmedPin
+	wxCtxMu.Unlock()
+	if pin != nil {
+		add(*pin)
+	}
 	if db.DB != nil {
 		rows, err := db.DB.Query(`SELECT target FROM notification_channels WHERE type='wx_clawbot' ORDER BY id`)
 		if err == nil {
@@ -141,25 +148,6 @@ func wxEnumerateBots() []wxBotCred {
 					add(wxBotCred{Token: cfg.Token, BaseURL: cfg.BaseURL, AccountID: cfg.AccountID, UserID: cfg.UserID})
 				}
 			}
-		}
-	}
-	// 二登待钉住凭据（wxConfirmedPin，最新扫码）对同 bot 覆盖陈旧凭据（重扫同
-	// bot 防旧 token 掩蔽）；新 bot 追加。保持全局在前的首 bot 序。
-	wxCtxMu.Lock()
-	pin := wxConfirmedPin
-	wxCtxMu.Unlock()
-	if pin != nil && pin.Token != "" {
-		key := wxCredKey(*pin)
-		replaced := false
-		for i := range bots {
-			if wxCredKey(bots[i]) == key {
-				bots[i] = *pin
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			bots = append(bots, *pin)
 		}
 	}
 	return bots

@@ -142,6 +142,10 @@ func AbortBindSession(typ, scannerID, botKey string) {
 	}
 }
 
+// BrandName 系统品牌名（branding.json app_name，缺省 Lazy Balancer），供消息
+// 模板/日报/邮件署名。
+func BrandName() string { return brandAppName() }
+
 // BindSessionConnected 绑定会话对应 bot 的入站连接态（连接测试判据：API 正确、
 // 系统能连上机器人）。
 func BindSessionConnected(typ, botKey string) bool {

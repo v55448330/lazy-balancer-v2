@@ -48,9 +48,10 @@ type NotificationRule struct {
 
 // RuleChannel 规则关联的通道摘要。
 type RuleChannel struct {
-	ID   int64  `json:"id"`
-	Type string `json:"type"`
-	Name string `json:"name"`
+	ID         int64  `json:"id"`
+	Type       string `json:"type"`
+	Name       string `json:"name"`
+	LastTestOK bool   `json:"last_test_ok"`
 }
 
 // GetNotificationRules GET /notification/rules——聚合当前用户的全部通知规则。
@@ -66,7 +67,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	}
 
 	// 1. 读取用户全部通道
-	chRows, err := db.DB.Query(`SELECT id, type, name FROM notification_channels
+	chRows, err := db.DB.Query(`SELECT id, type, name, COALESCE(last_test_ok,0) FROM notification_channels
 		WHERE user_id=? AND enabled=1 ORDER BY id`, uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
@@ -75,7 +76,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	var allChannels []RuleChannel
 	for chRows.Next() {
 		var ch RuleChannel
-		if chRows.Scan(&ch.ID, &ch.Type, &ch.Name) == nil {
+		if chRows.Scan(&ch.ID, &ch.Type, &ch.Name, &ch.LastTestOK) == nil {
 			allChannels = append(allChannels, ch)
 		}
 	}

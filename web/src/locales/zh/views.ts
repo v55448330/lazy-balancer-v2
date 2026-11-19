@@ -355,6 +355,8 @@ export default {
     'expiresAt': '过期时间',
     'expiresPastError': '过期时间不能早于当前时间',
     'expiresPlaceholder': '留空表示永不过期',
+    'expiryActive': '有效',
+    'expirySoon': '即将过期',
     'expirySourceSection': '有效期与来源限制',
     'featureConfig': '功能配置',
     'featureSaveConfirmMsg': '将更新 API 密钥「{name}」的 MCP 开关、只读权限和 IP 白名单，新的访问范围立即生效。确认保存？',

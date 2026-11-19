@@ -355,6 +355,8 @@ export default {
     'expiresAt': 'Expires at',
     'expiresPastError': 'Expiry can\'t be earlier than now',
     'expiresPlaceholder': 'Leave empty for no expiry',
+    'expiryActive': 'Active',
+    'expirySoon': 'Expiring soon',
     'expirySourceSection': 'Expiry & source restrictions',
     'featureConfig': 'Feature settings',
     'featureSaveConfirmMsg': 'About to update the MCP switch, read-only permission and IP whitelist of API key "{name}". The new access scope takes effect immediately. Save?',

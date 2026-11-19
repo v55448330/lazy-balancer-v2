@@ -116,3 +116,14 @@
 - **模板弹框统一**：日报每通道模板编辑复用事件规则同一弹框（全类型可编辑）；日报基本配置=投递时间/包含项目/目标通道（三态），label 与控件垂直对齐。
 - **命名统一**：bot 绑定输入统一「接收者」，placeholder 区分 openid/wxid；webhook 地址 label「URL」。
 - **设计守卫豁免**：shadow="never"/v-model.number 仅限登记 legacy（PathRulesEditor 内嵌面板/百分号输入），条目失效即红；新增违规无法交付。
+
+## 15. 增补裁定（2026-11-20 第五轮，状态标签与日报署名）
+- **状态指示统一标签**：表格内过期/永不过期/即将过期/有效/从未使用等状态 MUST 用
+  `el-tag size="small" effect="plain"`，颜色区分语义（success=有效/永不过期、warning=即将过期/只读、
+  danger=已过期/失败、info=从未使用/关闭）。时间文本用 `.cell-time{color:#6b7280;font-size:13px}`，
+  与标签同格用 `.cell-tags{display:inline-flex;gap:6px;flex-wrap:wrap}`。
+- **过期标签归属**：已过期/即将过期标签放「过期时间」列（日期+标签），状态列仅保留启用开关。
+- **日报统计补全**：每日摘要含 请求/放行/观察/独立IP/拦截/攻击TOP规则/TOP攻击源/自动封禁/证书/集群
+  十项（DailyItemIDs 单源），分节 全局概览/安全风险/证书/集群；缺失值显「无」不省略行。
+- **消息署名**：机器人文本/邮件/日报统一附加品牌+时间署名（`{{brand}}`/`{{time}}` 变量，
+  BrandName() 单源）；QQ 用 markdown 表格、微信纯文本、邮件内联样式 HTML、webhook JSON。

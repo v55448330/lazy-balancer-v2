@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"mime"
 	"net"
 	"net/smtp"
@@ -53,7 +54,27 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 		body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
 	}
 	tlsEnabled, insecure := smtpTLSOptions()
-	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, cfg.BodyFormat == "html", tlsEnabled, insecure)
+	// 日报渲染底座产出 HTML，须以 text/html 发送（否则客户端原样显示 HTML）；
+	// 事件邮件 body_format=html 时包裹品牌+时间版式。
+	htmlBody := cfg.BodyFormat == "html" || msg.EventType == EvtDailyReport
+	if htmlBody && msg.EventType != EvtDailyReport {
+		body = wrapEmailHTML(subject, body, ts)
+	}
+	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, htmlBody, tlsEnabled, insecure)
+}
+
+// wrapEmailHTML 事件邮件 HTML 版式（品牌+时间+正文；正文含 HTML 标签时不转义）。
+func wrapEmailHTML(subject, body string, ts time.Time) string {
+	stamp := ts.Format("2006-01-02 15:04")
+	inner := html.EscapeString(body)
+	if strings.Contains(body, "<") {
+		inner = body
+	}
+	return `<div style="font-family:-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;max-width:640px">` +
+		fmt.Sprintf(`<h3 style="margin:0 0 4px">%s</h3>`, html.EscapeString(subject)) +
+		fmt.Sprintf(`<p style="margin:0 0 12px;color:#6b7280;font-size:12px">%s · %s</p>`, html.EscapeString(BrandName()), stamp) +
+		`<div style="font-size:14px;white-space:pre-wrap">` + inner + `</div>` +
+		fmt.Sprintf(`<p style="margin:16px 0 0;color:#9ca3af;font-size:12px">—— %s · %s</p></div>`, html.EscapeString(BrandName()), stamp)
 }
 
 func (s emailSender) Test(ctx context.Context, targetJSON string) error {

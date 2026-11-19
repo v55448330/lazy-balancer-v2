@@ -39,7 +39,7 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 	}
 
 	email := renderDailyForChannel(msg, "email", "")
-	if !strings.Contains(email, "<h3>") || !strings.Contains(email, "1200") || strings.Contains(email, "攻击") {
+	if !strings.Contains(email, "<h3") || !strings.Contains(email, "1200") || strings.Contains(email, "攻击") {
 		t.Fatalf("email 渲染非 HTML 或未裁剪: %s", email)
 	}
 
@@ -71,7 +71,7 @@ func TestRenderDailyForChannel_styleOverride(t *testing.T) {
 	msg.Body = strings.Replace(dailyPayloadBody(nil),
 		`"values":`, `"formats":{"qq":"html"},"values":`, 1)
 	got = renderDailyForChannel(msg, "qq", "text")
-	if !strings.Contains(got, "<h3>") {
+	if !strings.Contains(got, "<h3") {
 		t.Fatalf("日报页配置未优先于通道样式: %q", got)
 	}
 }

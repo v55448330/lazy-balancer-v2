@@ -58,14 +58,18 @@ func DefaultFormatForChannel(channelType string) string {
 
 // DailyItemIDs 日报可定制项目（勾选清单契约）。
 var DailyItemIDs = []string{
-	"requests", "blocked", "attack_top", "autoban", "cert_status", "cluster_status",
+	"requests", "allowed", "logged", "distinct_ips", "blocked", "attack_top", "top_ip", "autoban", "cert_status", "cluster_status",
 }
 
 // DailyItemLabels 项目中文标签（前端渲染+正文模板共用）。
 var DailyItemLabels = map[string]string{
 	"requests":       "请求数",
+	"allowed":        "放行次数",
+	"logged":         "观察次数",
+	"distinct_ips":   "独立 IP 数",
 	"blocked":        "拦截次数",
 	"attack_top":     "攻击 TOP 规则",
+	"top_ip":         "TOP 攻击源",
 	"autoban":        "自动封禁次数",
 	"cert_status":    "证书状态",
 	"cluster_status": "集群状态",
@@ -181,8 +185,12 @@ func deliverDaily(userID int64, cfg DailyConfig, data DailyData, now time.Time, 
 func dailyValues(data DailyData) map[string]string {
 	return map[string]string{
 		"requests":       fmt.Sprintf("%d", data.Requests),
+		"allowed":        fmt.Sprintf("%d", data.Allowed),
+		"logged":         fmt.Sprintf("%d", data.Logged),
+		"distinct_ips":   fmt.Sprintf("%d", data.DistinctIPs),
 		"blocked":        fmt.Sprintf("%d", data.Blocked),
 		"attack_top":     data.TopRule,
+		"top_ip":         data.TopIP,
 		"autoban":        fmt.Sprintf("%d", data.Autobans),
 		"cert_status":    fmt.Sprintf("活跃 %d / 失败 %d", data.CertsActive, data.CertsFailed),
 		"cluster_status": data.ClusterNote,
@@ -213,8 +221,12 @@ func AllDailySendTimes() ([]string, error) {
 type DailyData struct {
 	Date        string
 	Requests    int64
+	Allowed     int64
+	Logged      int64
+	DistinctIPs int64
 	Blocked     int64
 	TopRule     string
+	TopIP       string
 	Autobans    int64
 	CertsActive int64
 	CertsFailed int64
@@ -230,8 +242,14 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	f0, f1 := y0.Format("2006-01-02 15:04:05"), y1.Format("2006-01-02 15:04:05")
 	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<?`, f0, f1).Scan(&d.Requests)
 	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked'`, f0, f1).Scan(&d.Blocked)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='allowed'`, f0, f1).Scan(&d.Allowed)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='logged'`, f0, f1).Scan(&d.Logged)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(DISTINCT client_ip) FROM security_events WHERE event_time>=? AND event_time<?`, f0, f1).Scan(&d.DistinctIPs)
 	if e := db.MetricsDB.QueryRowContext(ctx, `SELECT rule_name FROM security_events WHERE event_time>=? AND event_time<? GROUP BY rule_name ORDER BY COUNT(*) DESC LIMIT 1`, f0, f1).Scan(&d.TopRule); e != nil {
 		d.TopRule = "无"
+	}
+	if e := db.MetricsDB.QueryRowContext(ctx, `SELECT client_ip FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY client_ip ORDER BY COUNT(*) DESC LIMIT 1`, f0, f1).Scan(&d.TopIP); e != nil {
+		d.TopIP = "无"
 	}
 	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM autoban_recidivism WHERE last_ban_at>=?`, f0).Scan(&d.Autobans)
 	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status IN ('issued','wait_reschedule','downloading')`).Scan(&d.CertsActive)
@@ -300,8 +318,8 @@ var dailySections = []struct {
 	title string
 	items []string
 }{
-	{"🌐", "全局概览", []string{"requests"}},
-	{"🛡", "安全风险", []string{"blocked", "attack_top", "autoban"}},
+	{"🌐", "全局概览", []string{"requests", "allowed", "logged", "distinct_ips"}},
+	{"🛡", "安全风险", []string{"blocked", "attack_top", "top_ip", "autoban"}},
 	{"🔒", "证书状态", []string{"cert_status"}},
 	{"🖥", "集群状态", []string{"cluster_status"}},
 }
@@ -319,9 +337,11 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		return id
 	}
 	val := func(id string) string { return values[id] }
+	brand := BrandName()
+	now := time.Now().Format("2006-01-02 15:04")
 	switch format {
 	case "json":
-		obj := map[string]any{"date": date}
+		obj := map[string]any{"date": date, "brand": brand, "generated_at": now}
 		for _, it := range DailyItemIDs {
 			if enabled[it] {
 				obj[it] = val(it)
@@ -331,22 +351,25 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		return string(raw)
 	case "html":
 		var b strings.Builder
-		fmt.Fprintf(&b, "<h3>📊 Lazy Balancer 每日报告（%s）</h3>", html.EscapeString(date))
+		b.WriteString(`<div style="font-family:-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;max-width:640px">`)
+		fmt.Fprintf(&b, `<h3 style="margin:0 0 4px">📊 %s 每日报告</h3><p style="margin:0 0 12px;color:#6b7280;font-size:12px">%s · 生成于 %s</p>`,
+			html.EscapeString(brand), html.EscapeString(date), now)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, "<h4>%s %s</h4><table border=\"1\" cellspacing=\"0\" cellpadding=\"6\"><tr><th>指标</th><th>数值</th></tr>", sec.emoji, html.EscapeString(sec.title))
+			fmt.Fprintf(&b, `<h4 style="margin:12px 0 6px">%s %s</h4><table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;border-color:#e5e7eb;font-size:13px"><tr style="background:#f9fafb"><th align="left">指标</th><th align="left">数值</th></tr>`, sec.emoji, html.EscapeString(sec.title))
 			for _, r := range rows {
 				fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", html.EscapeString(r[0]), html.EscapeString(r[1]))
 			}
 			b.WriteString("</table>")
 		}
+		fmt.Fprintf(&b, `<p style="margin:16px 0 0;color:#9ca3af;font-size:12px">—— %s · %s</p></div>`, html.EscapeString(brand), now)
 		return b.String()
 	case "markdown":
 		var b strings.Builder
-		fmt.Fprintf(&b, "## 📊 Lazy Balancer 每日报告（%s）\n\n", date)
+		fmt.Fprintf(&b, "## 📊 %s 每日报告（%s）\n\n", brand, date)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
@@ -360,10 +383,11 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			}
 			b.WriteString("\n")
 		}
+		fmt.Fprintf(&b, "> %s · %s\n", brand, now)
 		return b.String()
 	default: // text（白名单兜底；纯文本分节行）
 		var b strings.Builder
-		fmt.Fprintf(&b, "📊 Lazy Balancer 每日报告（%s）\n", date)
+		fmt.Fprintf(&b, "📊 %s 每日报告（%s）\n", brand, date)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
@@ -374,6 +398,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 				fmt.Fprintf(&b, "%s：%s\n", r[0], r[1])
 			}
 		}
+		fmt.Fprintf(&b, "\n—— %s · %s\n", brand, now)
 		return b.String()
 	}
 }

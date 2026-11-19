@@ -76,8 +76,9 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 		"{{body}}", msg.Body,
 		"{{level}}", msg.Level,
 		"{{event}}", event,
-		"{{time}}", ts.Format(time.RFC3339),
+		"{{time}}", ts.Format("2006-01-02 15:04"),
 		"{{node}}", msg.Node,
+		"{{brand}}", BrandName(),
 	)
 	return r.Replace(tpl)
 }
@@ -104,6 +105,7 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 		"{{event}}", enc(event),
 		"{{time}}", enc(ts.Format(time.RFC3339)),
 		"{{node}}", enc(msg.Node),
+		"{{brand}}", enc(BrandName()),
 	)
 	return r.Replace(tpl)
 }

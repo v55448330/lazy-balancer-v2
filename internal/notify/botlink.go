@@ -9,6 +9,7 @@ package notify
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -157,10 +158,24 @@ func quoteJSON(s string) string {
 
 // formatBotText 长连通道（QQ/微信）文本形态：标题+换行+正文（正文空则仅标题）。
 func formatBotText(msg Message) string {
-	if strings.TrimSpace(msg.Body) == "" {
-		return msg.Title
+	var b strings.Builder
+	b.WriteString(msg.Title)
+	if strings.TrimSpace(msg.Body) != "" {
+		b.WriteString("\n" + msg.Body)
 	}
-	return msg.Title + "\n" + msg.Body
+	// 日报渲染底座已含品牌+时间署名，避免重复；事件消息附加署名。
+	if msg.EventType != EvtDailyReport {
+		b.WriteString("\n\n" + brandFooter(msg.Time))
+	}
+	return b.String()
+}
+
+// brandFooter 消息署名（品牌+时间），统一附加于机器人文本/邮件。
+func brandFooter(ts time.Time) string {
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	return fmt.Sprintf("—— %s · %s", BrandName(), ts.Format("2006-01-02 15:04"))
 }
 
 // formatBotTextWithTemplate 通道内容模板渲染（style_config.content_template；
@@ -179,6 +194,7 @@ func formatBotTextWithTemplate(tpl string, msg Message, ts time.Time) string {
 		"{{level}}", msg.Level,
 		"{{event}}", event,
 		"{{time}}", ts.Format("2006-01-02 15:04"),
+		"{{brand}}", BrandName(),
 	}
 	// 日报变量（{{date}}/{{requests}}/…）：值来自日报载荷（deliverOne 注入
 	// msg.Fields），用户日报模板可插入包含项目变量；非日报消息 Fields 无这些键不替换。

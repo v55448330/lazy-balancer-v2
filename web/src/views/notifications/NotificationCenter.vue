@@ -715,7 +715,7 @@ const defaultTplFor = (typ: string): string => {
   if (typ === 'email') return [
     '<div style="max-width:560px;margin:0 auto;font-family:\'Helvetica Neue\',Arial,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;">',
     '  <div style="background:#1e293b;padding:18px 24px;">',
-    '    <span style="color:#f8fafc;font-size:16px;font-weight:600;">Lazy Balancer</span>',
+    '    <span style="color:#f8fafc;font-size:16px;font-weight:600;">{{brand}}</span>',
     '    <span style="float:right;background:#ef4444;color:#fff;font-size:11px;padding:2px 10px;border-radius:10px;">{{level}}</span>',
     '  </div>',
     '  <div style="border:1px solid #e2e8f0;border-top:none;padding:24px;">',
@@ -727,11 +727,11 @@ const defaultTplFor = (typ: string): string => {
     '      <tr><td style="padding:4px 0;">时间</td><td style="text-align:right;">{{time}}</td></tr>',
     '    </table>',
     '  </div>',
-    '  <p style="text-align:center;font-size:11px;color:#94a3b8;margin:16px 0;">此邮件由 Lazy Balancer 通知中心自动发送</p>',
+    '  <p style="text-align:center;font-size:11px;color:#94a3b8;margin:16px 0;">此邮件由 {{brand}} 通知中心自动发送 · {{time}}</p>',
     '</div>',
   ].join('\n')
-  if (typ === 'qq') return '# {{title}}\n\n> {{body}}\n\n**级别**：{{level}}　**事件**：{{event}}\n**节点**：{{node}}　**时间**：{{time}}'
-  return '【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}} | 事件：{{event}}\n节点：{{node}} | 时间：{{time}}'
+  if (typ === 'qq') return '# {{title}}\n\n> {{body}}\n\n**级别**：{{level}}　**事件**：{{event}}\n**节点**：{{node}}　**时间**：{{time}}\n\n> {{brand}}'
+  return '【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}} | 事件：{{event}}\n节点：{{node}} | 时间：{{time}}\n—— {{brand}}'
 }
 const resetTplToDefault = (): void => {
   const ch = tplActiveChannel.value
@@ -739,7 +739,7 @@ const resetTplToDefault = (): void => {
   tplText.value = tplMode.value === 'daily' ? defaultChannelTplFor(ch.type) : defaultTplFor(ch.type)
 }
 // 日报预览样例值（daily 模式机器人模板预览；键集=后端 dailyValues）
-const dailySampleValues = { date: '2026-11-18', requests: '128340', blocked: '1203', attack_top: 'SQLi × 321', autoban: '17', cert_status: 'OK', cluster_status: '3/3' }
+const dailySampleValues = { date: '2026-11-18', requests: '128340', allowed: '120111', logged: '7026', distinct_ips: '3204', blocked: '1203', attack_top: 'SQLi × 321', top_ip: '45.33.32.9', autoban: '17', cert_status: 'OK', cluster_status: '3/3' }
 const previewText = computed(() => {
   let text = tplText.value
     .replace(/\{\{title\}\}/g, t('app.notification.rules.previewSampleTitle'))
@@ -748,6 +748,7 @@ const previewText = computed(() => {
     .replace(/\{\{event\}\}/g, 'cert.failed')
     .replace(/\{\{node\}\}/g, 'node-a')
     .replace(/\{\{time\}\}/g, '2026-11-18 09:00')
+    .replace(/\{\{brand\}\}/g, 'Lazy Balancer')
   if (tplMode.value === 'daily' && isBotChannel(tplActiveChannel.value?.type || '')) {
     for (const [k, v] of Object.entries(dailySampleValues)) text = text.split(`{{${k}}}`).join(v)
   }
@@ -868,13 +869,16 @@ const dailyPh = ['{{date}}', '{{requests}}', '{{blocked}}', '{{attack_top}}', '{
 // QQ=Markdown 分节表格，微信=纯文本分节行（iLink 协议无 markdown 能力）
 const defaultDailyTplFor = (typ: string): string => {
   if (typ === 'qq') return [
-    '## 📊 Lazy Balancer 日报（{{date}}）',
+    '## 📊 {{brand}} 日报（{{date}}）',
     '',
     '### 🌐 全局概览',
     '',
     '| 指标 | 数值 |',
     '| --- | --- |',
     '| 请求数 | {{requests}} |',
+    '| 放行次数 | {{allowed}} |',
+    '| 观察次数 | {{logged}} |',
+    '| 独立 IP 数 | {{distinct_ips}} |',
     '',
     '### 🛡 安全风险',
     '',
@@ -882,6 +886,7 @@ const defaultDailyTplFor = (typ: string): string => {
     '| --- | --- |',
     '| 拦截次数 | {{blocked}} |',
     '| 攻击 TOP 规则 | {{attack_top}} |',
+    '| TOP 攻击源 | {{top_ip}} |',
     '| 自动封禁次数 | {{autoban}} |',
     '',
     '### 🔒 证书状态',
@@ -895,16 +900,22 @@ const defaultDailyTplFor = (typ: string): string => {
     '| 指标 | 数值 |',
     '| --- | --- |',
     '| 集群状态 | {{cluster_status}} |',
+    '',
+    '> {{brand}} · {{time}}',
   ].join('\n')
   return [
-    '📊 Lazy Balancer 日报（{{date}}）',
+    '📊 {{brand}} 日报（{{date}}）',
     '',
     '🌐 全局概览',
     '请求数：{{requests}}',
+    '放行次数：{{allowed}}',
+    '观察次数：{{logged}}',
+    '独立 IP 数：{{distinct_ips}}',
     '',
     '🛡 安全风险',
     '拦截次数：{{blocked}}',
     '攻击 TOP 规则：{{attack_top}}',
+    'TOP 攻击源：{{top_ip}}',
     '自动封禁次数：{{autoban}}',
     '',
     '🔒 证书状态',
@@ -912,6 +923,8 @@ const defaultDailyTplFor = (typ: string): string => {
     '',
     '🖥 集群状态',
     '集群状态：{{cluster_status}}',
+    '',
+    '—— {{brand}} · {{time}}',
   ].join('\n')
 }
 // 通道模式预置：机器人=精美日报模板；webhook=JSON 载荷模板（占位符不裹引号，

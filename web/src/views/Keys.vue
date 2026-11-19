@@ -146,7 +146,7 @@
           <el-button link type="primary" class="key-name-cell" @click="openKeyDetail(asKey(scope.row))">{{ scope.row.name }}</el-button>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.status')" width="135">
+      <el-table-column :label="t('common.app.views.keys.status')" width="90">
         <template #default="scope">
           <div class="status-cell">
             <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
@@ -161,7 +161,7 @@
                 />
               </div>
             </el-tooltip>
-            <el-tag v-if="keyExpired(asKey(scope.row))" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
+            <!-- 过期状态标签移至「过期时间」列，状态列仅保留启用开关 -->
           </div>
         </template>
       </el-table-column>
@@ -182,11 +182,19 @@
       <el-table-column :label="t('common.app.views.keys.updatedAt')" width="170">
         <template #default="scope">{{ formatDate(scope.row.updated_at) || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="170">
-        <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
+      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="200">
+        <template #default="scope">
+          <div class="cell-tags">
+            <span v-if="scope.row.expires_at" class="cell-time">{{ formatDate(scope.row.expires_at) }}</span>
+            <el-tag :type="expiryTag(asKey(scope.row)).type" size="small" effect="plain">{{ expiryTag(asKey(scope.row)).text }}</el-tag>
+          </div>
+        </template>
       </el-table-column>
       <el-table-column :label="t('common.app.views.keys.lastUsed')" width="170">
-        <template #default="scope">{{ formatDate(scope.row.last_used) || t('common.app.views.keys.neverUsed') }}</template>
+        <template #default="scope">
+          <el-tag v-if="!scope.row.last_used" type="info" size="small" effect="plain">{{ t('common.app.views.keys.neverUsed') }}</el-tag>
+          <span v-else class="cell-time">{{ formatDate(scope.row.last_used) }}</span>
+        </template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colAction')" width="165" fixed="right">
         <template #default="scope">
@@ -760,6 +768,17 @@ const keyExpired = (key: APIKey): boolean => {
   return Number.isFinite(expiresAt) && expiresAt < Date.now()
 }
 
+// 过期状态标签（过期时间列统一彩色标签）：无过期=success 永不过期；已过期=danger；
+// 7 天内到期=warning 即将过期；其余=success 有效。与 keyExpired 同口径。
+const expiryTag = (key: APIKey): { type: 'success' | 'warning' | 'info' | 'danger'; text: string } => {
+  if (!key.expires_at) return { type: 'success', text: t('common.app.views.keys.neverExpires') }
+  const expiresAt = new Date(key.expires_at).getTime()
+  if (!Number.isFinite(expiresAt)) return { type: 'info', text: t('common.app.views.keys.neverExpires') }
+  if (expiresAt < Date.now()) return { type: 'danger', text: t('common.app.views.keys.expiredTag') }
+  if (expiresAt - Date.now() < 7 * 24 * 3600 * 1000) return { type: 'warning', text: t('common.app.views.keys.expirySoon') }
+  return { type: 'success', text: t('common.app.views.keys.expiryActive') }
+}
+
 // 功能标签单 tag 每协议（开关+读写合并呈现，省列宽）：表格与详情弹框共用同一口径。
 // 颜色沿用合并前语义——只读=warning、读写=success、协议关闭=info。
 const apiFeatureTag = (key: APIKey): { type: 'success' | 'warning' | 'info'; text: string } => key.api_enabled
@@ -1007,6 +1026,8 @@ onMounted(() => {
 .key-name-cell { font-weight: 600; padding: 0; height: auto; max-width: 100%; }
 .key-name-cell :deep(> span) { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .status-cell { display: inline-flex; align-items: center; gap: 6px; }
+.cell-tags { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cell-time { color: #6b7280; font-size: 13px; }
 .row-actions { display: inline-flex; gap: 8px; white-space: nowrap; flex-wrap: nowrap; }
 .row-actions .el-button { padding: 0; }
 /* API/MCP 接入卡（双协议同构：端点/鉴权/用途三行） */
