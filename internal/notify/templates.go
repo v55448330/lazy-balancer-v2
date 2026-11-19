@@ -2,6 +2,7 @@ package notify
 
 import (
 	"fmt"
+	"strings"
 )
 
 // renderTitle/renderBody 按目录模板渲染。参数以 evt.Fields 按序填充
@@ -12,19 +13,29 @@ func renderTitle(e catalogEntry, evt Event) string {
 	if len(args) == 0 {
 		return e.TitleFormat
 	}
-	return fmt.Sprintf(e.TitleFormat, args...)
+	return fmt.Sprintf(e.TitleFormat, trimArgs(e.TitleFormat, args)...)
 }
 
 func renderBody(e catalogEntry, evt Event) string {
 	args := fieldsArgs(evt)
 	body := e.BodyFormat
 	if len(args) > 0 {
-		body = fmt.Sprintf(e.BodyFormat, args...)
+		body = fmt.Sprintf(e.BodyFormat, trimArgs(e.BodyFormat, args)...)
 	}
 	if evt.Node != "" {
 		body += "（节点 " + evt.Node + "）"
 	}
 	return body
+}
+
+// trimArgs 截断参数至模板动词数——测试样例统一供 6 参而各事件模板动词数
+// 不同，超配会产出 %!(EXTRA …) 垃圾后缀；按动词数取前 N 个参数。
+func trimArgs(format string, args []any) []any {
+	n := strings.Count(format, "%s") + strings.Count(format, "%d") + strings.Count(format, "%v")
+	if n <= 0 || n >= len(args) {
+		return args
+	}
+	return args[:n]
 }
 
 func fieldsArgs(evt Event) []any {

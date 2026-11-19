@@ -359,8 +359,8 @@ func renderDailyForChannel(msg Message, channelType, styleFormat string) string 
 		return msg.Body // 载荷解析失败回退原文（fail-visible，不静默吞）
 	}
 	format := payload.Formats[channelType]
-	if format == "" {
-		format = styleFormat // 通道卡「消息样式」里的日报格式覆盖
+	if format == "" && channelType != "qq" && channelType != "wx_clawbot" {
+		format = styleFormat // 通道卡日报格式覆盖（机器人协议固定，不接受样式覆盖）
 	}
 	if format == "" {
 		format = DefaultFormatForChannel(channelType)
@@ -428,21 +428,23 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		return string(raw)
 	case "html":
 		var b strings.Builder
-		b.WriteString(`<div style="font-family:-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;max-width:640px">`)
-		fmt.Fprintf(&b, `<h3 style="margin:0 0 4px">📊 %s 每日报告</h3><p style="margin:0 0 12px;color:#6b7280;font-size:12px">%s · 生成于 %s</p>`,
-			html.EscapeString(brand), html.EscapeString(date), now)
+		b.WriteString(`<div style="max-width:640px;margin:0 auto;font-family:'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;">`)
+		fmt.Fprintf(&b, `<div style="background:#1e293b;padding:16px 24px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:16px;font-weight:600;">📊 %s 每日报告</td><td style="text-align:right;"><span style="background:#3b82f6;color:#fff;font-size:11px;padding:2px 10px;">%s</span></td></tr></table></div>`,
+			html.EscapeString(brand), html.EscapeString(date))
+		b.WriteString(`<div style="border:1px solid #e2e8f0;border-top:none;padding:24px;">`)
+		fmt.Fprintf(&b, `<p style="margin:0 0 16px;color:#6b7280;font-size:12px;">%s · 生成于 %s</p>`, html.EscapeString(date), now)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, `<h4 style="margin:12px 0 6px">%s %s</h4><table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;border-color:#e5e7eb;font-size:13px"><tr style="background:#f9fafb"><th align="left">指标</th><th align="left">数值</th></tr>`, sec.emoji, html.EscapeString(sec.title))
+			fmt.Fprintf(&b, `<h4 style="margin:16px 0 8px;font-size:14px;color:#0f172a;">%s %s</h4><table style="width:100%%;border-collapse:collapse;font-size:13px;"><tr style="background:#f9fafb;"><th align="left" style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">指标</th><th align="left" style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">数值</th></tr>`, sec.emoji, html.EscapeString(sec.title))
 			for _, r := range rows {
-				fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", html.EscapeString(r[0]), html.EscapeString(r[1]))
+				fmt.Fprintf(&b, `<tr><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#6b7280;">%s</td><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;">%s</td></tr>`, html.EscapeString(r[0]), html.EscapeString(r[1]))
 			}
 			b.WriteString("</table>")
 		}
-		fmt.Fprintf(&b, `<p style="margin:16px 0 0;color:#9ca3af;font-size:12px">—— %s · %s</p></div>`, html.EscapeString(brand), now)
+		fmt.Fprintf(&b, `<p style="margin:16px 0 0;color:#9ca3af;font-size:12px;text-align:center;">此邮件由 %s 通知中心自动发送 · %s</p></div></div>`, html.EscapeString(brand), now)
 		return b.String()
 	case "markdown":
 		var b strings.Builder

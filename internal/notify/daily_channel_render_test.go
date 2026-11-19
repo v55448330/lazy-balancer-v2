@@ -39,7 +39,7 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 	}
 
 	email := renderDailyForChannel(msg, "email", "")
-	if !strings.Contains(email, "<h3") || !strings.Contains(email, "1200") || strings.Contains(email, "攻击") {
+	if !strings.Contains(email, "<table") || !strings.Contains(email, "1200") || strings.Contains(email, "攻击") {
 		t.Fatalf("email 渲染非 HTML 或未裁剪: %s", email)
 	}
 
@@ -59,19 +59,25 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 	}
 }
 
-// TestRenderDailyForChannel_styleOverride 通道卡 daily_format 覆盖自动映射：
-// qq 配 text 后投递走纯文本（payload.formats 缺该键=用户未在日报页覆盖）。
+// TestRenderDailyForChannel_styleOverride 机器人协议固定（qq 样式 text 不生效，
+// 缺省 markdown）；非机器人通道卡 daily_format 覆盖自动映射；日报页 per-channel
+// 配置优先于一切。
 func TestRenderDailyForChannel_styleOverride(t *testing.T) {
 	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil), Title: "每日日报"}
 	got := renderDailyForChannel(msg, "qq", "text")
-	if strings.Contains(got, "**") || strings.Contains(got, "|") || !strings.Contains(got, "请求数：1200") || !strings.Contains(got, "拦截次数：34") {
-		t.Fatalf("qq style 覆盖未生效（应纯文本分节）: %q", got)
+	if !strings.Contains(got, "| 请求数 | 1200 |") {
+		t.Fatalf("qq 协议固定应 markdown（样式 text 不覆盖）: %q", got)
 	}
-	// 日报页 per-channel 配置仍优先于通道样式：payload.formats.qq=html → html 胜出
+	// 非机器人：通道卡 daily_format=text 覆盖自动映射（webhook 缺省 json）。
+	wh := renderDailyForChannel(msg, "webhook", "text")
+	if strings.Contains(wh, "{") || !strings.Contains(wh, "请求数：1200") {
+		t.Fatalf("webhook style 覆盖未生效（应纯文本）: %q", wh)
+	}
+	// 日报页 per-channel 配置仍优先：payload.formats.qq=html → html 胜出
 	msg.Body = strings.Replace(dailyPayloadBody(nil),
 		`"values":`, `"formats":{"qq":"html"},"values":`, 1)
 	got = renderDailyForChannel(msg, "qq", "text")
-	if !strings.Contains(got, "<h3") {
+	if !strings.Contains(got, "<table") {
 		t.Fatalf("日报页配置未优先于通道样式: %q", got)
 	}
 }
