@@ -117,12 +117,20 @@ func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject
 	}
 	if user != "" {
 		if ok, mechs := c.Extension("AUTH"); ok {
-			// Office365/Outlook 仅宣告 LOGIN（PLAIN 报 504 5.7.4 Unrecognized
-			// authentication type）；按服务端宣告机制选 LOGIN/PLAIN。
+			// 按服务端宣告机制择优 LOGIN > PLAIN > CRAM-MD5：Office365/Outlook
+			// 仅宣告 LOGIN（PLAIN 报 504 5.7.4 Unrecognized authentication type）；
+			// 部分企业/老旧服务器仅宣告 CRAM-MD5（挑战响应，net/smtp 内置）。
+			// 未识别机制回退 PLAIN（保持旧行为）。
+			upper := strings.ToUpper(mechs)
 			var auth smtp.Auth
-			if strings.Contains(strings.ToUpper(mechs), "LOGIN") {
+			switch {
+			case strings.Contains(upper, "LOGIN"):
 				auth = loginAuth{user: user, pass: pass}
-			} else {
+			case strings.Contains(upper, "PLAIN"):
+				auth = smtp.PlainAuth("", user, pass, host)
+			case strings.Contains(upper, "CRAM-MD5"):
+				auth = smtp.CRAMMD5Auth(user, pass)
+			default:
 				auth = smtp.PlainAuth("", user, pass, host)
 			}
 			if err := c.Auth(auth); err != nil {
