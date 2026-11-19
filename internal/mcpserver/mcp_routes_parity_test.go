@@ -183,6 +183,8 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/notification/daily/trigger":         "手动触发全员日报：管理员即时投递动作（与 Scheduled 任务体同源，Web 控制台低频操作）",
 	"POST /api/v1/notification/qq/bind-code":          "QQ 扫码绑定产码：手机 QQ 扫码授权闭环的浏览器侧行为（Agent 无扫码场景）",
 	"GET /api/v1/notification/qq/bind-code":           "QQ 扫码绑定轮询：绑定完成时凭据落库+openid 通道绑定（浏览器侧轮询）",
+	"POST /api/v1/notification/bind-session":          "绑定会话注册：弹框扫码确认后注册（浏览器侧绑定流程，Agent 无扫码场景）",
+	"GET /api/v1/notification/bind-session":           "绑定会话轮询：phase/连接态（浏览器侧轮询）",
 	"POST /api/v1/notification/wx/qr/start":           "微信 iLink 扫码登录产码：手机微信扫码确认闭环（Agent 无扫码场景）",
 	"GET /api/v1/notification/wx/qr/status":           "微信扫码登录状态轮询：confirmed 即凭据落库启用收发（浏览器侧轮询）",
 	"GET /api/v1/notification/delivery-trend":         "投递趋势：per-user 7天统计（Agent 无消费场景）",

@@ -82,6 +82,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/notification/rules/:id":         AuditPolicyExplicit,
 	"POST /api/v1/notification/rules/:id/test":    AuditPolicyExplicit,
 	"POST /api/v1/notification/channels/:id/test": AuditPolicyExplicit,
+	"POST /api/v1/notification/bind-session":      AuditPolicyExplicit,
 	// SMTP 连通性测试（诊断动作，中间件通用留痕）。
 	"POST /api/v1/notification/settings/smtp-test": AuditPolicyGeneric,
 	"PUT /api/v1/notification/channels/:id":        AuditPolicyExplicit,

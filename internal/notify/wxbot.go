@@ -851,6 +851,16 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 			text.WriteString(it.TextItem.Text)
 		}
 	}
+	// 弹框绑定会话：「绑定测试」匹配活跃会话→confirmed+品牌确认回复（不自动建
+	// 通道，建通道交弹框保存）。无活跃会话则落回旧「绑定 <验证码>」指令。
+	if IsBindTestMessage(text.String()) {
+		if ConfirmBindSessionByInbound("wx_clawbot", m.FromUserID, cred.AccountID, m.FromUserID, m.ContextToken) {
+			if err := sendWxMessage(ctx, cred, m.FromUserID, BindConfirmReply(), m.ContextToken); err != nil {
+				taskLogWarn(ctx, "bind", "微信绑定确认回复发送失败（bot=%s）: %v", wxCredKey(cred), err)
+			}
+			return
+		}
+	}
 	code := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text.String()), "绑定"))
 	// 入站长轮询属会话所属 bot——通道 target 钉住该 bot 凭据（多机器人出站鉴权源）。
 	target, _ := json.Marshal(map[string]any{

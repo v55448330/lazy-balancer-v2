@@ -286,6 +286,16 @@ func handleQQC2CMessage(ctx context.Context, cred qqBotCred, raw json.RawMessage
 		return
 	}
 	appid, secret := cred.AppID, cred.Secret
+	// 弹框绑定会话：「绑定测试」匹配活跃会话→confirmed+品牌确认回复（被动消息
+	// 带 msg_id 免额度）。无活跃会话落回旧「绑定 <验证码>」指令。
+	if IsBindTestMessage(msg.Content) {
+		if ConfirmBindSessionByInbound("qq", msg.Author.UserOpenID, appid, msg.Author.UserOpenID, "") {
+			if err := qqSendText(ctx, msg.Author.UserOpenID, BindConfirmReply(), msg.ID, appid, secret); err != nil {
+				taskLogWarn(ctx, "bind", "QQ 绑定确认回复发送失败（bot=%s）: %v", appid, err)
+			}
+			return
+		}
+	}
 	target := map[string]any{"openid": msg.Author.UserOpenID}
 	if appid != "" && secret != "" {
 		target["appid"], target["secret"] = appid, secret

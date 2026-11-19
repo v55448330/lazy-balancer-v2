@@ -121,19 +121,19 @@
                  保存不依赖入站捕获；扫码/自动回填仅作辅助。 -->
             <el-input v-model="drawerForm.targetValue" :placeholder="drawerForm.type === 'qq' ? t('app.notification.channels.botOpenidPlaceholder') : t('app.notification.channels.botReceiverPlaceholder')" />
             <div class="bind-helper">
-              <el-alert v-if="bindSuccessMsg" type="success" :closable="false" show-icon class="bind-success-alert">
-                <template #title>{{ bindSuccessMsg }}</template>
-              </el-alert>
-              <template v-if="drawerForm.type === 'wx_clawbot'">
-                <el-tag v-if="wxBotReady" type="success" effect="plain">{{ t('app.notification.channels.wxLoggedIn') }}</el-tag>
-                <el-button v-else size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
-                <el-button size="small" link type="primary" @click="startReceiverPoll">{{ t('app.notification.channels.autoFill') }}</el-button>
-                <div v-if="wxAlreadyLoggedIn && !wxBotReady && !bindQrImg" class="bind-hint">{{ t('app.notification.channels.wxAlreadyLoggedInHint') }}</div>
-              </template>
-              <template v-else>
-                <el-button size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
-              </template>
+              <el-button v-if="bindPhase === 'idle'" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
+              <div v-if="bindPhase === 'scanning'" class="bind-hint">{{ t('app.notification.channels.bindScanHint') }}</div>
+              <el-alert v-if="bindPhase === 'connecting'" type="info" :closable="false" show-icon class="bind-success-alert">
+                <template #title>{{ t('app.notification.channels.bindConnecting') }}</template>
+              </el-alert>
+              <el-alert v-if="bindPhase === 'awaiting_message'" type="warning" :closable="false" show-icon class="bind-success-alert">
+                <template #title>{{ t('app.notification.channels.bindAwaitMsg') }}</template>
+              </el-alert>
+              <el-alert v-if="bindPhase === 'confirmed'" type="success" :closable="false" show-icon class="bind-success-alert">
+                <template #title>{{ t('app.notification.channels.bindConfirmed') }}</template>
+              </el-alert>
+              <div v-if="bindPhase === 'idle' && drawerForm.type === 'wx_clawbot' && wxAlreadyLoggedIn" class="bind-hint">{{ t('app.notification.channels.wxAlreadyLoggedInHint') }}</div>
               <div class="bind-hint">{{ drawerForm.type === 'qq' ? t('app.notification.channels.qqBindHint') : t('app.notification.channels.wxSendMsgHint') }}</div>
             </div>
           </div>
@@ -311,7 +311,15 @@ const fetchChannels = async (silent = false): Promise<void> => {
 
 const drawerForm = ref({ type: 'webhook' as NotificationChannelType, name: '', targetValue: '' })
 const saving = ref(false)
-const canSave = computed(() => drawerForm.value.name.trim() !== '' && drawerForm.value.targetValue.trim() !== '')
+const canSave = computed(() => {
+  if (drawerForm.value.name.trim() === '') return false
+  const typ = drawerForm.value.type
+  // 机器人通道新建：须绑定会话 confirmed（收到「绑定测试」）才允许保存。
+  if ((typ === 'qq' || typ === 'wx_clawbot') && !editTarget.value) {
+    return bindPhase.value === 'confirmed' && drawerForm.value.targetValue.trim() !== ''
+  }
+  return drawerForm.value.targetValue.trim() !== ''
+})
 
 // 传输配置表单（键白名单=后端 validateChannelStyle；模板键保留回填不编辑——
 // 正文模板已归通知规则，保存时原样透传既有模板键避免覆盖丢失。
@@ -398,20 +406,23 @@ const saveDrawer = async (): Promise<void> => {
 
 const bindLoading = ref(false)
 const bindQrImg = ref('')
-const wxBotReady = ref(false) // 微信扫码已登录（bot_ready），等待入站消息回填 receiver
-const bindSuccessMsg = ref('') // 扫码成功后的下一步引导（wx 须发消息建立会话；qq 保存即可）
+// 绑定会话状态机：idle→scanning（扫码）→connecting（连接测试）→awaiting_message
+// （待发送「绑定测试」）→confirmed（入站确认+品牌回复，允许保存）。
+const bindPhase = ref<'idle' | 'scanning' | 'connecting' | 'awaiting_message' | 'confirmed'>('idle')
+const bindScannerID = ref('')
+const bindBotKey = ref('')
 const wxAlreadyLoggedIn = ref(false) // 全局已有微信登录态→提示无需重复扫码
-// 打开微信绑定面时探测全局登录态：已登录则提示无需重复扫码（避免频繁扫码）。
 const checkWxLoggedIn = async (): Promise<void> => {
   try {
     const res = await request.get<{ data?: { bot_ready?: boolean } }>('/notification/wx/bind-state', { silent: true })
     wxAlreadyLoggedIn.value = res.data?.bot_ready === true
   } catch { wxAlreadyLoggedIn.value = false }
 }
-// 切换通道类型：重置扫码态；切到微信探测全局登录态（提示无需重复扫码）。
+// 切换通道类型：重置绑定态；切到微信探测全局登录态（提示无需重复扫码）。
 watch(() => drawerForm.value.type, (typ) => {
-  bindSuccessMsg.value = ''
-  wxBotReady.value = false
+  bindPhase.value = 'idle'
+  bindScannerID.value = ''
+  bindBotKey.value = ''
   bindQrImg.value = ''
   stopBindPolling()
   if (typ === 'wx_clawbot') void checkWxLoggedIn()
@@ -419,7 +430,7 @@ watch(() => drawerForm.value.type, (typ) => {
 })
 const startBind = async (): Promise<void> => {
   bindLoading.value = true
-  bindSuccessMsg.value = ''
+  bindPhase.value = 'scanning'
   try {
     const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/qr/start'
     const res = await request.post<{ data?: { qr_content?: string } }>(endpoint, {})
@@ -427,8 +438,7 @@ const startBind = async (): Promise<void> => {
     if (qrUrl) {
       const QRCode = (await import('qrcode')).default
       bindQrImg.value = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
-      // 轮询绑定结果
-      pollBind()
+      pollScan()
     }
   } catch (e) { console.error(e) } finally { bindLoading.value = false }
 }
@@ -438,37 +448,70 @@ const stopBindPolling = (): void => {
   if (bindTimer !== null) { clearInterval(bindTimer); bindTimer = null }
   if (bindTimeout !== null) { clearTimeout(bindTimeout); bindTimeout = null }
 }
-const pollBind = (): void => {
+// 扫码轮询：confirmed 后取 scanner_id/bot_key（QQ=openid/appid）注册绑定会话。
+const pollScan = (): void => {
   stopBindPolling()
   const isQQ = drawerForm.value.type === 'qq'
   bindTimer = setInterval(async () => {
     try {
       if (isQQ) {
-        const res = await request.get<{ data?: { openid?: string } }>('/notification/qq/bind-code', { silent: true })
-        const val = res.data?.openid ?? ''
-        if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; bindSuccessMsg.value = t('app.notification.channels.qqBindSuccess'); stopBindPolling(); return }
+        const res = await request.get<{ data?: { bound?: boolean; openid?: string; appid?: string } }>('/notification/qq/bind-code', { silent: true })
+        if (res.data?.bound && res.data?.openid) {
+          bindScannerID.value = res.data.openid
+          bindBotKey.value = res.data.appid ?? ''
+          drawerForm.value.targetValue = res.data.openid
+          bindQrImg.value = ''
+          stopBindPolling()
+          void registerBindSession()
+        }
       } else {
-        // 接收者回填（bind-state 仅用于捕获入站接收者，不判定登录）。
-        const bs = await request.get<{ data?: { receiver?: string } }>('/notification/wx/bind-state', { silent: true })
-        const recv = bs.data?.receiver ?? ''
-        if (recv) { drawerForm.value.targetValue = recv; bindQrImg.value = ''; stopBindPolling(); return }
-        // 登录判定=本次二维码 confirmed（不读全局历史登录态，防未扫码跳「已登录」）。
-        const qs = await request.get<{ data?: { confirmed?: boolean } }>('/notification/wx/qr/status', { silent: true })
-        if (qs.data?.confirmed) { wxBotReady.value = true; bindQrImg.value = ''; bindSuccessMsg.value = t('app.notification.channels.wxBindSuccess') }
+        const qs = await request.get<{ data?: { confirmed?: boolean; scanner_id?: string; bot_key?: string } }>('/notification/wx/qr/status', { silent: true })
+        if (qs.data?.confirmed) {
+          bindScannerID.value = qs.data.scanner_id ?? ''
+          bindBotKey.value = qs.data.bot_key ?? ''
+          bindQrImg.value = ''
+          stopBindPolling()
+          void registerBindSession()
+        }
       }
     } catch { /* keep polling */ }
   }, 3000)
   bindTimeout = setTimeout(stopBindPolling, 300000)
 }
-// 自动回填（不产码）：机器人已登录时直接轮询入站接收者/openid 回填手动输入框。
-const startReceiverPoll = (): void => { pollBind() }
+// 注册绑定会话→连接测试→轮询入站「绑定测试」确认。
+const registerBindSession = async (): Promise<void> => {
+  bindPhase.value = 'connecting'
+  try {
+    await request.post('/notification/bind-session', { type: drawerForm.value.type, scanner_id: bindScannerID.value, bot_key: bindBotKey.value }, { silent: true })
+  } catch { /* 仍轮询 */ }
+  pollBindSession()
+}
+const pollBindSession = (): void => {
+  stopBindPolling()
+  const q = `/notification/bind-session?type=${encodeURIComponent(drawerForm.value.type)}&scanner_id=${encodeURIComponent(bindScannerID.value)}&bot_key=${encodeURIComponent(bindBotKey.value)}`
+  bindTimer = setInterval(async () => {
+    try {
+      const res = await request.get<{ data?: { phase?: string; receiver?: string; connected?: boolean } }>(q, { silent: true })
+      const d = res.data
+      if (d?.phase === 'confirmed') {
+        bindPhase.value = 'confirmed'
+        if (d.receiver) drawerForm.value.targetValue = d.receiver
+        stopBindPolling()
+        return
+      }
+      bindPhase.value = d?.connected ? 'awaiting_message' : 'connecting'
+    } catch { /* keep polling */ }
+  }, 2500)
+  bindTimeout = setTimeout(stopBindPolling, 600000)
+}
 onUnmounted(stopBindPolling)
 
 const resetDrawer = (): void => {
   stopBindPolling()
   bindQrImg.value = ''
-  wxBotReady.value = false
-  bindSuccessMsg.value = ''
+  bindPhase.value = 'idle'
+  bindScannerID.value = ''
+  bindBotKey.value = ''
   wxAlreadyLoggedIn.value = false
   drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
   styleForm.value = emptyStyle()

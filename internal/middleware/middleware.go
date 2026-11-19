@@ -1156,6 +1156,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.PUT("/notification/channels/:id", noStoreResponse(), h.UpdateNotificationChannel)
 				business.DELETE("/notification/channels/:id", noStoreResponse(), h.DeleteNotificationChannel)
 				business.POST("/notification/channels/:id/test", noStoreResponse(), h.TestNotificationChannel)
+				business.POST("/notification/bind-session", noStoreResponse(), h.PostBindSession)
+				business.GET("/notification/bind-session", noStoreResponse(), h.GetBindSession)
 
 				// lists (all authenticated users)
 				business.GET("/mcp/tools", h.GetMCPTools)

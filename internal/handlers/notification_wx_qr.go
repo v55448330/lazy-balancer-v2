@@ -45,7 +45,14 @@ func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 		// （一次登录一次审计）。
 		recordAudit(c, "绑定", "通知设置", "微信机器人扫码登录成功")
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": status, "confirmed": confirmed}})
+	data := gin.H{"status": status, "confirmed": confirmed}
+	if confirmed {
+		// 暴露扫码者 wxid + bot account_id，供弹框注册绑定会话（连接测试+发消息门控）。
+		scannerID, botKey := notify.WxScanIdentity()
+		data["scanner_id"] = scannerID
+		data["bot_key"] = botKey
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: data})
 }
 
 // GetWxBindState GET /notification/wx/bind-state——通道向导微信分支判据：

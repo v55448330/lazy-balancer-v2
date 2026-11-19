@@ -217,6 +217,7 @@ test('MFA 清单反查：middleware 全部写路由族均有清单锚点', () =>
     ['/api/v1/notification/deliveries/', '投递记录失败重发'],
     ['/api/v1/notification/qq/', 'QQ 通道扫码绑定码生成'],
     ['/api/v1/notification/channels', '通知通道增删改/测试'],
+    ['/api/v1/notification/bind-session', '通知通道增删改/测试'],
     ['/api/v1/notification/wx/', '通知系统设置（SMTP/QQ/微信凭据/微信扫码登录与 MCP 全局开关）'],
     ['/api/v1/security/mcp-sessions/', 'MCP 会话强制断开'],
   ]

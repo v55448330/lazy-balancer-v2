@@ -636,10 +636,9 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		// 117=114 基线+通知规则更新/规则测试/通道测试 3 路由升 Explicit
-		// （handler 记名称+结果，中间件不复记）；8=11-3（升显式 3 条）；
-		// 19=16 基线+日报预览（只读渲染不落库）+QQ/微信扫码产码 3 条 skip。
-		wantExplicit = 117
+		// 118=117 基线+绑定会话注册 1 路由 Explicit（handler 记发起绑定会话）；
+		// 8=Generic 不变；19=skip 不变。新增见 auditpolicy.go 登记处注释。
+		wantExplicit = 118
 		wantGeneric  = 8
 		wantSkip     = 19
 	)
