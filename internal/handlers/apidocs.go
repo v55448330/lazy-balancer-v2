@@ -297,9 +297,6 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/notification/settings", "通知", "通知设置（管理员）", "", `{"code":0,"data":{"smtp":{"host":"","port":"","user":"","from":"","pass_configured":false},"mcp_enabled":true,"api_enabled":true,"attack_warn_at":50,"attack_critical_at":200}}`, []string{"403 仅管理员可管理通知设置"}, "secret 类永不回显（只回「已配置」布尔）；阈值未配置时返回生效默认（50/200）；api_enabled/mcp_enabled 为对外接入全局开关（缺省启用）。"},
 	{"PUT", "/notification/settings", "通知", "更新通知设置（管理员）", `{"smtp":{"host":"smtp.example.com","port":"465","pass":"***"},"mcp_enabled":true,"api_enabled":true,"attack_warn_at":80,"attack_critical_at":300}`, `{"code":0,"message":"通知设置已保存"}`, []string{"400 invalid_request", "400 SMTP 端口必须为 1-65535 的数字", "400 拦截告警阈值需满足 0 < warn < critical", "403 仅管理员可管理通知设置", "428 mfa_step_up_required"}, "部分更新（仅提供的键生效）；secret 传空串=清除；api_enabled 停用时 API Key 认证的 REST 请求 503（JWT 面板不受影响），mcp_enabled 停用时 /mcp 503；thresholds 以生效值合并请求值后整体校验。变更键审计留痕。"},
 	{"POST", "/notification/settings/smtp-test", "通知", "SMTP 连通性测试（管理员）", `{"test_to":"ops@example.com"}`, `{"code":0,"message":"测试消息已发送"}`, []string{"403 仅管理员可管理通知设置", "502 测试消息发送失败", "428 mfa_step_up_required"}, "test_to 空=仅握手+AUTH；非空=发标记邮件至指定收件人。使用已保存的 SMTP 配置。"},
-	{"POST", "/notification/settings/smtp-oauth", "通知", "SMTP OAuth2 设备码发起（管理员）", `{"tenant":"common","client_id":"xxx","scope":""}`, `{"code":0,"data":{"user_code":"ABCD-EFGH","verification_uri":"https://microsoft.com/devicelogin","expires_in":900,"interval":5}}`, []string{"403 仅管理员可管理通知设置", "502 设备码申请失败", "428 mfa_step_up_required"}, "Outlook/Office365 公共客户端设备码流（RFC 8628，全程出站契合免公网）；落 client_id/tenant/scope，返回 user_code+验证网址供用户同意。"},
-	{"GET", "/notification/settings/smtp-oauth", "通知", "SMTP OAuth2 设备码轮询（管理员）", "", `{"code":0,"data":{"status":"completed","interval":5}}`, []string{"403 仅管理员可管理通知设置", "502 设备码轮询失败", "428 mfa_step_up_required"}, "status ∈ idle/pending/slow_down/completed/expired/error；completed 时 refresh_token 静态加密落库。"},
-	{"DELETE", "/notification/settings/smtp-oauth", "通知", "SMTP OAuth2 解绑（管理员）", "", `{"code":0,"message":"通知设置已保存"}`, []string{"403 仅管理员可管理通知设置", "428 mfa_step_up_required"}, "清除 OAuth 配置（client_id/tenant/refresh_token/scope）+ 清令牌缓存。"},
 	{"GET", "/notification/daily", "通知", "日报配置读取（当前用户）", "", `{"code":0,"data":{"config":{"enabled":true,"send_time":"09:00","items":["requests"],"formats":{"qq":"markdown"}},"items":["requests","blocked","attack_top"],"labels":{"requests":"请求数"}}}`, []string{"401 unauthenticated"}, "无配置行返回全项目默认（enabled=true 09:00 全 items）。"},
 	{"GET", "/notification/daily/targets", "通知", "日报投递目标", "", `{"code":0,"data":{"targets":[{"username":"admin","channels":[{"type":"qq","name":"QQ 机器人"}]}]}}`, []string{"401 unauthenticated"}, "启用日报的用户→各自启用通道（管理员全量，普通用户仅自己）。"},
 	{"GET", "/notification/rules", "通知", "通知规则列表（聚合视图）", "", `{"code":0,"data":{"rules":[{"id":"group:证书","trigger":"event","title":"证书","events":["cert.failed"],"event_titles":{"cert.failed":"证书签发失败"},"min_level":"critical","channels":[{"id":1,"type":"qq","name":"QQ机器人"}],"channel_ids":[],"channel_templates":{},"body_template":"","enabled":true}],"channels":[{"id":1,"type":"qq","name":"QQ机器人"}]}}`, []string{"401 unauthenticated"}, "聚合 subscriptions+channels+daily 为用户可理解的规则视图；event_titles 供可读展示；channel_ids 空=全部启用通道。"},
@@ -316,7 +313,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/notification/qq/bind-code", "通知", "QQ 扫码绑定状态轮询", "", `{"code":0,"data":{"bound":true,"appid":"123","openid":"oXxx"}}`, []string{"400 无进行中的绑定任务", "502 轮询绑定结果失败"}, "completed 时凭据自动落 notify_settings 并绑定 openid 通道，审计留痕。"},
 	{"POST", "/notification/wx/qr/start", "通知", "微信 iLink 扫码登录发起（管理员）", "", `{"code":0,"data":{"qr_content":"https://..."} }`, []string{"403 admin_required", "502 获取登录二维码失败", "428 mfa_step_up_required"}, "返回可直接渲染为二维码的 URL；confirmed 后凭据自动落库并启用收发。"},
 	{"GET", "/notification/wx/qr/status", "通知", "微信扫码登录状态轮询（管理员）", "", `{"code":0,"data":{"status":"confirmed","confirmed":true}}`, []string{"502 扫码状态轮询失败", "403 admin_required"}, "status ∈ wait/scaned/confirmed/expired；confirmed 即凭据已落库，审计留痕。"},
-	{"GET", "/notification/wx/bind-state", "通知", "微信通道绑定状态（当前用户）", "", `{"code":0,"data":{"bot_ready":true,"receiver":"wxid_xxx"}}`, []string{"401 unauthenticated"}, "bot_ready=机器人扫码登录态；receiver=领取最近入站私聊发送者（3 分钟内有效，领取即清）——通道向导「发送任意消息自动回填」闭环。"},
+	{"GET", "/notification/wx/bind-state", "通知", "微信通道绑定状态（当前用户）", "", `{"code":0,"data":{"bot_ready":true,"receiver":"wxid_xxx"}}`, []string{"401 unauthenticated"}, "bot_ready=机器人扫码登录态；receiver 优先=本次扫码确认凭据的扫码者 wxid（扫码会话作用域，未扫码不回填）；仅无进行中扫码会话时领最近入站私聊发送者（3 分钟内有效，领取即清）——防扫码期间旧 bot 消息泄漏旧 wxid。"},
 	{"GET", "/security/mcp-sessions", "通知", "MCP 会话列表（管理员）", "", `{"code":0,"data":{"sessions":[{"session_id":"mcp-session-3f","user_id":7,"username":"alice","key_id":42,"key_name":"ci-key","ip":"10.0.0.1","user_agent":"claude-code/1","first_seen":"2026-11-18 09:00:00","last_seen":"2026-11-18 09:30:00","online":true}]}}`, []string{"403 admin_required"}, "管理员全量；?mine=1 仅本人。online=last_seen 30 分钟内有活动（与投递 Daemon 清理同口径）；username/key_name 由 JOIN 取展示名，用户/Key 已删回空串。"},
 	{"POST", "/security/mcp-sessions/:id/disconnect", "通知", "强制断开 MCP 会话（管理员）", "", `{"code":0,"message":"MCP 会话已断开"}`, []string{"403 admin_required", "428 mfa_step_up_required", "404 MCP 会话不存在", "500 断开 MCP 会话失败"}, "删会话行+终止服务端会话（该会话后续请求 404，实时推送不再命中），审计留痕会话 ID/属主/Key。"},
 	{"GET", "/notification/mcp/stats", "通知", "MCP 调用统计（管理员）", "", `{"code":0,"data":{"today_calls":12,"active_sessions":2,"error_rate":0.25,"top_tools":[{"tool":"list_rules","calls":10}],"trend":[{"date":"2026-11-12","calls":0},{"date":"2026-11-18","calls":12}]}}`, []string{"403 admin_required"}, "今日调用/在线会话数/今日错误率/TOP 工具（今日前 5）/近 7 天调用趋势（含今日，无调用日补零）。"},
@@ -809,7 +806,6 @@ var idempotentDeleteDocRoutes = map[string]struct{}{
 	"DELETE /security/policies/:id/bind/:caddy_id":      {},
 	"DELETE /security/overview/threat-screen/collector": {},
 	"DELETE /settings/oidc":                             {},
-	"DELETE /notification/settings/smtp-oauth":          {},
 }
 
 // apiDocRetryByMethod 是「重试语义」的方法级默认文案（单源）。
@@ -833,39 +829,38 @@ var apiDocRetryByMethod = map[string]string{
 //
 // 语义边界：PUT/PATCH/DELETE 的文案由 apiDocRetryByMethod 派生，不进本表。
 var createLikeWriteDocRoutes = map[string]struct{}{
-	"POST /auth/login":                       {},
-	"POST /auth/ticket-login":                {},
-	"POST /auth/mfa/verify":                  {},
-	"POST /auth/mfa/setup":                   {},
-	"POST /auth/mfa/activate":                {},
-	"POST /auth/mfa/disable":                 {},
-	"POST /auth/mfa/recovery-codes":          {},
-	"POST /auth/mfa/verify-step":             {},
-	"POST /users/:id/mfa/reset":              {},
-	"POST /auth/setup":                       {},
-	"POST /users":                            {},
-	"POST /users/:id/reset-password":         {},
-	"POST /users/me/api-keys":                {},
-	"POST /api-keys":                         {},
-	"POST /config/import":                    {},
-	"POST /system/tasks/:id/trigger":         {},
-	"POST /system/tasks/:id/toggle":          {},
-	"POST /system/tasks/:id/control":         {},
-	"POST /system/tasks/:id/cancel":          {},
-	"POST /auto-backup/run":                  {},
-	"POST /notification/daily/preview":       {},
-	"POST /notification/daily/trigger":       {},
-	"POST /notification/daily/test":          {},
-	"POST /notification/qq/bind-code":        {},
-	"POST /notification/wx/qr/start":         {},
-	"POST /notification/settings/smtp-test":  {},
-	"POST /notification/settings/smtp-oauth": {},
-	"POST /notification/rules/:id":           {},
-	"POST /notification/rules/:id/test":      {},
-	"POST /auto-backup/:id/restore":          {},
-	"POST /config/reload":                    {},
-	"POST /rules":                            {},
-	"POST /certificate-configs":              {},
+	"POST /auth/login":                      {},
+	"POST /auth/ticket-login":               {},
+	"POST /auth/mfa/verify":                 {},
+	"POST /auth/mfa/setup":                  {},
+	"POST /auth/mfa/activate":               {},
+	"POST /auth/mfa/disable":                {},
+	"POST /auth/mfa/recovery-codes":         {},
+	"POST /auth/mfa/verify-step":            {},
+	"POST /users/:id/mfa/reset":             {},
+	"POST /auth/setup":                      {},
+	"POST /users":                           {},
+	"POST /users/:id/reset-password":        {},
+	"POST /users/me/api-keys":               {},
+	"POST /api-keys":                        {},
+	"POST /config/import":                   {},
+	"POST /system/tasks/:id/trigger":        {},
+	"POST /system/tasks/:id/toggle":         {},
+	"POST /system/tasks/:id/control":        {},
+	"POST /system/tasks/:id/cancel":         {},
+	"POST /auto-backup/run":                 {},
+	"POST /notification/daily/preview":      {},
+	"POST /notification/daily/trigger":      {},
+	"POST /notification/daily/test":         {},
+	"POST /notification/qq/bind-code":       {},
+	"POST /notification/wx/qr/start":        {},
+	"POST /notification/settings/smtp-test": {},
+	"POST /notification/rules/:id":          {},
+	"POST /notification/rules/:id/test":     {},
+	"POST /auto-backup/:id/restore":         {},
+	"POST /config/reload":                   {},
+	"POST /rules":                           {},
+	"POST /certificate-configs":             {},
 	// 通知中心：创建类/动作类 POST（重复调用产生新行或再次触发）。
 	"POST /notification/channels":                     {},
 	"POST /notification/channels/:id/test":            {},
@@ -955,10 +950,6 @@ func operationDescription(route apiDocRoute) string {
 		// OIDC 删除为幂等清空——重复调用保持配置为已删除状态
 		// 并返回成功(与资源型 DELETE 的 404 语义不同)。
 		retry = "可安全重试：重复调用保持 OIDC 配置为已删除状态并返回成功。"
-	case "DELETE /notification/settings/smtp-oauth":
-		// SMTP OAuth 解绑为幂等清空——重复调用保持配置为已解绑状态并返回成功
-		// （与资源型 DELETE 的 404 语义不同）。
-		retry = "可安全重试：重复调用保持 SMTP OAuth 配置为已解绑状态并返回成功。"
 	case "DELETE /security/policies/:id/bind/:caddy_id":
 		// unbind 是无条件删除绑定行——未绑定时同样返回
 		// 成功、状态不变（handler 不返回 404），与资源型 DELETE 不同。

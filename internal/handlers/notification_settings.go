@@ -32,7 +32,6 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 		notify.KeySMTPTLS, notify.KeySMTPInsecure,
 		notify.KeyQQAppID, notify.KeyQQSecret,
 		notify.KeyWxBotCred,
-		notify.KeySMTPOAuthTenant, notify.KeySMTPOAuthClientID, notify.KeySMTPOAuthRefreshToken, notify.KeySMTPOAuthScope,
 	)
 	warnAt, criticalAt := notify.BlockedThresholds()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
@@ -44,14 +43,6 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 			"pass_configured": m[notify.KeySMTPPass] != "",
 			"tls":             m[notify.KeySMTPTLS] != "0",
 			"insecure":        m[notify.KeySMTPInsecure] == "1",
-		},
-		// SMTP OAuth2（XOAUTH2，Outlook/Office365 设备码流）：refresh_token
-		// 只回布尔；tenant/client_id/scope 非密可回显（公共客户端无 secret）。
-		"smtp_oauth": gin.H{
-			"configured": m[notify.KeySMTPOAuthRefreshToken] != "" && m[notify.KeySMTPOAuthClientID] != "",
-			"tenant":     m[notify.KeySMTPOAuthTenant],
-			"client_id":  m[notify.KeySMTPOAuthClientID],
-			"scope":      m[notify.KeySMTPOAuthScope],
 		},
 		// QQ/微信凭据不回显（单源=扫码绑定自动落库；bot 登录态经
 		// /notification/wx/bind-state 供通道向导查询）

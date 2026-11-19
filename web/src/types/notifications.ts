@@ -65,12 +65,6 @@ interface NotificationSettings {
     tls: boolean
     insecure: boolean
   }
-  smtp_oauth?: {
-    configured: boolean
-    tenant: string
-    client_id: string
-    scope: string
-  }
   qq: {
     appid: string
     secret_configured: boolean

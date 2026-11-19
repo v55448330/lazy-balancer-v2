@@ -27,10 +27,9 @@ const secretPrefix = "enc:v1:"
 // secretSettingKeys 需静态加密的 notify_settings 键集合。qq_appid 是标识符
 // 非密不加密；通道 target 的 per-bot 凭据因等值去重约束不在本期范围（见设计稿）。
 var secretSettingKeys = map[string]bool{
-	KeySMTPPass:              true,
-	KeyQQSecret:              true,
-	KeyWxBotCred:             true,
-	KeySMTPOAuthRefreshToken: true,
+	KeySMTPPass:  true,
+	KeyQQSecret:  true,
+	KeyWxBotCred: true,
 }
 
 func isSecretSettingKey(key string) bool { return secretSettingKeys[key] }

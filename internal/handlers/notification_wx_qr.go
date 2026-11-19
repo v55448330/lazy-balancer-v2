@@ -49,14 +49,14 @@ func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 }
 
 // GetWxBindState GET /notification/wx/bind-state——通道向导微信分支判据：
-// bot 登录态 + 领取最近入站接收者（向导内「发送任意消息自动回填」闭环；
-// 领取即清，3 分钟内有效）。
+// receiver 优先取「本次扫码确认」凭据的扫码者 wxid（pin，扫码会话作用域）；
+// 仅当无进行中扫码会话（已登录 bot 追加通道）才领最近入站接收者（3 分钟内
+// 有效，领取即清）——防扫码期间旧 bot 入站消息泄漏旧 wxid（未扫码跳 wxid 根因）。
 func (h *Handlers) GetWxBindState(c *gin.Context) {
 	const captureWindow = 3 * time.Minute
-	receiver := notify.WxTakePendingReceiver(captureWindow)
-	if receiver == "" && notify.WxBotLoggedIn() {
-		// 扫码确认后默认接收者=扫码者，无需再发消息即可保存（入站捕获优先）。
-		receiver = notify.WxDefaultReceiver()
+	receiver := notify.WxDefaultReceiver()
+	if receiver == "" && !notify.WxQRLoginActive() {
+		receiver = notify.WxTakePendingReceiver(captureWindow)
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"bot_ready": notify.WxBotLoggedIn(),

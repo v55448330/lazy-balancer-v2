@@ -30,11 +30,6 @@ const (
 	KeyAttackWarnAt     = "notify.attack_warn_at"
 	KeyAttackCriticalAt = "notify.attack_critical_at"
 	KeyWxBotCred        = "notify.wx_bot_cred" // 微信扫码登录态（连接器域写入）
-	// SMTP OAuth2（XOAUTH2，Outlook/Office365 设备码流；公共客户端无 secret）
-	KeySMTPOAuthTenant       = "notify.smtp_oauth_tenant"
-	KeySMTPOAuthClientID     = "notify.smtp_oauth_client_id"
-	KeySMTPOAuthRefreshToken = "notify.smtp_oauth_refresh_token" // 敏感（静态加密）
-	KeySMTPOAuthScope        = "notify.smtp_oauth_scope"
 )
 
 // GetSetting 取单键值（未配置/库不可用返回空串）。

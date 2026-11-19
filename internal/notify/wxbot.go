@@ -277,6 +277,15 @@ func WxBotLoggedIn() bool {
 	return raw != ""
 }
 
+// WxQRLoginActive 是否有进行中的扫码会话（wxPendingQR 非空）。bind-state 据此
+// 把入站捕获回填限定在"无进行中扫码"（已登录 bot 追加通道），防扫码期间旧 bot
+// 入站消息泄漏旧 wxid。
+func WxQRLoginActive() bool {
+	wxCtxMu.Lock()
+	defer wxCtxMu.Unlock()
+	return wxPendingQR != ""
+}
+
 // WxDefaultReceiver 仅取「本次扫码确认」凭据的扫码者 wxid（wxConfirmedPin）。
 // 未扫码/无本次确认返回空——不得回退全局首 bot，否则新建通道未扫码即被填旧
 // bot 接收者，保存后凭据/接收者错配致测试失败（用户实测根因）。入站捕获仍可覆盖。
@@ -764,7 +773,9 @@ func WxQRLoginStart(ctx context.Context) (qrURL string, err error) {
 	}
 	wxCtxMu.Lock()
 	wxPendingQR = qr.Qrcode
-	// 新扫码会话丢弃旧的入站捕获，防新通道回填上一个会话的旧接收者。
+	// 新扫码会话丢弃旧凭据 pin 与旧入站捕获：防新通道未扫码即回填上一个
+	// 会话/旧 bot 的接收者（用户实测"未扫码跳 wxid"根因）。
+	wxConfirmedPin = nil
 	wxPendingInbound = wxInboundCapture{}
 	wxCtxMu.Unlock()
 	return qr.QRImgContent, nil
@@ -821,7 +832,7 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 			wxCtxMu.Lock()
 			wxUpdatesBufs = map[string]string{}
 			wxContextTokens = map[string]map[string]string{}
-			wxConfirmedPin = nil
+			wxConfirmedPin = &cred // 首登亦置 pin：本次扫码者 wxid 供自动回填（保存时消费）
 			wxPendingQR = ""
 			wxCtxMu.Unlock()
 		} else {

@@ -208,8 +208,6 @@ export default {
     modified: 'Modified',
     disconnected: 'Disconnected',
     bound: 'Bound',
-    authorized: 'Authorized',
-    unbound: 'Unbound',
     resent: 'Resent',
   },
   auditResources: {
@@ -217,7 +215,6 @@ export default {
     apiKey: 'API key',
     notificationChannel: 'Notification channel',
     qqBot: 'QQ bot',
-    smtpOAuth: 'SMTP OAuth',
     notificationDelivery: 'Notification delivery',
     notificationRule: 'Notification rule',
     notificationSubscription: 'Notification subscription',

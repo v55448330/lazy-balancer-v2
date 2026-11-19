@@ -1055,9 +1055,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.GET("/notification/settings", noStoreResponse(), h.GetNotificationSettings)
 				admin.PUT("/notification/settings", noStoreResponse(), h.UpdateNotificationSettings)
 				admin.POST("/notification/settings/smtp-test", noStoreResponse(), h.TestSMTPSettings)
-				admin.POST("/notification/settings/smtp-oauth", noStoreResponse(), h.PostSMTPOAuthDeviceCode)
-				admin.GET("/notification/settings/smtp-oauth", noStoreResponse(), h.GetSMTPOAuthDeviceCode)
-				admin.DELETE("/notification/settings/smtp-oauth", noStoreResponse(), h.DeleteSMTPOAuth)
 
 				// Security (admin write)
 				admin.POST("/security/policies", h.CreateSecurityPolicy)

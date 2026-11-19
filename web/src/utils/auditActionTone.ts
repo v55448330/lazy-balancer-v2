@@ -75,10 +75,6 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   '重发': 'warning',
   // 通知通道扫码绑定：建立关联（success 语义，无关键词可派生）。
   '绑定': 'success',
-  // SMTP OAuth 设备码授权：建立凭据关联（success，与「绑定」同族）。
-  '授权': 'success',
-  // SMTP OAuth 解绑：清除 refresh_token 凭据（破坏性，与「断开/删除」同族 danger）。
-  '解绑': 'danger',
   // MCP 会话强制断开：终止在线 Agent 会话（破坏性动作，与「删除」同族 danger）。
   '断开': 'danger',
   '写入': 'warning',
