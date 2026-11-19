@@ -126,7 +126,7 @@ func TestCaddyRestartWatcher_removalFailureDoesNotReapply(t *testing.T) {
 	calls := 0
 	services.SetConfigLoadRerun(func(string) error { calls++; return nil })
 	t.Cleanup(func() { services.SetConfigLoadRerun(nil) })
-	logs := captureHandlerLog(t)
+	readLog := captureCaddyTaskLog(t)
 
 	h := &Handlers{}
 	// 非空目录：os.Remove 必失败（ENOTEMPTY），模拟「触发文件删不掉」的
@@ -151,7 +151,7 @@ func TestCaddyRestartWatcher_removalFailureDoesNotReapply(t *testing.T) {
 	if n := countCaddyRestartRuns(t); n != 1 {
 		t.Fatalf("重复轮不得新增 task_runs 行, got %d", n)
 	}
-	if got := strings.Count(logs.String(), "Caddy 重启触发文件删除失败"); got != 1 {
-		t.Fatalf("删除失败 warn=%d 条, want 1（同一触发只留痕一次）: %q", got, logs.String())
+	if got := strings.Count(readLog(), "Caddy 重启触发文件删除失败"); got != 1 {
+		t.Fatalf("删除失败 warn=%d 条, want 1（同一触发只留痕一次）: %q", got, readLog())
 	}
 }

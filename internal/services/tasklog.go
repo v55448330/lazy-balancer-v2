@@ -28,6 +28,42 @@ func TaskLogfWarnContext(ctx context.Context, taskID, stage, format string, args
 	taskengine.TeeTaskLogTimeContext(ctx, taskID, "WARN", stage, fmt.Sprintf(format, args...))
 }
 
+// TaskLogfState 状态转换口径任务日志行：lvl 来自 logStateTransition
+// （warn=进入失败 / info=恢复），映射 WARN/INFO 落 tasks/{id}.log。
+// 运行期族 daemon 的业务行统一经此落任务日志（标准 §0），不再仅 runtime。
+func TaskLogfState(taskID, stage, lvl, format string, args ...any) {
+	if lvl == "warn" {
+		TaskLogfWarn(taskID, stage, format, args...)
+		return
+	}
+	TaskLogf(taskID, stage, format, args...)
+}
+
+// taskIDCtxKey 任务 ID ctx 注入键：daemon Run 起点 WithTaskID 标记，共享业务
+// 函数据此区分「任务执行链」（落任务日志）与「非任务调用方」（仅 runtime，
+// 标准 §3.7 任务日志只由该任务执行链写入）。
+type taskIDCtxKey struct{}
+
+// WithTaskID 在 daemon Run 起点把任务 ID 注入 ctx。
+func WithTaskID(ctx context.Context, taskID string) context.Context {
+	return context.WithValue(ctx, taskIDCtxKey{}, taskID)
+}
+
+func ctxTaskID(ctx context.Context) string {
+	v, _ := ctx.Value(taskIDCtxKey{}).(string)
+	return v
+}
+
+// TaskLogfStateCtx 仅当 ctx 属该任务执行链时落任务日志，否则回退 runtime
+// （共享路径被非任务调用方复用时不得越权写任务日志）。
+func TaskLogfStateCtx(ctx context.Context, taskID, stage, lvl, format string, args ...any) {
+	if ctxTaskID(ctx) == taskID {
+		TaskLogfState(taskID, stage, lvl, format, args...)
+		return
+	}
+	Logf(lvl, format, args...)
+}
+
 // writeUpdateLog 更新流水日志单实现（时间戳/级别/阶段口径唯一来源——
 // TeeTaskLogTime 与引擎生命周期行同用 engineLogTimeStr 斜杠形态）。
 // 三族导出名保持（调用方零改动），禁止再复制「自算时间戳+TeeTaskLog」形态。

@@ -3130,19 +3130,19 @@ func securityEventsIngestDeltaFrom(path string, from int64, archive bool) (int, 
 // securityEventsRateLimitedWarn 输出 tick 失败告警并对停摆错误（畸形区）
 // 限流：同一畸形区偏移每分钟最多一条 warn（tailer 记录 lastWarnOffset +
 // lastWarnTime），偏移前进即重置立即告警；其他错误照常输出。
-func (t *securityEventsTailer) securityEventsRateLimitedWarn(err error) {
+func (t *securityEventsTailer) securityEventsRateLimitedWarn(ctx context.Context, err error) {
 	if t.failOffset < 0 || !strings.Contains(err.Error(), "scan window at offset") {
 		// 其他错误同样按同消息 60s 限流（与畸形区同窗口）——审计目录缺失等
 		// 持久性失败不再每 2s tick 刷一条 warn，首条 warn 已暴露问题。
 		if !auditFailureShouldLog(err.Error()) {
 			return
 		}
-		Logf("warn", "security events ingestion: tick failed: %v", err)
+		TaskLogfStateCtx(ctx, securityEventsIngestionTaskID, "ingest", "warn", "security events ingestion: tick failed: %v", err)
 		return
 	}
 	now := time.Now()
 	if t.failOffset != t.lastWarnOffset || now.Sub(t.lastWarnTime) >= time.Minute {
-		Logf("warn", "security events ingestion: tick failed: %v", err)
+		TaskLogfStateCtx(ctx, securityEventsIngestionTaskID, "ingest", "warn", "security events ingestion: tick failed: %v", err)
 		t.lastWarnOffset = t.failOffset
 		t.lastWarnTime = now
 	}
@@ -3782,11 +3782,11 @@ func securityEventsPollOnce(ctx context.Context) (int, error) {
 			Logf("warn", "security events ingestion: create audit log dir %s failed: %v", filepath.Dir(auditLogPath), err)
 		}
 		securityEventsPollState.inited = true
-		Logf("info", "security events ingestion(engine) started: audit_log=%s", auditLogPath)
+		TaskLogfStateCtx(ctx, securityEventsIngestionTaskID, "ingest", "info", "security events ingestion(engine) started: audit_log=%s", auditLogPath)
 	}
 	tickErr := securityEventsPollState.tailer.securityEventsTickContext(ctx)
 	if tickErr != nil {
-		securityEventsPollState.tailer.securityEventsRateLimitedWarn(tickErr)
+		securityEventsPollState.tailer.securityEventsRateLimitedWarn(ctx, tickErr)
 	}
 	ingested := securityEventsPollState.tailer.lastIngested
 	securityEventsPollState.tailer.lastIngested = 0
@@ -3819,6 +3819,7 @@ func runIngestionLoop(ctx context.Context) error {
 	//scope-exempt: daemon-run-body-loop —— §0.2 形态② daemon Run 体自管理阻塞循环（2s 尾读+轮转跟随，ctx 取消即退）
 	ticker := time.NewTicker(securityEventsPollInterval)
 	defer ticker.Stop()
+	ctx = WithTaskID(ctx, securityEventsIngestionTaskID)
 	var lastRotateFailureSummaryAt time.Time
 	lastWriterDegraded := false
 	lastWriterStatsUnavailable := false

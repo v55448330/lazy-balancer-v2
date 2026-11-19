@@ -1250,7 +1250,7 @@ func caddyRestartNoteRemovalFailure(mod time.Time, err error) {
 	}
 	caddyRestartBackoff.mu.Unlock()
 	if !alreadyWarned {
-		services.Logf("warn", "Caddy 重启触发文件删除失败（已应用的配置不会重复执行，请检查目录权限/挂载）: %v", err)
+		services.TaskLogfState("caddy-restart-watcher", "trigger", "warn", "Caddy 重启触发文件删除失败（已应用的配置不会重复执行，请检查目录权限/挂载）: %v", err)
 	}
 }
 
@@ -1266,9 +1266,9 @@ func caddyRestartNoteStatFailure(err error) {
 	caddyRestartBackoff.mu.Unlock()
 	switch {
 	case unexpected && !alreadyWarned:
-		services.Logf("warn", "Caddy 重启触发文件探测失败（崩溃自愈链停摆，请检查 /tmp 触发文件所在目录的权限/挂载）: %v", err)
+		services.TaskLogfState("caddy-restart-watcher", "stat", "warn", "Caddy 重启触发文件探测失败（崩溃自愈链停摆，请检查 /tmp 触发文件所在目录的权限/挂载）: %v", err)
 	case !unexpected && alreadyWarned:
-		services.Logf("info", "Caddy 重启触发文件探测恢复")
+		services.TaskLogfState("caddy-restart-watcher", "stat", "info", "Caddy 重启触发文件探测恢复")
 	}
 }
 
@@ -1354,7 +1354,7 @@ func (h *Handlers) caddyRestartWatcherOnce(triggerFile string, processStart time
 			caddyRestartNoteRemovalFailure(st.ModTime(), err)
 			return
 		}
-		services.Logf("info", "检测到存量 Caddy 重启触发文件（mtime 早于进程启动），按上一进程残留清理不执行")
+		services.TaskLogfState("caddy-restart-watcher", "trigger", "info", "检测到存量 Caddy 重启触发文件（mtime 早于进程启动），按上一进程残留清理不执行")
 		return
 	}
 	if caddyRestartTriggerAlreadyApplied(st.ModTime()) {
@@ -1371,7 +1371,7 @@ func (h *Handlers) caddyRestartWatcherOnce(triggerFile string, processStart time
 		return // 退避窗口内：静默跳过（不执行、不落行、不刷日志）
 	}
 	record, attempts := caddyRestartBeginAttempt(now)
-	services.Logf("info", "检测到 Caddy 进程重启，经任务引擎调度配置载入（DB 渲染；第 %d 次重试，落行=%v）", attempts, record)
+	services.TaskLogfState("caddy-restart-watcher", "apply", "info", "检测到 Caddy 进程重启，经任务引擎调度配置载入（DB 渲染；第 %d 次重试，落行=%v）", attempts, record)
 	// 一切任务统一引擎调度——曾直调
 	// ApplyConfigOnStartup 绕过引擎（无 task_runs/[start]/[done]/单飞，
 	// 审计+任务日志双行）。Run 体触发门已放行 caddy-restart。
@@ -1392,11 +1392,11 @@ func (h *Handlers) caddyRestartWatcherOnce(triggerFile string, processStart time
 		// 慢尝试（RunSync 耗时超过退避档位）若按开始时刻计，窗口在尝试结束前
 		// 已到期，下一轮立即重试——退避失效。
 		caddyRestartEndAttempt(time.Now(), false)
-		services.Logf("error", "Caddy 重启后配置重应用失败（触发文件保留，按退避重试）: %v", runErr)
+		services.TaskLogfState("caddy-restart-watcher", "apply", "warn", "Caddy 重启后配置重应用失败（触发文件保留，按退避重试）: %v", runErr)
 		return
 	}
 	caddyRestartEndAttempt(time.Now(), true)
-	services.Logf("info", "Caddy 重启后配置重应用完成（引擎调度，与启动流程同源）")
+	services.TaskLogfState("caddy-restart-watcher", "apply", "info", "Caddy 重启后配置重应用完成（引擎调度，与启动流程同源）")
 	markCaddyRestartTriggerApplied(st.ModTime())
 	if err := os.Remove(triggerFile); err != nil {
 		caddyRestartNoteRemovalFailure(st.ModTime(), err)

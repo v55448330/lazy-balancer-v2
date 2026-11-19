@@ -162,7 +162,7 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine, taskLoopPrefs map[stri
 			}
 			taskengine.RunTicker(rc.Ctx, time.Minute, nil, func(context.Context) {
 				if err := round(); err != nil {
-					Logf("warn", "%v", err)
+					TaskLogfWarn("threat-rollup-warmer", "rollup", "预聚合预热轮失败: %v", err)
 				}
 			})
 			return nil
@@ -279,19 +279,19 @@ func runAPIKeyUsageFlusher(ctx context.Context) {
 	taskengine.RunTicker(ctx, time.Minute, nil, func(ctx context.Context) {
 		if err := db.FlushAPIKeyLastUsed(); err != nil {
 			if lvl := logStateTransition("apikey-usage-flush", true); lvl != "" {
-				Logf(lvl, "flush API key usage: %v", err)
+				TaskLogfState("apikey-usage-flusher", "flush", lvl, "flush API key usage: %v", err)
 			}
 		} else if lvl := logStateTransition("apikey-usage-flush", false); lvl != "" {
-			Logf(lvl, "flush API key usage recovered")
+			TaskLogfState("apikey-usage-flusher", "flush", lvl, "flush API key usage recovered")
 		}
 		if now := time.Now(); now.Unix() >= apiKeyAuxCleanupNextDue.Load() {
 			apiKeyAuxCleanupNextDue.Store(now.Add(apiKeyAuxCleanupInterval).Unix())
 			if err := db.CleanupAPIKeyAuxTables(ctx); err != nil {
 				if lvl := logStateTransition("apikey-aux-cleanup", true); lvl != "" {
-					Logf(lvl, "%v", err)
+					TaskLogfState("apikey-usage-flusher", "aux-cleanup", lvl, "%v", err)
 				}
 			} else if lvl := logStateTransition("apikey-aux-cleanup", false); lvl != "" {
-				Logf(lvl, "cleanup revoked JWT IDs / cluster registration secrets recovered")
+				TaskLogfState("apikey-usage-flusher", "aux-cleanup", lvl, "cleanup revoked JWT IDs / cluster registration secrets recovered")
 			}
 		}
 	})

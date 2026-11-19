@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +33,7 @@ func RunDeliveryLoop(ctx context.Context) error { //scope-exempt: daemon-run-bod
 			return nil
 		case <-t.C:
 			processPendingBatch(ctx)
-			cleanupExpiredMCPSessions()
+			cleanupExpiredMCPSessions(ctx)
 		case <-deliveryWakeCh:
 			// 重发唤醒：立即补扫 pending（tick 兜底仍保留）。
 			processPendingBatch(ctx)
@@ -129,13 +128,13 @@ func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []de
 		if sendErr != nil {
 			errs = append(errs, ch.Type+": "+sendErr.Error())
 			if deliveryID > 0 {
-				recordChannelResult(deliveryID, userID, ch, msg.EventType, "failed", sendErr.Error())
+				recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "failed", sendErr.Error())
 			}
 			continue
 		}
 		sentAny = true
 		if deliveryID > 0 {
-			recordChannelResult(deliveryID, userID, ch, msg.EventType, "sent", "")
+			recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "sent", "")
 		}
 	}
 	return errs, sentAny
@@ -215,22 +214,22 @@ func DeliverDailyForUser(userID int64, now time.Time) error {
 
 // recordChannelResult 每通道投递结果落行（统计事实源；落库失败仅告警不阻断投递）。
 // channel_name 快照落行——通道删除后投递记录仍显示通道名（不回退「通道 #id」）。
-func recordChannelResult(deliveryID, userID int64, ch deliveryTarget, eventType, status, errMsg string) {
+func recordChannelResult(ctx context.Context, deliveryID, userID int64, ch deliveryTarget, eventType, status, errMsg string) {
 	_, err := db.DB.Exec(`INSERT INTO notification_delivery_channels
 		(delivery_id, user_id, channel_id, channel_name, channel_type, event_type, status, error, created_at)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
 		deliveryID, userID, ch.ChannelID, ch.Name, ch.Type, eventType, status, errMsg,
 		time.Now().UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
-		log.Printf("WARN: notify 通道结果落库失败（delivery=%d channel=%d）: %v", deliveryID, ch.ChannelID, err)
+		taskLogWarn(ctx, "delivery", "notify 通道结果落库失败（delivery=%d channel=%d）: %v", deliveryID, ch.ChannelID, err)
 	}
 }
 
 // cleanupExpiredMCPSessions 30 分钟无活动的 MCP 会话标记离线（删除行——
 // 在线 Agent 页=表内即在线）。
-func cleanupExpiredMCPSessions() {
+func cleanupExpiredMCPSessions(ctx context.Context) {
 	if _, err := db.DB.Exec(`DELETE FROM mcp_sessions WHERE last_seen < datetime('now', '-30 minutes')`); err != nil {
-		log.Printf("WARN: notify MCP 会话清理失败: %v", err)
+		taskLogWarn(ctx, "delivery", "notify MCP 会话清理失败: %v", err)
 	}
 }
 

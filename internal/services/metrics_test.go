@@ -1,13 +1,12 @@
 package services
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +14,20 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/taskengine"
 )
+
+// isolateTaskLog 把任务日志目录隔离到临时目录，返回读取当前任务日志内容的
+// 闭包（运行期业务行经 TaskLogf 落 tasks/{id}.log，不再走标准 log.Writer）。
+func isolateTaskLog(t *testing.T, taskID string) func() string {
+	t.Helper()
+	taskengine.SetLogDir(t.TempDir())
+	t.Cleanup(func() { taskengine.SetLogDir("") })
+	return func() string {
+		data, _ := os.ReadFile(taskengine.TaskLogPath(taskID))
+		return string(data)
+	}
+}
 
 // isolateMetricsState 隔离包级状态转换 map（含 FIFO 键序），测试间互不串扰。
 func isolateMetricsState(t *testing.T) {
@@ -83,10 +95,7 @@ func TestMetricsService_collect_logs_failures_once_per_state_transition(t *testi
 	}))
 	t.Cleanup(live.Close)
 
-	var logs bytes.Buffer
-	originalWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	readLog := isolateTaskLog(t, "metrics-collector")
 
 	service := NewMetricsService(deadURL, 30)
 
@@ -100,11 +109,11 @@ func TestMetricsService_collect_logs_failures_once_per_state_transition(t *testi
 	service.collect()
 
 	// Then
-	if count := strings.Count(logs.String(), "Failed to collect metrics:"); count != 2 {
-		t.Fatalf("failure warn count=%d, want 2 (state-transition dedup): %s", count, logs.String())
+	if count := strings.Count(readLog(), "Failed to collect metrics:"); count != 2 {
+		t.Fatalf("failure warn count=%d, want 2 (state-transition dedup): %s", count, readLog())
 	}
-	if count := strings.Count(logs.String(), "metrics collection recovered"); count != 1 {
-		t.Fatalf("recovery info count=%d, want 1: %s", count, logs.String())
+	if count := strings.Count(readLog(), "metrics collection recovered"); count != 1 {
+		t.Fatalf("recovery info count=%d, want 1: %s", count, readLog())
 	}
 }
 
@@ -142,10 +151,7 @@ func TestMetricsService_collect_logs_read_failures_once_per_state_transition(t *
 	setupIsolatedDBWithMetrics(t)
 	isolateMetricsState(t)
 
-	var logs bytes.Buffer
-	originalWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	readLog := isolateTaskLog(t, "metrics-collector")
 
 	tr := &fixedResponseTransport{}
 	readErr := errors.New("connection reset mid-body")
@@ -163,7 +169,7 @@ func TestMetricsService_collect_logs_read_failures_once_per_state_transition(t *
 	service.collect()
 
 	// Then
-	out := logs.String()
+	out := readLog()
 	if count := strings.Count(out, "Failed to read metrics body:"); count != 2 {
 		t.Fatalf("read failure warn count=%d, want 2 (state-transition dedup): %s", count, out)
 	}
@@ -755,10 +761,7 @@ func TestMetricsService_refreshDBOverviewMetrics_dedupesFailureLogs(t *testing.T
 	if got := service.GetOverview(); got.ActiveRules != 2 || got.TotalRules != 3 {
 		t.Fatalf("baseline overview=%+v, want ActiveRules=2 TotalRules=3", got)
 	}
-	originalWriter := log.Writer()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	readLog := isolateTaskLog(t, "metrics-collector")
 	swapBrokenDB(t)
 
 	// When：连续两个周期都查失败
@@ -767,8 +770,8 @@ func TestMetricsService_refreshDBOverviewMetrics_dedupesFailureLogs(t *testing.T
 
 	// Then：每个类别只首报一次
 	for _, key := range []string{"query active rules failed", "query total rules failed", "query online nodes failed"} {
-		if count := strings.Count(logs.String(), key); count != 1 {
-			t.Fatalf("%q 日志次数=%d, want 1（状态转换去重）: %s", key, count, logs.String())
+		if count := strings.Count(readLog(), key); count != 1 {
+			t.Fatalf("%q 日志次数=%d, want 1（状态转换去重）: %s", key, count, readLog())
 		}
 	}
 	// 计数必须保留非零前值（失败分支被绕过即归零/漂移 → 本断言红）
@@ -776,8 +779,8 @@ func TestMetricsService_refreshDBOverviewMetrics_dedupesFailureLogs(t *testing.T
 	if got.ActiveRules != 2 || got.TotalRules != 3 {
 		t.Fatalf("overview=%+v, want ActiveRules=2 TotalRules=3（失败保留前值）", got)
 	}
-	if !strings.Contains(logs.String(), "keeping previous value=2") {
-		t.Fatalf("首报行必须带保留前值=2: %s", logs.String())
+	if !strings.Contains(readLog(), "keeping previous value=2") {
+		t.Fatalf("首报行必须带保留前值=2: %s", readLog())
 	}
 }
 

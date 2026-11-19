@@ -36,7 +36,7 @@ func RefreshRuntimeLogSizeOnce() {
 	defer func() {
 		if r := recover(); r != nil {
 			if logStateTransition("runtime-log-size-refresh", true) != "" {
-				Logf("warn", "refresh runtime log size panic: %v", r)
+				TaskLogfState("runtime-log-threshold", "size", "warn", "refresh runtime log size panic: %v", r)
 			}
 		}
 	}()
@@ -48,12 +48,12 @@ func RefreshRuntimeLogSizeOnce() {
 	if err := database.QueryRow("SELECT COALESCE(runtime_log_size_mb,?) FROM global_config WHERE id=1", db.DefaultRuntimeLogSizeMB).Scan(&mb); err != nil {
 		// 持久失败（如迁移窗口缺列）不再每 30s 一行 info。
 		if logStateTransition("runtime-log-size-refresh", true) != "" {
-			Logf("warn", "refresh runtime log size: %v", err)
+			TaskLogfState("runtime-log-threshold", "size", "warn", "refresh runtime log size: %v", err)
 		}
 		return
 	}
 	if logStateTransition("runtime-log-size-refresh", false) != "" {
-		Logf("info", "refresh runtime log size recovered")
+		TaskLogfState("runtime-log-threshold", "size", "info", "refresh runtime log size recovered")
 	}
 	if mb > 0 {
 		runtimeLogSizeMB.Store(int64(mb))

@@ -43,12 +43,12 @@ func init() {
 func RefreshTimezoneOnce() {
 	if err := refreshLocation(); err != nil {
 		if logStateTransition("timezone-refresh", true) != "" {
-			Logf("warn", "refresh timezone: %v", err)
+			TaskLogfState("runtime-tz-refresh", "tz", "warn", "refresh timezone: %v", err)
 		}
 		return
 	}
 	if logStateTransition("timezone-refresh", false) != "" {
-		Logf("info", "refresh timezone recovered")
+		TaskLogfState("runtime-tz-refresh", "tz", "info", "refresh timezone recovered")
 	}
 }
 

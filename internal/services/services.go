@@ -210,22 +210,22 @@ func (m *MetricsService) collect() {
 	resp, err := m.client.Get(m.metricsURL)
 	if err != nil {
 		if logStateTransition(metricsFailureCollect, true) != "" {
-			Logf("warn", "Failed to collect metrics: %v", err)
+			TaskLogfState("metrics-collector", "collect", "warn", "Failed to collect metrics: %v", err)
 		}
 		return
 	}
 	if lvl := logStateTransition(metricsFailureCollect, false); lvl != "" {
-		Logf("info", "metrics collection recovered")
+		TaskLogfState("metrics-collector", "collect", lvl, "metrics collection recovered")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		if logStateTransition(metricsFailureEndpoint, true) != "" {
-			Logf("warn", "Metrics endpoint returned status %d, skipping sample", resp.StatusCode)
+			TaskLogfState("metrics-collector", "collect", "warn", "Metrics endpoint returned status %d, skipping sample", resp.StatusCode)
 		}
 		return
 	}
 	if lvl := logStateTransition(metricsFailureEndpoint, false); lvl != "" {
-		Logf("info", "metrics endpoint recovered")
+		TaskLogfState("metrics-collector", "collect", lvl, "metrics endpoint recovered")
 	}
 
 	// 读取上限 16MB：规则数×状态码×host 序列的基数爆炸在 30s 采集周期里
@@ -235,21 +235,21 @@ func (m *MetricsService) collect() {
 		// body 中段读取错误此前裸 return——失败族中唯一零信号成员
 		// （52fdb0f7 枚举未覆盖）。现与其他类别同口径走状态转换日志。
 		if logStateTransition(metricsFailureRead, true) != "" {
-			Logf("warn", "Failed to read metrics body: %v", err)
+			TaskLogfState("metrics-collector", "collect", "warn", "Failed to read metrics body: %v", err)
 		}
 		return
 	}
 	if lvl := logStateTransition(metricsFailureRead, false); lvl != "" {
-		Logf("info", "metrics body read recovered")
+		TaskLogfState("metrics-collector", "collect", lvl, "metrics body read recovered")
 	}
 	if len(body) > 16<<20 {
 		if logStateTransition(metricsFailureBodyCap, true) != "" {
-			Logf("warn", "Metrics endpoint body exceeded 16MB cap, skipping sample")
+			TaskLogfState("metrics-collector", "collect", "warn", "Metrics endpoint body exceeded 16MB cap, skipping sample")
 		}
 		return
 	}
 	if lvl := logStateTransition(metricsFailureBodyCap, false); lvl != "" {
-		Logf("info", "metrics endpoint body back under 16MB cap")
+		TaskLogfState("metrics-collector", "collect", lvl, "metrics endpoint body back under 16MB cap")
 	}
 
 	// string 拷贝只做一次——parse 与 store 共用同一
@@ -265,47 +265,47 @@ func (m *MetricsService) collect() {
 	metrics := scan.global
 	if scan.globalErr != nil {
 		if logStateTransition(metricsFailureParse, true) != "" {
-			Logf("warn", "Failed to parse metrics: %v", scan.globalErr)
+			TaskLogfState("metrics-collector", "collect", "warn", "Failed to parse metrics: %v", scan.globalErr)
 		}
 		return
 	}
 	if lvl := logStateTransition(metricsFailureParse, false); lvl != "" {
-		Logf("info", "metrics parse recovered")
+		TaskLogfState("metrics-collector", "collect", lvl, "metrics parse recovered")
 	}
 	if scan.rulesErr != nil {
 		if logStateTransition(metricsFailureParseRules, true) != "" {
-			Logf("warn", "Failed to parse per-rule metrics: %v", scan.rulesErr)
+			TaskLogfState("metrics-collector", "collect", "warn", "Failed to parse per-rule metrics: %v", scan.rulesErr)
 		}
 	} else if lvl := logStateTransition(metricsFailureParseRules, false); lvl != "" {
-		Logf("info", "per-rule metrics parse recovered")
+		TaskLogfState("metrics-collector", "collect", lvl, "per-rule metrics parse recovered")
 	}
 	if err := m.storeMetrics(metrics); err != nil {
 		if logStateTransition(metricsFailureStore, true) != "" {
-			Logf("warn", "Failed to store metrics: %v, values: %d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+			TaskLogfState("metrics-collector", "collect", "warn", "Failed to store metrics: %v, values: %d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
 				err, metrics.requestsTotal, metrics.requests2xx, metrics.requests3xx,
 				metrics.requests4xx, metrics.requests5xx, metrics.bytesIn, metrics.bytesOut,
 				metrics.latencyP50, metrics.latencyP95, metrics.latencyP99)
 		}
 	} else if lvl := logStateTransition(metricsFailureStore, false); lvl != "" {
-		Logf("info", "metrics store recovered")
+		TaskLogfState("metrics-collector", "collect", lvl, "metrics store recovered")
 	}
 	if scan.rulesErr == nil {
 		if err := m.storePerRuleMetrics(scan.rules); err != nil {
 			if logStateTransition(metricsFailureStorePerRule, true) != "" {
-				Logf("warn", "Failed to store per-rule metrics: %v", err)
+				TaskLogfState("metrics-collector", "collect", "warn", "Failed to store per-rule metrics: %v", err)
 			}
 		} else {
 			if lvl := logStateTransition(metricsFailureStorePerRule, false); lvl != "" {
-				Logf("info", "metrics per-rule store recovered")
+				TaskLogfState("metrics-collector", "collect", lvl, "metrics per-rule store recovered")
 			}
 			// 日聚合累加在历史行成功落库后执行：checkpoint 推进以「当轮增量
 			// 已完整入账」为前提——失败不推进，下一成功轮把两段增量一次补齐。
 			if err := m.accumulateDailyAgg(scan.rules); err != nil {
 				if logStateTransition(metricsFailureDailyAgg, true) != "" {
-					Logf("warn", "Failed to accumulate daily agg: %v", err)
+					TaskLogfState("metrics-collector", "collect", "warn", "Failed to accumulate daily agg: %v", err)
 				}
 			} else if lvl := logStateTransition(metricsFailureDailyAgg, false); lvl != "" {
-				Logf("info", "metrics daily agg recovered")
+				TaskLogfState("metrics-collector", "collect", lvl, "metrics daily agg recovered")
 			}
 		}
 	}
@@ -875,13 +875,13 @@ func (m *MetricsService) cleanupHistory() error {
 		// 测试/嵌入形态 nil 库 panic）。nil 库按失败上抛——「清理没跑成」
 		// 必须可见，不得伪装 success。
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			Logf(lvl, "Failed to clean up metrics history: metrics database is not initialized")
+			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up metrics history: metrics database is not initialized")
 		}
 		return errMetricsDBUnavailable
 	}
 	if err := db.CleanupMetricsHistory(retentionDays); err != nil {
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			Logf(lvl, "Failed to clean up metrics history: %v", err)
+			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up metrics history: %v", err)
 		}
 		return err
 	}
@@ -889,7 +889,7 @@ func (m *MetricsService) cleanupHistory() error {
 	// 上抛进任务失败终态，不得静默继续。
 	if err := db.CleanupL4ConnHistory(retentionDays); err != nil {
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			Logf(lvl, "Failed to clean up l4 conn history: %v", err)
+			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up l4 conn history: %v", err)
 		}
 		return err
 	}
@@ -897,12 +897,12 @@ func (m *MetricsService) cleanupHistory() error {
 	// 同任务体清理，失败同口径上抛进任务失败终态。
 	if err := db.CleanupDailyAgg(dailyAggRetentionDays); err != nil {
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			Logf(lvl, "Failed to clean up metrics daily agg: %v", err)
+			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up metrics daily agg: %v", err)
 		}
 		return err
 	}
 	if lvl := logStateTransition("metrics-history-cleanup", false); lvl != "" {
-		Logf(lvl, "metrics history cleanup recovered")
+		TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "metrics history cleanup recovered")
 	}
 	return nil
 }
@@ -959,17 +959,17 @@ func (m *MetricsService) refreshDBOverviewMetrics() {
 	// 去重」裁定一致）；「keeping previous value=N」语义保留在首报行。
 	if err := database.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE enabled = 1").Scan(&activeRules); err != nil {
 		if lvl := logStateTransition("overview-count-active-rules", true); lvl != "" {
-			Logf(lvl, "updateOverview: query active rules failed: %v (keeping previous value=%d)", err, activeRules)
+			TaskLogfState("metrics-collector", "overview", lvl, "updateOverview: query active rules failed: %v (keeping previous value=%d)", err, activeRules)
 		}
 	} else if lvl := logStateTransition("overview-count-active-rules", false); lvl != "" {
-		Logf(lvl, "updateOverview: query active rules recovered")
+		TaskLogfState("metrics-collector", "overview", lvl, "updateOverview: query active rules recovered")
 	}
 	if err := database.QueryRow("SELECT COUNT(*) FROM lb_rules").Scan(&totalRules); err != nil {
 		if lvl := logStateTransition("overview-count-total-rules", true); lvl != "" {
-			Logf(lvl, "updateOverview: query total rules failed: %v (keeping previous value=%d)", err, totalRules)
+			TaskLogfState("metrics-collector", "overview", lvl, "updateOverview: query total rules failed: %v (keeping previous value=%d)", err, totalRules)
 		}
 	} else if lvl := logStateTransition("overview-count-total-rules", false); lvl != "" {
-		Logf(lvl, "updateOverview: query total rules recovered")
+		TaskLogfState("metrics-collector", "overview", lvl, "updateOverview: query total rules recovered")
 	}
 
 	// 在线节点数口径与 ComputeNodeStatus 统一：nodes.status 只在注册/上报时写入、
@@ -989,10 +989,10 @@ func (m *MetricsService) refreshDBOverviewMetrics() {
 		  AND datetime(last_seen) >= datetime('now', printf('-%d seconds', ?))
 	`, offlineThresholdSeconds).Scan(&onlineNodes); err != nil {
 		if lvl := logStateTransition("overview-count-online-nodes", true); lvl != "" {
-			Logf(lvl, "updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, onlineNodes)
+			TaskLogfState("metrics-collector", "overview", lvl, "updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, onlineNodes)
 		}
 	} else if lvl := logStateTransition("overview-count-online-nodes", false); lvl != "" {
-		Logf(lvl, "updateOverview: query online nodes recovered")
+		TaskLogfState("metrics-collector", "overview", lvl, "updateOverview: query online nodes recovered")
 	}
 
 	m.mu.Lock()
