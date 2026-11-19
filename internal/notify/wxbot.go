@@ -776,6 +776,10 @@ func wxBotSession(ctx context.Context, cred wxBotCred, link *botLinkState) error
 	if base == "" {
 		base = wxAPIBaseDefault
 	}
+	// 扫码已验证凭据，会话启动即视为在线（连接测试快速通过，不等首批 getupdates
+	// 长轮询 ~35s 才置在线——QQ WebSocket READY 即时而 wx 慢的根因）；若首批
+	// getupdates 返回 -14/错误再由 worker 置离线。
+	link.set(true, "")
 	first := true
 	for { //scope-exempt: daemon-run-body-loop（getupdates 长轮询挂起 ~35s，无 ticker）
 		if ctx.Err() != nil {
