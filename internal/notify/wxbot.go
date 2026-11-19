@@ -174,6 +174,21 @@ func WxBotLoggedIn() bool {
 	return raw != ""
 }
 
+// WxDefaultReceiver 扫码确认后默认接收者=扫码者 wxid（最近确认凭据优先，
+// 回退全局登录态）。使「扫码后无需再发消息即可保存通道」；入站捕获仍可覆盖。
+func WxDefaultReceiver() string {
+	wxCtxMu.Lock()
+	pin := wxConfirmedPin
+	wxCtxMu.Unlock()
+	if pin != nil && pin.UserID != "" {
+		return pin.UserID
+	}
+	if cred, ok := loadWxBotCred(); ok {
+		return cred.UserID
+	}
+	return ""
+}
+
 func cacheWxContextToken(from, token string) {
 	wxCtxMu.Lock()
 	wxContextTokens[from] = token

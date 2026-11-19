@@ -405,6 +405,12 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	err := notify.TestChannel(ctx, typ, target)
 	ok := err == nil
 	_, _ = db.DB.Exec(`UPDATE notification_channels SET last_test_at=datetime('now'), last_test_ok=? WHERE id=?`, boolToInt(ok), id)
+	// 通道测试留痕投递记录（用户裁定：所有外发消息含测试均可见）。
+	testErr := ""
+	if err != nil {
+		testErr = err.Error()
+	}
+	_ = notify.RecordChannelTestDelivery(owner, id, typ, name, ok, testErr)
 	auditName := name
 	if auditName == "" {
 		auditName = typ

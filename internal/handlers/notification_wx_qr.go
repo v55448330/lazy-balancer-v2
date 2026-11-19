@@ -53,8 +53,13 @@ func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 // 领取即清，3 分钟内有效）。
 func (h *Handlers) GetWxBindState(c *gin.Context) {
 	const captureWindow = 3 * time.Minute
+	receiver := notify.WxTakePendingReceiver(captureWindow)
+	if receiver == "" && notify.WxBotLoggedIn() {
+		// 扫码确认后默认接收者=扫码者，无需再发消息即可保存（入站捕获优先）。
+		receiver = notify.WxDefaultReceiver()
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"bot_ready": notify.WxBotLoggedIn(),
-		"receiver":  notify.WxTakePendingReceiver(captureWindow),
+		"receiver":  receiver,
 	}})
 }

@@ -215,6 +215,31 @@ func EnqueueTestDelivery(userID int64, eventType string) error {
 	return nil
 }
 
+// RecordChannelTestDelivery 通道「测试」留痕（用户裁定：投递记录须记录所有
+// 外发消息，含通道测试）。同步落 delivery 行（is_test=1，status=sent/failed）
+// + 每通道结果行，与真实投递同表同口径，投递记录可见。
+func RecordChannelTestDelivery(userID, channelID int64, typ, name string, ok bool, errMsg string) error {
+	status := "sent"
+	if !ok {
+		status = "failed"
+	}
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	res, err := db.DB.Exec(`INSERT INTO notification_deliveries
+		(user_id, event_type, level, title, body, status, attempts, is_test, created_at, sent_at)
+		VALUES (?,?,?,?,?,?,1,1,?,?)`,
+		userID, "channel.test", "info", "【测试】通道「"+name+"」",
+		"通道连通性测试消息", status, now, now)
+	if err != nil {
+		return err
+	}
+	deliveryID, _ := res.LastInsertId()
+	_, err = db.DB.Exec(`INSERT INTO notification_delivery_channels
+		(delivery_id, user_id, channel_id, channel_name, channel_type, event_type, status, error, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		deliveryID, userID, channelID, name, typ, "channel.test", status, errMsg, now)
+	return err
+}
+
 // DeliverDailyForUser 单用户日报测试发送（导出：每日摘要卡「测试发送」）：
 // 与定时日报同管线（数据载荷落 pending → 派发侧按通道格式渲染），is_test=1
 // 区分定时全员日报（is_test=0）。

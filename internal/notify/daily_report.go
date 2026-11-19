@@ -352,9 +352,11 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, "### %s %s\n\n| 指标 | 数值 |\n| --- | --- |\n", sec.emoji, sec.title)
+			// QQ 官方 markdown 不支持表格（仅标题/加粗/列表/引用/链接/图片），
+			// 用加粗列表行呈现指标，避免表格在 QQ 端退化为纯文本竖线。
+			fmt.Fprintf(&b, "### %s %s\n\n", sec.emoji, sec.title)
 			for _, r := range rows {
-				fmt.Fprintf(&b, "| %s | %s |\n", r[0], r[1])
+				fmt.Fprintf(&b, "- **%s**：%s\n", r[0], r[1])
 			}
 			b.WriteString("\n")
 		}

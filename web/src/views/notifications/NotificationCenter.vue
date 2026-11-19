@@ -213,13 +213,10 @@
               </div>
             </div>
           </template>
-          <el-table :data="eventRules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }">
+          <el-table :data="eventRules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb', color: '#374151', fontWeight: 600 }">
             <el-table-column :label="t('app.notification.rules.trigger')" width="90">
               <template #default="{ row }">
-                <div class="rule-name-cell">
-                  <el-icon :size="16" color="#3b82f6"><Bell /></el-icon>
-                  <span class="rule-name-text">{{ eventGroup(row.title) }}</span>
-                </div>
+                <span class="rule-name-text">{{ eventGroup(row.title) }}</span>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.events')" min-width="280">
@@ -230,6 +227,9 @@
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.minLevel')" width="120">
+              <template #header>
+                <span>{{ t('app.notification.rules.minLevel') }}<FieldHelpIcon :content="t('app.notification.rules.minLevelHint')" /></span>
+              </template>
               <template #default="{ row }">
                 <el-select v-model="row.min_level" size="small" style="width:96px" @change="saveRuleField(asRule(row))">
                   <el-option value="info" :label="t('app.notification.subs.levels.info')" />
@@ -335,16 +335,20 @@
         </div>
 
         <el-divider />
-        <div class="tpl-section-head">
-          <div class="tpl-section-label">{{ t('app.notification.rules.preview') }}</div>
-          <el-radio-group v-if="tplEditorLang === 'markup'" v-model="htmlPreviewMode" size="small">
-            <el-radio-button value="render">{{ t('app.notification.rules.previewRender') }}</el-radio-button>
-            <el-radio-button value="source">{{ t('app.notification.rules.previewSource') }}</el-radio-button>
-          </el-radio-group>
-        </div>
-        <!-- HTML：sandbox iframe 渲染预览（无脚本/无同源）；其余格式纯文本 pre -->
-        <iframe v-if="tplEditorLang === 'markup' && htmlPreviewMode === 'render'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
-        <pre v-else class="tpl-preview">{{ previewText }}</pre>
+        <!-- 预览区默认折叠（防弹框超屏）：展开后渲染/源码切换与预览正文 -->
+        <el-collapse v-model="tplPreviewOpen" class="tpl-preview-collapse">
+          <el-collapse-item name="preview" :title="t('app.notification.rules.preview')">
+            <div v-if="tplEditorLang === 'markup'" class="tpl-preview-mode">
+              <el-radio-group v-model="htmlPreviewMode" size="small">
+                <el-radio-button value="render">{{ t('app.notification.rules.previewRender') }}</el-radio-button>
+                <el-radio-button value="source">{{ t('app.notification.rules.previewSource') }}</el-radio-button>
+              </el-radio-group>
+            </div>
+            <!-- HTML：sandbox iframe 渲染预览（无脚本/无同源）；其余格式纯文本 pre -->
+            <iframe v-if="tplEditorLang === 'markup' && htmlPreviewMode === 'render'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
+            <pre v-else class="tpl-preview">{{ previewText }}</pre>
+          </el-collapse-item>
+        </el-collapse>
       </template>
       <el-empty v-else :description="t('app.notification.rules.noChannelsHint')" :image-size="60" />
 
@@ -379,8 +383,10 @@
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.channelsLabel') }}</span>
               <div class="daily-ch-select">
-                <el-checkbox-group v-model="dailyChannelSelection" size="small" @change="saveDailyChannels(dailyRule)">
-                  <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id">{{ ch.name }}</el-checkbox>
+                <el-checkbox-group v-model="dailyChannelSelection" @change="saveDailyChannels(dailyRule)">
+                  <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small">
+                    {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
+                  </el-checkbox>
                 </el-checkbox-group>
                 <div class="form-hint">{{ t('app.notification.rules.channelSelectHint') }}</div>
                 <div v-if="dailyChannelSelection.length === 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.rules.noDeliveryWarn') }}</span></div>
@@ -388,21 +394,19 @@
             </div>
           </div>
           <el-divider />
-          <DialogSectionHeader :title="t('app.notification.daily.channelSection')" :description="t('app.notification.daily.botFormatHint')" />
+          <DialogSectionHeader :title="t('app.notification.daily.channelSection')" :description="t('app.notification.daily.botFormatHint')" class="daily-section-head" />
           <div class="daily-config-rows">
+            <!-- 单行协调布局：名+类型 tag 左、格式右、编辑/预览行内 -->
             <div v-for="ch in userChannels" :key="ch.id" class="daily-config-row">
-              <div class="daily-config-head">
-                <span class="daily-config-name">{{ ch.name }}</span>
-                <el-tag size="small" effect="plain" type="info">{{ channelTypeLabel(ch.type) }}</el-tag>
-                <div class="daily-config-format">
-                  <span class="daily-config-label">{{ t('app.notification.daily.formatLabel') }}</span>
-                  <el-tag v-if="isBotChannel(ch.type)" size="small" effect="plain">{{ dailyFormatLabel(fixedDailyFormat(ch.type)) }}</el-tag>
-                  <el-select v-else :model-value="dailyFormatOf(dailyRule, ch.type)" size="small" style="width: 170px" @change="(v: string) => saveDailyFormat(dailyRule, ch.type, v)">
-                    <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
-                  </el-select>
-                </div>
+              <span class="daily-config-name">{{ ch.name }}</span>
+              <el-tag size="small" effect="plain" type="info">{{ channelTypeLabel(ch.type) }}</el-tag>
+              <div class="daily-config-format">
+                <span class="daily-config-label">{{ t('app.notification.daily.formatLabel') }}</span>
+                <el-tag v-if="isBotChannel(ch.type)" size="small" effect="plain">{{ dailyFormatLabel(fixedDailyFormat(ch.type)) }}</el-tag>
+                <el-select v-else :model-value="dailyFormatOf(dailyRule, ch.type)" size="small" style="width: 170px" @change="(v: string) => saveDailyFormat(dailyRule, ch.type, v)">
+                  <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
+                </el-select>
               </div>
-              <!-- 正文模板入口（全通道类型）：打开与事件规则共享的模板弹框 -->
               <div class="daily-config-actions">
                 <el-button size="small" link type="primary" @click="openChannelTplDialog(ch)">{{ t('app.notification.daily.editTemplate') }}</el-button>
                 <el-button size="small" link type="primary" :loading="previewChannelId === ch.id" @click="previewChannelDaily(ch)">{{ t('app.notification.rules.preview') }}</el-button>
@@ -445,13 +449,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EChartsOption } from 'echarts'
 import VChart from 'vue-echarts'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
-import { axisChartBase, barSeries, lineSeries, pieChartBase, chartColors } from '@/utils/chartBase'
+import { axisChartBase, barSeries, lineSeries, pieChartBase } from '@/utils/chartBase'
+import { securityActionColors } from '@/utils/chartTheme'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { hasOwn } from '@/utils/hasOwn'
 import type { NotificationChannel } from '@/types/notifications.ts'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
+import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
 import ChannelCards from './ChannelCards.vue'
@@ -505,6 +511,17 @@ const squareChartCorners = (opt: EChartsOption): EChartsOption => {
   return opt
 }
 
+// 概览图表柔和色板（对齐全站降饱和裁定：Element 柔和色族 + SecurityOverview
+// 语义色单源，替换 vivid tailwind chartColors；红=拦截色、橙=检出色）。
+const softChartColors = {
+  blue: '#409eff',
+  green: '#059669',
+  teal: '#0e7490',
+  orange: securityActionColors.detected,
+  red: securityActionColors.blocked,
+} as const
+const softPiePalette = [softChartColors.blue, softChartColors.green, softChartColors.orange, softChartColors.teal, softChartColors.red]
+
 const trendChartOption = computed<EChartsOption>(() => {
   const rows = trendData.value
   const labels = rows.map(d => d.date.slice(5))
@@ -515,9 +532,9 @@ const trendChartOption = computed<EChartsOption>(() => {
     [sentName, failedName, rateName],
     labels,
     [
-      barSeries(sentName, chartColors.green, rows.map(d => d.sent), { stack: 'total', barMaxWidth: 28 }),
-      barSeries(failedName, chartColors.red, rows.map(d => d.total - d.sent), { stack: 'total', barMaxWidth: 28 }),
-      lineSeries(rateName, chartColors.blue, rows.map(d => Math.round(d.rate * 100)), { yAxisIndex: 1, areaStyle: undefined, showSymbol: true }),
+      barSeries(sentName, softChartColors.green, rows.map(d => d.sent), { stack: 'total', barMaxWidth: 28 }),
+      barSeries(failedName, softChartColors.red, rows.map(d => d.total - d.sent), { stack: 'total', barMaxWidth: 28 }),
+      lineSeries(rateName, softChartColors.blue, rows.map(d => Math.round(d.rate * 100)), { yAxisIndex: 1, areaStyle: undefined, showSymbol: true }),
     ],
     { legendTop: true, yExtra: { minInterval: 1 } },
   )
@@ -535,7 +552,7 @@ const channelTypeLabel = (typ: string): string => {
   }
 }
 const channelDistOption = computed<EChartsOption>(() => squareChartCorners(pieChartBase(
-  channelDist.value.map(d => ({ name: channelTypeLabel(d.type), value: d.count })),
+  channelDist.value.map((d, i) => ({ name: channelTypeLabel(d.type), value: d.count, itemStyle: { color: softPiePalette[i % softPiePalette.length] } })),
 )))
 
 // 投递分布三维（delivery-stats：每通道结果口径，7 天）
@@ -546,20 +563,20 @@ interface DeliveryStats {
 }
 const deliveryStats = ref<DeliveryStats>({ by_channel: [], by_type: [], by_event: [] })
 const byChannelOption = computed<EChartsOption>(() => squareChartCorners(pieChartBase(
-  deliveryStats.value.by_channel.map(d => ({ name: d.name, value: d.total })),
+  deliveryStats.value.by_channel.map((d, i) => ({ name: d.name, value: d.total, itemStyle: { color: softPiePalette[i % softPiePalette.length] } })),
 )))
 const rateByTypeOption = computed<EChartsOption>(() => {
   const rows = deliveryStats.value.by_type
   const name = t('app.notification.rules.trendRate')
   return squareChartCorners(axisChartBase([name], rows.map(d => channelTypeLabel(d.type)), [
-    barSeries(name, chartColors.blue, rows.map(d => Math.round(d.rate * 100)), { barMaxWidth: 36 }),
+    barSeries(name, softChartColors.blue, rows.map(d => Math.round(d.rate * 100)), { barMaxWidth: 36 }),
   ], { yExtra: { min: 0, max: 100, axisLabel: { fontSize: 10, color: '#9ca3af', formatter: '{value}%' } } }))
 })
 const byEventOption = computed<EChartsOption>(() => {
   const rows = deliveryStats.value.by_event
   const name = t('app.notification.rules.statDeliveries')
   const opt = axisChartBase([name], rows.map(d => d.title), [
-    barSeries(name, chartColors.purple, rows.map(d => d.total), { barMaxWidth: 18 }),
+    barSeries(name, softChartColors.teal, rows.map(d => d.total), { barMaxWidth: 18 }),
   ], { yExtra: { minInterval: 1 } })
   // 横向条形（事件标题长，类目轴换 y）：grid 左侧留白给标题
   return squareChartCorners({ ...opt, grid: { left: 8, right: 24, top: 15, bottom: 32, containLabel: true }, xAxis: { type: 'value', minInterval: 1, axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#9ca3af' }, splitLine: { lineStyle: { color: '#f3f4f6' } } }, yAxis: { type: 'category', data: rows.map(d => d.title), axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#6b7280', width: 90, overflow: 'truncate' } } })
@@ -626,6 +643,7 @@ const tplChannelTab = ref('') // 通道 ID 字符串
 const tplTexts = ref<Record<string, string>>({}) // 通道 ID → 草稿模板
 const tplFormats = ref<Record<string, string>>({}) // rule 模式：通道 ID → 正文格式（编辑高亮/预览状态）
 const htmlPreviewMode = ref<'render' | 'source'>('render')
+const tplPreviewOpen = ref<string[]>([]) // 预览区默认折叠（防弹框超屏），开弹框时复位
 const savingTpl = ref(false)
 const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{node}}']
 const tplFormatOptions = ['text', 'markdown', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
@@ -736,6 +754,11 @@ const fetchRules = async (): Promise<void> => {
     const rulesUrl = isAdmin.value && rulesUserId.value > 0 ? `/notification/rules?user_id=${rulesUserId.value}` : '/notification/rules'
     const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; daily_items?: { id: string; label: string }[] } }>(rulesUrl)
     rules.value = res.data?.rules ?? []
+    // 最低级别预选：空值回退目录默认级别 info（目录各组最低级别，亦为后端
+    // 新建订阅行的起始级别）——下拉不再呈现空「请选择」态；仅显示兜底，不写库。
+    for (const r of rules.value) {
+      if (r.trigger === 'event' && !r.min_level) r.min_level = 'info'
+    }
     userChannels.value = res.data?.channels ?? []
     dailyItemOptions.value = res.data?.daily_items ?? []
     if (!isAdmin.value) {
@@ -965,6 +988,7 @@ const openChannelTplDialog = (ch: RuleChannel): void => {
   tplTexts.value = drafts
   tplChannelTab.value = String(ch.id)
   htmlPreviewMode.value = 'render'
+  tplPreviewOpen.value = []
   tplDialogVisible.value = true
 }
 // 通道模式保存：草稿回写日报草稿库后落通道配置；成功关闭弹框
@@ -994,6 +1018,7 @@ const editTemplate = (rule: Rule): void => {
   const targets = tplSelectedChannels.value.length ? userChannels.value.filter(ch => tplSelectedChannels.value.includes(ch.id)) : userChannels.value
   tplChannelTab.value = targets.length ? String(targets[0].id) : ''
   htmlPreviewMode.value = 'render'
+  tplPreviewOpen.value = []
   tplDialogVisible.value = true
 }
 // 通道选择变化：tab 不在当前 tab 集内时回落到首个
@@ -1129,7 +1154,6 @@ onMounted(() => {
 .chart-container { height: 248px; }
 .chart-container .echarts { height: 100%; }
 .privacy-hint { font-size: 12px; color: #9ca3af; }
-.rule-name-cell { display: flex; align-items: center; gap: 8px; }
 .rule-name-text { font-weight: 600; }
 .tag-wrap { display: flex; flex-wrap: wrap; gap: 4px; }
 .ev-more { font-size: 11px; color: #6b7280; }
@@ -1143,6 +1167,12 @@ onMounted(() => {
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; }
+/* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
+.tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
+.tpl-preview-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; border-bottom: none; }
+.tpl-preview-collapse :deep(.el-collapse-item__wrap) { border-bottom: none; }
+.tpl-preview-collapse :deep(.el-collapse-item__content) { padding-bottom: 0; }
+.tpl-preview-mode { margin-bottom: 8px; }
 .scope-hint { font-size: 12px; color: #9ca3af; }
 .rule-ch-select { margin-bottom: 4px; }
 .rule-ch-select :deep(.el-checkbox) { margin-right: 12px; margin-bottom: 6px; }
@@ -1154,18 +1184,20 @@ onMounted(() => {
 .daily-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; }
 .daily-value { font-size: 13px; font-weight: 600; color: #111827; }
-.daily-ch-select { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-/* 日报配置弹窗：基本配置 + 通道卡片行（名称+类型+格式 / 内容模板 / 操作） */
+.daily-ch-select { flex: 1; min-width: 0; }
+.daily-ch-select :deep(.el-checkbox) { margin-right: 12px; margin-bottom: 6px; }
+/* 日报配置弹窗：基本配置 + 每通道单行卡（名+类型 tag 左 / 格式右 / 编辑预览行内） */
 .daily-config-body { min-height: 80px; }
 .daily-config-basic { display: flex; flex-direction: column; gap: 12px; }
 .daily-config-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
-.daily-config-rows { display: flex; flex-direction: column; gap: 12px; }
-.daily-config-row { border: 1px solid #ebeef5; border-radius: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.daily-config-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.daily-config-rows { display: flex; flex-direction: column; gap: 8px; }
+.daily-config-row { border: 1px solid #ebeef5; border-radius: 0; padding: 10px 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .daily-config-name { font-weight: 600; font-size: 13px; color: #111827; }
 .daily-config-format { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .daily-config-label { font-size: 12px; color: #6b7280; flex: none; }
 .daily-config-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* 节标题与左竖条顶对齐（描述在标题下，不整块居中） */
+.daily-config-dialog :deep(.daily-section-head) { align-items: flex-start; }
 /* 日报预览弹窗 */
 .daily-preview-toolbar { margin-bottom: 10px; }
 .daily-html-preview { width: 100%; height: 340px; border: 1px solid #e5e7eb; background: #fff; }

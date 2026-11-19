@@ -28,7 +28,7 @@
         </div>
       </template>
 
-      <!-- 通道卡片网格：统一尺寸/间距/层级（名称+类型 tag+接收者+传输摘要+测试态+操作） -->
+      <!-- 通道卡片网格：统一尺寸/间距/层级（名称+类型 tag / 接收者+传输摘要 / 底栏=测试态+文字操作） -->
       <el-row v-loading="loading" :gutter="16">
         <el-col v-for="ch in filteredChannels" :key="ch.id" :xs="24" :sm="12" :lg="8" class="ch-col">
           <el-card class="ch-card" :class="[`ch-${ch.type}`, { 'ch-disabled': !ch.enabled }]">
@@ -45,30 +45,32 @@
               </div>
               <el-switch v-model="ch.enabled" size="small" :disabled="writeBlocked" @change="toggleEnabled(ch)" />
             </div>
-            <div class="ch-target">
-              <span class="ch-target-label">{{ targetLabelShort(ch.type) }}</span>
-              <code class="ch-target-value" :title="displayTarget(ch)">{{ displayTarget(ch) }}</code>
+            <div class="ch-info">
+              <div class="ch-target">
+                <span class="ch-target-label">{{ targetLabelShort(ch.type) }}</span>
+                <code class="ch-target-value" :title="displayTarget(ch)">{{ displayTarget(ch) }}</code>
+              </div>
+              <div class="ch-transport">
+                <span class="ch-transport-label">{{ t('app.notification.channels.transportSection') }}</span>
+                <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
+              </div>
             </div>
-            <div class="ch-transport">
-              <span class="ch-transport-label">{{ t('app.notification.channels.transportSection') }}</span>
-              <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
-            </div>
-            <div class="ch-meta">
+            <div class="ch-foot">
               <span class="ch-test" :class="testStateClass(ch)">
                 <i class="ch-test-dot" :class="!ch.last_test_at ? 'is-none' : ch.last_test_ok ? 'is-ok' : 'is-fail'" />
                 {{ testStateText(ch) }}
               </span>
-            </div>
-            <div class="ch-actions">
-              <el-button size="small" link type="primary" :loading="testingId === ch.id" :disabled="writeBlocked" @click="testChannel(ch)">
-                {{ t('app.notification.channels.test') }}
-              </el-button>
-              <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">
-                {{ t('app.notification.channels.edit') }}
-              </el-button>
-              <el-button size="small" link type="danger" :loading="deletingIds.has(ch.id)" :disabled="writeBlocked" @click="deleteChannel(ch)">
-                {{ t('app.notification.channels.delete') }}
-              </el-button>
+              <div class="ch-actions">
+                <el-button size="small" link type="primary" :loading="testingId === ch.id" :disabled="writeBlocked" @click="testChannel(ch)">
+                  {{ t('app.notification.channels.test') }}
+                </el-button>
+                <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">
+                  {{ t('app.notification.channels.edit') }}
+                </el-button>
+                <el-button size="small" link type="danger" :loading="deletingIds.has(ch.id)" :disabled="writeBlocked" @click="deleteChannel(ch)">
+                  {{ t('app.notification.channels.delete') }}
+                </el-button>
+              </div>
             </div>
           </el-card>
         </el-col>
@@ -93,6 +95,7 @@
       <template #header>
         <DialogHeader :icon="editTarget ? Edit : Plus" :title="editTarget ? t('app.notification.channels.edit') : t('app.notification.channels.add')" :subtitle="typeLabel(drawerForm.type)" tone="primary" />
       </template>
+      <DialogSectionHeader :title="t('app.notification.channels.configSection')" />
       <el-form :label-width="$flw('110px')" :disabled="saving">
         <el-form-item :label="t('app.notification.channels.name')">
           <el-input v-model="drawerForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
@@ -140,7 +143,7 @@
               </el-radio-group>
               <div class="form-hint">{{ t('app.notification.channels.styleMethodHint') }}</div>
             </el-form-item>
-            <el-form-item :label="t('app.notification.channels.styleHeaders')">
+            <el-form-item :label="t('app.notification.channels.styleHeaders')" class="headers-form-item">
               <div class="header-rows">
                 <div v-for="(row, i) in headerRows" :key="i" class="header-row">
                   <el-select v-model="row.name" size="small" filterable allow-create default-first-option :placeholder="t('app.notification.channels.styleHeaderName')" class="header-name">
@@ -275,7 +278,7 @@ const transportSummary = (ch: NotificationChannel): string => {
 
 const testStateText = (ch: NotificationChannel): string => {
   if (!ch.last_test_at) return t('app.notification.channels.neverTested')
-  return ch.last_test_ok ? t('app.notification.channels.lastTestOk') : t('app.notification.channels.lastTestFail')
+  return ch.last_test_ok ? t('app.notification.channels.testStateOk') : t('app.notification.channels.testStateFail')
 }
 const testStateClass = (ch: NotificationChannel): string =>
   !ch.last_test_at ? 'test-none' : ch.last_test_ok ? 'test-ok' : 'test-fail'
@@ -561,30 +564,33 @@ defineExpose({ fetchChannels })
 .ch-name { font-size: 14px; font-weight: 600; color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-tags { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 
+/* 信息区：接收者+传输摘要两行紧凑排布，间距统一 */
+.ch-info { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+
 .ch-target {
   display: flex; align-items: baseline; gap: 8px;
   padding: 7px 10px;
   background: var(--el-fill-color-extra-light);
   border-radius: 0;
-  margin-bottom: 8px;
 }
 .ch-target-label { flex: none; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
 .ch-target-value { font-size: 12px; color: #374151; word-break: break-all; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ch-transport { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ch-transport { display: flex; align-items: baseline; gap: 8px; }
 .ch-transport-label { flex: none; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
 .ch-transport-value { font-size: 12px; color: #374151; }
 
-.ch-meta { margin-bottom: 10px; }
+/* 底栏：测试态（左）+文字操作（右），分隔线收口，margin-top:auto 齐高 */
+.ch-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; margin-top: auto; }
 .ch-test { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
 .ch-test-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.ch-test-dot.is-ok { background: #10b981; }
-.ch-test-dot.is-fail { background: #ef4444; }
+.ch-test-dot.is-ok { background: #059669; }
+.ch-test-dot.is-fail { background: #f56c6c; }
 .ch-test-dot.is-none { background: #9ca3af; }
-.test-ok { color: #10b981; }
-.test-fail { color: #ef4444; }
+.test-ok { color: #059669; }
+.test-fail { color: #f56c6c; }
 .test-none { color: #9ca3af; }
 
-.ch-actions { display: flex; gap: 4px; justify-content: flex-end; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; margin-top: auto; }
+.ch-actions { display: flex; align-items: center; gap: 4px; }
 
 /* 编辑弹窗：绑定辅助区 + 传输配置分组 */
 .ch-form-section { margin-top: 4px; }
@@ -593,6 +599,8 @@ defineExpose({ fetchChannels })
 .bind-qr-img { width: 200px; height: 200px; }
 .bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
+/* 自定义请求头：多行内容时 label 与整块垂直居中 */
+.headers-form-item { align-items: center; }
 .header-rows { width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .header-row { display: grid; grid-template-columns: 180px 1fr auto; gap: 8px; align-items: center; }
 .header-name { width: 100%; }

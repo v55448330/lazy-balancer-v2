@@ -130,6 +130,9 @@
               </div>
             </div>
           </template>
+    <!-- 列宽按内容实测（SF/PingFang 口径，另加 24px cell 内边距）：19 字符时间戳≈137px→时间列 170 不换行；
+         en 功能双 tag≈258px→功能列定宽 290（禁 min-width 弹性分摊，防宽屏 ballooning 大片空白；
+         第三个白名单 tag 出现时按既有 flex-wrap 换行）；名称为唯一弹性列吸收余宽；创建人/状态/操作紧凑。 -->
     <el-table
       v-loading="loading"
       :data="tableKeys"
@@ -143,7 +146,7 @@
           <el-button link type="primary" class="key-name-cell" @click="openKeyDetail(asKey(scope.row))">{{ scope.row.name }}</el-button>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.status')" width="130">
+      <el-table-column :label="t('common.app.views.keys.status')" width="135">
         <template #default="scope">
           <div class="status-cell">
             <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
@@ -162,7 +165,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.features')" min-width="280">
+      <el-table-column :label="t('common.app.views.keys.features')" width="290">
         <template #default="scope">
           <div class="feature-tags">
             <el-tag :type="apiFeatureTag(asKey(scope.row)).type" size="small" effect="plain">{{ apiFeatureTag(asKey(scope.row)).text }}</el-tag>
@@ -173,19 +176,19 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.createdBy')" width="120" show-overflow-tooltip>
+      <el-table-column :label="t('common.app.views.keys.createdBy')" width="100" show-overflow-tooltip>
         <template #default="scope">{{ scope.row.display_name || scope.row.username || ('#' + scope.row.created_by) }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.updatedAt')" width="160">
+      <el-table-column :label="t('common.app.views.keys.updatedAt')" width="170">
         <template #default="scope">{{ formatDate(scope.row.updated_at) || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="160">
+      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="170">
         <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.lastUsed')" width="160">
+      <el-table-column :label="t('common.app.views.keys.lastUsed')" width="170">
         <template #default="scope">{{ formatDate(scope.row.last_used) || t('common.app.views.keys.neverUsed') }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colAction')" width="160" fixed="right">
+      <el-table-column :label="t('app.notification.deliveries.colAction')" width="165" fixed="right">
         <template #default="scope">
           <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
             <div class="row-actions">
