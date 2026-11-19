@@ -323,7 +323,7 @@
                   <code>{{ scope.row.method }} {{ scope.row.path }}</code>
                 </template>
               </el-table-column>
-              <el-table-column :label="t('common.app.views.keys.typeCol')" width="90" align="center">
+              <el-table-column :label="t('common.app.views.keys.typeCol')" width="90">
                 <template #default="scope">
                   <el-tag :type="scope.row.read_only ? 'success' : 'warning'" size="small">
                     {{ scope.row.read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.write') }}

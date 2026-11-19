@@ -229,7 +229,7 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.minLevel')" width="120" align="center">
+            <el-table-column :label="t('app.notification.rules.minLevel')" width="120">
               <template #default="{ row }">
                 <el-select v-model="row.min_level" size="small" style="width:96px" @change="saveRuleField(asRule(row))">
                   <el-option value="info" :label="t('app.notification.subs.levels.info')" />
@@ -246,12 +246,12 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.bodyTemplate')" width="90" align="center">
+            <el-table-column :label="t('app.notification.rules.bodyTemplate')" width="90">
               <template #default="{ row }">
                 <el-button size="small" link type="primary" @click="editTemplate(asRule(row))">{{ t('app.notification.rules.edit') }}</el-button>
               </template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.enabled')" width="65" align="center">
+            <el-table-column :label="t('app.notification.rules.enabled')" width="65">
               <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="toggleRule(asRule(row))" /></template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.actions')" width="80" fixed="right">

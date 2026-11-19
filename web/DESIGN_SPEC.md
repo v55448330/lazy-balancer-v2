@@ -2,7 +2,7 @@
 
 **建立：** 2026-11-19（用户裁定：从安全总览/仪表盘/任务监控提取标准，后续所有前端组件变动必须遵循）
 **适用范围：** web/src 全部页面与组件。新页面/新组件 MUST 先对照本规范；既有页面改动时顺带对齐。
-**机械守卫：** tests/notificationsCenter.spec.ts、apiAccessRename.spec.ts、exportSurface.spec.ts、notificationKeyCoverage.spec.ts。
+**机械守卫：** tests/designGuard.spec.ts（全仓设计守卫）、tests/notificationsCenter.spec.ts、apiAccessRename.spec.ts、exportSurface.spec.ts、notificationKeyCoverage.spec.ts、settingsConfirmationGuards.spec.ts、formFreeze.spec.ts 及布局类钉测（npm test 必跑，违规即红）。
 
 ## 1. 形状语言
 - 全站直角：`--el-border-radius-base/small/round: 0`（main.css）。卡片/按钮/输入/弹框/标签一律直角。
@@ -103,3 +103,16 @@
 - **双协议对称**：API/MCP 的开关、只读、统计、明细必须成对设计；Key 级与全局级同构。
 - **投递记录**：恒全量（不区分用户视角），用户/通道维度经行内列呈现；禁止裸事件键。
 - **每日摘要**：定时摘要与事件规则形态不同，独立卡片交互，不混事件表格。
+
+## 14. 增补裁定（2026-11-19 第四轮，designGuard 机器化）
+- **表头左对齐**：表格列头一律左对齐（设计标准）；通知/密钥面禁 `align="center"/"right"`（designGuard 钉）。其余页面逐步对齐。
+- **图表直角**：概览及所有图表柱/饼 `borderRadius:0`、图例 `icon:'rect'`（直角语言延伸到数据图形容器；饼扇区白描边保留）。
+- **操作确认**：测试/保存/启用/禁用/删除等状态变更或外发操作必须 `ElMessageBox.confirm`（取消不执行）；开关启停取消需回滚。
+- **创建人显示名**：列表创建人/属主优先 display_name，回退 username/#id；更新人同口径入详情。
+- **列表列取舍**：创建时间不重要入详情；更新时间/过期时间/最后使用保留在列表；列宽按内容优化避免省略号/换行。
+- **详情完整**：密钥详情必含 IP 白名单（空=不限制来源）。
+- **webhook 请求头**：下拉预设（Authorization/X-API-Key/Content-Type/Accept/User-Agent）+可创建 X-* 自定义+值输入，网格对齐；禁裸 input 名。
+- **机器人传输配置**：QQ/微信消息形态由官方协议固定，通道编辑不提供消息类型/传输配置；日报格式对机器人固定，弹框仅决定高亮/预览样式。
+- **模板弹框统一**：日报每通道模板编辑复用事件规则同一弹框（全类型可编辑）；日报基本配置=投递时间/包含项目/目标通道（三态），label 与控件垂直对齐。
+- **命名统一**：bot 绑定输入统一「接收者」，placeholder 区分 openid/wxid；webhook 地址 label「URL」。
+- **设计守卫豁免**：shadow="never"/v-model.number 仅限登记 legacy（PathRulesEditor 内嵌面板/百分号输入），条目失效即红；新增违规无法交付。

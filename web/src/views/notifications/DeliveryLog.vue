@@ -68,28 +68,28 @@
           <span v-else class="ev-more">—</span>
         </template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colLevel')" width="100" align="center">
+      <el-table-column :label="t('app.notification.deliveries.colLevel')" width="100">
         <template #default="scope">
           <el-tag :type="levelTagType(scope.row.level)" size="small">
             {{ t(`app.notification.subs.levels.${scope.row.level}`) }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colStatus')" width="110" align="center">
+      <el-table-column :label="t('app.notification.deliveries.colStatus')" width="110">
         <template #default="scope">
           <el-tag :type="statusTagType(scope.row.status)" size="small">{{ statusLabel(scope.row.status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colAttempts')" width="70" align="center">
+      <el-table-column :label="t('app.notification.deliveries.colAttempts')" width="70">
         <template #default="scope">{{ scope.row.attempts }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colNote')" width="100" align="center">
+      <el-table-column :label="t('app.notification.deliveries.colNote')" width="100">
         <template #default="scope">
           <el-tag v-if="scope.row.is_test" size="small" type="info" effect="plain">{{ t('app.notification.deliveries.noteTest') }}</el-tag>
           <span v-else class="ev-more">—</span>
         </template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colAction')" width="110" align="center">
+      <el-table-column :label="t('app.notification.deliveries.colAction')" width="110">
         <template #default="scope">
           <el-button
             v-if="isResendable(scope.row as NotificationDelivery)"
