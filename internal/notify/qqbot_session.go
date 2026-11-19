@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -167,7 +166,7 @@ func qqBotSession(ctx context.Context, rs *qqResumeState) error {
 			"token": "QQBot " + token, "session_id": rs.sessionID, "seq": rs.lastS.Load(),
 		}})
 		if err == nil {
-			log.Printf("INFO: QQ 机器人尝试断线续传（seq=%d）", rs.lastS.Load())
+			taskLogf(ctx, "connect", "QQ 机器人尝试断线续传（seq=%d）", rs.lastS.Load())
 		}
 	} else {
 		err = send(map[string]any{"op": 2, "d": map[string]any{
@@ -198,7 +197,7 @@ func qqBotSession(ctx context.Context, rs *qqResumeState) error {
 					return
 				}
 				if time.Since(time.UnixMilli(lastAck.Load())) > 2*beat+qqBeatGrace {
-					log.Printf("WARN: QQ 心跳 ACK 超时，判定连接死亡")
+					taskLogWarn(ctx, "connect", "QQ 心跳 ACK 超时，判定连接死亡")
 					_ = conn.Close()
 					return
 				}
@@ -243,8 +242,9 @@ func qqBotSession(ctx context.Context, rs *qqResumeState) error {
 					rs.sessionID = d.SessionID
 				}
 				qqLink.set(true, "")
+				taskLogf(ctx, "connect", "QQ 机器人连接建立（READY，session 已就绪）")
 			case "RESUMED":
-				log.Printf("INFO: QQ 机器人断线续传成功（seq=%d）", rs.lastS.Load())
+				taskLogf(ctx, "connect", "QQ 机器人断线续传成功（seq=%d）", rs.lastS.Load())
 				qqLink.set(true, "")
 			case "C2C_MESSAGE_CREATE":
 				handleQQC2CMessage(ctx, frame.D)
@@ -270,7 +270,7 @@ func handleQQC2CMessage(ctx context.Context, raw json.RawMessage) {
 	bindBotChannel(code, msg.Author.UserOpenID, "qq", "QQ 机器人", `{"openid":`+quoteJSON(msg.Author.UserOpenID)+`}`,
 		func(reply string) {
 			if err := qqSendText(ctx, msg.Author.UserOpenID, reply, msg.ID); err != nil {
-				log.Printf("WARN: QQ 绑定回复发送失败: %v", err)
+				taskLogWarn(ctx, "bind", "QQ 绑定回复发送失败: %v", err)
 			}
 		})
 }
@@ -283,7 +283,14 @@ func sendQQRESTMessage(ctx context.Context, openid, text string) error {
 // sendQQRESTMarkdown 主动发 QQ 单聊 markdown 富文本（msg_type=2；需机器人
 // 具备 markdown 权限——失败原样留痕，通道「测试」可预检）。
 func sendQQRESTMarkdown(ctx context.Context, openid, md string) error {
-	return qqSendRaw(ctx, openid, map[string]any{"content": md, "msg_type": 2}, "")
+	// 官方载荷（bot.q.qq.com 消息类型·Markdown）：msg_type=2 且内容置于
+	// markdown.content 对象——顶层 content 是文本字段形态，markdown 不生效。
+	// 换行规范：QQ markdown 单换行不渲染，需空行分段（单 \n → 双 \n）。
+	content := strings.ReplaceAll(md, "\n", "\n\n")
+	for strings.Contains(content, "\n\n\n\n") {
+		content = strings.ReplaceAll(content, "\n\n\n\n", "\n\n")
+	}
+	return qqSendRaw(ctx, openid, map[string]any{"msg_type": 2, "markdown": map[string]any{"content": content}}, "")
 }
 
 // qqSendText REST 发送文本：msgID 非空=被动回复（免主动消息额度）。

@@ -18,6 +18,8 @@ import (
 // DailyReportRun 日报 Scheduled：遍历启用用户按各自配置渲染+直接落投递
 // （不经事件订阅面——日报独立区块语义，与手动触发单源 DeliverDailyForAll）。
 func DailyReportRun(rc taskengine.RunContext) error {
-	_, err := DeliverDailyForAll(time.Now())
+	ctx := withTaskID(rc.Ctx, "notification-daily-report")
+	taskLogf(ctx, "daily", "日报定时任务触发（按各用户配置渲染昨日摘要）")
+	_, err := DeliverDailyForAll(ctx, time.Now())
 	return err
 }

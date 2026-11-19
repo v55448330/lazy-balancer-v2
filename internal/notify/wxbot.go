@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -162,6 +161,14 @@ func applyWxHeaders(req *http.Request, token string) {
 type wxSender struct{}
 
 func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error {
+	// 停止语义（用户裁定，同 QQ）：连接任务未运行=机器人服务不在位，出站
+	// 投递直接失败（落 failed+原因）。iLink 仅文本，无 markdown 形态。
+	if connected, lastErr, _ := WxLinkStatus(); !connected {
+		if lastErr != "" {
+			return fmt.Errorf("微信机器人服务未运行: %s", lastErr)
+		}
+		return errors.New("微信机器人服务未运行（连接任务已停止或登录态未配置）")
+	}
 	var styled struct {
 		ContentTemplate string `json:"content_template"`
 	}
@@ -304,10 +311,14 @@ func splitWxText(text string, limit int) []string {
 // RunWxBotConnection 连接主循环（对称 RunQQBotConnection；退避重连）。
 // 登录态过期（-14）fail-loud 终止：轮询再无意义，需重新扫码后由任务门重新拉起。
 func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
+	ctx = withTaskID(ctx, "wx-bot-connection")
+	// 清洁停止置离线（同 QQ 根因）：防 wxLink 残留假在线污染 Send/Test 门。
+	defer wxLink.set(false, "连接任务已停止")
 	// iLink 长轮询出站：wxBotSession（getupdates 挂起 ~35s），断线退避重连。
 	if !WxBotConfigured() {
 		return fmt.Errorf("微信 Bot 登录态未配置（请先扫码登录）")
 	}
+	taskLogf(ctx, "connect", "微信机器人连接任务启动（登录态已配置，开始长轮询）")
 	attempt := 0
 	for {
 		if ctx.Err() != nil {
@@ -330,7 +341,7 @@ func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 			attempt = 0
 		}
 		attempt++
-		log.Printf("WARN: 微信机器人连接断开（第 %d 次，%v 后重连）: %v", attempt, botBackoff(attempt), err)
+		taskLogWarn(ctx, "connect", "微信机器人连接断开（第 %d 次，%v 后重连）: %v", attempt, botBackoff(attempt), err)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -415,6 +426,7 @@ func wxBotSession(ctx context.Context, cred wxBotCred) error {
 		if first {
 			first = false
 			wxLink.set(true, "")
+			taskLogf(ctx, "connect", "微信机器人长轮询建立（首批 getupdates 成功，在线）")
 		}
 		for _, m := range ur.Msgs {
 			handleWxInbound(ctx, cred, m)
@@ -445,7 +457,7 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 		`{"receiver":`+quoteJSON(m.FromUserID)+`}`,
 		func(reply string) {
 			if err := sendWxMessage(ctx, cred, m.FromUserID, reply, m.ContextToken); err != nil {
-				log.Printf("WARN: 微信绑定回复发送失败: %v", err)
+				taskLogWarn(ctx, "bind", "微信绑定回复发送失败: %v", err)
 			}
 		})
 }
@@ -528,7 +540,7 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 		wxContextTokens = map[string]string{}
 		wxPendingQR = ""
 		wxCtxMu.Unlock()
-		log.Printf("INFO: 微信机器人扫码登录成功（bot=%s）", pr.BotID)
+		taskLogf(ctx, "bind", "微信机器人扫码登录成功（bot=%s）", pr.BotID)
 	}
 	return pr.Status, pr.Status == "confirmed", nil
 }

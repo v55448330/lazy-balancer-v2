@@ -114,7 +114,7 @@ func (h *Handlers) TriggerNotificationDaily(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, msgDailyTriggerForbidden), MessageKey: msgDailyTriggerForbidden})
 		return
 	}
-	rendered, err := notify.DeliverDailyForAll(time.Now())
+	rendered, err := notify.DeliverDailyForAll(c.Request.Context(), time.Now())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("触发全员日报失败", err)})
 		return

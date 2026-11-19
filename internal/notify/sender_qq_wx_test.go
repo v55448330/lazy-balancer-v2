@@ -159,3 +159,36 @@ func TestBindBotChannelUpsert(t *testing.T) {
 		t.Errorf("失效绑定码回执 = %v", replies)
 	}
 }
+
+// 停止语义回归（用户裁定+实测根因）：连接任务清洁停止必须置离线，且出站
+// Send 因「服务未运行」直接失败（不静默滞留 pending）。此前早退路径不清
+// qqLink/wxLink，残留假在线使 Send/Test 门放行。
+func TestQQConnectionStopClearsLinkAndBlocksSend(t *testing.T) {
+	newNotifyConnectorDB(t)
+	qqLink.set(true, "") // 模拟停止前在线
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = RunQQBotConnection(ctx) // 清洁停止（ctx 已取消）
+	if connected, _, _ := QQLinkStatus(); connected {
+		t.Fatal("连接任务停止后 qqLink 应置离线（残留假在线=根因）")
+	}
+	err := qqSender{}.Send(context.Background(), `{"openid":"o123"}`, Message{Title: "t", Body: "b"})
+	if err == nil || !strings.Contains(err.Error(), "服务未运行") {
+		t.Errorf("停止后出站 Send 应失败含「服务未运行」, got %v", err)
+	}
+}
+
+func TestWxConnectionStopClearsLinkAndBlocksSend(t *testing.T) {
+	newNotifyConnectorDB(t)
+	wxLink.set(true, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = RunWxBotConnection(ctx)
+	if connected, _, _ := WxLinkStatus(); connected {
+		t.Fatal("连接任务停止后 wxLink 应置离线")
+	}
+	err := wxSender{}.Send(context.Background(), `{"receiver":"wxid_1"}`, Message{Title: "t", Body: "b"})
+	if err == nil || !strings.Contains(err.Error(), "服务未运行") {
+		t.Errorf("停止后出站 Send 应失败含「服务未运行」, got %v", err)
+	}
+}

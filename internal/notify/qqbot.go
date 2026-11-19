@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -48,6 +47,14 @@ func QQLinkStatus() (bool, string, time.Time) {
 type qqSender struct{}
 
 func (qqSender) Send(ctx context.Context, targetJSON string, msg Message) error {
+	// 停止语义（用户裁定）：连接任务未运行=机器人服务不在位，出站投递直接
+	// 失败（落 failed+原因），不静默滞留 pending。连接在线态由连接 Daemon 维护。
+	if connected, lastErr, _ := QQLinkStatus(); !connected {
+		if lastErr != "" {
+			return fmt.Errorf("QQ 机器人服务未运行: %s", lastErr)
+		}
+		return errors.New("QQ 机器人服务未运行（连接任务已停止或凭据未配置）")
+	}
 	var styled struct {
 		MsgType         string `json:"msg_type"`
 		ContentTemplate string `json:"content_template"`
@@ -112,10 +119,15 @@ var qqWakeCh = make(chan struct{}, 1)
 // Identify。长时间在线后重连退避计数归零（长期运行不受历史断连拖累）。
 // 凭据变更（qqWakeCh）立即重置会话态重连，不等退避。
 func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
+	ctx = withTaskID(ctx, "qq-bot-connection")
+	// 清洁停止必须置离线：否则 qqLink 残留 connected=true，Send/Test 门被
+	// 污染成假在线（停止后仍放行的实测根因）。任何退出路径统一收尾。
+	defer qqLink.set(false, "连接任务已停止")
 	// 出站长连：ws 事件网关（qqBotSession 内心跳/Resume），断线退避重连。
 	if !QQBotConfigured() {
 		return fmt.Errorf("QQ 机器人凭据未配置")
 	}
+	taskLogf(ctx, "connect", "QQ 机器人连接任务启动（凭据已配置，开始鉴权建连）")
 	resume := &qqResumeState{}
 	attempt := 0
 	for {
@@ -132,7 +144,7 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 			attempt = 0
 		}
 		attempt++
-		log.Printf("WARN: QQ 机器人连接断开（第 %d 次，%v 后重连）: %v", attempt, botBackoff(attempt), err)
+		taskLogWarn(ctx, "connect", "QQ 机器人连接断开（第 %d 次，%v 后重连）: %v", attempt, botBackoff(attempt), err)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -140,6 +152,7 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 			// 凭据已轮换：旧会话态作废，立即以新凭据重新 Identify。
 			resume.reset()
 			attempt = 0
+			taskLogf(ctx, "connect", "QQ 凭据已轮换，重置会话态立即重连")
 		case <-time.After(botBackoff(attempt)):
 		}
 	}

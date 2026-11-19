@@ -913,16 +913,13 @@ const toggleKey = async (key: APIKey) => {
   // 此时没有门，连点会叠出第二个确认框并重复写。
   togglePendingId.value = key.id
   try {
-    if (!isEnabled) {
-      try {
-        await ElMessageBox.confirm(t('common.app.views.keys.disableConfirmMsg', { name: key.name }), t('common.app.views.keys.disableTitle'), {
-          type: 'warning',
-          confirmButtonText: t('common.app.views.keys.confirmDisable'),
-          cancelButtonText: t('common.app.views.keys.cancel'),
-        })
-      } catch {
-        return
-      }
+    try {
+      await ElMessageBox.confirm(
+        isEnabled ? t('common.app.views.keys.enableConfirmMsg', { name: key.name }) : t('common.app.views.keys.disableConfirmMsg', { name: key.name }),
+        isEnabled ? t('common.app.views.keys.enableTitle') : t('common.app.views.keys.disableTitle'),
+        { type: 'warning', confirmButtonText: isEnabled ? t('common.app.views.keys.confirmEnable') : t('common.app.views.keys.confirmDisable'), cancelButtonText: t('common.app.views.keys.cancel') })
+    } catch {
+      return
     }
     const payload: UpdateAPIKeyInput = { is_enabled: isEnabled }
     await request.patch(keyAdminEndpoint(key) ? `/api-keys/${key.id}/status` : `/users/me/api-keys/${key.id}`, payload)

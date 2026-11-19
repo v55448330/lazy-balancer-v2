@@ -117,7 +117,7 @@ func SaveDailyConfig(cfg DailyConfig) error {
 // DeliverDailyForAll 遍历全部启用日报的用户：按各自配置渲染昨日摘要并直接
 // 落 pending 投递（不经事件订阅面——日报是独立区块，不走订阅矩阵过滤）。
 // 返回渲染成功的用户数。Scheduled 任务体与管理员手动触发共用本函数（单源）。
-func DeliverDailyForAll(now time.Time) (int, error) {
+func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 	rows, err := db.DB.Query(`SELECT user_id FROM notification_daily WHERE COALESCE(json_extract(config,'$.enabled'),1)=1`)
 	if err != nil {
 		return 0, err
@@ -136,15 +136,18 @@ func DeliverDailyForAll(now time.Time) (int, error) {
 		if err != nil || !cfg.Enabled {
 			continue
 		}
-		data, err := CollectDailyData(context.Background(), now)
+		data, err := CollectDailyData(ctx, now)
 		if err != nil {
+			taskLogWarn(ctx, "daily", "日报数据采集失败（user=%d）: %v", u, err)
 			continue
 		}
 		if err := deliverDaily(u, cfg, data, now); err != nil {
+			taskLogWarn(ctx, "daily", "日报投递失败（user=%d）: %v", u, err)
 			continue
 		}
 		rendered++
 	}
+	taskLogf(ctx, "daily", "日报轮完成：启用用户 %d · 渲染投递 %d", len(users), rendered)
 	return rendered, nil
 }
 

@@ -34,6 +34,19 @@
       :header-cell-style="{ background: '#f9fafb' }"
       :empty-text="t('app.notification.deliveries.emptyText')"
     >
+      <!-- 展开行：分通道投递结果（失败原因与通道一一对应，替代仅 tooltip 的弱关联） -->
+      <el-table-column type="expand" width="36">
+        <template #default="scope">
+          <div class="ch-expand">
+            <div v-for="ch in scope.row.channels" :key="ch.channel_id" class="ch-expand-row">
+              <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small" effect="plain" class="ch-expand-name">{{ ch.channel_name }}</el-tag>
+              <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small">{{ channelStatusLabel(ch.status) }}</el-tag>
+              <span class="ch-expand-error" :class="{ 'ch-expand-error-failed': ch.status !== 'sent' }">{{ ch.error || t('app.notification.deliveries.expandNoError') }}</span>
+            </div>
+            <span v-if="!scope.row.channels?.length" class="ev-more">{{ t('app.notification.deliveries.expandEmpty') }}</span>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colTime')" width="170">
         <template #default="scope">
           {{ formatDate(scope.row.created_at) || '-' }}
@@ -162,6 +175,16 @@ const statusTagType = (status: DeliveryStatus): 'info' | 'success' | 'warning' |
   }
 }
 
+// 分通道状态标签（行内通道 status 为 string；未知值按失败兜底）
+const channelStatusLabel = (status: string): string => {
+  switch (status) {
+    case 'pending': return t('app.notification.deliveries.statusPending')
+    case 'sent': return t('app.notification.deliveries.statusSent')
+    case 'dead': return t('app.notification.deliveries.statusDead')
+    default: return t('app.notification.deliveries.statusFailed')
+  }
+}
+
 const levelTagType = (level: NotificationDelivery['level']): 'info' | 'warning' | 'danger' => {
   switch (level) {
     case 'info': return 'info'
@@ -238,4 +261,10 @@ defineExpose({ fetchDeliveries })
 .scope-hint { font-size: 12px; color: var(--text-secondary, #6b7280); }
 .deliveries-footer { margin-top: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: nowrap; }
 .deliveries-pagination { flex: 0 0 auto; white-space: nowrap; }
+/* 展开行：分通道投递结果（通道-状态-错误一一对应） */
+.ch-expand { padding: 4px 12px 8px 36px; display: flex; flex-direction: column; gap: 6px; }
+.ch-expand-row { display: flex; align-items: flex-start; gap: 8px; }
+.ch-expand-name { flex: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.ch-expand-error { font-size: 12px; color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding-top: 2px; }
+.ch-expand-error-failed { color: #dc2626; }
 </style>

@@ -167,6 +167,7 @@
                 <span>{{ t('app.notification.rules.dailyTitle') }}</span>
               </div>
               <div class="card-header-actions">
+                <el-button size="small" link type="primary" @click="openDailyConfig">{{ t('app.notification.daily.configBtn') }}</el-button>
                 <el-button size="small" link type="primary" :loading="testingDaily" @click="testDaily">{{ t('app.notification.daily.testSend') }}</el-button>
                 <el-button size="small" link type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
                 <el-switch v-model="dailyRule.enabled" size="small" @change="toggleRule(dailyRule)" />
@@ -185,19 +186,7 @@
                 <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
               </el-checkbox-group>
             </div>
-            <div class="daily-field">
-              <span class="daily-label">{{ t('app.notification.daily.formatLabel') }}</span>
-              <div class="daily-formats">
-                <div v-for="ch in (dailyRule.channels || [])" :key="ch.id" class="daily-format-row">
-                  <el-tag size="small" effect="plain">{{ ch.name }}</el-tag>
-                  <el-select :model-value="dailyFormatOf(dailyRule, ch.type)" size="small" style="width:170px" @change="(v: string) => saveDailyFormat(dailyRule, ch.type, v)">
-                    <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
-                  </el-select>
-                </div>
-                <span v-if="!(dailyRule.channels || []).length" class="ev-more">{{ t('app.notification.rules.noChannelsHint') }}</span>
-              </div>
-              <span class="form-hint">{{ t('app.notification.daily.formatHint') }}</span>
-            </div>
+            <span class="form-hint">{{ t('app.notification.daily.configHint') }}</span>
           </div>
         </el-card>
 
@@ -344,6 +333,61 @@
         <el-button type="primary" :loading="savingTpl" @click="saveTemplate">{{ t('app.notification.rules.save') }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- 日报通道配置弹窗：每通道渲染格式（写日报规则 formats）+ QQ/微信内容模板（写通道 style_config） -->
+    <el-dialog v-model="dailyConfigVisible" class="dialog-body-inset daily-config-dialog" width="min(760px, 94vw)" top="5vh">
+      <template #header>
+        <DialogHeader :icon="Calendar" :title="t('app.notification.daily.configTitle')" :subtitle="t('app.notification.daily.configSubtitle')" tone="primary" />
+      </template>
+      <div v-loading="dailyConfigLoading" class="daily-config-rows">
+        <div v-for="ch in userChannels" :key="ch.id" class="daily-config-row">
+          <div class="daily-config-head">
+            <span class="daily-config-name">{{ ch.name }}</span>
+            <el-tag size="small" effect="plain">{{ channelTypeLabel(ch.type) }}</el-tag>
+          </div>
+          <div class="daily-config-format">
+            <span class="daily-config-label">{{ t('app.notification.daily.formatLabel') }}</span>
+            <el-select :model-value="dailyRule ? dailyFormatOf(dailyRule, ch.type) : 'auto'" size="small" style="width: 170px" @change="(v: string) => { if (dailyRule) saveDailyFormat(dailyRule, ch.type, v) }">
+              <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
+            </el-select>
+          </div>
+          <!-- 内容模板=通道 style_config.content_template（后端白名单仅 QQ/微信），空模板=回退默认形态 -->
+          <template v-if="ch.type === 'qq' || ch.type === 'wx_clawbot'">
+            <div class="daily-config-label">{{ t('app.notification.daily.contentTemplate') }}</div>
+            <el-input v-model="dailyTplDrafts[ch.id]" type="textarea" :rows="3" :maxlength="2000" :placeholder="t('app.notification.daily.contentTemplatePlaceholder')" />
+            <div class="daily-config-actions">
+              <el-button size="small" type="primary" plain :loading="savingTplChannelId === ch.id" @click="saveChannelContentTemplate(ch)">{{ t('app.notification.daily.saveTemplate') }}</el-button>
+              <span class="form-hint">{{ t('app.notification.daily.contentTemplateHint') }}</span>
+            </div>
+          </template>
+          <div class="daily-config-preview">
+            <el-button size="small" link type="primary" :loading="previewChannelId === ch.id" @click="previewChannelDaily(ch)">{{ t('app.notification.rules.preview') }}</el-button>
+          </div>
+        </div>
+        <el-empty v-if="!dailyConfigLoading && userChannels.length === 0" :description="t('app.notification.rules.noChannelsHint')" :image-size="60" />
+      </div>
+      <template #footer>
+        <el-button @click="dailyConfigVisible = false">{{ t('app.notification.rules.cancel') }}</el-button>
+        <el-button type="primary" :loading="testingDaily" @click="testDaily">{{ t('app.notification.daily.testSend') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 日报预览弹窗（卡片预览与通道格式预览共用；html=sandbox iframe，其余纯文本 pre） -->
+    <el-dialog v-model="dailyPreviewVisible" append-to-body class="dialog-body-inset" width="min(680px, 92vw)" top="6vh">
+      <template #header>
+        <DialogHeader :icon="Calendar" :title="t('app.notification.daily.previewTitle')" :subtitle="dailyPreviewSource" tone="primary" />
+      </template>
+      <div class="daily-preview-toolbar">
+        <el-radio-group v-model="dailyPreviewFmt" size="small" @change="renderDailyPreview">
+          <el-radio-button v-for="f in dailyPreviewFormatOptions" :key="f.value" :value="f.value">{{ f.label }}</el-radio-button>
+        </el-radio-group>
+      </div>
+      <iframe v-if="dailyPreviewFmt === 'html'" class="daily-html-preview" sandbox="" :srcdoc="dailyPreviewText" :title="t('app.notification.daily.previewTitle')" />
+      <pre v-else v-loading="dailyPreviewLoading" class="tpl-preview">{{ dailyPreviewText || t('app.notification.daily.previewEmpty') }}</pre>
+      <template #footer>
+        <el-button @click="dailyPreviewVisible = false">{{ t('app.notification.rules.cancel') }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -351,13 +395,14 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Calendar, Bell, ChatDotRound, CircleCheckFilled, DataAnalysis, Odometer, TrendCharts } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EChartsOption } from 'echarts'
 import VChart from 'vue-echarts'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import { axisChartBase, barSeries, lineSeries, pieChartBase, chartColors } from '@/utils/chartBase'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { hasOwn } from '@/utils/hasOwn'
+import type { NotificationChannel } from '@/types/notifications.ts'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
@@ -612,6 +657,10 @@ const ruleWriteUrl = (ruleId: string): string =>
     : `/notification/rules/${ruleId}`
 
 const toggleRule = async (rule: Rule): Promise<void> => {
+  // 启停写操作需确认；取消/失败时回拨开关（switch 的 @change 已先行改值）
+  const confirmText = rule.enabled ? t('app.notification.rules.enableConfirm') : t('app.notification.rules.disableConfirm')
+  try { await ElMessageBox.confirm(confirmText, t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  catch { rule.enabled = !rule.enabled; return }
   try { await request.post(ruleWriteUrl(rule.id), { enabled: rule.enabled }) }
   catch { rule.enabled = !rule.enabled }
 }
@@ -638,14 +687,64 @@ const saveDailyFormat = async (rule: Rule | null, channelType: string, format: s
   try { await request.post(ruleWriteUrl(rule.id), { formats }) } catch { /* */ }
 }
 const dailyFormatOf = (rule: Rule | null, channelType: string): string => rule?.formats?.[channelType] || 'auto'
-// 日报测试发送：与定时日报同管线，落投递行（结果见投递记录）
+// 日报测试发送：与定时日报同管线，落投递行（结果见投递记录）；写操作需确认
 const testDaily = async (): Promise<void> => {
   if (testingDaily.value) return
+  try { await ElMessageBox.confirm(t('app.notification.daily.testConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  catch { return }
   testingDaily.value = true
   try {
     await request.post('/notification/daily/test', {})
     ElMessage.success(t('app.notification.daily.testSent'))
   } catch (e) { console.error(e) } finally { testingDaily.value = false }
+}
+
+// ===== 日报通道配置弹窗（每通道渲染格式 + QQ/微信内容模板） =====
+const dailyConfigVisible = ref(false)
+const dailyConfigLoading = ref(false)
+const dailyFullChannels = ref<NotificationChannel[]>([])
+const dailyTplDrafts = ref<Record<number, string>>({})
+const savingTplChannelId = ref<number | null>(null)
+const previewChannelId = ref<number | null>(null)
+
+const openDailyConfig = async (): Promise<void> => {
+  dailyConfigVisible.value = true
+  dailyConfigLoading.value = true
+  try {
+    // rules 端点的通道摘要不含 style_config——内容模板读写需全量通道 DTO
+    const res = await request.get<{ data?: { channels?: NotificationChannel[] } }>('/notification/channels', { silent: true })
+    const full = res.data?.channels ?? []
+    dailyFullChannels.value = full
+    const drafts: Record<number, string> = {}
+    for (const ch of full) {
+      let tpl: unknown
+      try { tpl = (JSON.parse(ch.style_config || '{}') as Record<string, unknown>).content_template } catch { tpl = undefined }
+      drafts[ch.id] = typeof tpl === 'string' ? tpl : ''
+    }
+    dailyTplDrafts.value = drafts
+  } catch (e) { console.error(e) } finally { dailyConfigLoading.value = false }
+}
+
+// 内容模板保存：PUT 通道 style_config 为全量覆盖语义——回读既有键仅替换
+// content_template（空模板=移除该键回退默认形态）；保存写库需确认。
+const saveChannelContentTemplate = async (ch: RuleChannel): Promise<void> => {
+  const full = dailyFullChannels.value.find(c => c.id === ch.id)
+  if (!full || savingTplChannelId.value !== null) return
+  const draft = (dailyTplDrafts.value[ch.id] ?? '').trim()
+  if (draft.length > 2000) { ElMessage.error(t('app.notification.daily.templateTooLong')); return }
+  try {
+    await ElMessageBox.confirm(t('app.notification.daily.saveTplConfirm', { name: ch.name }), t('app.notification.rules.confirmTitle'), { type: 'warning' })
+  } catch { return }
+  savingTplChannelId.value = ch.id
+  try {
+    let style: Record<string, unknown> = {}
+    try { style = JSON.parse(full.style_config || '{}') as Record<string, unknown> } catch { style = {} }
+    if (draft) style.content_template = draft
+    else delete style.content_template
+    await request.put(`/notification/channels/${ch.id}`, { style_config: style })
+    full.style_config = JSON.stringify(style)
+    mfaAwareSuccess(t('app.notification.daily.templateSaved'))
+  } catch (e) { console.error(e) } finally { savingTplChannelId.value = null }
 }
 
 const editTemplate = (rule: Rule): void => {
@@ -674,6 +773,9 @@ watch(tplSelectedChannels, () => {
 
 const saveTemplate = async (): Promise<void> => {
   if (!tplEditingRule.value || savingTpl.value) return
+  // 保存写库需确认（取消不执行）
+  try { await ElMessageBox.confirm(t('app.notification.rules.saveConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  catch { return }
   savingTpl.value = true
   try {
     // 通道选择 + 每通道模板（部分更新：不动启用态/级别/时间）。
@@ -696,8 +798,10 @@ const saveTemplate = async (): Promise<void> => {
 }
 
 const testRule = async (rule: Rule): Promise<void> => {
-  // 按规则选定通道+每通道模板渲染发送（后端 TestRuleDelivery；不落投递行）
+  // 按规则选定通道+每通道模板渲染发送（后端 TestRuleDelivery；不落投递行）；真实发送需确认
   if (testingRuleId.value !== null) return
+  try { await ElMessageBox.confirm(t('app.notification.rules.testConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  catch { return }
   testingRuleId.value = rule.id
   try {
     const base = ruleWriteUrl(rule.id)
@@ -710,8 +814,60 @@ const testRule = async (rule: Rule): Promise<void> => {
   } finally { testingRuleId.value = null }
 }
 
-const previewDaily = async (): Promise<void> => {
-  try { const res = await request.post<{ data?: { content: string } }>('/notification/daily/preview', { format: 'markdown' }); if (res.data?.content) window.open('', '_blank')?.document.write(`<pre>${res.data.content}</pre>`) } catch { /* */ }
+// ===== 日报预览弹窗（卡片预览与通道格式预览共用；html=sandbox iframe 渲染） =====
+const dailyPreviewVisible = ref(false)
+const dailyPreviewText = ref('')
+const dailyPreviewFmt = ref('markdown')
+const dailyPreviewSource = ref('')
+const dailyPreviewLoading = ref(false)
+const dailyPreviewFormatOptions = ['markdown', 'text', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
+
+const fetchDailyPreview = async (format: string): Promise<void> => {
+  dailyPreviewLoading.value = true
+  try {
+    const res = await request.post<{ data?: { content: string; format: string } }>('/notification/daily/preview', {
+      items: dailyRule.value?.items,
+      format,
+    })
+    dailyPreviewText.value = res.data?.content ?? ''
+    dailyPreviewFmt.value = res.data?.format || format
+  } catch (e) { console.error(e) } finally { dailyPreviewLoading.value = false }
+}
+
+// 弹框内切换格式即时重渲
+const renderDailyPreview = (): void => { void fetchDailyPreview(dailyPreviewFmt.value) }
+
+// 卡片预览：昨日真实数据（默认 markdown）
+const previewDaily = (): void => {
+  if (dailyPreviewLoading.value) return
+  dailyPreviewSource.value = ''
+  dailyPreviewFmt.value = 'markdown'
+  dailyPreviewText.value = ''
+  dailyPreviewVisible.value = true
+  void fetchDailyPreview('markdown')
+}
+
+// 通道级自动映射（与后端 renderDailyForChannel 同构：webhook=json/email=html/qq·wx=markdown）
+const autoDailyFormat = (typ: string): string => {
+  switch (typ) {
+    case 'webhook': return 'json'
+    case 'email': return 'html'
+    case 'qq':
+    case 'wx_clawbot': return 'markdown'
+    default: return 'text'
+  }
+}
+// 通道格式预览：按该通道生效格式（日报页覆盖 > 类型自动映射）渲染同一份日报
+const previewChannelDaily = (ch: RuleChannel): void => {
+  if (previewChannelId.value !== null || dailyPreviewLoading.value) return
+  const configured = dailyRule.value ? dailyFormatOf(dailyRule.value, ch.type) : 'auto'
+  const fmt = configured === 'auto' ? autoDailyFormat(ch.type) : configured
+  dailyPreviewSource.value = ch.name
+  dailyPreviewFmt.value = fmt
+  dailyPreviewText.value = ''
+  dailyPreviewVisible.value = true
+  previewChannelId.value = ch.id
+  void fetchDailyPreview(fmt).finally(() => { previewChannelId.value = null })
 }
 
 onMounted(() => {
@@ -771,7 +927,16 @@ onMounted(() => {
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
 .daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; padding-top: 5px; }
-.daily-channels { display: flex; gap: 6px; flex-wrap: wrap; }
-.daily-formats { display: flex; flex-direction: column; gap: 8px; }
-.daily-format-row { display: flex; align-items: center; gap: 8px; }
+/* 日报通道配置弹窗：通道卡片行（名称+类型 / 格式 / 内容模板 / 预览） */
+.daily-config-rows { display: flex; flex-direction: column; gap: 12px; min-height: 80px; }
+.daily-config-row { border: 1px solid #ebeef5; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.daily-config-head { display: flex; align-items: center; gap: 8px; }
+.daily-config-name { font-weight: 600; font-size: 13px; color: #111827; }
+.daily-config-format { display: flex; align-items: center; gap: 8px; }
+.daily-config-label { font-size: 12px; color: #6b7280; flex: none; }
+.daily-config-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.daily-config-preview { display: flex; justify-content: flex-end; }
+/* 日报预览弹窗 */
+.daily-preview-toolbar { margin-bottom: 10px; }
+.daily-html-preview { width: 100%; height: 340px; border: 1px solid #e5e7eb; background: #fff; }
 </style>

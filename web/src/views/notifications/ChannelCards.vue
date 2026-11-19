@@ -9,12 +9,16 @@
             <span>{{ t('app.notification.rules.channelsTab') }}</span>
           </div>
           <div class="card-header-actions">
+            <el-radio-group v-model="filterType" size="small">
+              <el-radio-button value="">{{ t('app.notification.channels.filterAll') }}</el-radio-button>
+              <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">{{ typeLabel(typ) }}</el-radio-button>
+            </el-radio-group>
             <el-select v-if="isAdminUser" v-model="filterUserId" size="small" clearable :placeholder="t('app.notification.channels.allUsers')" style="width:140px" @change="fetchChannels">
               <el-option v-for="u in userList" :key="u.id" :value="u.id" :label="u.username" />
             </el-select>
             <el-tooltip :disabled="!writeBlocked" :content="writeBlockedReason">
               <div>
-                <el-button type="primary" :disabled="writeBlocked || drawerVisible" @click="openCreate">
+                <el-button type="primary" size="small" :disabled="writeBlocked || drawerVisible" @click="openCreate">
                   <el-icon><Plus /></el-icon>
                   {{ t('app.notification.channels.add') }}
                 </el-button>
@@ -23,12 +27,6 @@
           </div>
         </div>
       </template>
-      <div class="ch-filter-row">
-        <el-radio-group v-model="filterType" size="small">
-          <el-radio-button value="">{{ t('app.notification.channels.filterAll') }}</el-radio-button>
-          <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">{{ typeLabel(typ) }}</el-radio-button>
-        </el-radio-group>
-      </div>
 
     <!-- 通道卡片网格（Dashboard 同构：彩色图标+状态+内联操作） -->
     <el-row v-loading="loading" :gutter="16">
@@ -47,6 +45,10 @@
           <div class="ch-target">
             <span class="ch-target-label">{{ targetLabelShort(ch.type) }}</span>
             <code class="ch-target-value">{{ displayTarget(ch) }}</code>
+          </div>
+          <div class="ch-transport">
+            <span class="ch-transport-label">{{ t('app.notification.channels.transportSection') }}</span>
+            <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
           </div>
           <div class="ch-meta">
             <span class="ch-test" :class="testStateClass(ch)">
@@ -106,9 +108,15 @@
               <el-button size="small" text type="primary" @click="drawerForm.targetValue = ''">{{ t('app.notification.channels.bindRebind') }}</el-button>
             </template>
             <template v-else>
-              <el-button type="primary" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
-              <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
-              <div v-if="bindQrImg" class="bind-hint">{{ t('app.notification.channels.bindScanHint', { app: drawerForm.type === 'qq' ? 'QQ' : t('app.notification.channels.typeWx') }) }}</div>
+              <template v-if="wxBotReady && drawerForm.type === 'wx_clawbot'">
+                <el-tag type="success" effect="plain">{{ t('app.notification.channels.wxLoggedIn') }}</el-tag>
+                <div class="bind-hint">{{ t('app.notification.channels.wxSendMsgHint') }}</div>
+              </template>
+              <template v-else>
+                <el-button type="primary" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
+                <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
+                <div v-if="bindQrImg" class="bind-hint">{{ t('app.notification.channels.bindScanHint', { app: drawerForm.type === 'qq' ? 'QQ' : t('app.notification.channels.typeWx') }) }}</div>
+              </template>
             </template>
           </div>
         </el-form-item>
@@ -160,16 +168,7 @@
               <div v-if="styleForm.msg_type === 'markdown'" class="form-hint">{{ t('app.notification.channels.styleMsgMdHint') }}</div>
             </el-form-item>
           </template>
-          <el-form-item :label="t('app.notification.channels.styleDailyFormat')">
-            <el-select v-model="styleForm.daily_format" size="small" style="width:160px">
-              <el-option value="" :label="t('app.notification.channels.styleFormatAuto')" />
-              <el-option value="text" :label="t('app.notification.channels.styleFormatText')" />
-              <el-option value="markdown" :label="t('app.notification.channels.styleFormatMarkdown')" />
-              <el-option value="html" :label="t('app.notification.channels.styleFormatHtml')" />
-              <el-option value="json" :label="t('app.notification.channels.styleFormatJson')" />
-            </el-select>
-          </el-form-item>
-          <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.tplMovedHint') }}</span></div>
+          <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.transportMovedHint') }}</span></div>
         </el-form>
           </el-collapse-item>
         </el-collapse>
@@ -266,6 +265,16 @@ const displayTarget = (ch: NotificationChannel): string => {
   return v || '-'
 }
 
+// 卡片传输配置摘要（style_config 单源；日报渲染格式已归规则日报区，不在此展示）
+const transportSummary = (ch: NotificationChannel): string => {
+  let sc: Record<string, string> = {}
+  try { sc = JSON.parse(ch.style_config || '{}') as Record<string, string> } catch { sc = {} }
+  if (ch.type === 'webhook') return (sc.method || 'POST').toUpperCase()
+  if (ch.type === 'email') return sc.body_format === 'html' ? 'HTML' : t('app.notification.channels.styleFormatText')
+  if (ch.type === 'qq') return sc.msg_type === 'markdown' ? 'Markdown' : t('app.notification.channels.styleMsgText')
+  return t('app.notification.channels.styleFormatText') // 微信 iLink 仅文本
+}
+
 const testStateText = (ch: NotificationChannel): string => {
   if (!ch.last_test_at) return t('app.notification.channels.neverTested')
   return ch.last_test_ok ? t('app.notification.channels.lastTestOk') : t('app.notification.channels.lastTestFail')
@@ -338,6 +347,10 @@ const targetPlaceholder = (typ: NotificationChannelType): string => {
 
 const saveDrawer = async (): Promise<void> => {
   if (saving.value || !canSave.value) return
+  // 操作确认标准：保存写库需弹框确认。
+  try {
+    await ElMessageBox.confirm(t('app.notification.channels.saveConfirm'), t('app.notification.channels.confirmTitle'), { type: 'warning' })
+  } catch { return }
   saving.value = true
   try {
     const key = { webhook: 'url', email: 'email', qq: 'openid', wx_clawbot: 'receiver' }[drawerForm.value.type] ?? 'target'
@@ -360,7 +373,7 @@ const saveDrawer = async (): Promise<void> => {
       // 新建保存即自动测试：立即验证可达性并刷新测试态（复用既有通道不重复测试）
       if (newId && !reused) {
         const created = channels.value.find(c => c.id === newId)
-        if (created) await testChannel(created)
+        if (created) await doTestChannel(created)
       }
       return
     }
@@ -371,6 +384,7 @@ const saveDrawer = async (): Promise<void> => {
 
 const bindLoading = ref(false)
 const bindQrImg = ref('')
+const wxBotReady = ref(false) // 微信扫码已登录（bot_ready），等待入站消息回填 receiver
 const startBind = async (): Promise<void> => {
   bindLoading.value = true
   try {
@@ -398,7 +412,10 @@ const pollBind = (): void => {
     try {
       const res = await request.get<{ data?: { bound?: boolean; openid?: string; receiver?: string; bot_ready?: boolean } }>(endpoint, { silent: true })
       const val = res.data?.openid ?? res.data?.receiver ?? ''
-      if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; stopBindPolling() }
+      if (val) { drawerForm.value.targetValue = val; bindQrImg.value = ''; wxBotReady.value = false; stopBindPolling(); return }
+      // 微信：扫码确认（bot_ready）后清除二维码、提示「向机器人发任意消息」，
+      // 继续轮询 receiver 回填——此前仅查 receiver 导致扫完码无反馈、无法保存。
+      if (drawerForm.value.type === 'wx_clawbot' && res.data?.bot_ready) { wxBotReady.value = true; bindQrImg.value = '' }
     } catch { /* keep polling */ }
   }, 3000)
   bindTimeout = setTimeout(stopBindPolling, 300000)
@@ -408,6 +425,7 @@ onUnmounted(stopBindPolling)
 const resetDrawer = (): void => {
   stopBindPolling()
   bindQrImg.value = ''
+  wxBotReady.value = false
   drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
   styleForm.value = emptyStyle()
   headerRows.value = []
@@ -443,15 +461,21 @@ const openEdit = (ch: NotificationChannel): void => {
 
 const toggleEnabled = async (ch: NotificationChannel): Promise<void> => {
   if (writeBlocked.value) return
+  const target = ch.enabled
+  // 操作确认标准：启用/禁用属状态变更，需弹框确认；取消回滚开关。
   try {
-    await request.put(`/notification/channels/${ch.id}`, { enabled: ch.enabled })
+    await ElMessageBox.confirm(
+      target ? t('app.notification.channels.enableConfirm', { name: ch.name }) : t('app.notification.channels.disableConfirm', { name: ch.name }),
+      t('app.notification.channels.confirmTitle'), { type: 'warning' })
+  } catch { ch.enabled = !target; return }
+  try {
+    await request.put(`/notification/channels/${ch.id}`, { enabled: target })
   } catch {
-    ch.enabled = !ch.enabled
+    ch.enabled = !target
   }
 }
 
-const testChannel = async (ch: NotificationChannel): Promise<void> => {
-  if (writeBlocked.value || testingId.value !== null) return
+const doTestChannel = async (ch: NotificationChannel): Promise<void> => {
   testingId.value = ch.id
   try {
     await request.post(`/notification/channels/${ch.id}/test`, {}, { silent: true })
@@ -462,6 +486,14 @@ const testChannel = async (ch: NotificationChannel): Promise<void> => {
     testingId.value = null
     await fetchChannels()
   }
+}
+const testChannel = async (ch: NotificationChannel): Promise<void> => {
+  if (writeBlocked.value || testingId.value !== null) return
+  // 操作确认标准：测试会真实外发消息，需弹框确认。
+  try {
+    await ElMessageBox.confirm(t('app.notification.channels.testConfirm', { name: ch.name }), t('app.notification.channels.confirmTitle'), { type: 'warning' })
+  } catch { return }
+  await doTestChannel(ch)
 }
 
 const deleteChannel = async (ch: NotificationChannel): Promise<void> => {
@@ -497,7 +529,6 @@ defineExpose({ fetchChannels })
 .card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
-.ch-filter-row { margin-bottom: 16px; }
 .transport-collapse { margin-top: 8px; border-top: none; }
 .transport-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; }
 .ch-col { margin-bottom: 16px; }
@@ -532,6 +563,9 @@ defineExpose({ fetchChannels })
 }
 .ch-target-label { flex: none; font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; }
 .ch-target-value { font-size: 12px; color: #374151; word-break: break-all; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-transport { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.ch-transport-label { flex: none; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+.ch-transport-value { font-size: 12px; color: #374151; }
 
 .ch-meta { margin-bottom: 8px; }
 .ch-test { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }

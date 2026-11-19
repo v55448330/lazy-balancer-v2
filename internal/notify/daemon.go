@@ -23,6 +23,8 @@ const (
 
 // RunDeliveryLoop 投递主循环（rc.Ctx 取消=引擎停止/角色门停）。
 func RunDeliveryLoop(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
+	ctx = withTaskID(ctx, "notification-delivery")
+	taskLogf(ctx, "delivery", "通知投递任务启动（pending 扫描+失败重试+通道健康探测）")
 	requeueStalePending()
 	t := time.NewTicker(deliveryTickInterval) //scope-exempt: daemon-run-body-loop
 	defer t.Stop()
@@ -46,7 +48,7 @@ func RunDeliveryLoop(ctx context.Context) error { //scope-exempt: daemon-run-bod
 func processPendingBatch(ctx context.Context) {
 	batch, err := pendingDeliveries(deliveryBatchSize)
 	if err != nil {
-		log.Printf("WARN: notify pending 扫描失败: %v", err)
+		taskLogWarn(ctx, "delivery", "notify pending 扫描失败: %v", err)
 		return
 	}
 	for _, d := range batch {
@@ -64,7 +66,7 @@ func processPendingBatch(ctx context.Context) {
 func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 	channels, err := channelsForUser(userID)
 	if err != nil {
-		log.Printf("WARN: notify 通道查询失败（delivery=%d）: %v", id, err)
+		taskLogWarn(ctx, "delivery", "notify 通道查询失败（delivery=%d）: %v", id, err)
 		return
 	}
 	// 订阅通道选择三态：无订阅行/缺省=全部启用通道（默认订阅语义）；
@@ -95,9 +97,11 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 			reason = "部分通道失败: " + strings.Join(errs, "; ")
 		}
 		markDelivery(id, "sent", true, reason)
+		taskLogf(ctx, "delivery", "投递 %d 已发送（user=%d event=%s）%s", id, userID, msg.EventType, reason)
 		return
 	}
 	markDelivery(id, "failed", true, strings.Join(errs, "; "))
+	taskLogWarn(ctx, "delivery", "投递 %d 失败（user=%d event=%s）: %s", id, userID, msg.EventType, strings.Join(errs, "; "))
 }
 
 // sendToChannels 逐通道渲染+发送（失败重试 1 次）+结果落行。deliverOne 与
