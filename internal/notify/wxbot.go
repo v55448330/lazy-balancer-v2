@@ -535,6 +535,27 @@ func sendWxMessage(ctx context.Context, cred wxBotCred, toUserID, text, contextT
 		if resp.StatusCode/100 != 2 {
 			return fmt.Errorf("微信发送 status=%d body=%s", resp.StatusCode, string(raw))
 		}
+		// 解析业务错误码：HTTP 200 仍可能 ret/errcode 非 0（如 context_token
+		// 过期/会话失效）。只查 HTTP 状态会误报成功（用户实测"提示成功但未收到"
+		// 根因），与 getupdates 同口径 fail-loud。
+		var sr struct {
+			Ret     int    `json:"ret"`
+			Errcode int    `json:"errcode"`
+			Errmsg  string `json:"errmsg"`
+		}
+		if json.Unmarshal(raw, &sr) != nil {
+			return fmt.Errorf("微信发送响应解析失败: %.256s", string(raw))
+		}
+		if sr.Ret != 0 || sr.Errcode != 0 {
+			code := sr.Ret
+			if code == 0 {
+				code = sr.Errcode
+			}
+			if code == -14 {
+				return fmt.Errorf("%w（发送 ret=%d errmsg=%s，请对方再发一条消息刷新会话）", errWxSessionExpired, sr.Ret, sr.Errmsg)
+			}
+			return fmt.Errorf("微信发送业务错误 ret=%d errcode=%d errmsg=%s", sr.Ret, sr.Errcode, sr.Errmsg)
+		}
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -310,12 +311,45 @@ func sendQQRESTMessage(ctx context.Context, openid, text, appid, secret string) 
 func sendQQRESTMarkdown(ctx context.Context, openid, md, appid, secret string) error {
 	// 官方载荷（bot.q.qq.com 消息类型·Markdown）：msg_type=2 且内容置于
 	// markdown.content 对象——顶层 content 是文本字段形态，markdown 不生效。
-	// 换行规范：QQ markdown 单换行不渲染，需空行分段（单 \n → 双 \n）。
-	content := strings.ReplaceAll(md, "\n", "\n\n")
-	for strings.Contains(content, "\n\n\n\n") {
-		content = strings.ReplaceAll(content, "\n\n\n\n", "\n\n")
-	}
+	content := normalizeQQMarkdown(md)
 	return qqSendRaw(ctx, openid, map[string]any{"msg_type": 2, "markdown": map[string]any{"content": content}}, "", appid, secret)
+}
+
+// normalizeQQMarkdown QQ markdown 换行规范：段落间空行分隔（单换行不渲染分段），
+// 但表格/列表/代码块行须保持连续单换行——空行会断表（用户实测表格不渲染根因：
+// 旧实现把全部 \n 翻倍，表格行间插空行致 markdown 表格语法失效）。
+func normalizeQQMarkdown(md string) string {
+	lines := strings.Split(md, "\n")
+	// 结构化行（表格/列表/代码围栏）内部保持单换行，其余段落空行分隔。
+	structural := func(s string) bool {
+		t := strings.TrimSpace(s)
+		if strings.HasPrefix(t, "|") || strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "```") {
+			return true
+		}
+		// 有序列表 "1. "
+		if i := strings.Index(t, ". "); i > 0 && i <= 3 {
+			if _, err := strconv.Atoi(t[:i]); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	var b strings.Builder
+	for i, ln := range lines {
+		if i > 0 {
+			if structural(ln) && structural(lines[i-1]) {
+				b.WriteString("\n")
+			} else {
+				b.WriteString("\n\n")
+			}
+		}
+		b.WriteString(ln)
+	}
+	out := b.String()
+	for strings.Contains(out, "\n\n\n") {
+		out = strings.ReplaceAll(out, "\n\n\n", "\n\n")
+	}
+	return out
 }
 
 // qqSendText REST 发送文本：msgID 非空=被动回复（免主动消息额度）。
