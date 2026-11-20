@@ -39,8 +39,4 @@ const iconClass = computed(() => [props.tone ? `dh-icon--${props.tone}` : '', pr
 .dh-icon--danger { background: var(--el-color-danger-light-8); color: var(--el-color-danger-dark-2); border: 1px solid var(--el-color-danger-light-7); }
 .dh-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
 .dh-sub { font-size: 12.5px; color: var(--el-text-color-secondary); margin-top: 2px; }
-.dh-bar { width: 3px; height: 30px; flex-shrink: 0; background: var(--el-color-primary); margin: 0 2px 0 -4px; }
-.dh-bar--success { background: var(--el-color-success); }
-.dh-bar--warning { background: var(--el-color-warning); }
-.dh-bar--danger { background: var(--el-color-danger); }
 </style>
