@@ -123,7 +123,7 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   assert.match(text, /distByEventTitle/, '事件分布图必须在位')
 })
 
-test('统一模板弹框+停用通道联动+事件级别着色+正文语言切换', () => {
+test('统一模板弹框+停用通道联动+事件级别分区+正文语言切换', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
 
   // 1) 日报配置弹框整体并入统一模板弹框（旧弹框/入口零残留；日报卡只剩「编辑模板」）
@@ -146,21 +146,32 @@ test('统一模板弹框+停用通道联动+事件级别着色+正文语言切�
   assert.match(text, /class="info-note-bar"><span class="info-note-desc">\{\{ t\('app\.notification\.rules\.channelDisabledHint'\) \}\}/, '发送至浮层提示用 info-note-bar')
   assert.match(text, /:title="channelPickTitle\(ch\)"/, '停用/未测试通道 title 提示单源')
 
-  // 3) 触发器 min-width 与浮层面板同宽（摘要不截断）
-  assert.match(text, /:width="340"[\s\S]{0,200}pick-trigger--events/, '事件浮层宽度与触发器类绑定')
-  assert.match(text, /pick-trigger--events \{ min-width: 340px; \}/, '事件触发器 min-width=面板宽')
-  assert.match(text, /pick-trigger--channels \{ min-width: 300px; \}/, '发送至触发器 min-width=面板宽')
-  assert.match(text, /:width="300"[\s\S]{0,200}pick-trigger--channels/, '发送至浮层宽度=触发器 min-width')
+  // 3) 浮层宽度=触发器实测 offsetWidth（点击测量绑定）；底部不足翻上、不横向位移
+  assert.match(text, /:width="pickWidth\.events"/, '事件浮层宽度绑定触发器实测值')
+  assert.match(text, /:width="pickWidth\.channels"/, '发送至浮层宽度绑定触发器实测值')
+  assert.match(text, /const measurePickWidth = \(e: MouseEvent, kind: 'events' \| 'channels'\)/, '点击时测量触发器宽度')
+  assert.match(text, /offsetWidth/, '宽度来源=触发器 offsetWidth')
+  assert.match(text, /@click="measurePickWidth\(\$event, 'events'\)"/, '事件触发器点击即测量')
+  assert.match(text, /@click="measurePickWidth\(\$event, 'channels'\)"/, '发送至触发器点击即测量')
+  assert.match(text, /pick-trigger--events \{ min-width: 340px; \}/, '事件触发器保留 min-width（下限）')
+  assert.match(text, /pick-trigger--channels \{ min-width: 300px; \}/, '发送至触发器保留 min-width（下限）')
+  assert.match(text, /placement="bottom-start"/, '定位底部优先')
+  const popperBlock = text.slice(text.indexOf('const pickPopperOptions'), text.indexOf('const pickPopperOptions') + 400)
+  assert.match(popperBlock, /fallbackPlacements: \['top-start', 'top'\]/, '底部空间不足翻到触发器上方')
+  assert.doesNotMatch(popperBlock, /'right'|'left'/, '不得向右/左横向回退')
+  assert.match(popperBlock, /altAxis: false/, 'preventOverflow 禁止横向位移')
+  assert.doesNotMatch(text, /popperViewportSafe/, '横向回退工具不用于表格多选浮层')
+  assert.match(text, /const pickWidth = ref<\{ events: number; channels: number \}>/, '宽度态按触发器类型分存')
 
-  // 4) 事件按级别着色 + 分组标题 + 图例（级别取 catalog level）
+  // 4) 事件浮层按级别分区（严重/警告/信息三段），中性样式：无着色、无图例
   assert.match(text, /const eventLevel = \(row: Rule, ev: string\): EventLevel =>/, '事件级别必须解析自目录')
-  assert.match(text, /ev-level-\$\{eventLevel\(asRule\(row\), ev\)\}/, '事件选项必须按级别着色')
+  assert.match(text, /const eventLevelSections = \(rule: Rule\)/, '事件按级别分段')
+  assert.match(text, /EVENT_SECTION_ORDER: readonly EventLevel\[\] = \['critical', 'warn', 'info'\]/, '分段顺序=严重→警告→信息')
+  assert.match(text, /v-for="sec in eventLevelSections\(asRule\(row\)\)"/, '浮层按分区渲染')
+  assert.match(text, /class="notif-level-head">\{\{ t\(`app\.notification\.subs\.levels\.\$\{sec\.level\}`\) \}\}/, '段标题=级别词条')
   assert.match(text, /class="notif-pick-title">\{\{ eventGroup\(row\.title\) \}\}/, '浮层保留分组标题')
-  assert.match(text, /class="ev-level-legend"/, '级别图例必须在位')
-  assert.match(text, /ev-dot-\$\{lv\}/, '图例色点随级别')
-  assert.match(text, /ev-level-critical \.el-checkbox__label \{ color: var\(--ev-critical\); \}/, 'critical 红')
-  assert.match(text, /ev-level-warn \.el-checkbox__label \{ color: var\(--ev-warn\); \}/, 'warn 橙')
-  assert.match(text, /ev-level-info \.el-checkbox__label \{ color: var\(--ev-info\); \}/, 'info 蓝')
+  assert.doesNotMatch(text, /ev-level-|ev-level-legend|ev-legend-dot|ev-dot-/, '级别着色与图例必须清零')
+  assert.doesNotMatch(text, /--ev-critical/, '级别色变量必须清零')
 
   // 5) 模板弹框语言切换：zh/en 默认预设（保存即正文语言）
   assert.match(text, /const tplLang = ref<TplLang>/, '弹框语言态')
@@ -170,6 +181,17 @@ test('统一模板弹框+停用通道联动+事件级别着色+正文语言切�
   assert.match(text, /const defaultTplFor = \(typ: string, lang: TplLang\): string =>/, '事件预置 zh/en 双版本')
   assert.match(text, /const defaultDailyTplFor = \(typ: string, lang: TplLang\): string =>/, '日报预置 zh/en 双版本')
   assert.match(text, /draft !== defaultTplFor\(ch\.type, 'zh'\) && draft !== defaultTplFor\(ch\.type, 'en'\)/, '任一语言预置均视为默认（不冗余落库）')
+  assert.match(text, /tplChannelLabel/, '通道切换必须带「通道」标签词条')
+  assert.match(text, /class="tpl-channel-row">\s*<span class="tpl-format-label">\{\{ t\('app\.notification\.rules\.tplChannelLabel'\) \}\}/, '通道切换行带 label')
+
+  // 6) 消息模板列删除；「编辑模板」并入操作列（与保存/取消/测试并列，共用行草稿逻辑）
+  assert.doesNotMatch(text, /rules\.bodyTemplate/, '消息模板列必须删除')
+  const actionsAt = text.indexOf("t('app.notification.rules.actions')")
+  const actionsBlock = text.slice(actionsAt, text.indexOf('</el-table-column>', actionsAt))
+  assert.match(actionsBlock, /editTemplate\(asRule\(row\)\)/, '操作列必须有编辑模板按钮')
+  assert.match(actionsBlock, /saveRuleDraft\(asRule\(row\)\)/, '保存仍在操作列')
+  assert.match(actionsBlock, /cancelRuleDraft\(asRule\(row\)\)/, '取消仍在操作列')
+  assert.match(actionsBlock, /testRule\(asRule\(row\)\)/, '测试仍在操作列')
 })
 
 test('投递记录消费 deliveries 契约：恒全量+用户/通道维度+失败重发', () => {
