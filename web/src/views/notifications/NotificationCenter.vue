@@ -232,21 +232,23 @@
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.events')" min-width="360">
               <template #default="{ row }">
-                <el-popover placement="bottom-start" trigger="click" :width="340" :popper-options="popperViewportSafe" popper-class="nd-pick-popper">
+                <el-popover placement="bottom-start" trigger="click" :width="pickWidth.events" :popper-options="pickPopperOptions" popper-class="nd-pick-popper">
                   <template #reference>
-                    <button type="button" class="pick-trigger pick-trigger--events" :title="ruleEventSummary(asRule(row))">
+                    <button type="button" class="pick-trigger pick-trigger--events" :title="ruleEventSummary(asRule(row))" @click="measurePickWidth($event, 'events')">
                       <span class="pick-summary" :class="{ 'is-empty': ruleDraftOf(asRule(row)).events.length === 0 }">{{ ruleEventSummary(asRule(row)) }}</span>
                       <el-icon class="pick-caret"><ArrowDown /></el-icon>
                     </button>
                   </template>
                   <div class="notif-pick-panel">
                     <div class="notif-pick-title">{{ eventGroup(row.title) }}</div>
-                    <el-checkbox-group v-model="ruleDraftOf(asRule(row)).events" size="small" class="notif-pick-group">
-                      <el-checkbox v-for="ev in rowEventOptions(asRule(row))" :key="ev" :value="ev" border size="small" :class="`ev-level-${eventLevel(asRule(row), ev)}`">{{ eventTitle(asRule(row), ev) }}</el-checkbox>
+                    <el-checkbox-group v-model="ruleDraftOf(asRule(row)).events" size="small" class="notif-pick-group notif-pick-sections">
+                      <div v-for="sec in eventLevelSections(asRule(row))" :key="sec.level" class="notif-level-section">
+                        <div class="notif-level-head">{{ t(`app.notification.subs.levels.${sec.level}`) }}</div>
+                        <div class="notif-level-items">
+                          <el-checkbox v-for="ev in sec.events" :key="ev" :value="ev" border size="small">{{ eventTitle(asRule(row), ev) }}</el-checkbox>
+                        </div>
+                      </div>
                     </el-checkbox-group>
-                    <div class="ev-level-legend">
-                      <span v-for="lv in EVENT_LEVELS" :key="lv" class="ev-legend-item"><i class="ev-legend-dot" :class="`ev-dot-${lv}`" />{{ t(`app.notification.subs.levels.${lv}`) }}</span>
-                    </div>
                     <div class="notif-pick-hint">{{ t('app.notification.rules.eventSelectHint') }}</div>
                   </div>
                 </el-popover>
@@ -266,9 +268,9 @@
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.sendTo')" min-width="320">
               <template #default="{ row }">
-                <el-popover placement="bottom-start" trigger="click" :width="300" :popper-options="popperViewportSafe" popper-class="nd-pick-popper">
+                <el-popover placement="bottom-start" trigger="click" :width="pickWidth.channels" :popper-options="pickPopperOptions" popper-class="nd-pick-popper">
                   <template #reference>
-                    <button type="button" class="pick-trigger pick-trigger--channels" :title="ruleChannelSummary(asRule(row))">
+                    <button type="button" class="pick-trigger pick-trigger--channels" :title="ruleChannelSummary(asRule(row))" @click="measurePickWidth($event, 'channels')">
                       <span class="pick-summary" :class="{ 'is-empty': ruleDraftOf(asRule(row)).channel_ids.length === 0 }">{{ ruleChannelSummary(asRule(row)) }}</span>
                       <el-icon class="pick-caret"><ArrowDown /></el-icon>
                     </button>
@@ -287,18 +289,14 @@
                 </el-popover>
               </template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.bodyTemplate')" width="90">
-              <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="editTemplate(asRule(row))">{{ t('app.notification.rules.edit') }}</el-button>
-              </template>
-            </el-table-column>
             <el-table-column :label="t('app.notification.rules.enabled')" width="65">
               <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="toggleRule(asRule(row))" /></template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.actions')" width="150" fixed="right">
+            <el-table-column :label="t('app.notification.rules.actions')" width="200" fixed="right">
               <template #default="{ row }">
                 <el-button v-if="ruleDraftDirty(asRule(row))" size="small" link type="primary" :loading="savingRuleId === row.id" @click="saveRuleDraft(asRule(row))">{{ t('app.notification.rules.save') }}</el-button>
                 <el-button v-if="ruleDraftDirty(asRule(row))" size="small" link @click="cancelRuleDraft(asRule(row))">{{ t('app.notification.rules.cancel') }}</el-button>
+                <el-button size="small" link type="primary" @click="editTemplate(asRule(row))">{{ t('app.notification.daily.editTemplate') }}</el-button>
                 <el-button size="small" link type="primary" :loading="testingRuleId === row.id" @click="testRule(asRule(row))">{{ t('app.notification.rules.test') }}</el-button>
               </template>
             </el-table-column>
@@ -338,9 +336,12 @@
           </el-radio-group>
           <span class="form-hint tpl-lang-hint">{{ t('app.notification.rules.tplLangHint') }}</span>
         </div>
-        <el-radio-group v-model="tplChannelTab" size="small" class="tpl-channel-switch">
-          <el-radio-button v-for="ch in tplTabChannels" :key="ch.id" :value="String(ch.id)">{{ ch.name }}</el-radio-button>
-        </el-radio-group>
+        <div class="tpl-channel-row">
+          <span class="tpl-format-label">{{ t('app.notification.rules.tplChannelLabel') }}</span>
+          <el-radio-group v-model="tplChannelTab" size="small">
+            <el-radio-button v-for="ch in tplTabChannels" :key="ch.id" :value="String(ch.id)">{{ ch.name }}</el-radio-button>
+          </el-radio-group>
+        </div>
 
         <div class="tpl-field">
           <div class="tpl-section-head">
@@ -424,7 +425,6 @@ import { axisChartBase, barSeries, lineSeries, pieChartBase } from '@/utils/char
 import { securityActionColors } from '@/utils/chartTheme'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { hasOwn } from '@/utils/hasOwn'
-import { popperViewportSafe } from '@/utils/popper'
 import type { NotificationChannel, NotificationChannelsResponse } from '@/types/notifications.ts'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -463,7 +463,7 @@ const eventGroup = (group: string): string => {
   return hasOwn(m, group) ? m[group] : group
 }
 // 事件级别（目录 level 单源，回退规则携带的 event_levels，再回退 info）：
-// 浮层多选按级别着色 + 图例。
+// 浮层多选按级别分区（严重/警告/信息），中性样式不着色。
 const EVENT_LEVELS = ['info', 'warn', 'critical'] as const
 type EventLevel = typeof EVENT_LEVELS[number]
 const eventLevel = (row: Rule, ev: string): EventLevel => {
@@ -499,6 +499,28 @@ const eventCatalog = ref<CatalogEvent[]>([])
 const rowEventOptions = (rule: Rule): string[] => {
   const ids = eventCatalog.value.filter(e => e.group === rule.title).map(e => e.id)
   return ids.length ? ids : (rule.events ?? [])
+}
+// 浮层事件分区：按级别分三段（严重→警告→信息），仅列非空段；级别取 catalog level。
+const EVENT_SECTION_ORDER: readonly EventLevel[] = ['critical', 'warn', 'info']
+const eventLevelSections = (rule: Rule): { level: EventLevel; events: string[] }[] =>
+  EVENT_SECTION_ORDER
+    .map(level => ({ level, events: rowEventOptions(rule).filter(ev => eventLevel(rule, ev) === level) }))
+    .filter(sec => sec.events.length > 0)
+
+// 表格多选浮层（事件/发送至）：宽度=触发器实测 offsetWidth（点击时测量），
+// 与触发器/下拉框同宽。定位底部优先，底部空间不足翻到触发器上方——回退候选
+// 仅垂直（通用视口安全工具含左右回退，会把面板横向挤出表格列）。
+const pickWidth = ref<{ events: number; channels: number }>({ events: 340, channels: 300 })
+const measurePickWidth = (e: MouseEvent, kind: 'events' | 'channels'): void => {
+  const w = (e.currentTarget as HTMLElement | null)?.offsetWidth ?? 0
+  if (w > 0) pickWidth.value = { ...pickWidth.value, [kind]: w }
+}
+const pickPopperOptions = {
+  modifiers: [
+    { name: 'flip', options: { fallbackPlacements: ['top-start', 'top'] } },
+    // 仅纵向兜底；altAxis=false 禁止横向位移（面板不得向右挤）
+    { name: 'preventOverflow', options: { padding: 8, altAxis: false } },
+  ],
 }
 
 // 7 天投递趋势（ECharts：成功/失败堆叠柱 + 成功率折线，SecurityOverview/Dashboard 同构）
@@ -1516,7 +1538,7 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .pick-caret { flex: none; font-size: 12px; color: #909399; }
 .tpl-lang-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .tpl-lang-hint { margin-top: 0; }
-.tpl-channel-switch { margin-bottom: 16px; }
+.tpl-channel-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
 .tpl-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .tpl-section-head .tpl-section-label { margin-bottom: 0; }
@@ -1568,23 +1590,12 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-pick-panel { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; }
 .notif-pick-title { font-size: 12px; font-weight: 600; color: #374151; }
 .notif-pick-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
-.nd-pick-popper.el-popover { padding: 12px; }
-/* 事件级别着色（catalog level 单源）：critical 红 / warn 橙 / info 蓝，与
- * chartTheme securityActionColors（blocked/detected）+ 主蓝同族；直角语言。
- * 浮层 teleport 到 body，配色随面板变量下传。 */
-.notif-pick-panel { --ev-critical: #f56c6c; --ev-warn: #e6a23c; --ev-info: #409eff; }
-.notif-pick-group .el-checkbox.ev-level-critical .el-checkbox__label { color: var(--ev-critical); }
-.notif-pick-group .el-checkbox.ev-level-warn .el-checkbox__label { color: var(--ev-warn); }
-.notif-pick-group .el-checkbox.ev-level-info .el-checkbox__label { color: var(--ev-info); }
-.notif-pick-group .el-checkbox.is-bordered.ev-level-critical { border-color: #fbc4c4; }
-.notif-pick-group .el-checkbox.is-bordered.ev-level-warn { border-color: #f5dab1; }
-.notif-pick-group .el-checkbox.is-bordered.ev-level-info { border-color: #b3d8ff; }
+.nd-pick-popper.el-popover { padding: 12px; box-sizing: border-box; }
+/* 事件浮层按级别分区（严重/警告/信息）：中性样式，仅节标题分组，不着色 */
+.notif-pick-group.notif-pick-sections { display: flex; flex-direction: column; gap: 10px; }
+.notif-level-section { display: flex; flex-direction: column; gap: 6px; }
+.notif-level-head { font-size: 12px; color: #6b7280; }
+.notif-level-items { display: flex; flex-wrap: wrap; gap: 8px; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled { border-color: #e4e7ed; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled .el-checkbox__label { color: #a8abb2; }
-.ev-level-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: #6b7280; }
-.ev-legend-item { display: inline-flex; align-items: center; gap: 4px; }
-.ev-legend-dot { width: 8px; height: 8px; display: inline-block; }
-.ev-dot-critical { background: var(--ev-critical); }
-.ev-dot-warn { background: var(--ev-warn); }
-.ev-dot-info { background: var(--ev-info); }
 </style>
