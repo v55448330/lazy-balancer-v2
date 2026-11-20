@@ -717,7 +717,8 @@ var allowedNewColumnDivergence = map[string]string{
 	// SQLite ALTER ADD COLUMN 禁非常量默认：fresh DDL 带 DEFAULT CURRENT_TIMESTAMP，
 	// 补列通道只能无默认（存量行由 newColumnBackfills 回填 created_at，读侧
 	// COALESCE/NullTime 兜底）——有意分叉，语义等价。
-	"api_keys.updated_at": "ALTER 禁 CURRENT_TIMESTAMP 非常量默认；存量回填 created_at",
+	"api_keys.updated_at":                   "ALTER 禁 CURRENT_TIMESTAMP 非常量默认；存量回填 created_at",
+	"notification_subscriptions.updated_at": "ALTER 禁非常量默认（fresh DDL DEFAULT datetime('now')）；写入侧显式 datetime('now') 覆盖",
 }
 
 func TestNewColumnsDualRegistered_matchFreshColumnShape(t *testing.T) {
@@ -811,7 +812,7 @@ var freshOriginalColumns = map[string][]string{
 	"notification_deliveries":        {"id", "user_id", "event_type", "level", "title", "body", "status", "attempts", "error", "created_at", "sent_at"},
 	"notification_delivery_channels": {"id", "delivery_id", "user_id", "channel_id", "channel_type", "event_type", "status", "error", "created_at"},
 	"notification_daily":             {"user_id", "config", "updated_at"},
-	"notification_subscriptions":     {"user_id", "event_type", "min_level", "body_template", "channel_ids", "channel_templates"},
+	"notification_subscriptions":     {"user_id", "event_type", "min_level", "body_template", "channel_ids", "channel_templates", "updated_at", "updated_by"},
 	"notify_settings":                {"key", "value"},
 	"path_rules":                     {"id", "rule_id", "sort_order", "match_type", "path", "upstreams_json", "created_at", "updated_at"},
 	"revoked_jti":                    {"jti_hash", "expires_at"},

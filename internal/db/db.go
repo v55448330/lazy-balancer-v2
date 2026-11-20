@@ -576,6 +576,8 @@ func createTables() error {
 		body_template TEXT NOT NULL DEFAULT '',
 		channel_ids TEXT NOT NULL DEFAULT '',
 		channel_templates TEXT NOT NULL DEFAULT '',
+		updated_at DATETIME DEFAULT (datetime('now')),
+		updated_by INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (user_id, event_type)
 	);
 
@@ -1313,6 +1315,8 @@ var newColumnsRegistry = map[string]string{
 	"notification_subscriptions.body_template":     "TEXT NOT NULL DEFAULT ''",
 	"notification_subscriptions.channel_ids":       "TEXT NOT NULL DEFAULT ''",
 	"notification_subscriptions.channel_templates": "TEXT NOT NULL DEFAULT ''",
+	"notification_subscriptions.updated_at":        "DATETIME",
+	"notification_subscriptions.updated_by":        "INTEGER NOT NULL DEFAULT 0",
 	"notification_delivery_channels.channel_name":  "TEXT NOT NULL DEFAULT ''",
 	// 通知投递语义两列（2026-11-19 通知重构）：is_test=测试发送标记
 	// （规则测试/单用户日报测试=1，定时日报与真实事件=0）；retry_channel_ids=

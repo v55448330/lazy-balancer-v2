@@ -128,8 +128,9 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 			}
 			continue
 		}
-		if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template) VALUES (?,?,?,?)
-			ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template`, uid, op.eventType, op.minLevel, op.bodyTemplate); err != nil {
+		if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, updated_at, updated_by) VALUES (?,?,?,?,datetime('now'),?)
+			ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template,
+			updated_at=excluded.updated_at, updated_by=excluded.updated_by`, uid, op.eventType, op.minLevel, op.bodyTemplate, uid); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
 			return
 		}

@@ -42,6 +42,9 @@ type NotificationRule struct {
 	ChannelIDs       []int64           `json:"channel_ids"`       // 显式选定的通道 ID（空=全部）
 	ChannelTemplates map[string]string `json:"channel_templates"` // 通道 ID → 事件×通道模板
 	BodyTemplate     string            `json:"body_template"`     // 事件级消息模板
+	UpdatedAt        string            `json:"updated_at"`        // 最近更新（UTC 存储）
+	UpdatedBy        int64             `json:"updated_by"`        // 更新者用户 ID
+	UpdatedByName    string            `json:"updated_by_name"`   // 更新者显示名
 	Enabled          bool              `json:"enabled"`
 	Subscribed       bool              `json:"subscribed"` // 事件是否已订阅
 }
@@ -87,15 +90,19 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	// 2. 事件目录 → 事件规则
 	catalog := notify.CatalogExport()
 	subRows, err := db.DB.Query(`SELECT event_type, COALESCE(min_level,''), COALESCE(body_template,''),
-		COALESCE(channel_ids,''), COALESCE(channel_templates,'')
+		COALESCE(channel_ids,''), COALESCE(channel_templates,''), COALESCE(updated_at,''), COALESCE(updated_by,0)
 		FROM notification_subscriptions WHERE user_id=?`, uid)
-	type subState struct{ level, tpl, ids, tpls string }
+	type subState struct {
+		level, tpl, ids, tpls string
+		updatedAt             string
+		updatedBy             int64
+	}
 	subsByEvent := map[string]subState{}
 	if err == nil {
 		for subRows.Next() {
 			var ev string
 			var s subState
-			if subRows.Scan(&ev, &s.level, &s.tpl, &s.ids, &s.tpls) == nil {
+			if subRows.Scan(&ev, &s.level, &s.tpl, &s.ids, &s.tpls, &s.updatedAt, &s.updatedBy) == nil {
 				subsByEvent[ev] = s
 			}
 		}
@@ -123,6 +130,11 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 			rule.EventLevels[e.ID] = string(e.Level)
 			if sub, ok := subsByEvent[e.ID]; ok {
 				hasSub = true
+				// 组级「更新时间/更新人」=组内最近一次订阅变更。
+				if sub.updatedAt > rule.UpdatedAt {
+					rule.UpdatedAt = sub.updatedAt
+					rule.UpdatedBy = sub.updatedBy
+				}
 				rule.MinLevel = sub.level
 				if sub.tpl != "" {
 					rule.BodyTemplate = sub.tpl
@@ -174,8 +186,9 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	dailyCfg, err := notify.GetDailyConfig(uid)
 	if err == nil {
 		// 日报目标通道= sys.daily_report 订阅行 channel_ids 三态（与事件规则同口径）。
-		var dailyIDs string
-		_ = db.DB.QueryRow(`SELECT COALESCE(channel_ids,'') FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, notify.EvtDailyReport).Scan(&dailyIDs)
+		var dailyIDs, dailyAt string
+		var dailyBy int64
+		_ = db.DB.QueryRow(`SELECT COALESCE(channel_ids,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, notify.EvtDailyReport).Scan(&dailyIDs, &dailyAt, &dailyBy)
 		var chIDs []int64
 		if dailyIDs != "" {
 			_ = json.Unmarshal([]byte(dailyIDs), &chIDs)
@@ -189,8 +202,32 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 			Formats:    dailyCfg.Formats,
 			Channels:   allChannels,
 			ChannelIDs: chIDs,
+			UpdatedAt:  dailyAt,
+			UpdatedBy:  dailyBy,
 			Enabled:    dailyCfg.Enabled,
 		})
+	}
+
+	// 更新者显示名（id→display_name/username），供前端「更新用户」列。
+	if rows, err := db.DB.Query(`SELECT id, COALESCE(display_name,''), username FROM users`); err == nil {
+		nameByID := map[int64]string{}
+		for rows.Next() {
+			var id int64
+			var dn, un string
+			if rows.Scan(&id, &dn, &un) == nil {
+				if dn != "" {
+					nameByID[id] = dn
+				} else {
+					nameByID[id] = un
+				}
+			}
+		}
+		rows.Close()
+		for i := range rules {
+			if rules[i].UpdatedBy > 0 {
+				rules[i].UpdatedByName = nameByID[rules[i].UpdatedBy]
+			}
+		}
 	}
 
 	// 排序：已启用在前，日报在末
@@ -225,6 +262,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		}
 	}
 	ruleID := c.Param("id")
+	actor := contextUserID(c) // 操作者（管理员代管时=管理员本人）
 
 	var req struct {
 		Enabled          *bool             `json:"enabled"`
@@ -266,16 +304,20 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
 			return
 		}
-		// 日报目标通道落 sys.daily_report 订阅行（deliverOne 消费三态）。
+		// 日报目标通道落 sys.daily_report 订阅行（deliverOne 消费三态）；
+		// 同时记录更新者/时间（items/send_time 变更亦刷新）。
 		if req.ChannelIDs != nil {
 			b, _ := json.Marshal(*req.ChannelIDs)
-			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates)
-				VALUES (?,?,?,?,?,?)
-				ON CONFLICT(user_id, event_type) DO UPDATE SET channel_ids=excluded.channel_ids`,
-				uid, notify.EvtDailyReport, "info", "", string(b), ""); err != nil {
+			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates, updated_at, updated_by)
+				VALUES (?,?,?,?,?,?,datetime('now'),?)
+				ON CONFLICT(user_id, event_type) DO UPDATE SET channel_ids=excluded.channel_ids, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
+				uid, notify.EvtDailyReport, "info", "", string(b), "", actor); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报目标通道失败", err)})
 				return
 			}
+		} else if _, err := db.DB.Exec(`UPDATE notification_subscriptions SET updated_at=datetime('now'), updated_by=? WHERE user_id=? AND event_type=?`, actor, uid, notify.EvtDailyReport); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("记录日报更新时间失败", err)})
+			return
 		}
 
 	case len(ruleID) > 6 && ruleID[:6] == "group:":
@@ -356,11 +398,12 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 					curTpls = ""
 				}
 			}
-			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates)
-				VALUES (?,?,?,?,?,?)
+			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates, updated_at, updated_by)
+				VALUES (?,?,?,?,?,?,datetime('now'),?)
 				ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template,
-				channel_ids=excluded.channel_ids, channel_templates=excluded.channel_templates`,
-				uid, ev, curLevel, curTpl, curIDs, curTpls); err != nil {
+				channel_ids=excluded.channel_ids, channel_templates=excluded.channel_templates,
+				updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
+				uid, ev, curLevel, curTpl, curIDs, curTpls, actor); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
 				return
 			}

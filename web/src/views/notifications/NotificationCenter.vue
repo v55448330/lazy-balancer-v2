@@ -206,6 +206,12 @@
                 </div>
               </div>
             </div>
+            <div class="daily-field">
+              <span class="daily-label">{{ t('app.notification.rules.colUpdatedBy') }}</span>
+              <span class="daily-value">{{ dailyRule.updated_by_name || '—' }}</span>
+              <span class="daily-label">{{ t('app.notification.rules.colUpdatedAt') }}</span>
+              <span class="daily-value">{{ formatDate(dailyRule.updated_at) || '—' }}</span>
+            </div>
           </div>
         </el-card>
 
@@ -282,6 +288,12 @@
                 </el-popover>
               </template>
             </el-table-column>
+            <el-table-column :label="t('app.notification.rules.colUpdatedBy')" width="110" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.updated_by_name || '—' }}</template>
+            </el-table-column>
+            <el-table-column :label="t('app.notification.rules.colUpdatedAt')" width="170">
+              <template #default="{ row }">{{ formatDate(row.updated_at) || '—' }}</template>
+            </el-table-column>
             <el-table-column :label="t('app.notification.rules.enabled')" width="65">
               <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="toggleRule(asRule(row))" /></template>
             </el-table-column>
@@ -325,7 +337,7 @@
             <el-radio-button value="zh">中文</el-radio-button>
             <el-radio-button value="en">English</el-radio-button>
           </el-radio-group>
-          <span class="form-hint tpl-lang-hint">{{ t('app.notification.rules.tplLangHint') }}</span>
+          <span class="form-tip-inline">{{ t('app.notification.rules.tplLangHint') }}</span>
         </div>
         <div class="tpl-channel-row">
           <span class="tpl-format-label">{{ t('app.notification.rules.tplChannelLabel') }}</span>
@@ -356,7 +368,7 @@
             <el-tag v-for="ph in tplActivePh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag>
           </div>
           <div class="tpl-hints">
-            <div v-for="hint in tplHints" :key="hint" class="form-hint">{{ hint }}</div>
+            <div v-for="hint in tplHints" :key="hint" class="form-tip-line">{{ hint }}</div>
           </div>
           <div v-if="tplLengthLimit > 0 && tplText.length > tplLengthLimit" class="info-note-bar"><span class="info-note-desc">{{ tplActiveChannel?.type === 'email' ? t('app.notification.daily.bodyTemplateTooLong') : t('app.notification.daily.templateTooLong') }}</span></div>
         </div>
@@ -421,6 +433,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
+import { formatDate } from '@/utils/date'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
 
@@ -435,6 +448,7 @@ interface Rule {
   event_titles?: Record<string, string>; event_levels?: Record<string, string>; min_level?: string; send_time?: string
   channels: RuleChannel[]; channel_ids?: number[]; channel_templates?: Record<string, string>
   body_template: string; enabled: boolean
+  updated_at?: string; updated_by?: number; updated_by_name?: string
   items?: string[]; formats?: Record<string, string>
 }
 // 事件目录行（rules 端点返回；内联事件选项数据源，按 group 分组）
@@ -1017,7 +1031,9 @@ const savingDaily = ref(false)
 const newRuleDraft = (rule: Rule): RuleDraft => ({
   events: [...(rule.events ?? [])],
   channel_ids: baselineChannelIds(rule.channel_ids),
-  min_level: rule.min_level || 'info',
+  // 最低级别列已下线：草稿固定 info（=不按级别过滤），保存即清除历史级别门槛，
+  // 确保所选事件全部投递（避免旧 warn/critical 配置造成静默过滤）。
+  min_level: 'info',
 })
 const newDailyDraft = (rule: Rule): DailyDraft => ({
   items: [...(rule.items ?? [])],
@@ -1591,7 +1607,7 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .pick-summary.is-empty { color: #9ca3af; }
 .pick-caret { flex: none; font-size: 12px; color: #909399; }
 .tpl-lang-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.tpl-lang-hint { margin: 0 0 0 4px; }
+
 .tpl-channel-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
 .tpl-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -1603,7 +1619,7 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
 .tpl-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
-.tpl-hints .form-hint { margin-top: 0; }
+.tpl-hints .form-tip-line { margin-top: 0; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; height: 360px; max-height: 46vh; overflow: auto; }
 .tpl-md-preview { background: #f9fafb; padding: 10px 12px; font-size: 13px; line-height: 1.7; color: #111827; border: 1px solid #eef2f7; height: 360px; max-height: 46vh; overflow: auto; }
 .tpl-md-preview h2 { font-size: 16px; margin: 6px 0; }

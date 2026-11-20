@@ -57,6 +57,10 @@
                 <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
               </div>
             </div>
+            <div v-if="ch.type === 'wx_clawbot' && ch.session_ready === false" class="info-note-bar rebind-note">
+              <span class="info-note-desc">{{ t('app.notification.channels.wxSessionStaleHint') }}</span>
+              <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">{{ t('app.notification.channels.rebindRetry') }}</el-button>
+            </div>
             <div v-if="rebindIncompleteIds.has(ch.id)" class="info-note-bar rebind-note">
               <span class="info-note-desc">{{ t('app.notification.channels.rebindIncompleteHint') }}</span>
               <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">{{ t('app.notification.channels.rebindRetry') }}</el-button>
