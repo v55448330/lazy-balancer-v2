@@ -1010,8 +1010,10 @@ const toggleRule = async (rule: Rule): Promise<void> => {
   const confirmText = rule.enabled ? t('app.notification.rules.enableConfirm') : t('app.notification.rules.disableConfirm')
   try { await ElMessageBox.confirm(confirmText, t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
   catch { rule.enabled = !rule.enabled; return }
-  try { await request.post(ruleWriteUrl(rule.id), { enabled: rule.enabled }) }
-  catch (e) {
+  try {
+    await request.post(ruleWriteUrl(rule.id), { enabled: rule.enabled })
+    await fetchRules(false) // 刷新启用态与更新用户/时间
+  } catch (e) {
     rule.enabled = !rule.enabled
     if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
   }

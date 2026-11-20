@@ -308,6 +308,8 @@ export default {
         statusDead: 'Expired',
         statusLabel: 'Status',
         colTime: 'Time',
+        colReqTime: 'Requested',
+        colSentTime: 'Delivered',
         colAttempts: "Attempts",
         colEvent: 'Event',
         colLevel: 'Level',

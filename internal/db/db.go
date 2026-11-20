@@ -612,6 +612,7 @@ func createTables() error {
 		event_type TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'sent',
 		error TEXT DEFAULT '',
+		duration_ms INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_ndc_delivery ON notification_delivery_channels(delivery_id);
@@ -1320,6 +1321,7 @@ var newColumnsRegistry = map[string]string{
 	"notification_subscriptions.updated_at":        "DATETIME",
 	"notification_subscriptions.updated_by":        "INTEGER NOT NULL DEFAULT 0",
 	"notification_delivery_channels.channel_name":  "TEXT NOT NULL DEFAULT ''",
+	"notification_delivery_channels.duration_ms":   "INTEGER NOT NULL DEFAULT 0",
 	// 通知投递语义两列（2026-11-19 通知重构）：is_test=测试发送标记
 	// （规则测试/单用户日报测试=1，定时日报与真实事件=0）；retry_channel_ids=
 	// failed_only 重发的失败通道过滤（JSON 数组，派发消费后清空，''=全量）。

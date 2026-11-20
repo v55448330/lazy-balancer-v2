@@ -110,6 +110,7 @@ CREATE TABLE notification_delivery_channels (
 	event_type TEXT NOT NULL,
 	status TEXT NOT NULL DEFAULT 'sent',
 	error TEXT DEFAULT '',
+	duration_ms INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL
 );`)
 	if err != nil {

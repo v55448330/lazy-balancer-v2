@@ -45,6 +45,7 @@ type deliveryChannelDTO struct {
 	ChannelType string `json:"channel_type"`
 	Status      string `json:"status"`
 	Error       string `json:"error"`
+	DurationMs  int64  `json:"duration_ms"` // 通道处理耗时（毫秒）
 }
 
 // maskDeliveryBody 跨属主正文脱敏：rune 截断到 200 字符（保留边界完整字符）。
@@ -154,7 +155,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 			placeholders = append(placeholders, '?')
 			chArgs = append(chArgs, id)
 		}
-		chRows, err := db.DB.Query(`SELECT nc.delivery_id, nc.channel_id, COALESCE(NULLIF(c.name,''), NULLIF(nc.channel_name,''), ''), nc.channel_type, nc.status, COALESCE(nc.error,'')
+		chRows, err := db.DB.Query(`SELECT nc.delivery_id, nc.channel_id, COALESCE(NULLIF(c.name,''), NULLIF(nc.channel_name,''), ''), nc.channel_type, nc.status, COALESCE(nc.error,''), COALESCE(nc.duration_ms,0)
 			FROM notification_delivery_channels nc LEFT JOIN notification_channels c ON c.id = nc.channel_id
 			WHERE nc.delivery_id IN (`+string(placeholders)+`) ORDER BY nc.id`, chArgs...)
 		if err == nil {
@@ -165,7 +166,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 			for chRows.Next() {
 				var deliveryID int64
 				var ch deliveryChannelDTO
-				if chRows.Scan(&deliveryID, &ch.ChannelID, &ch.ChannelName, &ch.ChannelType, &ch.Status, &ch.Error) == nil {
+				if chRows.Scan(&deliveryID, &ch.ChannelID, &ch.ChannelName, &ch.ChannelType, &ch.Status, &ch.Error, &ch.DurationMs) == nil {
 					if ch.ChannelName == "" {
 						ch.ChannelName = "通道 #" + strconv.FormatInt(ch.ChannelID, 10)
 					}

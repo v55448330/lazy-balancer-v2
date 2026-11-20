@@ -151,20 +151,22 @@ func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []de
 		// 此前传 msg 会把事件模板渲染覆盖回目录原始正文（事件模板不生效根因）。
 		chMsg.Body = renderDailyForChannel(chMsg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
 		styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
+		sendStart := time.Now()
 		sendErr := sendToChannel(ctx, ch.Type, styledTarget, chMsg)
 		if sendErr != nil {
 			sendErr = sendToChannel(ctx, ch.Type, styledTarget, chMsg)
 		}
+		durMs := time.Since(sendStart).Milliseconds()
 		if sendErr != nil {
 			errs = append(errs, ch.Type+": "+sendErr.Error())
 			if deliveryID > 0 {
-				recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "failed", sendErr.Error())
+				recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "failed", sendErr.Error(), durMs)
 			}
 			continue
 		}
 		sentAny = true
 		if deliveryID > 0 {
-			recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "sent", "")
+			recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "sent", "", durMs)
 		}
 	}
 	return errs, sentAny
@@ -270,11 +272,11 @@ func DeliverDailyForUser(userID int64, now time.Time) error {
 
 // recordChannelResult 每通道投递结果落行（统计事实源；落库失败仅告警不阻断投递）。
 // channel_name 快照落行——通道删除后投递记录仍显示通道名（不回退「通道 #id」）。
-func recordChannelResult(ctx context.Context, deliveryID, userID int64, ch deliveryTarget, eventType, status, errMsg string) {
+func recordChannelResult(ctx context.Context, deliveryID, userID int64, ch deliveryTarget, eventType, status, errMsg string, durMs int64) {
 	_, err := db.DB.Exec(`INSERT INTO notification_delivery_channels
-		(delivery_id, user_id, channel_id, channel_name, channel_type, event_type, status, error, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		deliveryID, userID, ch.ChannelID, ch.Name, ch.Type, eventType, status, errMsg,
+		(delivery_id, user_id, channel_id, channel_name, channel_type, event_type, status, error, duration_ms, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		deliveryID, userID, ch.ChannelID, ch.Name, ch.Type, eventType, status, errMsg, durMs,
 		time.Now().UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		taskLogWarn(ctx, "delivery", "notify 通道结果落库失败（delivery=%d channel=%d）: %v", deliveryID, ch.ChannelID, err)

@@ -810,7 +810,7 @@ var freshOriginalColumns = map[string][]string{
 	"nodes":                          {"id", "name", "mode", "ip_address", "port", "is_approved", "sync_interval", "status", "last_seen", "created_at"},
 	"notification_channels":          {"id", "user_id", "type", "name", "target", "style_config", "enabled", "last_test_at", "last_test_ok", "created_at", "updated_at"},
 	"notification_deliveries":        {"id", "user_id", "event_type", "level", "title", "body", "status", "attempts", "error", "created_at", "sent_at"},
-	"notification_delivery_channels": {"id", "delivery_id", "user_id", "channel_id", "channel_type", "event_type", "status", "error", "created_at"},
+	"notification_delivery_channels": {"id", "delivery_id", "user_id", "channel_id", "channel_name", "channel_type", "event_type", "status", "error", "duration_ms", "created_at"},
 	"notification_daily":             {"user_id", "config", "updated_at"},
 	"notification_subscriptions":     {"user_id", "event_type", "min_level", "body_template", "channel_ids", "channel_templates", "enabled", "updated_at", "updated_by"},
 	"notify_settings":                {"key", "value"},

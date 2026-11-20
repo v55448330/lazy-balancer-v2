@@ -42,14 +42,20 @@
               <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small" effect="plain" class="ch-expand-name">{{ ch.channel_name }}</el-tag>
               <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small">{{ channelStatusLabel(ch.status) }}</el-tag>
               <span class="ch-expand-error" :class="{ 'ch-expand-error-failed': ch.status !== 'sent' }">{{ ch.error || t('app.notification.deliveries.expandNoError') }}</span>
+              <span class="ch-expand-dur">{{ ch.duration_ms ? ch.duration_ms + ' ms' : '—' }}</span>
             </div>
             <span v-if="!scope.row.channels?.length" class="ev-more">{{ t('app.notification.deliveries.expandEmpty') }}</span>
           </div>
         </template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colTime')" width="170">
+      <el-table-column :label="t('app.notification.deliveries.colReqTime')" width="170">
         <template #default="scope">
           {{ formatDate(scope.row.created_at) || '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column :label="t('app.notification.deliveries.colSentTime')" width="170">
+        <template #default="scope">
+          {{ formatDate(scope.row.sent_at) || '—' }}
         </template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colUser')" width="130" show-overflow-tooltip>
@@ -289,6 +295,7 @@ defineExpose({ fetchDeliveries })
 .ch-expand { padding: 4px 12px 8px 36px; display: flex; flex-direction: column; gap: 6px; }
 .ch-expand-row { display: flex; align-items: flex-start; gap: 8px; }
 .ch-expand-name { flex: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.ch-expand-dur { flex: none; color: #6b7280; font-size: 12px; font-variant-numeric: tabular-nums; }
 .ch-expand-error { font-size: 12px; color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding-top: 2px; }
 .ch-expand-error-failed { color: #dc2626; }
 </style>

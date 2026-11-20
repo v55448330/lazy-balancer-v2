@@ -133,7 +133,7 @@
               <el-button v-if="bindPhase === 'idle' && editTarget" size="small" type="primary" plain :loading="rebindStarting" :disabled="writeBlocked" @click="startRebind">{{ t('app.notification.channels.rebindAction') }}</el-button>
               <div v-if="bindPhase === 'idle' && editTarget" class="bind-hint">{{ t('app.notification.channels.rebindIdleHint') }}</div>
               <el-alert v-if="rebindActive" type="warning" :closable="false" show-icon class="bind-success-alert">
-                <template #title>{{ t('app.notification.channels.rebindPausedHint') }}</template>
+                <template #title><span v-for="(p, i) in bindParts(t('app.notification.channels.rebindPausedHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></template>
               </el-alert>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
               <div v-if="bindPhase === 'scanning'" class="bind-hint">{{ t('app.notification.channels.bindScanHint') }}</div>
@@ -147,13 +147,13 @@
                 <template #title>{{ t('app.notification.channels.bindConnecting') }}</template>
               </el-alert>
               <el-alert v-if="bindPhase === 'awaiting_message'" type="warning" :closable="false" show-icon class="bind-success-alert">
-                <template #title>{{ t('app.notification.channels.bindAwaitMsg') }}</template>
+                <template #title><span v-for="(p, i) in bindParts(t('app.notification.channels.bindAwaitMsg'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></template>
               </el-alert>
               <el-alert v-if="bindPhase === 'confirmed'" type="success" :closable="false" show-icon class="bind-success-alert">
                 <template #title>{{ t('app.notification.channels.bindConfirmed') }}</template>
               </el-alert>
-              <div v-if="bindPhase === 'idle' && drawerForm.type === 'wx_clawbot' && wxAlreadyLoggedIn" class="bind-hint">{{ t('app.notification.channels.wxAlreadyLoggedInHint') }}</div>
-              <div class="bind-hint">{{ drawerForm.type === 'qq' ? t('app.notification.channels.qqBindHint') : t('app.notification.channels.wxSendMsgHint') }}</div>
+              <div v-if="bindPhase === 'idle' && drawerForm.type === 'wx_clawbot' && wxAlreadyLoggedIn" class="bind-hint"><span v-for="(p, i) in bindParts(t('app.notification.channels.wxAlreadyLoggedInHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></div>
+              <div class="bind-hint"><span v-for="(p, i) in bindParts(drawerForm.type === 'qq' ? t('app.notification.channels.qqBindHint') : t('app.notification.channels.wxSendMsgHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></div>
             </div>
             <div v-if="drawerForm.targetValue" class="bind-hint bind-receiver">{{ t('app.notification.channels.bindReceiverCaptured', { id: drawerForm.targetValue }) }}</div>
           </div>
@@ -346,6 +346,21 @@ const testStateText = (ch: NotificationChannel): string => {
   return ch.last_test_ok ? t('app.notification.channels.testStateOk') : t('app.notification.channels.testStateFail')
 }
 // 微信会话真实可用性：context_token 存在且最近测试未失败（后端 token 存在≠服务端未过期）。
+// 「绑定测试」关键词加粗（提示更醒目，降低困惑）。
+const bindParts = (s: string): { text: string; bold: boolean }[] => {
+  const parts: { text: string; bold: boolean }[] = []
+  const kw = '绑定测试'
+  let rest = s
+  let idx = rest.indexOf(kw)
+  while (idx >= 0) {
+    if (idx > 0) parts.push({ text: rest.slice(0, idx), bold: false })
+    parts.push({ text: kw, bold: true })
+    rest = rest.slice(idx + kw.length)
+    idx = rest.indexOf(kw)
+  }
+  if (rest) parts.push({ text: rest, bold: false })
+  return parts
+}
 const wxSessionOk = (ch: NotificationChannel): boolean => ch.session_ready === true && ch.last_test_ok !== false
 const testStateClass = (ch: NotificationChannel): string =>
   !ch.last_test_at ? 'test-none' : ch.last_test_ok ? 'test-ok' : 'test-fail'
@@ -464,6 +479,11 @@ const saveDrawer = async (): Promise<void> => {
     }
     drawerVisible.value = false
     await fetchChannels()
+    // 机器人通道保存后自动测试：绑定「绑定测试」确认后立即验证可达性，无需手动点测试
+    if (editTarget.value && (drawerForm.value.type === 'qq' || drawerForm.value.type === 'wx_clawbot')) {
+      const cur = channels.value.find(c => c.id === editTarget.value?.id)
+      if (cur) await doTestChannel(cur)
+    }
   } catch (e) { console.error(e) } finally { saving.value = false }
 }
 

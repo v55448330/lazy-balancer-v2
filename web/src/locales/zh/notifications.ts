@@ -315,6 +315,8 @@ export default {
         statusDead: '已过期',
         statusLabel: '状态',
         colTime: '时间',
+        colReqTime: '请求时间',
+        colSentTime: '投递时间',
         colAttempts: "尝试",
         colEvent: '事件',
         colLevel: '级别',
