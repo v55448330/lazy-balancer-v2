@@ -6,6 +6,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -179,5 +180,31 @@ func TestUpdateNotificationRule_adminWriteOwnership(t *testing.T) {
 	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=9 AND event_type='cert.failed'`).Scan(&ownRows)
 	if ownRows != 1 {
 		t.Fatalf("非管理员本人订阅行数=%d, want 1（user_id 参数不得越权）", ownRows)
+	}
+}
+
+func TestGetNotificationRules_stableOrder(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	r := newRulesTestRouter(h, 7, "user")
+	var prev string
+	for i := 0; i < 5; i++ {
+		status, out := doNotifyRequest(t, r, http.MethodGet, "/notification/rules", "")
+		if status != http.StatusOK || out["code"].(float64) != 0 {
+			t.Fatalf("rules status=%d body=%v", status, out)
+		}
+		data := out["data"].(map[string]any)
+		raw := data["rules"].([]any)
+		ids := make([]string, 0, len(raw))
+		for _, it := range raw {
+			ids = append(ids, it.(map[string]any)["id"].(string))
+		}
+		cur := strings.Join(ids, ",")
+		if prev != "" && cur != prev {
+			t.Fatalf("规则顺序不稳定：prev=%s cur=%s", prev, cur)
+		}
+		prev = cur
+		if len(ids) == 0 || ids[len(ids)-1] != "daily" {
+			t.Fatalf("日报必须末位：%v", ids)
+		}
 	}
 }

@@ -234,13 +234,27 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		}
 	}
 
-	// 排序：已启用在前，日报在末
-	sort.Slice(rules, func(i, j int) bool {
-		if rules[i].Enabled != rules[j].Enabled {
-			return rules[i].Enabled
+	// 固定顺序（catalog 声明序），不随启停/保存变化：此前按 Enabled+Trigger 排序，
+	// 同 trigger 的事件组比较恒 false 且来源是 Go map 遍历 → 每次请求顺序随机，
+	// 任何配置修改触发刷新都会导致表格行重排。日报恒末位。
+	groupRank := map[string]int{}
+	for i, e := range catalog {
+		if _, ok := groupRank[e.Group]; !ok {
+			groupRank[e.Group] = i
 		}
-		return rules[i].Trigger < rules[j].Trigger
-	})
+	}
+	rankOf := func(r NotificationRule) int {
+		if r.Trigger == "daily" {
+			return 1 << 30
+		}
+		if len(r.ID) > 6 && r.ID[:6] == "group:" {
+			if v, ok := groupRank[r.ID[6:]]; ok {
+				return v
+			}
+		}
+		return 1 << 29
+	}
+	sort.SliceStable(rules, func(i, j int) bool { return rankOf(rules[i]) < rankOf(rules[j]) })
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"rules":       rules,
