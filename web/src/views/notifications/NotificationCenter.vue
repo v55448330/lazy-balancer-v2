@@ -964,7 +964,6 @@ const ruleDrafts = ref<Record<string, RuleDraft>>({})
 const dailyDraft = ref<DailyDraft | null>(null)
 const savingRuleId = ref<string | null>(null)
 const savingDaily = ref(false)
-const allChannelIds = (): number[] => userChannels.value.map(ch => ch.id)
 const newRuleDraft = (rule: Rule): RuleDraft => ({
   events: [...(rule.events ?? [])],
   channel_ids: baselineChannelIds(rule.channel_ids),
@@ -1021,7 +1020,7 @@ const ruleDraftDirty = (rule: Rule): boolean => {
   const d = ruleDrafts.value[rule.id]
   if (!d) return false
   return !sameSet(d.events, rule.events ?? [])
-    || !sameSet(d.channel_ids, rule.channel_ids ?? allChannelIds())
+    || !sameSet(d.channel_ids, baselineChannelIds(rule.channel_ids))
     || d.min_level !== (rule.min_level || 'info')
 }
 const dailyDraftDirty = computed<boolean>(() => {
@@ -1029,7 +1028,7 @@ const dailyDraftDirty = computed<boolean>(() => {
   const d = dailyDraft.value
   if (!r || !d) return false
   return !sameSet(d.items, r.items ?? [])
-    || !sameSet(d.channel_ids, r.channel_ids ?? allChannelIds())
+    || !sameSet(d.channel_ids, baselineChannelIds(r.channel_ids))
     || d.send_time !== (r.send_time || '09:00')
 })
 
@@ -1133,120 +1132,125 @@ const dailyPh = ['{{date}}', '{{requests}}', '{{allowed}}', '{{logged}}', '{{blo
 // 精美预置日报模板（事件与日报同族版式；分节=全局概览/安全风险/证书/集群与系统/运行状态）：
 // QQ=Markdown 分节表格（含 top_ips/top_paths/cert_expiring 多行变量），
 // 微信=纯文本分节行（iLink 协议无 markdown 能力），email=统一 HTML 卡片（日报版式）。
-const defaultDailyTplFor = (typ: string): string => {
-  if (typ === 'email') return emailCardTpl('{{title}}（{{date}}）',
+const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
+  const L = tplLabelsFor(lang)
+  const c = L.colon
+  const row = (label: string, key: string): string => `| ${label} | {{${key}}} |`
+  if (typ === 'email') return emailCardTpl(L.emailDailyTitle,
     '    <div style="font-size:14px;line-height:1.7;color:#334155;">{{body}}</div>',
-    [['日期', '{{date}}'], ['时间', '{{time}}']])
+    [[L.date, '{{date}}'], [L.time, '{{time}}']],
+    L.signature)
   if (typ === 'qq') return [
-    '# 📊 {{brand}} 日报',
-    '> {{date}} · 生成于 {{time}}',
+    `# ${L.dailyHeader}`,
+    `> {{date}} · ${L.generatedAt} {{time}}`,
     '',
-    '## 🌐 全局概览',
+    `## ${L.secOverview}`,
     '',
-    '| 指标 | 数值 |',
+    `| ${L.metricHeader} | ${L.valueHeader} |`,
     '| --- | --- |',
-    '| 请求数 | {{requests}} |',
-    '| 放行次数 | {{allowed}} |',
-    '| 观察次数 | {{logged}} |',
-    '| 独立 IP 数 | {{distinct_ips}} |',
-    '| 总带宽 | {{bandwidth}} |',
-    '| 峰值请求/窗 | {{peak_qps}} |',
+    row(L.requests, 'requests'),
+    row(L.allowed, 'allowed'),
+    row(L.logged, 'logged'),
+    row(L.distinctIps, 'distinct_ips'),
+    row(L.bandwidth, 'bandwidth'),
+    row(L.peakQps, 'peak_qps'),
     '',
-    '## 🛡 安全风险',
+    `## ${L.secSecurity}`,
     '',
-    '| 指标 | 数值 |',
+    `| ${L.metricHeader} | ${L.valueHeader} |`,
     '| --- | --- |',
-    '| 拦截次数 | {{blocked}} |',
-    '| 攻击 TOP 规则 | {{attack_top}} |',
-    '| CC 触发次数 | {{cc_triggered}} |',
-    '| 自动封禁次数 | {{autoban}} |',
+    row(L.blocked, 'blocked'),
+    row(L.attackTop, 'attack_top'),
+    row(L.cc, 'cc_triggered'),
+    row(L.autoban, 'autoban'),
     '',
-    '**TOP 攻击源 IP**',
+    `**${L.topIps}**`,
     '{{top_ips}}',
-    '**TOP 攻击路径**',
+    `**${L.topPaths}**`,
     '{{top_paths}}',
     '',
-    '## 🔒 证书状态',
+    `## ${L.secCert}`,
     '',
-    '| 指标 | 数值 |',
+    `| ${L.metricHeader} | ${L.valueHeader} |`,
     '| --- | --- |',
-    '| 证书状态 | {{cert_status}} |',
+    row(L.certStatus, 'cert_status'),
     '',
-    '**临期证书明细**',
+    `**${L.certExpiring}**`,
     '{{cert_expiring}}',
     '',
-    '## 🖥 集群与运行',
+    `## ${L.secCluster}`,
     '',
-    '| 指标 | 数值 |',
+    `| ${L.metricHeader} | ${L.valueHeader} |`,
     '| --- | --- |',
-    '| 集群状态 | {{cluster_status}} |',
-    '| 运行时长 | {{uptime}} |',
-    '| 威胁库版本 | {{threat_db}} |',
-    '| 应用版本 | {{app_version}} |',
+    row(L.clusterStatus, 'cluster_status'),
+    row(L.uptime, 'uptime'),
+    row(L.threatDb, 'threat_db'),
+    row(L.appVersion, 'app_version'),
     '',
-    '## 🔌 接入与任务',
+    `## ${L.secIntegrations}`,
     '',
-    '| 指标 | 数值 |',
+    `| ${L.metricHeader} | ${L.valueHeader} |`,
     '| --- | --- |',
-    '| API 调用(今日) | {{api_calls}} |',
-    '| MCP 调用 | {{mcp_calls}} |',
-    '| 定时任务 | {{task_status}} |',
-    '| 自动备份 | {{backup_status}} |',
+    row(L.apiCalls, 'api_calls'),
+    row(L.mcpCalls, 'mcp_calls'),
+    row(L.taskStatus, 'task_status'),
+    row(L.backup, 'backup_status'),
     '',
-    '## 👤 用户认证',
+    `## ${L.secAuth}`,
     '',
-    '| 指标 | 数值 |',
+    `| ${L.metricHeader} | ${L.valueHeader} |`,
     '| --- | --- |',
-    '| 登录认证 | {{login_status}} |',
+    row(L.loginStatus, 'login_status'),
     '',
     '> {{brand}} · {{time}}',
   ].join('\n')
+  const line = (label: string, key: string): string => `${label}${c}{{${key}}}`
   return [
-    '📊 {{brand}} 日报（{{date}}）',
+    `${L.dailyHeader}${lang === 'en' ? ' ({{date}})' : '（{{date}}）'}`,
     '────────────',
     '',
-    '🌐 全局概览',
-    '请求数：{{requests}}',
-    '放行次数：{{allowed}}',
-    '观察次数：{{logged}}',
-    '独立 IP 数：{{distinct_ips}}',
-    '带宽：{{bandwidth}}',
-    '峰值 QPS：{{peak_qps}}',
+    L.secOverview,
+    line(L.requests, 'requests'),
+    line(L.allowed, 'allowed'),
+    line(L.logged, 'logged'),
+    line(L.distinctIps, 'distinct_ips'),
+    line(L.wxBandwidth, 'bandwidth'),
+    line(L.wxPeakQps, 'peak_qps'),
     '',
-    '🛡 安全风险',
-    '拦截次数：{{blocked}}',
-    '攻击 TOP 规则：{{attack_top}}',
-    'TOP 攻击源：',
+    L.secSecurity,
+    line(L.blocked, 'blocked'),
+    line(L.attackTop, 'attack_top'),
+    `${L.topIps}${c}`,
     '{{top_ips}}',
-    'TOP 攻击路径：',
+    `${L.topPaths}${c}`,
     '{{top_paths}}',
-    'CC 触发次数：{{cc_triggered}}',
-    '自动封禁次数：{{autoban}}',
+    line(L.cc, 'cc_triggered'),
+    line(L.autoban, 'autoban'),
     '',
-    '🔒 证书状态',
-    '证书状态：{{cert_status}}',
-    '即将过期：',
+    L.secCert,
+    line(L.certStatus, 'cert_status'),
+    `${L.certExpiring}${c}`,
     '{{cert_expiring}}',
     '',
-    '🖥 集群与系统',
-    '集群状态：{{cluster_status}}',
-    '运行时长：{{uptime}}',
-    '规则库：{{threat_db}}',
-    '版本：{{app_version}}',
-    'API 调用：{{api_calls}}',
-    'MCP 调用：{{mcp_calls}}',
+    L.wxCluster,
+    line(L.clusterStatus, 'cluster_status'),
+    line(L.uptime, 'uptime'),
+    line(L.wxThreatDb, 'threat_db'),
+    line(L.wxAppVersion, 'app_version'),
+    line(L.apiCalls, 'api_calls'),
+    line(L.mcpCalls, 'mcp_calls'),
     '',
-    '⚙️ 运行状态',
-    '定时任务：{{task_status}}',
-    '备份：{{backup_status}}',
-    '登录：{{login_status}}',
+    L.secRun,
+    line(L.taskStatus, 'task_status'),
+    line(L.wxBackup, 'backup_status'),
+    line(L.wxLogin, 'login_status'),
     '',
     '—— {{brand}} · {{time}}',
   ].join('\n')
 }
 // 通道模式预置（日报）：机器人=分节日报模板；email=统一 HTML 卡片（日报版式）；
 // webhook=JSON 载荷模板（占位符不裹引号，与保存侧 probe 校验同口径）。
-const defaultChannelTplFor = (typ: string): string => {
+const defaultChannelTplFor = (typ: string, lang: TplLang): string => {
   if (typ === 'webhook') return [
     '{',
     '  "level": {{level}},',
@@ -1257,7 +1261,7 @@ const defaultChannelTplFor = (typ: string): string => {
     '  "event": {{event}}',
     '}',
   ].join('\n')
-  return defaultDailyTplFor(typ)
+  return defaultDailyTplFor(typ, lang)
 }
 
 // 弹框打开即时刷新（不依赖页面刷新）：rules=规则数据+通道摘要测试态（不重建内联
