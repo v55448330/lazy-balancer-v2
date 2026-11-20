@@ -375,12 +375,13 @@
 
         <el-divider />
         <!-- 预览区默认折叠（防弹框超屏）：展开后渲染/源码切换与预览正文 -->
-        <el-collapse v-if="tplEditorLang === 'markdown' || tplEditorLang === 'markup'" v-model="tplPreviewOpen" class="tpl-preview-collapse">
+        <el-collapse v-model="tplPreviewOpen" class="tpl-preview-collapse">
           <el-collapse-item name="preview">
             <template #title><DialogSectionHeader :title="t('app.notification.rules.preview')" /></template>
             <!-- 上半部分即正文源码，预览区直接渲染：HTML iframe / Markdown 渲染；不再提供源码切换 -->
             <iframe v-if="tplEditorLang === 'markup'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
-            <div v-else class="tpl-md-preview" v-html="tplPreviewHtml"></div>
+            <div v-else-if="tplEditorLang === 'markdown'" class="tpl-md-preview" v-html="tplPreviewHtml"></div>
+            <pre v-else class="tpl-preview">{{ previewText }}</pre>
           </el-collapse-item>
         </el-collapse>
       </template>
