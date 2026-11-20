@@ -118,7 +118,7 @@ export default {
       rules: {
       statSuccessRate: "Success Rate",
       trendTitle: "Delivery Trend (7 days)",
-      privacyHint: "Channel targets are masked when viewing others",
+      userLabel: "User",
       statDeliveries: "Deliveries",
       statRules: "Active Rules",
       statChannels: "Channels",

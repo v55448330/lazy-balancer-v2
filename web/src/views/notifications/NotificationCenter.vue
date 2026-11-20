@@ -216,11 +216,17 @@
                 <el-icon class="title-icon"><Bell /></el-icon>
                 <span>{{ t('app.notification.rules.eventRulesTitle') }}</span>
               </div>
-              <div v-if="isAdmin" class="card-header-actions">
-                <el-select v-model="rulesUserId" size="small" style="width:160px" @change="() => fetchRules(true)">
-                  <el-option v-for="u in adminUsers" :key="u.id" :value="u.id" :label="u.username" />
-                </el-select>
-                <span class="privacy-hint">{{ t('app.notification.rules.privacyHint') }}</span>
+              <div class="card-header-actions">
+                <div v-if="isAdmin" class="user-pick">
+                  <span class="user-pick-label">{{ t('app.notification.rules.userLabel') }}</span>
+                  <el-select v-model="rulesUserId" size="small" style="width:160px" @change="() => fetchRules(true)">
+                    <el-option v-for="u in adminUsers" :key="u.id" :value="u.id" :label="u.username" />
+                  </el-select>
+                </div>
+                <template v-if="anyRuleDirty">
+                  <el-button size="small" type="primary" :loading="savingAllRules" @click="saveAllRuleDrafts">{{ t('app.notification.rules.save') }}</el-button>
+                  <el-button size="small" @click="cancelAllRuleDrafts">{{ t('app.notification.rules.cancel') }}</el-button>
+                </template>
               </div>
             </div>
           </template>
@@ -291,10 +297,8 @@
             <el-table-column :label="t('app.notification.rules.enabled')" width="65">
               <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="toggleRule(asRule(row))" /></template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.actions')" width="200" fixed="right">
+            <el-table-column :label="t('app.notification.rules.actions')" width="150" fixed="right">
               <template #default="{ row }">
-                <el-button v-if="ruleDraftDirty(asRule(row))" size="small" link type="primary" :loading="savingRuleId === row.id" @click="saveRuleDraft(asRule(row))">{{ t('app.notification.rules.save') }}</el-button>
-                <el-button v-if="ruleDraftDirty(asRule(row))" size="small" link @click="cancelRuleDraft(asRule(row))">{{ t('app.notification.rules.cancel') }}</el-button>
                 <el-button size="small" link type="primary" @click="editTemplate(asRule(row))">{{ t('app.notification.daily.editTemplate') }}</el-button>
                 <el-button size="small" link type="primary" :loading="testingRuleId === row.id" @click="testRule(asRule(row))">{{ t('app.notification.rules.test') }}</el-button>
               </template>
@@ -983,7 +987,7 @@ interface RuleDraft { events: string[]; channel_ids: number[]; min_level: string
 interface DailyDraft { items: string[]; channel_ids: number[]; send_time: string }
 const ruleDrafts = ref<Record<string, RuleDraft>>({})
 const dailyDraft = ref<DailyDraft | null>(null)
-const savingRuleId = ref<string | null>(null)
+const savingAllRules = ref(false)
 const savingDaily = ref(false)
 const newRuleDraft = (rule: Rule): RuleDraft => ({
   events: [...(rule.events ?? [])],
@@ -1053,25 +1057,32 @@ const dailyDraftDirty = computed<boolean>(() => {
     || d.send_time !== (r.send_time || '09:00')
 })
 
-// 事件规则行保存：确认后将草稿（事件/通道/级别）部分更新写库；取消不写。
-const saveRuleDraft = async (rule: Rule): Promise<void> => {
-  const d = ruleDrafts.value[rule.id]
-  if (!d || savingRuleId.value !== null) return
+// 事件规则卡头统一保存/取消：存在任一行草稿脏时显示，保存所有脏行。
+const anyRuleDirty = computed<boolean>(() => eventRules.value.some(r => ruleDraftDirty(asRule(r))))
+const saveAllRuleDrafts = async (): Promise<void> => {
+  const dirty = eventRules.value.map(asRule).filter(r => ruleDraftDirty(r))
+  if (!dirty.length || savingAllRules.value) return
   try { await ElMessageBox.confirm(t('app.notification.rules.saveRuleConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
   catch { return }
-  savingRuleId.value = rule.id
+  savingAllRules.value = true
   try {
-    await request.post(ruleWriteUrl(rule.id), { events: d.events, channel_ids: d.channel_ids, min_level: d.min_level })
-    rule.events = [...d.events]
-    rule.channel_ids = [...d.channel_ids]
-    rule.min_level = d.min_level
+    for (const rule of dirty) {
+      const d = ruleDrafts.value[rule.id]
+      if (!d) continue
+      await request.post(ruleWriteUrl(rule.id), { events: d.events, channel_ids: d.channel_ids, min_level: d.min_level })
+      rule.events = [...d.events]
+      rule.channel_ids = [...d.channel_ids]
+      rule.min_level = d.min_level
+    }
     mfaAwareSuccess(t('app.notification.rules.saved'))
   } catch (e) {
     if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
-  } finally { savingRuleId.value = null }
+  } finally { savingAllRules.value = false }
 }
-const cancelRuleDraft = (rule: Rule): void => {
-  ruleDrafts.value = { ...ruleDrafts.value, [rule.id]: newRuleDraft(rule) }
+const cancelAllRuleDrafts = (): void => {
+  const m = { ...ruleDrafts.value }
+  for (const r of eventRules.value) m[r.id] = newRuleDraft(asRule(r))
+  ruleDrafts.value = m
 }
 
 // 每日摘要卡保存：确认后部分更新 items/channel_ids/send_time；空项目拦截同口径。
@@ -1517,7 +1528,8 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .chart-card :deep(.el-card__body) { height: 280px; padding: 16px; box-sizing: border-box; }
 .chart-container { height: 248px; }
 .chart-container .echarts { height: 100%; }
-.privacy-hint { font-size: 12px; color: #9ca3af; }
+.user-pick { display: inline-flex; align-items: center; gap: 8px; }
+.user-pick-label { font-size: 13px; color: #4b5563; }
 .rule-name-text { font-weight: 600; }
 .ev-more { font-size: 11px; color: #6b7280; }
 /* 表格多选触发器（事件/发送至）：摘要 + 展开箭头，点击弹 bordered 复选组 */

@@ -82,11 +82,11 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   assert.doesNotMatch(tplBlock, /enabled: true/, '模板保存不得强制启用规则')
   assert.doesNotMatch(tplBlock, /body_template:/, '每通道模板取代单一 body_template 直写')
   assert.match(tplBlock, /ElMessageBox\.confirm/, '模板保存需确认（取消不写）')
-  // 行草稿保存：事件/通道/级别三键部分更新 + 确认 + MFA 感知成功提示
-  const rowBlock = text.slice(text.indexOf('const saveRuleDraft'), text.indexOf('const cancelRuleDraft'))
-  assert.match(rowBlock, /events: d\.events, channel_ids: d\.channel_ids, min_level: d\.min_level/, '行保存只提交事件/通道/级别三键')
-  assert.match(rowBlock, /ElMessageBox\.confirm/, '行保存需确认（取消不写）')
-  assert.match(rowBlock, /mfaAwareSuccess/, '行保存成功经 MFA 感知提示')
+  // 卡头统一保存：事件/通道/级别三键部分更新 + 确认 + MFA 感知成功提示
+  const rowBlock = text.slice(text.indexOf('const anyRuleDirty'), text.indexOf('const cancelAllRuleDrafts'))
+  assert.match(rowBlock, /events: d\.events, channel_ids: d\.channel_ids, min_level: d\.min_level/, '卡头保存提交事件/通道/级别三键')
+  assert.match(rowBlock, /ElMessageBox\.confirm/, '卡头保存需确认（取消不写）')
+  assert.match(rowBlock, /mfaAwareSuccess/, '卡头保存成功经 MFA 感知提示')
   // 摘要卡保存：项目/通道/时间三键部分更新 + 确认
   const dailyBlock = text.slice(text.indexOf('const saveDailyDraft'), text.indexOf('const cancelDailyDraft'))
   assert.match(dailyBlock, /items: d\.items, channel_ids: d\.channel_ids, send_time: d\.send_time/, '卡保存只提交项目/通道/时间三键')
@@ -184,14 +184,17 @@ test('统一模板弹框+停用通道联动+事件级别分区+正文语言切�
   assert.match(text, /tplChannelLabel/, '通道切换必须带「通道」标签词条')
   assert.match(text, /class="tpl-channel-row">\s*<span class="tpl-format-label">\{\{ t\('app\.notification\.rules\.tplChannelLabel'\) \}\}/, '通道切换行带 label')
 
-  // 6) 消息模板列删除；「编辑模板」并入操作列（与保存/取消/测试并列，共用行草稿逻辑）
+  // 6) 消息模板列删除；编辑模板/测试在操作列；保存/取消统一到卡头（任一行脏时）
   assert.doesNotMatch(text, /rules\.bodyTemplate/, '消息模板列必须删除')
   const actionsAt = text.indexOf("t('app.notification.rules.actions')")
   const actionsBlock = text.slice(actionsAt, text.indexOf('</el-table-column>', actionsAt))
   assert.match(actionsBlock, /editTemplate\(asRule\(row\)\)/, '操作列必须有编辑模板按钮')
-  assert.match(actionsBlock, /saveRuleDraft\(asRule\(row\)\)/, '保存仍在操作列')
-  assert.match(actionsBlock, /cancelRuleDraft\(asRule\(row\)\)/, '取消仍在操作列')
-  assert.match(actionsBlock, /testRule\(asRule\(row\)\)/, '测试仍在操作列')
+  assert.match(actionsBlock, /testRule\(asRule\(row\)\)/, '测试在操作列')
+  assert.doesNotMatch(actionsBlock, /saveRuleDraft|cancelRuleDraft/, '保存/取消已移出操作列')
+  assert.match(text, /anyRuleDirty/, '卡头保存显隐依赖任一行脏')
+  assert.match(text, /saveAllRuleDrafts/, '卡头统一保存')
+  assert.match(text, /cancelAllRuleDrafts/, '卡头统一取消')
+  assert.doesNotMatch(text, /privacy-hint|privacyHint/, '脱敏描述已删')
 })
 
 test('投递记录消费 deliveries 契约：恒全量+用户/通道维度+失败重发', () => {

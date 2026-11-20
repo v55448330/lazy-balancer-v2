@@ -125,7 +125,7 @@ export default {
       rules: {
       statSuccessRate: "成功率",
       trendTitle: "投递趋势（7天）",
-      privacyHint: "查看他人配置时通道目标已脱敏",
+      userLabel: "用户",
       statDeliveries: "投递量",
       statRules: "活跃规则",
       statChannels: "通道数",
