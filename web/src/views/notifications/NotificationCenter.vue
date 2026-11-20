@@ -168,8 +168,8 @@
               </div>
               <div class="card-header-actions">
                 <template v-if="dailyDraftDirty">
-                  <el-button size="small" link type="primary" :loading="savingDaily" @click="saveDailyDraft">{{ t('app.notification.rules.save') }}</el-button>
-                  <el-button size="small" link @click="cancelDailyDraft">{{ t('app.notification.rules.cancel') }}</el-button>
+                  <el-button size="small" type="primary" :loading="savingDaily" @click="saveDailyDraft">{{ t('app.notification.rules.save') }}</el-button>
+                  <el-button size="small" @click="cancelDailyDraft">{{ t('app.notification.rules.cancel') }}</el-button>
                 </template>
                 <el-button size="small" link type="primary" @click="openDailyTpl">{{ t('app.notification.daily.editTemplate') }}</el-button>
                 <el-button size="small" link type="primary" :loading="testingDaily" @click="testDaily">{{ t('app.notification.daily.testSend') }}</el-button>
@@ -346,11 +346,11 @@
           </el-radio-group>
         </div>
 
-        <div class="tpl-field">
-          <div class="tpl-section-head">
-            <div class="tpl-section-label">{{ tplEditorLabel }}</div>
-            <el-button size="small" link type="primary" @click="resetTplToDefault">{{ t('app.notification.rules.tplDefault') }}</el-button>
-          </div>
+          <div class="tpl-field">
+            <div class="tpl-section-head">
+              <DialogSectionHeader :title="tplEditorLabel" />
+              <el-button size="small" link type="primary" @click="resetTplToDefault">{{ t('app.notification.rules.tplDefault') }}</el-button>
+            </div>
           <div class="tpl-format-row">
             <span class="tpl-format-label">{{ t('app.notification.rules.tplFormatLabel') }}</span>
             <el-tag v-if="isBotChannel(tplActiveChannel?.type || '')" size="small" effect="plain">{{ dailyFormatLabel(tplFixedFormat) }}</el-tag>
@@ -376,15 +376,17 @@
         <el-divider />
         <!-- 预览区默认折叠（防弹框超屏）：展开后渲染/源码切换与预览正文 -->
         <el-collapse v-model="tplPreviewOpen" class="tpl-preview-collapse">
-          <el-collapse-item name="preview" :title="t('app.notification.rules.preview')">
+          <el-collapse-item name="preview">
+            <template #title><DialogSectionHeader :title="t('app.notification.rules.preview')" /></template>
             <div v-if="tplEditorLang === 'markup'" class="tpl-preview-mode">
               <el-radio-group v-model="htmlPreviewMode" size="small">
                 <el-radio-button value="render">{{ t('app.notification.rules.previewRender') }}</el-radio-button>
                 <el-radio-button value="source">{{ t('app.notification.rules.previewSource') }}</el-radio-button>
               </el-radio-group>
             </div>
-            <!-- HTML：sandbox iframe 渲染预览（无脚本/无同源）；其余格式纯文本 pre -->
+            <!-- HTML：sandbox iframe 渲染；Markdown：渲染为 HTML 展示；其余格式纯文本 pre -->
             <iframe v-if="tplEditorLang === 'markup' && htmlPreviewMode === 'render'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
+            <div v-else-if="tplEditorLang === 'markdown'" class="tpl-md-preview" v-html="tplPreviewHtml"></div>
             <pre v-else class="tpl-preview">{{ previewText }}</pre>
           </el-collapse-item>
         </el-collapse>
@@ -398,7 +400,7 @@
     </el-dialog>
 
     <!-- 日报预览弹窗（卡片预览与通道格式预览共用；html=sandbox iframe，其余纯文本 pre） -->
-    <el-dialog v-model="dailyPreviewVisible" append-to-body class="dialog-body-inset" width="min(680px, 92vw)" top="6vh">
+    <el-dialog v-model="dailyPreviewVisible" append-to-body class="dialog-body-inset daily-preview-dialog" width="min(680px, 92vw)" top="6vh">
       <template #header>
         <DialogHeader :icon="Calendar" :title="t('app.notification.daily.previewTitle')" :subtitle="dailyPreviewSource" tone="primary" />
       </template>
@@ -408,6 +410,7 @@
         </el-radio-group>
       </div>
       <iframe v-if="dailyPreviewFmt === 'html'" class="daily-html-preview" sandbox="" :srcdoc="dailyPreviewText" :title="t('app.notification.daily.previewTitle')" />
+      <div v-else-if="dailyPreviewFmt === 'markdown'" v-loading="dailyPreviewLoading" class="tpl-md-preview" v-html="dailyPreviewHtml"></div>
       <pre v-else v-loading="dailyPreviewLoading" class="tpl-preview">{{ dailyPreviewText || t('app.notification.daily.previewEmpty') }}</pre>
       <template #footer>
         <el-button @click="dailyPreviewVisible = false">{{ t('app.notification.rules.cancel') }}</el-button>
@@ -431,6 +434,7 @@ import { hasOwn } from '@/utils/hasOwn'
 import type { NotificationChannel, NotificationChannelsResponse } from '@/types/notifications.ts'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
@@ -889,6 +893,45 @@ const dailySampleValues = {
   api_calls: '1200', mcp_calls: '300',
   task_status: '成功 12 / 失败 1', backup_status: '成功 7 / 失败 0',
   login_status: '成功 40 / 失败 3 / MFA失败 1',
+}
+// 轻量 Markdown→HTML（预览用，覆盖 QQ 模板子集：#/##/### 标题、**加粗**、- 列表、
+// > 引用、| 表格、段落；先转义再渲染，禁脚本）。
+const mdToHtml = (md: string): string => {
+  const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const inline = (s: string): string => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+?)`/g, '<code>$1</code>')
+  const lines = md.split('\n')
+  const out: string[] = []
+  let i = 0
+  while (i < lines.length) {
+    const ln = lines[i]
+    if (/^\s*\|/.test(ln) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
+      const header = ln.trim().replace(/^\||\|$/g, '').split('|').map(c => `<th>${inline(c.trim())}</th>`).join('')
+      i += 2
+      const rows: string[] = []
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map(c => `<td>${inline(c.trim())}</td>`).join(''))
+        i++
+      }
+      out.push(`<table><thead><tr>${header}</tr></thead><tbody>${rows.map(r => `<tr>${r}</tr>`).join('')}</tbody></table>`)
+      continue
+    }
+    if (/^###\s+/.test(ln)) { out.push(`<h4>${inline(ln.replace(/^###\s+/, ''))}</h4>`); i++; continue }
+    if (/^##\s+/.test(ln)) { out.push(`<h3>${inline(ln.replace(/^##\s+/, ''))}</h3>`); i++; continue }
+    if (/^#\s+/.test(ln)) { out.push(`<h2>${inline(ln.replace(/^#\s+/, ''))}</h2>`); i++; continue }
+    if (/^\s*-\s+/.test(ln)) {
+      const items: string[] = []
+      while (i < lines.length && /^\s*-\s+/.test(lines[i])) { items.push(`<li>${inline(lines[i].replace(/^\s*-\s+/, ''))}</li>`); i++ }
+      out.push(`<ul>${items.join('')}</ul>`); continue
+    }
+    if (/^\s*>\s?/.test(ln)) {
+      const items: string[] = []
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) { items.push(inline(lines[i].replace(/^\s*>\s?/, ''))); i++ }
+      out.push(`<blockquote>${items.join('<br>')}</blockquote>`); continue
+    }
+    if (ln.trim() === '') { i++; continue }
+    out.push(`<p>${inline(ln)}</p>`); i++
+  }
+  return out.join('\n')
 }
 const previewText = computed(() => {
   let text = tplText.value
@@ -1462,6 +1505,8 @@ const testRule = async (rule: Rule): Promise<void> => {
 const dailyPreviewVisible = ref(false)
 const dailyPreviewText = ref('')
 const dailyPreviewFmt = ref('markdown')
+const tplPreviewHtml = computed(() => mdToHtml(previewText.value))
+const dailyPreviewHtml = computed(() => mdToHtml(dailyPreviewText.value))
 const dailyPreviewSource = ref('')
 const dailyPreviewLoading = ref(false)
 const dailyPreviewFmtLocked = ref(false) // 机器人预览格式随协议固定（隐藏切换器）
@@ -1561,7 +1606,20 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
 .tpl-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .tpl-hints .form-hint { margin-top: 0; }
-.tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; }
+.tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; max-height: 42vh; overflow: auto; }
+.tpl-md-preview { background: #f9fafb; padding: 10px 12px; font-size: 13px; line-height: 1.7; color: #111827; border: 1px solid #eef2f7; max-height: 42vh; overflow: auto; }
+.tpl-md-preview h2 { font-size: 16px; margin: 6px 0; }
+.tpl-md-preview h3 { font-size: 14px; margin: 8px 0 6px; }
+.tpl-md-preview h4 { font-size: 13px; margin: 8px 0 4px; }
+.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+.tpl-md-preview th, .tpl-md-preview td { border: 1px solid #e5e7eb; padding: 4px 8px; text-align: left; }
+.tpl-md-preview th { background: #f3f4f6; }
+.tpl-md-preview blockquote { border-left: 3px solid #d1d5db; margin: 6px 0; padding: 2px 10px; color: #6b7280; }
+.tpl-md-preview ul { margin: 4px 0; padding-left: 18px; }
+.tpl-md-preview code { background: #eef2f7; padding: 1px 4px; font-family: ui-monospace, monospace; }
+.tpl-html-preview, .daily-html-preview { max-height: 42vh; }
+.rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 200px); overflow-y: auto; }
+.daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 200px); overflow-y: auto; }
 /* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
 .tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
 .tpl-preview-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; border-bottom: none; }

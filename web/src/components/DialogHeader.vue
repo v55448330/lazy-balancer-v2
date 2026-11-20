@@ -3,7 +3,6 @@
     <div class="dh-icon" :class="iconClass">
       <el-icon :size="18"><component :is="icon" /></el-icon>
     </div>
-    <span class="dh-bar" :class="barClass"></span>
     <div>
       <div class="dh-title">{{ title }}</div>
       <div v-if="subtitle" class="dh-sub">{{ subtitle }}</div>
@@ -24,7 +23,6 @@ const props = defineProps<{
 }>()
 
 const iconClass = computed(() => [props.tone ? `dh-icon--${props.tone}` : '', props.toneClass || ''])
-const barClass = computed(() => props.tone ? `dh-bar--${props.tone}` : '')
 </script>
 
 <style scoped>

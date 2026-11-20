@@ -89,6 +89,8 @@ const NON_LOG_VHTML_FACES = [
   'src/components/CodeEditor.vue#highlighted',
   'src/components/SyntaxHighlight.vue#highlighted',
   'src/components/layout/AppLayout.vue#footerHtml',
+  'src/views/notifications/NotificationCenter.vue#tplPreviewHtml',
+  'src/views/notifications/NotificationCenter.vue#dailyPreviewHtml',
 ] as const
 
 test('全部 v-html 面：日志面必须先转义再着色，非日志面须显式登记', () => {
