@@ -55,7 +55,7 @@
       <el-table-column :label="t('app.notification.deliveries.colUser')" width="130" show-overflow-tooltip>
         <template #default="scope">{{ scope.row.username || ('#' + scope.row.user_id) }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colEvent')" width="200" show-overflow-tooltip>
+      <el-table-column :label="t('app.notification.deliveries.colEvent')" min-width="240" show-overflow-tooltip>
         <template #default="scope">{{ deliveryEventTitle(scope.row) }}</template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colResult')" width="110">
