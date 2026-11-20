@@ -6676,3 +6676,110 @@ func repairPolicyStageMergeV2() error {
 	}
 	return nil
 }
+
+// SeedDefaultSecurityPolicies 首次安装时播种各阶段默认安全策略。
+// 仅由 cmd/server/main.go 调用（Initialize 不播——测试/导入环境不受干扰）。
+// 幂等条件=security_policies 为空（用户建过/导入过任何策略即不播）。
+// 威胁名单引用按 name 查 system=1 行 ID，不依赖 auto-increment 假设。
+func SeedDefaultSecurityPolicies() error {
+	var count int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_policies`).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil // 已有策略（用户创建或备份导入），不播种
+	}
+	// 查内置威胁名单 ID（按 name，system=1）
+	threatNames := []string{
+		"中科大恶意 IP 名单（USTC）",
+		"FireHOL Level 1 综合黑名单",
+		"Emerging Threats 失陷主机名单",
+	}
+	listIDs := make([]int64, 0, len(threatNames))
+	for _, name := range threatNames {
+		var id int64
+		var entries string
+		// 仅当名单在场且有条目时才引用（空名单引用在导入侧产生悬空校验失败）
+		if err := DB.QueryRow(`SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE name=? AND system=1`, name).Scan(&id, &entries); err == nil && entries != "[]" && entries != "" {
+			listIDs = append(listIDs, id)
+		}
+	}
+	threatRefs, _ := json.Marshal(listIDs)
+
+	type policySeed struct {
+		name, desc, ptype    string
+		mode                 string
+		ipWLEnabled          int
+		ipWL                 string
+		ipACLEnabled         int
+		ipACLMode            string
+		ipACLRefs            string
+		crsGroups            string
+		humanMode, humanType string
+		ccEnabled            int
+	}
+	seeds := []policySeed{
+		{
+			name: "内网直通", desc: "信任 RFC1918 私有网段，跳过全部安全阶段（默认适合本地/内网部署）",
+			ptype: "stage0", mode: "off",
+			ipWLEnabled: 1, ipWL: `["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]`,
+		},
+		{
+			name: "威胁情报拦截", desc: "拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP",
+			ptype: "stage1", mode: "off",
+			ipACLEnabled: 1, ipACLMode: "deny",
+			ipACLRefs: string(threatRefs),
+		},
+		{
+			name: "基础 CC 防护", desc: "自动模式人机验证：突刺/4xx/多 UA 触发滑块挑战，保护后端不被高频脚本耗尽",
+			ptype: "stage2", mode: "off",
+			humanMode: "auto", humanType: "slider",
+			ccEnabled: 1,
+		},
+		{
+			name: "基础 WAF 防护", desc: "CRS 阻断模式（推荐勾选协议异常/SQL 注入/XSS 核心规则组）",
+			ptype: "stage3", mode: "blocking",
+			crsGroups: "", // 留空：CRS 组测试环境不可用；UI 打开后用户勾选
+		},
+	}
+	for i, sd := range seeds {
+		ipWLVal := sd.ipWL
+		if ipWLVal == "" {
+			ipWLVal = "[]"
+		}
+		ipACLRefsVal := sd.ipACLRefs
+		if ipACLRefsVal == "" {
+			ipACLRefsVal = "[]"
+		}
+		crsVal := sd.crsGroups
+		if crsVal == "" {
+			crsVal = "[]"
+		}
+		hm := sd.humanMode
+		if hm == "" {
+			hm = "off"
+		}
+		ht := sd.humanType
+		if ht == "" {
+			ht = DefaultHumanVerifyType
+		}
+		if _, err := DB.Exec(`INSERT INTO security_policies
+			(id, name, description, mode, policy_type, enabled,
+			 ip_whitelist_enabled, ip_whitelist,
+			 ip_acl_enabled, ip_acl_mode, ip_acl_list_refs,
+			 crs_rule_groups,
+			 human_verify_mode, human_verify_type, human_verify_ttl,
+			 cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio)
+			VALUES (100+?,?,?,?,?,1, ?,?, ?,?,?, ?, ?,?,?, ?,?,?,?)`,
+			i, sd.name, sd.desc, sd.mode, sd.ptype,
+			sd.ipWLEnabled, ipWLVal,
+			sd.ipACLEnabled, sd.ipACLMode, ipACLRefsVal,
+			crsVal,
+			hm, ht, DefaultHumanVerifyTTL,
+			sd.ccEnabled, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio); err != nil {
+			return fmt.Errorf("seed %q: %w", sd.name, err)
+		}
+	}
+	log.Printf("[db] 已播种 %d 条默认安全策略（各阶段内置，可编辑/可删除）", len(seeds))
+	return nil
+}

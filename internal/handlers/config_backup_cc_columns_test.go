@@ -96,8 +96,8 @@ func TestValidateV2BackupSecurityPolicies_ccNumericNonIntegerDefaults(t *testing
 	}
 	p := tables["security_policies"][0]
 	if p["cc_rps_limit"] != int64(40) || p["cc_rps_window"] != int64(10) ||
-		p["cc_4xx_ratio"] != int64(70) || p["cc_session_ua_threshold"] != int64(5) {
-		t.Fatalf("非整数形态应归一治理默认 40/10/70/5，实际 %v/%v/%v/%v",
+		p["cc_4xx_ratio"] != int64(80) || p["cc_session_ua_threshold"] != int64(5) {
+		t.Fatalf("非整数形态应归一治理默认 40/10/80/5，实际 %v/%v/%v/%v",
 			p["cc_rps_limit"], p["cc_rps_window"], p["cc_4xx_ratio"], p["cc_session_ua_threshold"])
 	}
 }

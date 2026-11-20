@@ -107,7 +107,7 @@ func TestAutobanConfig_getDefaults(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
 		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
 	}
-	if cfg.Enabled || !cfg.DryRun || cfg.Threshold != 100 || cfg.WindowMinutes != 5 || cfg.Duration != "1h" || cfg.Scope != "blocked,logged,challenge_issued,challenge_failed" {
+	if cfg.Enabled || !cfg.DryRun || cfg.Threshold != 150 || cfg.WindowMinutes != 10 || cfg.Duration != "1h" || cfg.Scope != "blocked,logged,challenge_issued,challenge_failed" {
 		t.Fatalf("默认配置失真: %+v", cfg)
 	}
 }
@@ -217,7 +217,7 @@ func TestAutobanConfig_putRejectsInvalid(t *testing.T) {
 	if err := json.Unmarshal(getRequest(t, router, "/security/autoban").Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Threshold != 100 || got.WindowMinutes != 5 || got.Duration != "1h" || got.Scope != "blocked,logged,challenge_issued,challenge_failed" {
+	if got.Threshold != 150 || got.WindowMinutes != 10 || got.Duration != "1h" || got.Scope != "blocked,logged,challenge_issued,challenge_failed" {
 		t.Fatalf("非法配置写入了库: %+v", got)
 	}
 }

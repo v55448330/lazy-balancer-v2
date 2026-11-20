@@ -120,6 +120,10 @@ func run() error {
 	if err := db.Initialize(cfg.DataDir); err != nil {
 		return startupFailed(fmt.Errorf("initialize database: %w", err))
 	}
+	// 默认安全策略播种（各阶段 1-2 条，降低首次使用门槛；仅首次安装，用户删除后不复活）
+	if err := db.SeedDefaultSecurityPolicies(); err != nil {
+		return startupFailed(fmt.Errorf("seed default security policies: %w", err))
+	}
 	defer func() {
 		if err := db.Close(); err != nil {
 			services.Logf("error", "close databases during shutdown: %v", err)
