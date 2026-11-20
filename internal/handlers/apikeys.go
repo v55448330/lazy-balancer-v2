@@ -674,6 +674,14 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		auditDetail = services.FormatAuditDetail(auditDetail, "变更："+strings.Join(changes, "、"))
 	}
 	recordAudit(c, "更新", "API密钥", auditDetail)
+	// 启停子集发通知事件（密钥其余字段编辑不属启停语义）。
+	if req.IsEnabled != nil {
+		state := "禁用"
+		if *req.IsEnabled {
+			state = "启用"
+		}
+		notify.Publish(notify.Event{Type: notify.EvtAPIKeyToggled, Fields: map[string]string{"1": c.GetString("username"), "2": state, "3": name}})
+	}
 	// 禁用即清扫白名单解析缓存（条目随 Key 失活永不再命中）。
 	// 在位编辑白名单也清扫——缓存键含白名单内容，旧键
 	// 成为孤儿永不再命中（曾仅禁用/删除清扫）。

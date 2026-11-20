@@ -11,6 +11,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -261,6 +262,8 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		"channels":    allChannels, // 供「添加规则」向导选择通道
 		"catalog":     catalog,     // 事件目录（供向导选择触发条件）
 		"daily_items": dailyItemsForWizard(),
+		// 大模块分组（2026-11-21 裁定：日报配置按模块选择）
+		"daily_modules": notify.DailyModules(),
 	}})
 }
 
@@ -449,6 +452,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		proxy = "管理员代管用户 " + strconv.FormatInt(uid, 10)
 	}
 	recordAudit(c, "修改", "通知规则", services.FormatAuditDetail(proxy, "规则「"+ruleTitle+"」", services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtNotifyRuleChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": fmt.Sprintf("#%s", c.Param("id"))}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

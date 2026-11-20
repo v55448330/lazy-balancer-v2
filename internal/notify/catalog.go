@@ -59,6 +59,31 @@ const (
 	EvtNotifyChannelRecovered = "notify.channel_recovered" // 通道恢复（与掉线成对）
 	EvtTaskFailed             = "task.failed"              // 定时任务执行失败
 	EvtAPIKeyExpiryWarning    = "apikey.expiry_warning"    // API 密钥临期预警
+	// ── 2026-11-21 用户裁定「全部都做」：写操作通知事件查漏补缺（T1+T2 全量）──
+	EvtCaddyLifecycle         = "cfg.caddy_lifecycle"           // Caddy 启动/停止/重启
+	EvtAdminTLSChanged        = "cfg.admin_tls_changed"         // 管理接口 TLS 配置
+	EvtOIDCChanged            = "cfg.oidc_changed"              // OIDC 单点登录配置（动作参数）
+	EvtAutoBackupChanged      = "cfg.auto_backup_changed"       // 自动备份设置
+	EvtNotificationCfgChanged = "cfg.notification_changed"      // 通知投递设置
+	EvtClusterSettingsChanged = "cfg.cluster_settings_changed"  // 集群设置
+	EvtCAProviderChanged      = "cfg.ca_provider_changed"       // CA 提供商
+	EvtPolicyChanged          = "sec.policy_changed"            // 安全策略 CRUD/绑定/解绑/批量/拆分/默认策略（动作参数）
+	EvtIPListChanged          = "sec.ip_list_changed"           // IP 名单 CRUD/条目增删（动作参数）
+	EvtCustomRuleChanged      = "sec.custom_rule_changed"       // 自定义安全规则 CRUD
+	EvtBlockPageChanged       = "sec.block_page_changed"        // 拦截页 CRUD
+	EvtAutobanCfgChanged      = "sec.autoban_config_changed"    // 自动封禁配置/累犯移除
+	EvtMCPDisconnected        = "sec.mcp_disconnected"          // MCP 会话强制断开
+	EvtLibUpdated             = "sec.lib_updated"               // 安全库手动更新触发（CRS/威胁/IP2Region/爬虫）
+	EvtLibSettingsChanged     = "sec.lib_settings_changed"      // 安全库自动更新/定时/v6 开关
+	EvtClusterServiceControl  = "cluster.service_control"       // 主节点控制从节点服务（启停 Caddy/重启面板）
+	EvtClusterLoginTicket     = "cluster.login_ticket"          // 集群登录票据签发（主节点侧）
+	EvtClusterNodeSettings    = "cluster.node_settings_changed" // forget-pin/注册令牌/access-url/节点站点
+	EvtClusterManualSync      = "cluster.manual_sync"           // 手动配置拉取同步
+	EvtAPIKeyToggled          = "auth.apikey_toggled"           // API 密钥启用/禁用
+	EvtRestartRequested       = "sys.restart_requested"         // 面板重启请求
+	EvtTaskManualAction       = "task.manual_action"            // 任务手动触发/启停/取消/控制
+	EvtNotifyChannelChanged   = "notify.channel_changed"        // 通知通道 CRUD
+	EvtNotifyRuleChanged      = "notify.rule_changed"           // 通知规则 CRUD
 )
 
 // catalogEntry 事件目录条目。
@@ -116,6 +141,31 @@ var catalog = []catalogEntry{
 	{EvtNotifyChannelRecovered, LevelInfo, true, "通知通道恢复", "通知通道已恢复（%s），投递正常"},
 	{EvtTaskFailed, LevelWarn, true, "定时任务失败", "任务 %s 执行失败：%s"},
 	{EvtAPIKeyExpiryWarning, LevelWarn, true, "API 密钥临期", "API 密钥「%s」将于 %s 到期（剩余 %s 天）"},
+	// ── 2026-11-21 查漏补缺批：可用性/安全敏感 = warn+默认订阅；常规运维 = info ──
+	{EvtCaddyLifecycle, LevelWarn, true, "Caddy 服务启停", "用户 %s %s Caddy 服务（%s）"},
+	{EvtAdminTLSChanged, LevelInfo, false, "Admin TLS 配置变更", "用户 %s 更新了管理接口 TLS 配置"},
+	{EvtOIDCChanged, LevelInfo, false, "OIDC 配置变更", "用户 %s %s了 OIDC 单点登录配置"},
+	{EvtAutoBackupChanged, LevelInfo, false, "自动备份设置变更", "用户 %s 更新了自动备份设置"},
+	{EvtNotificationCfgChanged, LevelInfo, false, "通知设置变更", "用户 %s 更新了通知投递设置"},
+	{EvtClusterSettingsChanged, LevelInfo, false, "集群设置变更", "用户 %s 更新了集群设置"},
+	{EvtCAProviderChanged, LevelInfo, false, "CA 提供商变更", "用户 %s 更新了 CA 提供商「%s」"},
+	{EvtPolicyChanged, LevelWarn, true, "安全策略变更", "用户 %s %s（策略：%s）"},
+	{EvtIPListChanged, LevelInfo, false, "IP 名单变更", "用户 %s %s（名单：%s）"},
+	{EvtCustomRuleChanged, LevelInfo, false, "自定义规则变更", "用户 %s %s（规则：%s）"},
+	{EvtBlockPageChanged, LevelInfo, false, "拦截页变更", "用户 %s %s（页面：%s）"},
+	{EvtAutobanCfgChanged, LevelWarn, true, "自动封禁配置变更", "用户 %s %s"},
+	{EvtMCPDisconnected, LevelWarn, true, "MCP 会话断开", "管理员 %s 强制断开了 MCP 会话（%s）"},
+	{EvtLibUpdated, LevelInfo, false, "安全库手动更新", "用户 %s 触发了%s手动更新"},
+	{EvtLibSettingsChanged, LevelInfo, false, "安全库设置变更", "用户 %s 变更了%s（%s）"},
+	{EvtClusterServiceControl, LevelWarn, true, "集群服务控制", "管理员 %s 对节点 %s 执行 %s（%s）"},
+	{EvtClusterLoginTicket, LevelWarn, true, "集群登录票据签发", "管理员 %s 签发了节点 %s 的登录票据（目标用户：%s）"},
+	{EvtClusterNodeSettings, LevelWarn, true, "集群节点管理操作", "管理员 %s 执行了 %s（%s）"},
+	{EvtClusterManualSync, LevelWarn, true, "集群手动同步", "用户 %s 发起了从节点配置拉取同步"},
+	{EvtAPIKeyToggled, LevelWarn, true, "API 密钥状态变更", "用户 %s %s了 API 密钥「%s」"},
+	{EvtRestartRequested, LevelWarn, true, "面板重启请求", "用户 %s 发起了面板重启，系统即将重启"},
+	{EvtTaskManualAction, LevelInfo, false, "任务手动操作", "用户 %s 对任务 %s 执行了 %s"},
+	{EvtNotifyChannelChanged, LevelInfo, false, "通知通道变更", "用户 %s %s了通知通道「%s」"},
+	{EvtNotifyRuleChanged, LevelInfo, false, "通知规则变更", "用户 %s %s了通知规则「%s」"},
 }
 
 // defaultSubscribedFor 新用户默认订阅集：critical+warn 全开，info 与日报默认关。

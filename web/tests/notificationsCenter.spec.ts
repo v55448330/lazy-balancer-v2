@@ -104,7 +104,8 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   // 每日摘要独立卡片（不混事件规则表格）+ 三字段卡内联编辑
   assert.match(text, /daily-card/, '每日摘要必须独立卡片')
   assert.match(text, /el-time-select v-model="dailyDraft\.send_time"/, '投递时间必须卡内联编辑')
-  assert.match(text, /el-checkbox-group v-model="dailyDraft\.items"/, '包含项目必须卡内联编辑')
+  assert.match(text, /:model-value="dailyModuleChecked"/, '包含模块勾选必须绑定模块选中集（2026-11-21 裁定：按模块选择）')
+  assert.match(text, /@update:model-value="toggleDailyModule"/, '模块勾选切换必须走 toggleDailyModule（整组项目入/出 items）')
   assert.match(text, /el-checkbox-group v-model="dailyDraft\.channel_ids"/, '目标通道必须卡内联编辑')
   assert.match(text, /eventRules/, '事件规则独立表格数据源')
   // 规则测试走 /test 端点（按选定通道+模板渲染）

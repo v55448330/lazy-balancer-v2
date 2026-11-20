@@ -16,6 +16,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 
 	"github.com/gin-gonic/gin"
 )
@@ -890,6 +891,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "创建",
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "创建了", "3": req.Name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%d，%d 条）", req.Name, id, len(entries)),
 		SuccessMsg:  apimsg.T(c, "k_e52e1fb6"), MessageKey: "k_e52e1fb6",
 		Data: createData,
@@ -1111,6 +1113,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	}
 	if h.tryIPListHotPathApply(c, tx, listID, ipListEntriesChanged(oldEntriesJSON, entriesJSON), txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "更新",
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了", "3": name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s，%d 条）", name, id, len(entries)),
 		SuccessMsg:  apimsg.T(c, "k_b754105d"), MessageKey: "k_b754105d",
 		Data: applyData,
@@ -1263,6 +1266,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "删除",
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": listName}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s，%s）", listName, id, entryCountLabel),
 		SuccessMsg:  apimsg.T(c, "k_50264d65"), MessageKey: "k_50264d65",
 	})
@@ -1396,6 +1400,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	}
 	if h.tryIPListHotPathApply(c, tx, listID, true, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "变更了条目", "3": listName}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）追加 IP %s（%s，现共 %d 条）", listName, id, req.Value, actionLabel, len(entries)),
 		SuccessMsg:  apimsg.T(c, "k_a4443bc4"), MessageKey: "k_a4443bc4",
 		Data: gin.H{"added": true},

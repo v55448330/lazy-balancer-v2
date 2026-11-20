@@ -165,6 +165,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail("变更键: "+strings.Join(changed, ","), "", services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtNotificationCfgChanged, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ce6e6687"), MessageKey: "k_ce6e6687"})
 }
 

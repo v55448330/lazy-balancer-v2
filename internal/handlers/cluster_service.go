@@ -18,6 +18,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -131,6 +132,7 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 		clusterError(c, http.StatusBadGateway, "从节点不可达或响应异常", err)
 		return
 	}
+	notify.Publish(notify.Event{Type: notify.EvtClusterServiceControl, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("节点 %d（%s）", nodeID, issued.NodeName), "3": req.Action, "4": "成功"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
 }
 

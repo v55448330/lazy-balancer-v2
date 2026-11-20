@@ -274,6 +274,7 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 	}
 	id, _ := res.LastInsertId()
 	notify.ClearBindSessionsByUser(uid)
+	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "创建", "3": req.Name}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id}})
 }
 
@@ -356,6 +357,7 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		subject = "管理员修改用户" + subject
 	}
 	recordAudit(c, "修改", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": fmt.Sprintf("#%s", c.Param("id"))}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
@@ -395,6 +397,7 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 		subject = "管理员删除用户" + subject
 	}
 	recordAudit(c, "删除", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除", "3": fmt.Sprintf("#%s", c.Param("id"))}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

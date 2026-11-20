@@ -10,6 +10,7 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -116,6 +117,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail("配置无变化", services.AuditResultPart("success")))
 	}
 	services.ResumeSyncIfUserEnabled(h.syncService.Resume)
+	notify.Publish(notify.Event{Type: notify.EvtClusterManualSync, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_91110f22"), MessageKey: "k_91110f22", Data: result})
 }
 
@@ -164,6 +166,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		fmt.Sprintf("已清除 %d 个主节点证书指纹，下次同步将重新验证并钉扎", removed),
 		services.AuditResultPart("success"),
 	))
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "清除了全部集群信任锚", "3": "forget-pins"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_d94bc52e"), MessageKey: "k_d94bc52e"})
 }
 

@@ -1792,6 +1792,7 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已启动", note)})
 		return
 	}
+	notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": "成功"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4c308279"), MessageKey: "k_4c308279"})
 }
 
@@ -1808,6 +1809,7 @@ func (h *Handlers) StopCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
+	notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "停止", "3": "成功"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_b2073f69"), MessageKey: "k_b2073f69"})
 }
 
@@ -1831,6 +1833,7 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已重启", note)})
 		return
 	}
+	notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "成功"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_427e9e31"), MessageKey: "k_427e9e31"})
 }
 

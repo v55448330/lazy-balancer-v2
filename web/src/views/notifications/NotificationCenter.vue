@@ -186,9 +186,12 @@
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
-              <el-checkbox-group v-model="dailyDraft.items" size="small" class="notif-pick-group daily-items">
-                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id" border size="small">{{ dailyItemLabel(opt.id) }}</el-checkbox>
+              <!-- 大模块勾选（2026-11-21 裁定：项目粒度太细）——模块=项目稳定分组，
+                   勾=整组入 items，取消=整组移除；存储仍是 items[]（渲染契约不变）。 -->
+              <el-checkbox-group :model-value="dailyModuleChecked" size="small" class="notif-pick-group daily-items" @update:model-value="toggleDailyModule">
+                <el-checkbox v-for="mod in dailyModules" :key="mod.id" :value="mod.id" border size="small">{{ mod.emoji }} {{ mod.label }}</el-checkbox>
               </el-checkbox-group>
+              <span class="form-hint">{{ t('app.notification.daily.modulesHint') }}</span>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.sendTo') }}</span>
@@ -650,13 +653,26 @@ const rules = ref<Rule[]>([])
 const eventRules = computed(() => rules.value.filter(r => r.trigger === 'event'))
 const dailyRule = computed(() => rules.value.find(r => r.trigger === 'daily') ?? null)
 const testingRuleId = ref<string | null>(null)
-const dailyItemOptions = ref<{ id: string; label: string }[]>([])
-const testingDaily = ref(false)
-// 日报项目/格式多语言标签（tm 原始对象索引）
-const dailyItemLabel = (id: string): string => {
-  const m = (tm('app.notification.dailyItems') || {}) as Record<string, string>
-  return hasOwn(m, id) ? m[id] : id
+// 大模块（2026-11-21 裁定）：模块勾选=整组项目入/出 items
+const dailyModules = ref<Array<{ id: string; label: string; emoji: string; items: string[] }>>([])
+const dailyModuleChecked = computed<string[]>(() =>
+  (dailyModules.value ?? [])
+    .filter(mod => mod.items.every(it => dailyDraft.value?.items.includes(it)))
+    .map(mod => mod.id))
+const toggleDailyModule = (checked: Array<string | number> | string | number | undefined): void => {
+  const on = Array.isArray(checked) ? checked.map(String) : checked !== undefined ? [String(checked)] : []
+  if (!dailyDraft.value) return
+  const next = new Set(dailyDraft.value.items)
+  for (const mod of dailyModules.value) {
+    const isOn = on.includes(mod.id)
+    for (const it of mod.items) {
+      if (isOn) next.add(it)
+      else next.delete(it)
+    }
+  }
+  dailyDraft.value.items = [...next]
 }
+const testingDaily = ref(false)
 const dailyFormatLabel = (v: string): string => {
   const m = (tm('app.notification.dailyFormats') || {}) as Record<string, string>
   return hasOwn(m, v) ? m[v] : v
@@ -976,7 +992,7 @@ const fetchRules = async (reseedDrafts: boolean): Promise<void> => {
   try {
     // 默认当前用户；管理员可选其他用户（规则/通道按用户区分，概览才全平台）
     const rulesUrl = isAdmin.value && rulesUserId.value > 0 ? `/notification/rules?user_id=${rulesUserId.value}` : '/notification/rules'
-    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; catalog?: CatalogEvent[]; daily_items?: { id: string; label: string }[] } }>(rulesUrl)
+    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; catalog?: CatalogEvent[]; daily_items?: { id: string; label: string }[]; daily_modules?: { id: string; label: string; emoji: string; items: string[] }[] } }>(rulesUrl)
     rules.value = res.data?.rules ?? []
     // 最低级别预选：空值回退目录默认级别 info（目录各组最低级别，亦为后端
     // 新建订阅行的起始级别）——下拉不再呈现空「请选择」态；仅显示兜底，不写库。
@@ -985,7 +1001,7 @@ const fetchRules = async (reseedDrafts: boolean): Promise<void> => {
     }
     userChannels.value = res.data?.channels ?? []
     eventCatalog.value = res.data?.catalog ?? []
-    dailyItemOptions.value = res.data?.daily_items ?? []
+    dailyModules.value = res.data?.daily_modules ?? []
     await fetchChannels()
     seedDailyTplDrafts()
     seedDrafts(reseedDrafts)

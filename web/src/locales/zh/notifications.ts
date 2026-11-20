@@ -99,7 +99,8 @@ export default {
         json: 'JSON',
       },
       daily: {
-        itemsLabel: '包含项目',
+        itemsLabel: '包含模块',
+        modulesHint: '按模块勾选日报内容，模块内项目自动整组包含',
         formatLabel: '通道格式',
         editTemplate: '编辑模板',
         contentTemplate: '内容模板',

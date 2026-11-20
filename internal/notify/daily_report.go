@@ -411,6 +411,29 @@ var dailySections = []struct {
 	{"👤", "用户认证", []string{"login_status"}},
 }
 
+// DailyModuleExport 日报大模块（配置 UI 按模块勾选的契约形状）。
+type DailyModuleExport struct {
+	ID    string   `json:"id"`
+	Label string   `json:"label"`
+	Emoji string   `json:"emoji"`
+	Items []string `json:"items"`
+}
+
+// DailyModules 模块全集导出（2026-11-21 用户裁定：配置按大模块选择，
+// 项目级勾选粒度太细；items 存储与渲染契约不变——模块=项目的稳定分组）。
+func DailyModules() []DailyModuleExport {
+	out := make([]DailyModuleExport, 0, len(dailySections))
+	for i, sec := range dailySections {
+		out = append(out, DailyModuleExport{
+			ID:    fmt.Sprintf("mod%d", i+1),
+			Label: sec.title,
+			Emoji: sec.emoji,
+			Items: append([]string{}, sec.items...),
+		})
+	}
+	return out
+}
+
 // renderDailyFromValues 渲染底座（值映射→分节格式化文本；html 转义）。
 func renderDailyFromValues(date string, values map[string]string, items []string, format string) string {
 	enabled := map[string]bool{}
@@ -438,30 +461,39 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		return string(raw)
 	case "html":
 		escBR := func(s string) string { return strings.ReplaceAll(html.EscapeString(s), "\n", "<br>") }
+		// 协调设计（2026-11-21 裁定）：品牌渐变头+模块色卡分区+斑马行表+
+		// 双栏指标（标签弱化/数值加重）——与面板直角语言一致的邮件卡片。
+		sectionAccent := []string{"#3b82f6", "#ef4444", "#f59e0b", "#8b5cf6", "#06b6d4", "#64748b"}
 		var b strings.Builder
-		b.WriteString(`<div style="max-width:640px;margin:0 auto;font-family:'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;">`)
-		fmt.Fprintf(&b, `<div style="background:#1e293b;padding:16px 24px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:16px;font-weight:600;">📊 %s 每日报告</td><td style="text-align:right;"><span style="background:#3b82f6;color:#fff;font-size:11px;padding:2px 10px;">%s</span></td></tr></table></div>`,
+		b.WriteString(`<div style="max-width:640px;margin:0 auto;font-family:'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;background:#f1f5f9;padding:24px 12px;">`)
+		fmt.Fprintf(&b, `<div style="background:linear-gradient(135deg,#1e293b 0%%,#334155 100%%);padding:22px 28px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:17px;font-weight:600;letter-spacing:.5px;">📊 %s 每日报告</td><td align="right" style="vertical-align:middle;"><span style="background:rgba(255,255,255,.14);color:#e2e8f0;font-size:12px;padding:4px 12px;border:1px solid rgba(255,255,255,.22);">%s</span></td></tr></table></div>`,
 			html.EscapeString(brand), html.EscapeString(date))
-		b.WriteString(`<div style="border:1px solid #e2e8f0;border-top:none;padding:24px;">`)
-		fmt.Fprintf(&b, `<p style="margin:0 0 16px;color:#6b7280;font-size:12px;">%s · 生成于 %s</p>`, html.EscapeString(date), now)
-		for _, sec := range dailySections {
+		fmt.Fprintf(&b, `<div style="background:#ffffff;padding:8px 24px 4px;"><p style="margin:14px 0 18px;color:#94a3b8;font-size:12px;">数据周期 %s · 生成于 %s</p></div>`, html.EscapeString(date), now)
+		for si, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, `<h4 style="margin:16px 0 8px;font-size:14px;color:#0f172a;">%s %s</h4><table style="width:100%%;border-collapse:collapse;font-size:13px;"><tr style="background:#f9fafb;"><th align="left" style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">指标</th><th align="left" style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">数值</th></tr>`, sec.emoji, html.EscapeString(sec.title))
-			for _, r := range rows {
-				fmt.Fprintf(&b, `<tr><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#6b7280;vertical-align:top;">%s</td><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;">%s</td></tr>`, html.EscapeString(r[0]), escBR(r[1]))
+			accent := sectionAccent[si%len(sectionAccent)]
+			fmt.Fprintf(&b, `<div style="margin:0 24px 16px;background:#ffffff;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="width:4px;background:%s;padding:0;"></td><td style="padding:12px 16px;">`, accent)
+			fmt.Fprintf(&b, `<div style="font-size:14px;font-weight:600;color:#0f172a;margin-bottom:10px;">%s %s</div>`, sec.emoji, html.EscapeString(sec.title))
+			b.WriteString(`<table style="width:100%;border-collapse:collapse;font-size:13px;">`)
+			for ri, r := range rows {
+				bg := "#ffffff"
+				if ri%2 == 1 {
+					bg = "#f8fafc"
+				}
+				fmt.Fprintf(&b, `<tr style="background:%s;"><td style="padding:7px 10px;color:#64748b;border-bottom:1px solid #f1f5f9;vertical-align:top;white-space:nowrap;">%s</td><td align="right" style="padding:7px 10px;color:#0f172a;font-weight:600;border-bottom:1px solid #f1f5f9;">%s</td></tr>`, bg, html.EscapeString(r[0]), escBR(r[1]))
 			}
-			b.WriteString("</table>")
+			b.WriteString(`</table></td></tr></table></div>`)
 		}
-		fmt.Fprintf(&b, `<p style="margin:16px 0 0;color:#9ca3af;font-size:12px;text-align:center;">此邮件由 %s 通知中心自动发送 · %s</p></div></div>`, html.EscapeString(brand), now)
+		fmt.Fprintf(&b, `<div style="padding:6px 24px 18px;"><p style="margin:0;color:#94a3b8;font-size:11px;text-align:center;">此邮件由 %s 通知中心自动发送 · %s</p></div></div>`, html.EscapeString(brand), now)
 		return b.String()
 	case "markdown":
 		// QQ 原生 markdown 支持 #/## 标题、**加粗**、> 引用、- 列表（官方文档），
 		// 表格经用户实测可渲染。标量入指标表，多值用加粗标签+无序列表拆行。
 		var b strings.Builder
-		fmt.Fprintf(&b, "# 📊 %s 每日报告\n> %s · 生成于 %s\n\n", brand, date, now)
+		fmt.Fprintf(&b, "# 📊 %s 每日报告\n> 数据周期 %s · 生成于 %s\n\n", brand, date, now)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
@@ -480,13 +512,13 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 				}
 			}
 			if tbl.Len() > 0 {
-				b.WriteString("| 指标 | 数值 |\n| --- | --- |\n" + tbl.String() + "\n")
+				b.WriteString("| 指标 | 数值 |\n| :--- | ---: |\n" + tbl.String() + "\n")
 			}
 			if lists.Len() > 0 {
 				b.WriteString(lists.String() + "\n")
 			}
 		}
-		fmt.Fprintf(&b, "> %s · %s\n", brand, now)
+		fmt.Fprintf(&b, "---\n> %s · %s\n", brand, now)
 		return b.String()
 	default: // text（微信 iLink 纯文本协议；无 markdown 标记，多值独立行）
 		var b strings.Builder

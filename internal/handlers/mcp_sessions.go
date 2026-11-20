@@ -5,6 +5,7 @@ package handlers
 // 在线口径与投递 Daemon 清理同源：last_seen 30 分钟内=在线（表内即在线）。
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/mcpserver"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 )
 
 // mcpSessionDTO 会话行（Main 契约形状）：username/key_name 由 JOIN 取展示名，
@@ -85,6 +87,7 @@ func (h *Handlers) DisconnectMCPSession(c *gin.Context) {
 	recordAudit(c, "断开", "MCP 会话",
 		"会话 "+sessionID+"（用户 #"+strconv.FormatInt(ownerUserID, 10)+
 			"，Key #"+strconv.FormatInt(ownerKeyID, 10)+"）强制断开")
+	notify.Publish(notify.Event{Type: notify.EvtMCPDisconnected, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("会话 #%s", c.Param("id"))}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_768f666d"), MessageKey: "k_768f666d"})
 }
 

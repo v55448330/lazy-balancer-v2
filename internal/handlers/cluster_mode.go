@@ -11,6 +11,7 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -235,6 +236,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		detail = "无修改"
 	}
 	recordAudit(c, "更新", "集群设置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtClusterSettingsChanged, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_42589787"), MessageKey: "k_42589787"})
 }
 

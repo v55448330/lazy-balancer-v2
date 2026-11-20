@@ -31,6 +31,8 @@ func (h *Handlers) GetNotificationDaily(c *gin.Context) {
 		"config": cfg,
 		"items":  notify.DailyItemIDs,
 		"labels": notify.DailyItemLabels,
+		// 大模块分组（2026-11-21 裁定：配置按模块选择）
+		"modules": notify.DailyModules(),
 	}})
 }
 

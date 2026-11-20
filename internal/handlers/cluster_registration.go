@@ -13,6 +13,7 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -76,6 +77,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(fmt.Sprintf("有效期至：%s", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "生成了集群注册令牌", "3": "-"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_9fc1e233"), MessageKey: "k_9fc1e233", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
 }
 

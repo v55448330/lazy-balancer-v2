@@ -903,6 +903,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		fmt.Sprintf("保留份数：%d", *req.Keep),
 		"范围："+strings.Join(autoBackupSectionLabels(req.Sections), "、"),
 		services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtAutoBackupChanged, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ae59d879"), MessageKey: "k_ae59d879"})
 }
 

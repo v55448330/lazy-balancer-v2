@@ -92,7 +92,8 @@ export default {
         json: 'JSON',
       },
       daily: {
-        itemsLabel: 'Included items',
+        itemsLabel: 'Included modules',
+        modulesHint: 'Pick daily content by module; items within a module are included as a group',
         formatLabel: 'Channel format',
         editTemplate: 'Edit template',
         contentTemplate: 'Content template',

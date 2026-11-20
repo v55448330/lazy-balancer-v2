@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/taskengine"
 )
@@ -167,6 +169,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 				respondTaskTriggerAdmissionError(c, err)
 				return
 			}
+			notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "手动触发"}})
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 			return
 		}
@@ -237,6 +240,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_bf082546", m.Name)})
 			} else {
 				recordAudit(c, "停止", "任务监控", m.Name+" 调度")
+				notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "启停切换"}})
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_cc16b9ca", m.Name)})
 			}
 			return
@@ -284,6 +288,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 		// 文案中性化：可取消族含 crs/ip2region（检查→拉取→安装/重载），
 		// 硬编码「下载阶段」会让审计台账与真实中断阶段不一致。
 		recordAudit(c, "取消", "任务监控", "手动取消任务 "+id+"（当前阶段中断，已完成部分保留）")
+		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("#%s", id), "3": "取消运行"}})
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_bf64e658"), MessageKey: "k_bf64e658"})
 		return
 	}
@@ -360,6 +365,7 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_60bfa15e", id)})
 	default:
 		recordAudit(c, "重启", "任务监控", "常驻任务 "+id+" 重启")
+		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("#%s", c.Param("id")), "3": "控制操作"}})
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_42ea59c6", id)})
 	}
 }

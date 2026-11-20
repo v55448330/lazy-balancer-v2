@@ -16,6 +16,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -82,6 +83,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("回读自动封禁配置失败", err)})
 		return
 	}
+	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了自动封禁配置"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_7c026b1f"), MessageKey: "k_7c026b1f", Data: updated})
 }
 
@@ -258,6 +260,7 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	// 否则旧计数仍在下一轮达阈值立即重封，「移除打断累犯」被撤销。
 	services.AutobanForgetIPs([]string{identity})
 	recordAudit(c, "删除", "累犯记录", fmt.Sprintf("移除累犯身份 %s（打断累犯流程：清计数桶与观察建议，下次达阈值按首次档起算；已生效封禁条目不受影响）", identity))
+	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "移除了累犯前科"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
@@ -279,6 +282,7 @@ func (h *Handlers) ResetAutobanRecidivism(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "重置", "累犯记录", "清空全部自动封禁累犯升级历史（下次达阈值按首次档起算；已生效封禁条目不受影响）")
+	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "重置了累犯前科"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

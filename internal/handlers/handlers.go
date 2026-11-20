@@ -547,6 +547,9 @@ type txApplyFinish struct {
 	Data             any
 	ReloadDetail     string
 	RulesWrittenInTx bool
+	// Notify 事务提交成功后发布的通知事件（2026-11-21 查漏补缺批）——
+	// 安全域写操作统一走本收尾，事件随提交原子落地（渲染拒绝/提交失败不发）。
+	Notify *notify.Event
 }
 
 // finishTxApply 事务内应用的统一收尾（2026-09-06 裁定 ①②：只有可渲染配置可落库，
@@ -591,6 +594,9 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		msg := models.APIResponse{Code: 0, Message: f.SuccessMsg, Data: f.Data}
 		if f.MessageKey != "" {
 			msg.MessageKey = f.MessageKey
+		}
+		if f.Notify != nil {
+			notify.Publish(*f.Notify)
 		}
 		c.JSON(status, msg)
 		return

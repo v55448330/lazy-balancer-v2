@@ -9,6 +9,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/taskengine"
 )
@@ -127,6 +128,7 @@ func (h *Handlers) UpdateCrawlerAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "爬虫地址库", "自动更新总开关："+enabledStateLabel(autoUpdate))
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "爬虫地址库", "3": fmt.Sprintf("%s", "UpdateCrawlerAutoUpdate")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -137,6 +139,7 @@ func (h *Handlers) UpdateCrawlerSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "爬虫地址库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "爬虫地址库", "3": fmt.Sprintf("%s", "UpdateCrawlerSchedule")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 

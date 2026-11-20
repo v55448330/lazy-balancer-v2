@@ -11,6 +11,7 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -105,6 +106,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	// 审计带节点名(与服务控制事件同格式「节点 %d（%s）」,:ID 必留,
 	// nodes.name 无 UNIQUE,仅名无法定位行)。
 	recordAudit(c, "生成", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d（%s）", nodeID, response.NodeName), services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtClusterLoginTicket, Fields: map[string]string{"1": c.GetString("username"), "2": response.NodeName, "3": fmt.Sprintf("%d", nodeID)}})
 	c.JSON(http.StatusOK, response)
 }
 

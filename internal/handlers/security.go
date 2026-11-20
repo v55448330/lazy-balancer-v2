@@ -22,6 +22,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/taskengine"
 
@@ -259,6 +260,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	id, _ := result.LastInsertId()
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "自定义规则", AuditAction: "创建",
+		Notify:      &notify.Event{Type: notify.EvtCustomRuleChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "创建了", "3": rule.Name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%d）", rule.Name, id),
 		SuccessMsg:  "规则创建成功", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用,
 		Data:        gin.H{"id": id},
@@ -365,6 +367,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "自定义规则", AuditAction: "更新",
+		Notify:      &notify.Event{Type: notify.EvtCustomRuleChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了", "3": merged.Name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）", merged.Name, id),
 		SuccessMsg:  "规则已更新", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用,
 	})
@@ -443,6 +446,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "自定义规则", AuditAction: "删除",
+		Notify:      &notify.Event{Type: notify.EvtCustomRuleChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": fmt.Sprintf("#%d", listID)}},
 		AuditDetail: fmt.Sprintf("规则 #%d", listID),
 		SuccessMsg:  "规则已删除", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
@@ -551,6 +555,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 	id, _ := result.LastInsertId()
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "拦截页面", AuditAction: "创建",
+		Notify:      &notify.Event{Type: notify.EvtBlockPageChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "创建了", "3": req.Name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%d）", req.Name, id),
 		SuccessMsg:  "拦截页面创建成功", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用,
 		Data:        gin.H{"id": id},
@@ -647,6 +652,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "拦截页面", AuditAction: "更新",
+		Notify:      &notify.Event{Type: notify.EvtBlockPageChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了", "3": page.Name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）", page.Name, id),
 		SuccessMsg:  "拦截页面已更新", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用,
 	})
@@ -727,6 +733,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "拦截页面", AuditAction: "删除",
+		Notify:      &notify.Event{Type: notify.EvtBlockPageChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": fmt.Sprintf("#%s", id)}},
 		AuditDetail: fmt.Sprintf("页面 #%s", id),
 		SuccessMsg:  "拦截页面已删除", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
@@ -1389,6 +1396,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	id, _ := result.LastInsertId()
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "创建",
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "创建了", "3": req.Name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%d）", req.Name, id),
 		SuccessMsg:  "安全策略创建成功", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"id": id},
@@ -2595,6 +2603,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
 		AuditDetail: auditDetail,
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了", "3": policyName}},
 		SuccessMsg:  "安全策略更新成功", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
 }
@@ -2636,6 +2645,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "删除",
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": fmt.Sprintf("#%s", id)}},
 		AuditDetail: fmt.Sprintf("策略 #%s", id),
 		SuccessMsg:  "安全策略已删除", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
@@ -2791,6 +2801,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID),
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "绑定了规则", "3": fmt.Sprintf("#%s 绑定规则 %s", policyID, req.RuleCaddyID)}},
 		SuccessMsg:  "规则已关联", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
 }
@@ -2844,6 +2855,7 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("设置规则 %s 的安全策略为 [%s]", ruleCaddyID, summary),
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "设置了规则绑定", "3": fmt.Sprintf("规则 %s 绑定集", ruleCaddyID)}},
 		SuccessMsg:  "规则安全策略已更新", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
 }
@@ -3693,6 +3705,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("批量绑定安全策略 [%s]（%s）：成功 %d 条，不变 %d 条，跳过 %d 条", strings.Join(idStrs, ","), req.Mode, bound, unchanged, len(skipped)),
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "批量绑定了规则", "3": fmt.Sprintf("批量绑定 [%s]", strings.Join(idStrs, ","))}},
 		SuccessMsg:  "批量绑定完成", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"bound": bound, "unchanged": unchanged, "skipped": skipped},
 	})
@@ -4319,6 +4332,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("拆分迁移混合策略「%s」(#%d)：创建 %d 条单职策略（复用首轮 %d 条），重映射 %d 条规则，跳过 %d 条", p.Name, p.ID, len(created), reusedCount, remapped, len(skipped)),
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "拆分了混合策略", "3": p.Name}},
 		SuccessMsg:  "拆分迁移完成", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"created": created, "reused": reusedCount, "remapped": remapped, "skipped": skipped, "deleted_original": deletedOriginal},
 	})
@@ -4363,6 +4377,7 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("解除规则 %s 与策略 #%s 的绑定", ruleCaddyID, policyID),
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "解绑了规则", "3": fmt.Sprintf("#%s 解绑规则 %s", policyID, ruleCaddyID)}},
 		SuccessMsg:  "已取消关联", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"changed": true},
 	})
@@ -5832,6 +5847,7 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "CRS规则库", "自动更新已"+enabledStateLabel(autoUpdate))
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateCRSAutoUpdate")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -5948,6 +5964,7 @@ func (h *Handlers) startLibUpdate(c *gin.Context, taskID, family, displayName st
 		respondTaskTriggerAdmissionError(c, err)
 		return
 	}
+	notify.Publish(notify.Event{Type: notify.EvtLibUpdated, Fields: map[string]string{"1": c.GetString("username"), "2": displayName}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 
@@ -5988,6 +6005,7 @@ func (h *Handlers) UpdateCRSSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "CRS规则库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateCRSSchedule")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -6147,6 +6165,7 @@ func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_7d87740a", services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_7d87740a"})
 		return
 	}
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "SetIP2RegionV6Enabled")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -6193,6 +6212,7 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "IP数据库", "自动更新已"+enabledStateLabel(autoUpdate))
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateIP2RegionAutoUpdate")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -6204,6 +6224,7 @@ func (h *Handlers) UpdateIP2RegionSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "IP数据库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateIP2RegionSchedule")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 

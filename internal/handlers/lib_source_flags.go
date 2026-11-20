@@ -16,6 +16,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 )
 
 // libSourceFlagsSpec 两个源开关端点的差异面。
@@ -141,5 +142,6 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 		spec.ArmFirstSlots()
 	}
 	recordAudit(c, "更新", spec.Family, fmt.Sprintf("%s 更新开关：%s", name, enabledStateLabel(*body.UpdateEnabled)))
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": spec.Family, "3": "更新了源开关"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
