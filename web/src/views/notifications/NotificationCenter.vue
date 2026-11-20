@@ -182,7 +182,7 @@
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
-              <div class="tag-wrap">
+              <div class="tag-wrap tag-wrap-limit">
                 <el-tag v-for="it in (dailyRule.items || [])" :key="it" size="small" effect="plain">{{ dailyItemLabel(it) }}</el-tag>
               </div>
             </div>
@@ -743,13 +743,13 @@ const defaultTplFor = (typ: string): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
     [['事件', '{{event}}'], ['节点', '{{node}}'], ['时间', '{{time}}']])
   if (typ === 'qq') return [
-    '## 🔔 {{title}}',
+    '# 🔔 {{title}}',
     '',
     '> {{body}}',
     '',
-    '### 📋 事件详情',
+    '## 📋 事件详情',
     '',
-    '| 指标 | 数值 |',
+    '| 项目 | 内容 |',
     '| --- | --- |',
     '| 级别 | {{level}} |',
     '| 事件 | {{event}} |',
@@ -1307,6 +1307,7 @@ onMounted(() => {
 .privacy-hint { font-size: 12px; color: #9ca3af; }
 .rule-name-text { font-weight: 600; }
 .tag-wrap { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag-wrap-limit { max-width: 720px; align-items: center; }
 .ev-more { font-size: 11px; color: #6b7280; }
 .tpl-channel-switch { margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }

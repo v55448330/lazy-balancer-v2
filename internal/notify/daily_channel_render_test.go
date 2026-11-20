@@ -73,12 +73,19 @@ func TestRenderDailyForChannel_styleOverride(t *testing.T) {
 	if strings.Contains(wh, "{") || !strings.Contains(wh, "请求数：1200") {
 		t.Fatalf("webhook style 覆盖未生效（应纯文本）: %q", wh)
 	}
-	// 日报页 per-channel 配置仍优先：payload.formats.qq=html → html 胜出
+	// 机器人协议固定优先于一切配置：payload.formats.qq=text 仍 markdown。
 	msg.Body = strings.Replace(dailyPayloadBody(nil),
-		`"values":`, `"formats":{"qq":"html"},"values":`, 1)
+		`"values":`, `"formats":{"qq":"text"},"values":`, 1)
 	got = renderDailyForChannel(msg, "qq", "text")
-	if !strings.Contains(got, "<table") {
-		t.Fatalf("日报页配置未优先于通道样式: %q", got)
+	if !strings.Contains(got, "| 请求数 | 1200 |") {
+		t.Fatalf("qq 协议固定应不受配置覆盖: %q", got)
+	}
+	// 非机器人日报页配置优先：payload.formats.webhook=html → html 胜出。
+	msg.Body = strings.Replace(dailyPayloadBody(nil),
+		`"values":`, `"formats":{"webhook":"html"},"values":`, 1)
+	wh = renderDailyForChannel(msg, "webhook", "text")
+	if !strings.Contains(wh, "<table") {
+		t.Fatalf("日报页配置未优先于通道样式: %q", wh)
 	}
 }
 

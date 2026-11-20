@@ -59,30 +59,39 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	defaultHTML := cfg.BodyTemplate == "" && cfg.BodyFormat != "text" && msg.EventType != EvtDailyReport
 	htmlBody := cfg.BodyFormat == "html" || msg.EventType == EvtDailyReport || defaultHTML
 	if htmlBody && msg.EventType != EvtDailyReport && cfg.BodyTemplate == "" {
-		body = wrapEmailHTML(subject, body, ts, msg.Level)
+		body = wrapEmailHTML(msg, subject, body, ts)
 	}
 	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, htmlBody, tlsEnabled, insecure)
 }
 
-// wrapEmailHTML 事件邮件统一卡片版式（深色品牌头+级别徽章+标题+正文+元信息+署名；
-// 正文含 HTML 标签时不转义）。与日报 HTML 卡片同族。
-func wrapEmailHTML(subject, body string, ts time.Time, level string) string {
+// wrapEmailHTML 事件邮件统一精美卡片：深色品牌头+级别徽章+标题+accent 条+
+// 浅色正文面板+事件/节点/时间元信息网格+署名。与日报卡片同族。
+func wrapEmailHTML(msg Message, subject, body string, ts time.Time) string {
 	stamp := ts.Format("2006-01-02 15:04")
 	inner := html.EscapeString(body)
 	if strings.Contains(body, "<") {
 		inner = body
 	}
-	badge := map[string]string{"critical": "#ef4444", "warn": "#f59e0b", "info": "#3b82f6"}[level]
+	badge := map[string]string{"critical": "#ef4444", "warn": "#f59e0b", "info": "#3b82f6"}[msg.Level]
 	if badge == "" {
 		badge = "#3b82f6"
 	}
 	brand := html.EscapeString(BrandName())
+	meta := ""
+	if msg.EventType != "" {
+		meta += fmt.Sprintf(`<tr><td style="padding:6px 0;color:#64748b;">事件</td><td style="padding:6px 0;text-align:right;color:#334155;">%s</td></tr>`, html.EscapeString(msg.EventType))
+	}
+	if msg.Node != "" {
+		meta += fmt.Sprintf(`<tr><td style="padding:6px 0;color:#64748b;">节点</td><td style="padding:6px 0;text-align:right;color:#334155;">%s</td></tr>`, html.EscapeString(msg.Node))
+	}
+	meta += fmt.Sprintf(`<tr><td style="padding:6px 0;color:#64748b;">时间</td><td style="padding:6px 0;text-align:right;color:#334155;">%s</td></tr>`, stamp)
 	return `<div style="max-width:640px;margin:0 auto;font-family:'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;">` +
-		fmt.Sprintf(`<div style="background:#1e293b;padding:16px 24px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:16px;font-weight:600;">%s</td><td style="text-align:right;"><span style="background:%s;color:#fff;font-size:11px;padding:2px 10px;">%s</span></td></tr></table></div>`, brand, badge, html.EscapeString(level)) +
-		`<div style="border:1px solid #e2e8f0;border-top:none;padding:24px;">` +
-		fmt.Sprintf(`<h2 style="margin:0 0 12px;font-size:18px;color:#0f172a;">%s</h2>`, html.EscapeString(subject)) +
-		`<div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">` + inner + `</div>` +
-		fmt.Sprintf(`<table style="width:100%%;font-size:12px;border-top:1px solid #f1f5f9;margin-top:16px;border-collapse:collapse;"><tr><td style="padding:6px 0;color:#64748b;">时间</td><td style="padding:6px 0;text-align:right;color:#334155;">%s</td></tr></table>`, stamp) +
+		fmt.Sprintf(`<div style="background:#1e293b;padding:20px 28px;border-radius:8px 8px 0 0;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:17px;font-weight:600;">🛡 %s</td><td style="text-align:right;"><span style="background:%s;color:#fff;font-size:11px;padding:3px 12px;border-radius:10px;">%s</span></td></tr></table></div>`, brand, badge, html.EscapeString(msg.Level)) +
+		`<div style="border:1px solid #e2e8f0;border-top:none;padding:28px;border-radius:0 0 8px 8px;background:#ffffff;">` +
+		fmt.Sprintf(`<h2 style="margin:0 0 10px;font-size:20px;color:#0f172a;">%s</h2>`, html.EscapeString(subject)) +
+		fmt.Sprintf(`<div style="height:3px;width:48px;background:%s;margin:0 0 18px;border-radius:2px;"></div>`, badge) +
+		`<div style="background:#f8fafc;border:1px solid #eef2f7;border-radius:6px;padding:16px;font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">` + inner + `</div>` +
+		fmt.Sprintf(`<table style="width:100%%;font-size:12px;margin-top:18px;border-collapse:collapse;">%s</table>`, meta) +
 		`</div>` +
 		fmt.Sprintf(`<p style="text-align:center;font-size:11px;color:#94a3b8;margin:16px 0;">此邮件由 %s 通知中心自动发送 · %s</p></div>`, brand, stamp)
 }

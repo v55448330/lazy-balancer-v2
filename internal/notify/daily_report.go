@@ -358,12 +358,22 @@ func renderDailyForChannel(msg Message, channelType, styleFormat string) string 
 	if err := json.Unmarshal([]byte(msg.Body), &payload); err != nil || payload.Date == "" {
 		return msg.Body // 载荷解析失败回退原文（fail-visible，不静默吞）
 	}
-	format := payload.Formats[channelType]
-	if format == "" && channelType != "qq" && channelType != "wx_clawbot" {
-		format = styleFormat // 通道卡日报格式覆盖（机器人协议固定，不接受样式覆盖）
-	}
-	if format == "" {
-		format = DefaultFormatForChannel(channelType)
+	// 机器人日报格式协议固定（QQ=markdown 表格、微信=纯文本），不受用户/通道
+	// 配置覆盖（§14）；非机器人按 日报页配置 > 通道样式 > 自动映射。
+	format := ""
+	switch channelType {
+	case "qq":
+		format = "markdown"
+	case "wx_clawbot":
+		format = "text"
+	default:
+		format = payload.Formats[channelType]
+		if format == "" {
+			format = styleFormat
+		}
+		if format == "" {
+			format = DefaultFormatForChannel(channelType)
+		}
 	}
 	return renderDailyFromValues(payload.Date, payload.Values, payload.Items, format)
 }

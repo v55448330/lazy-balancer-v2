@@ -126,7 +126,7 @@ func templateDate(msg Message, ts time.Time) string {
 func defaultEventTemplate(typ string) string {
 	switch typ {
 	case "qq":
-		return "# {{title}}\n\n> {{body}}\n\n**级别**：{{level}}　**事件**：{{event}}\n**时间**：{{time}}\n\n> {{brand}}"
+		return "# 🔔 {{title}}\n\n> {{body}}\n\n## 📋 事件详情\n\n| 项目 | 内容 |\n| --- | --- |\n| 级别 | {{level}} |\n| 事件 | {{event}} |\n| 节点 | {{node}} |\n| 时间 | {{time}} |\n\n> {{brand}} · {{time}}"
 	case "wx_clawbot":
 		return "【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}} | 事件：{{event}}\n时间：{{time}}\n—— {{brand}}"
 	}
