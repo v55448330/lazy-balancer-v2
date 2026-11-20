@@ -248,7 +248,7 @@ export default {
         bindReceiverCaptured: '已捕获接收者：{id}',
         bindConnecting: '连接测试中…正在验证机器人 API 与连接',
         bindAwaitMsg: '连接成功！请在微信/QQ 内向机器人发送「绑定测试」完成绑定（收到后自动回复确认）。',
-        rebindAwaitMsg: '机器人已连接。请在微信/QQ 内向机器人发送「**绑定测试**」确认——确认后将自动切换接收者并恢复投递。',
+        rebindAwaitMsg: '机器人已连接，请发送「绑定测试」确认。',
         bindConfirmed: '绑定成功！已收到确认消息，可保存通道。',
         wxLoggedIn: '微信已登录',
         wxSendMsgHint: '扫码登录并连接成功后，须在微信内向机器人发送「绑定测试」完成绑定（机器人会回复确认），之后才能保存与接收通知。保存后将自动验证送达，失败会提示。不同接收者=不同通道，可绑定多个。',
