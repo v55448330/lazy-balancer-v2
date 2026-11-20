@@ -96,9 +96,11 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   // 选项文案走 subs.levels 多语言词条（信息/警告/严重）
   assert.match(text, /el-select v-model="ruleDraftOf\(asRule\(row\)\)\.min_level"/, '级别列必须为紧凑下拉（绑定行草稿）')
   assert.match(text, /t\('app\.notification\.subs\.levels\.info'\)/, '级别选项必须多语言')
-  // 事件/发送至列=内联多选（绑定行草稿；未测试通道禁选+提示）
-  assert.match(text, /el-select v-model="ruleDraftOf\(asRule\(row\)\)\.events" multiple/, '事件列必须为内联多选')
-  assert.match(text, /el-select v-model="ruleDraftOf\(asRule\(row\)\)\.channel_ids" multiple/, '发送至列必须为内联多选')
+  // 事件/发送至列=点击浮层内的 bordered 多选（绑定行草稿；未测试通道禁选+提示）
+  assert.match(text, /<el-popover[^>]*trigger="click"/, '事件/发送至列必须为点击浮层多选')
+  assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.events"/, '事件列必须为浮层多选（绑定行草稿）')
+  assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.channel_ids"/, '发送至列必须为浮层多选（绑定行草稿）')
+  assert.match(text, /<el-checkbox[^>]*border size="small"/, '多选组必须为 bordered 复选组')
   assert.match(text, /:disabled="ch\.last_test_ok !== true"/, '未测试通道禁选')
   // 每日摘要独立卡片（不混事件规则表格）+ 三字段卡内联编辑
   assert.match(text, /daily-card/, '每日摘要必须独立卡片')

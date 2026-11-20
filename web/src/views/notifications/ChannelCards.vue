@@ -41,6 +41,7 @@
                 <div class="ch-tags">
                   <el-tag size="small" effect="plain" type="info">{{ typeLabel(ch.type) }}</el-tag>
                   <el-tag v-if="!isMine(ch)" size="small" effect="plain">{{ t('app.notification.channels.ownerTag', { id: ch.user_id }) }}</el-tag>
+                  <el-tag v-if="rebindIncompleteIds.has(ch.id)" size="small" effect="plain" type="danger">{{ t('app.notification.channels.rebindIncompleteTag') }}</el-tag>
                 </div>
               </div>
               <el-switch v-model="ch.enabled" size="small" :disabled="writeBlocked" @change="toggleEnabled(ch)" />
@@ -54,6 +55,10 @@
                 <span class="ch-transport-label">{{ t('app.notification.channels.transportSection') }}</span>
                 <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
               </div>
+            </div>
+            <div v-if="rebindIncompleteIds.has(ch.id)" class="info-note-bar rebind-note">
+              <span class="info-note-desc">{{ t('app.notification.channels.rebindIncompleteHint') }}</span>
+              <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">{{ t('app.notification.channels.rebindRetry') }}</el-button>
             </div>
             <div class="ch-foot">
               <span v-if="ch.type === 'qq' || ch.type === 'wx_clawbot'" class="ch-link" :class="ch.link_connected ? 'is-online' : 'is-offline'">
@@ -119,7 +124,12 @@
           <el-divider />
           <div class="bind-area bind-center">
             <div class="bind-helper">
-              <el-button v-if="bindPhase === 'idle'" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
+              <el-button v-if="bindPhase === 'idle' && !editTarget" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
+              <el-button v-if="bindPhase === 'idle' && editTarget" size="small" type="primary" plain :loading="rebindStarting" :disabled="writeBlocked" @click="startRebind">{{ t('app.notification.channels.rebindAction') }}</el-button>
+              <div v-if="bindPhase === 'idle' && editTarget" class="bind-hint">{{ t('app.notification.channels.rebindIdleHint') }}</div>
+              <el-alert v-if="rebindActive" type="warning" :closable="false" show-icon class="bind-success-alert">
+                <template #title>{{ t('app.notification.channels.rebindPausedHint') }}</template>
+              </el-alert>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
               <div v-if="bindPhase === 'scanning'" class="bind-hint">{{ t('app.notification.channels.bindScanHint') }}</div>
               <div v-if="bindPhase === 'scanning' && bindQrExpiresAt" class="bind-hint">{{ t('app.notification.channels.bindQrCountdown', { time: bindCountdownText }) }}</div>
@@ -193,7 +203,7 @@
       <div v-else-if="editTarget" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.botProtocolHint') }}</span></div>
       <template #footer>
         <el-button @click="drawerVisible = false">{{ t('app.notification.channels.cancel') }}</el-button>
-        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDrawer">{{ t('app.notification.channels.save') }}</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!canSave || rebindActive" @click="saveDrawer">{{ t('app.notification.channels.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -205,6 +215,7 @@ import { useI18n } from 'vue-i18n'
 import { ChatDotRound, ChatLineRound, Edit, Link, Message, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import { safeLocalStorageGet, safeLocalStorageSet } from '@/utils/safeWebStorage'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -227,6 +238,38 @@ const deletingIds = ref(new Set<number>())
 const drawerVisible = ref(false)
 const editTarget = ref<NotificationChannel | null>(null)
 let fetchSeq = 0
+
+// 重新扫码绑定（编辑态机器人通道）：记旧 target 供失败回滚；未完成标记按
+// 通道 id 持久化（旧 bot 不可用→保持停用，不静默丢，卡片提示重试）。
+const REBIND_INCOMPLETE_KEY = 'lb.notification.rebind_incomplete'
+interface RebindState {
+  channelId: number
+  channelType: NotificationChannelType
+  oldTarget: string
+}
+const rebind = ref<RebindState | null>(null)
+const rebindActive = computed(() => rebind.value !== null)
+const rebindStarting = ref(false)
+const rebindIncompleteIds = ref(new Set<number>())
+let rebindTimer: ReturnType<typeof setTimeout> | null = null
+let rebindFinalizing = false
+const loadRebindIncomplete = (): void => {
+  const raw = safeLocalStorageGet(REBIND_INCOMPLETE_KEY)
+  if (!raw) return
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (Array.isArray(parsed)) {
+      rebindIncompleteIds.value = new Set(parsed.filter((v): v is number => typeof v === 'number'))
+    }
+  } catch { /* 坏值按空集 */ }
+}
+const markRebindIncomplete = (id: number, on: boolean): void => {
+  const next = new Set(rebindIncompleteIds.value)
+  if (on) next.add(id)
+  else next.delete(id)
+  rebindIncompleteIds.value = next
+  safeLocalStorageSet(REBIND_INCOMPLETE_KEY, JSON.stringify([...next]))
+}
 
 const writeBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
 const writeBlockedReason = computed(() =>
@@ -308,6 +351,12 @@ const fetchChannels = async (silent = false): Promise<void> => {
     const res = await request.get<NotificationChannelsResponse>(url)
     if (seq !== fetchSeq) return
     channels.value = res.data?.channels ?? []
+    // 已恢复投递且测试通过=重绑闭环，清理陈旧未完成标记。
+    if (rebindIncompleteIds.value.size) {
+      for (const c of channels.value) {
+        if (c.enabled && c.last_test_ok && rebindIncompleteIds.value.has(c.id)) markRebindIncomplete(c.id, false)
+      }
+    }
     loadError.value = false
   } catch {
     if (seq === fetchSeq) loadError.value = true
@@ -458,7 +507,7 @@ watch(() => drawerForm.value.type, (typ) => {
   if (typ === 'wx_clawbot') void checkWxLoggedIn()
   else wxAlreadyLoggedIn.value = false
 })
-const startBind = async (): Promise<void> => {
+const startBind = async (): Promise<boolean> => {
   bindLoading.value = true
   bindPhase.value = 'scanning'
   bindRegistered = false
@@ -466,13 +515,20 @@ const startBind = async (): Promise<void> => {
     const endpoint = drawerForm.value.type === 'qq' ? '/notification/qq/bind-code' : '/notification/wx/qr/start'
     const res = await request.post<{ data?: { qr_content?: string; expires_in?: number } }>(endpoint, {})
     const qrUrl = res.data?.qr_content ?? ''
-    if (qrUrl) {
-      const QRCode = (await import('qrcode')).default
-      bindQrImg.value = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
-      pollScan()
-      startQrCountdown(Math.min(res.data?.expires_in ?? 300, 300)) // 统一 5min；wx 服务端更早 expired 优先
+    if (!qrUrl) {
+      bindPhase.value = 'idle'
+      return false
     }
-  } catch (e) { console.error(e) } finally { bindLoading.value = false }
+    const QRCode = (await import('qrcode')).default
+    bindQrImg.value = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
+    pollScan()
+    startQrCountdown(Math.min(res.data?.expires_in ?? 300, 300)) // 统一 5min；wx 服务端更早 expired 优先
+    return true
+  } catch (e) {
+    console.error(e)
+    bindPhase.value = 'idle'
+    return false
+  } finally { bindLoading.value = false }
 }
 let bindTimer: ReturnType<typeof setInterval> | null = null
 let bindTimeout: ReturnType<typeof setTimeout> | null = null
@@ -552,14 +608,149 @@ const pollBindSession = (): void => {
   bindTimer = setTimeout(() => { void tick() }, 500)
   bindTimeout = setTimeout(stopBindPolling, 600000)
 }
-onUnmounted(stopBindPolling)
+onUnmounted(() => {
+  stopBindPolling()
+  clearRebindTimer()
+})
+
+const cleanupBindSession = async (): Promise<void> => {
+  // 清理后端绑定会话+待绑定凭据，防幽灵入站连接（未保存通道的 bot）。
+  // 先同步捕获并复位本地态，再等 DELETE 完成（回滚/落库前的顺序保证）。
+  const scannerID = bindScannerID.value
+  if (!bindRegistered || !scannerID) return
+  const type = drawerForm.value.type
+  const botKey = bindBotKey.value
+  bindRegistered = false
+  bindScannerID.value = ''
+  bindBotKey.value = ''
+  try {
+    await request.delete(`/notification/bind-session?type=${encodeURIComponent(type)}&scanner_id=${encodeURIComponent(scannerID)}&bot_key=${encodeURIComponent(botKey)}`, { silent: true })
+  } catch { /* 会话可能已过期：忽略 */ }
+}
+
+const clearRebindTimer = (): void => {
+  if (rebindTimer !== null) { clearTimeout(rebindTimer); rebindTimer = null }
+}
+// 旧 bot 可用性探测：通道 target 未改动，link/session/test 字段即旧 bot 现状。
+const botChannelAvailable = (ch: NotificationChannel | undefined): boolean => {
+  if (!ch) return false
+  if (ch.link_connected === true) return true
+  if (ch.type === 'wx_clawbot' && ch.session_ready === true) return true
+  return ch.last_test_ok === true
+}
+// 重绑未完成（弹框关闭/扫码超时/未 confirmed/中途失败）：按旧 bot 可用性回滚，
+// 旧 bot 不可用则保持停用并标记未完成（不静默丢旧 target），提示重试。
+const revertRebind = async (rb: RebindState): Promise<void> => {
+  await fetchChannels(true)
+  const ch = channels.value.find(c => c.id === rb.channelId)
+  if (!ch) { markRebindIncomplete(rb.channelId, false); return }
+  if (botChannelAvailable(ch)) {
+    try {
+      await request.put(`/notification/channels/${rb.channelId}`, { target: rb.oldTarget, enabled: true })
+      markRebindIncomplete(rb.channelId, false)
+      mfaAwareSuccess(t('app.notification.channels.rebindRollbackOk'))
+    } catch (e) {
+      console.error(e)
+      markRebindIncomplete(rb.channelId, true)
+      ElMessage.error(t('app.notification.channels.rebindRollbackFailed'))
+    }
+  } else {
+    try {
+      await request.put(`/notification/channels/${rb.channelId}`, { enabled: false })
+    } catch (e) { console.error(e) }
+    markRebindIncomplete(rb.channelId, true)
+    ElMessage.warning(t('app.notification.channels.rebindIncompleteWarn'))
+  }
+  await fetchChannels(true)
+}
+const abortRebind = async (): Promise<void> => {
+  const rb = rebind.value
+  if (!rb) return
+  rebind.value = null
+  clearRebindTimer()
+  stopBindPolling()
+  // 先清绑定会话/待钉凭据，再回滚 target：防 wx 回滚 PUT 误钉本轮新扫凭据。
+  await cleanupBindSession()
+  bindQrImg.value = ''
+  bindQrExpiresAt.value = null
+  bindPhase.value = 'idle'
+  await revertRebind(rb)
+}
+// confirmed（收到「绑定测试」入站）→ 落新 target 并恢复投递。
+const finalizeRebind = async (): Promise<void> => {
+  const rb = rebind.value
+  if (!rb || rebindFinalizing) return
+  const newTarget = drawerForm.value.targetValue.trim()
+  if (!newTarget) { await abortRebind(); return }
+  rebindFinalizing = true
+  clearRebindTimer()
+  try {
+    const target = JSON.stringify({ [targetField(rb.channelType)]: newTarget })
+    await request.put(`/notification/channels/${rb.channelId}`, { target, enabled: true })
+    // 新 target 已落库（凭据已钉住），再清绑定会话/待钉凭据。
+    await cleanupBindSession()
+    markRebindIncomplete(rb.channelId, false)
+    rebind.value = null
+    mfaAwareSuccess(t('app.notification.channels.rebindSuccess'))
+    drawerVisible.value = false
+    await fetchChannels()
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t('app.notification.channels.rebindSaveFailed'))
+    await abortRebind()
+  } finally { rebindFinalizing = false }
+}
+const startRebind = async (): Promise<void> => {
+  const ch = editTarget.value
+  if (!ch || (ch.type !== 'qq' && ch.type !== 'wx_clawbot')) return
+  if (rebind.value || rebindStarting.value || writeBlocked.value) return
+  // 旧 target 必须可解析且带接收者键（非属主脱敏/损坏值无法回滚，拒绝进入流程）。
+  let readable = false
+  try {
+    const parsed = JSON.parse(ch.target) as Record<string, unknown>
+    readable = typeof parsed[targetField(ch.type)] === 'string'
+  } catch { readable = false }
+  if (!readable) {
+    ElMessage.error(t('app.notification.channels.rebindTargetUnreadable'))
+    return
+  }
+  try {
+    await ElMessageBox.confirm(t('app.notification.channels.rebindConfirm'), t('app.notification.channels.confirmTitle'), { type: 'warning' })
+  } catch { return }
+  rebindStarting.value = true
+  rebind.value = { channelId: ch.id, channelType: ch.type, oldTarget: ch.target }
+  try {
+    // 先暂停投递（target 保持旧值，任何失败都可原样回滚）。
+    await request.put(`/notification/channels/${ch.id}`, { enabled: false })
+    ch.enabled = false
+    rebindTimer = setTimeout(() => { void abortRebind() }, 600000)
+    const started = await startBind()
+    if (!started) {
+      ElMessage.error(t('app.notification.channels.rebindQrFailed'))
+      await abortRebind()
+    }
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t('app.notification.channels.rebindPauseFailed'))
+    // 请求结果不确定（可能已在服务端生效）：按旧 bot 可用性对账回滚/标记。
+    await abortRebind()
+  } finally { rebindStarting.value = false }
+}
+watch(bindPhase, (phase) => {
+  if (!rebind.value) return
+  if (phase === 'confirmed') void finalizeRebind()
+  else if (phase === 'expired') void abortRebind()
+})
 
 const resetDrawer = (): void => {
-  stopBindPolling()
-  // 取消时清理后端绑定会话+待绑定凭据，防幽灵入站连接（未保存通道的 bot）。
-  if (bindRegistered && bindScannerID.value) {
-    void request.delete(`/notification/bind-session?type=${encodeURIComponent(drawerForm.value.type)}&scanner_id=${encodeURIComponent(bindScannerID.value)}&bot_key=${encodeURIComponent(bindBotKey.value)}`, { silent: true }).catch(() => {})
+  if (rebind.value && !rebindFinalizing) {
+    // 弹框关闭=重绑未完成：先按旧机器人可用性回滚/标记，再复位表单。
+    void abortRebind()
+  } else if (!rebind.value) {
+    stopBindPolling()
+    void cleanupBindSession()
   }
+  // 重绑落库中（rebindFinalizing）：绑定清理由 finalizeRebind 收口，避免抢跑清 pin。
   bindQrImg.value = ''
   bindQrExpiresAt.value = null
   bindPhase.value = 'idle'
@@ -612,6 +803,7 @@ const toggleEnabled = async (ch: NotificationChannel): Promise<void> => {
   } catch { ch.enabled = !target; return }
   try {
     await request.put(`/notification/channels/${ch.id}`, { enabled: target })
+    if (target) markRebindIncomplete(ch.id, false)
   } catch {
     ch.enabled = !target
   }
@@ -649,6 +841,7 @@ const deleteChannel = async (ch: NotificationChannel): Promise<void> => {
   deletingIds.value.add(ch.id)
   try {
     await request.delete(`/notification/channels/${ch.id}`)
+    markRebindIncomplete(ch.id, false)
     mfaAwareSuccess(t('app.notification.channels.deleteSuccess'))
     await fetchChannels()
   } catch { /* handled */ }
@@ -659,6 +852,7 @@ const deleteChannel = async (ch: NotificationChannel): Promise<void> => {
 
 let linkPoll: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
+  loadRebindIncomplete()
   void fetchChannels()
   // 实时连接态：常驻入站会话在线态周期刷新（静默，不闪 loading）。
   linkPoll = setInterval(() => { void fetchChannels(true) }, 15000)
@@ -737,6 +931,10 @@ defineExpose({ fetchChannels })
 .test-none { color: #9ca3af; }
 
 .ch-actions { display: flex; align-items: center; gap: 4px; }
+
+/* 重绑未完成提示条（卡片内）：文本左、重试右，直角细边框 */
+.rebind-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 12px; }
+.rebind-note .info-note-desc { flex: 1; min-width: 0; }
 
 /* 编辑弹窗：绑定辅助区 + 传输配置分组 */
 .ch-form-section { margin-top: 4px; }

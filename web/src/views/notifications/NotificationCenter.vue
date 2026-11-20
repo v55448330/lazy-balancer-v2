@@ -186,14 +186,14 @@
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
-              <el-checkbox-group v-model="dailyDraft.items" size="small" class="daily-items">
-                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
+              <el-checkbox-group v-model="dailyDraft.items" size="small" class="notif-pick-group daily-items">
+                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id" border size="small">{{ dailyItemLabel(opt.id) }}</el-checkbox>
               </el-checkbox-group>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.sendTo') }}</span>
               <div class="daily-ch-select">
-                <el-checkbox-group v-model="dailyDraft.channel_ids">
+                <el-checkbox-group v-model="dailyDraft.channel_ids" size="small" class="notif-pick-group">
                   <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.last_test_ok !== true" :title="ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined">
                     {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
                   </el-checkbox>
@@ -231,11 +231,21 @@
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.events')" min-width="280">
               <template #default="{ row }">
-                <el-select v-model="ruleDraftOf(asRule(row)).events" multiple filterable size="small" class="inline-rule-select" collapse-tags collapse-tags-tooltip :max-collapse-tags="2" :placeholder="t('app.notification.rules.events')">
-                  <el-option-group :label="eventGroup(row.title)">
-                    <el-option v-for="ev in rowEventOptions(asRule(row))" :key="ev" :value="ev" :label="eventTitle(asRule(row), ev)" />
-                  </el-option-group>
-                </el-select>
+                <el-popover placement="bottom-start" trigger="click" :width="380" :popper-options="popperViewportSafe" popper-class="nd-pick-popper">
+                  <template #reference>
+                    <button type="button" class="pick-trigger" :title="ruleEventSummary(asRule(row))">
+                      <span class="pick-summary" :class="{ 'is-empty': ruleDraftOf(asRule(row)).events.length === 0 }">{{ ruleEventSummary(asRule(row)) }}</span>
+                      <el-icon class="pick-caret"><ArrowDown /></el-icon>
+                    </button>
+                  </template>
+                  <div class="notif-pick-panel">
+                    <div class="notif-pick-title">{{ eventGroup(row.title) }}</div>
+                    <el-checkbox-group v-model="ruleDraftOf(asRule(row)).events" size="small" class="notif-pick-group">
+                      <el-checkbox v-for="ev in rowEventOptions(asRule(row))" :key="ev" :value="ev" border size="small">{{ eventTitle(asRule(row), ev) }}</el-checkbox>
+                    </el-checkbox-group>
+                    <div class="notif-pick-hint">{{ t('app.notification.rules.eventSelectHint') }}</div>
+                  </div>
+                </el-popover>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.minLevel')" width="120">
@@ -252,12 +262,24 @@
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.sendTo')" min-width="200">
               <template #default="{ row }">
-                <el-select v-model="ruleDraftOf(asRule(row)).channel_ids" multiple size="small" class="inline-rule-select" collapse-tags collapse-tags-tooltip :max-collapse-tags="2" :placeholder="t('app.notification.rules.noDelivery')">
-                  <el-option v-for="ch in userChannels" :key="ch.id" :value="ch.id" :label="ch.name" :disabled="ch.last_test_ok !== true">
-                    <span>{{ ch.name }}（{{ channelTypeLabel(ch.type) }}）</span>
-                    <span v-if="ch.last_test_ok !== true" class="ch-untested-hint">{{ t('app.notification.rules.channelUntestedHint') }}</span>
-                  </el-option>
-                </el-select>
+                <el-popover placement="bottom-start" trigger="click" :width="340" :popper-options="popperViewportSafe" popper-class="nd-pick-popper">
+                  <template #reference>
+                    <button type="button" class="pick-trigger" :title="ruleChannelSummary(asRule(row))">
+                      <span class="pick-summary" :class="{ 'is-empty': ruleDraftOf(asRule(row)).channel_ids.length === 0 }">{{ ruleChannelSummary(asRule(row)) }}</span>
+                      <el-icon class="pick-caret"><ArrowDown /></el-icon>
+                    </button>
+                  </template>
+                  <div class="notif-pick-panel">
+                    <el-checkbox-group v-model="ruleDraftOf(asRule(row)).channel_ids" size="small" class="notif-pick-group">
+                      <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.last_test_ok !== true" :title="ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined">
+                        {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
+                      </el-checkbox>
+                    </el-checkbox-group>
+                    <div v-if="!userChannels.length" class="notif-pick-hint">{{ t('app.notification.rules.noChannelsHint') }}</div>
+                    <div v-else class="notif-pick-hint">{{ t('app.notification.rules.channelSelectHint') }}</div>
+                    <div v-if="userChannels.length && ruleDraftOf(asRule(row)).channel_ids.length === 0" class="notif-pick-hint">{{ t('app.notification.rules.noDeliveryWarn') }}</div>
+                  </div>
+                </el-popover>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.bodyTemplate')" width="90">
@@ -292,8 +314,9 @@
     </el-tabs>
 
     <!-- 模板弹框（事件规则与日报每通道共享）：rule 模式=每通道规则模板（接收通道已前移到
-         事件规则表格内联编辑）；daily 模式=通道正文模板（style_config：机器人 content_template/webhook payload_template/email body_template）。
-         机器人格式协议固定（仅高亮/预览样式）；webhook/email 格式可选。 -->
+         事件规则表格的多选浮层草稿）；daily 模式=通道正文模板（style_config：机器人 content_template/webhook payload_template/email body_template）。
+         两模式同一版式：通道切换 radio + 格式行 + 编辑器 + 变量芯片 + 提示 + 折叠预览 + 取消/保存，
+         仅数据源不同。机器人格式协议固定（仅高亮/预览样式）；webhook/email 格式可选。 -->
     <el-dialog v-model="tplDialogVisible" append-to-body class="dialog-body-inset rule-edit-dialog" width="min(860px, 94vw)" top="5vh">
       <template #header>
         <DialogHeader :icon="Bell" :title="t('app.notification.rules.editTemplateTitle')" :subtitle="tplMode === 'rule' ? (tplEditingRule?.title || '') : (tplActiveChannel?.name || '')" tone="primary" />
@@ -311,13 +334,10 @@
             <el-button size="small" link type="primary" @click="resetTplToDefault">{{ t('app.notification.rules.tplDefault') }}</el-button>
           </div>
           <div class="tpl-format-row">
-            <span class="daily-config-label">{{ t('app.notification.rules.tplFormatLabel') }}</span>
-            <el-tag v-if="isBotChannel(tplActiveChannel?.type || '')" size="small" effect="plain">{{ dailyFormatLabel(tplActiveFormat) }}</el-tag>
-            <el-select v-else-if="tplMode === 'daily'" :model-value="dailyRule ? dailyFormatOf(dailyRule, tplActiveChannel?.type || '') : 'auto'" size="small" style="width: 170px" @change="(v: string) => saveDailyFormat(dailyRule, tplActiveChannel?.type || '', v)">
-              <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
-            </el-select>
-            <el-select v-else :model-value="tplActiveFormat" size="small" style="width: 170px" @change="setTplFormat">
-              <el-option v-for="f in tplFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
+            <span class="tpl-format-label">{{ t('app.notification.rules.tplFormatLabel') }}</span>
+            <el-tag v-if="isBotChannel(tplActiveChannel?.type || '')" size="small" effect="plain">{{ dailyFormatLabel(tplFixedFormat) }}</el-tag>
+            <el-select v-else :model-value="tplFormatSelectValue" size="small" style="width: 170px" @change="onTplFormatChange">
+              <el-option v-for="f in tplFormatSelectOptions" :key="f.value" :value="f.value" :label="f.label" />
             </el-select>
           </div>
           <!-- JSON/HTML/Markdown 高亮编辑（CodeEditor 全站单源）；纯文本用 textarea -->
@@ -329,13 +349,9 @@
           <div class="ph-row">
             <el-tag v-for="ph in tplActivePh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag>
           </div>
-          <div class="form-hint">{{ t('app.notification.rules.tplPhHint') }}</div>
-          <div v-if="tplActiveChannel?.type === 'email'" class="form-hint">{{ t('app.notification.rules.tplSubjectHint') }}</div>
-          <div v-if="tplActiveChannel?.type === 'qq'" class="form-hint">{{ t('app.notification.rules.tplQqMdHint') }}</div>
-          <div v-if="tplMode === 'rule'" class="form-hint">{{ t('app.notification.rules.templateHint') }}</div>
-          <div v-else-if="isBotChannel(tplActiveChannel?.type || '')" class="form-hint">{{ t('app.notification.daily.contentTemplateHint') }}</div>
-          <div v-else-if="tplActiveChannel?.type === 'webhook'" class="form-hint">{{ t('app.notification.daily.webhookTplHint') }}</div>
-          <div v-else class="form-hint">{{ t('app.notification.daily.emailTplHint') }}</div>
+          <div class="tpl-hints">
+            <div v-for="hint in tplHints" :key="hint" class="form-hint">{{ hint }}</div>
+          </div>
           <div v-if="tplLengthLimit > 0 && tplText.length > tplLengthLimit" class="info-note-bar"><span class="info-note-desc">{{ tplActiveChannel?.type === 'email' ? t('app.notification.daily.bodyTemplateTooLong') : t('app.notification.daily.templateTooLong') }}</span></div>
         </div>
 
@@ -359,8 +375,7 @@
 
       <template #footer>
         <el-button @click="tplDialogVisible = false">{{ t('app.notification.rules.cancel') }}</el-button>
-        <el-button v-if="tplMode === 'rule'" type="primary" :loading="savingTpl" @click="saveTemplate">{{ t('app.notification.rules.save') }}</el-button>
-        <el-button v-else type="primary" :loading="savingTplChannelId !== null" @click="saveChannelTplFromDialog">{{ t('app.notification.rules.save') }}</el-button>
+        <el-button type="primary" :loading="tplSaving" @click="saveTplDialog">{{ t('app.notification.rules.save') }}</el-button>
       </template>
     </el-dialog>
 
@@ -422,7 +437,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Calendar, Bell, ChatDotRound, CircleCheckFilled, DataAnalysis, Odometer, TrendCharts } from '@element-plus/icons-vue'
+import { ArrowDown, Calendar, Bell, ChatDotRound, CircleCheckFilled, DataAnalysis, Odometer, TrendCharts } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EChartsOption } from 'echarts'
 import VChart from 'vue-echarts'
@@ -431,6 +446,7 @@ import { axisChartBase, barSeries, lineSeries, pieChartBase } from '@/utils/char
 import { securityActionColors } from '@/utils/chartTheme'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { hasOwn } from '@/utils/hasOwn'
+import { popperViewportSafe } from '@/utils/popper'
 import type { NotificationChannel } from '@/types/notifications.ts'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -661,6 +677,32 @@ const tplActiveFormat = computed<string>(() => {
   return tplFormats.value[tplChannelTab.value] || (ch.type === 'webhook' ? 'json' : 'html')
 })
 const setTplFormat = (v: string): void => { tplFormats.value = { ...tplFormats.value, [tplChannelTab.value]: v } }
+// 版式统一：rule/daily 共用同一格式行（机器人协议固定 tag；webhook/email 同款下拉），
+// 仅数据源不同——rule=编辑高亮状态，daily=持久化格式（auto=回退类型映射）。
+const tplFixedFormat = computed(() => fixedDailyFormat(tplActiveChannel.value?.type || ''))
+const tplFormatSelectValue = computed<string>(() => {
+  const ch = tplActiveChannel.value
+  if (!ch) return 'text'
+  if (tplMode.value === 'daily') return dailyFormatOf(dailyRule.value, ch.type)
+  return tplFormats.value[tplChannelTab.value] || (ch.type === 'webhook' ? 'json' : 'html')
+})
+const tplFormatSelectOptions = computed(() => tplMode.value === 'daily' ? dailyFormatOptions.value : tplFormatOptions)
+const onTplFormatChange = (v: string): void => {
+  if (tplMode.value === 'daily') void saveDailyFormat(dailyRule.value, tplActiveChannel.value?.type || '', v)
+  else setTplFormat(v)
+}
+// 提示行统一结构：占位符说明恒在；类型提示 + 模式提示次序一致
+const tplHints = computed<string[]>(() => {
+  const typ = tplActiveChannel.value?.type || ''
+  const hints = [t('app.notification.rules.tplPhHint')]
+  if (typ === 'email') hints.push(t('app.notification.rules.tplSubjectHint'))
+  if (typ === 'qq') hints.push(t('app.notification.rules.tplQqMdHint'))
+  if (tplMode.value === 'rule') hints.push(t('app.notification.rules.templateHint'))
+  else if (isBotChannel(typ)) hints.push(t('app.notification.daily.contentTemplateHint'))
+  else if (typ === 'webhook') hints.push(t('app.notification.daily.webhookTplHint'))
+  else hints.push(t('app.notification.daily.emailTplHint'))
+  return hints
+})
 const tplEditorLang = computed(() => {
   const fmt = tplActiveFormat.value
   if (fmt === 'json') return 'json'
@@ -877,6 +919,21 @@ const ruleDraftOf = (rule: Rule): RuleDraft => {
   const fresh = newRuleDraft(rule)
   ruleDrafts.value = { ...ruleDrafts.value, [rule.id]: fresh }
   return fresh
+}
+// 表格多选触发器摘要：前 2 项名称 + 余量（事件=可读标题，通道=通道名）；
+// 空选=不投递（'[]' 落库语义），与保存侧同口径。
+const summarizePick = (names: string[]): string =>
+  names.length > 2 ? `${names.slice(0, 2).join('、')} +${names.length - 2}` : names.join('、')
+const ruleEventSummary = (rule: Rule): string => {
+  const evs = ruleDraftOf(rule).events
+  if (!evs.length) return t('app.notification.rules.noDelivery')
+  return summarizePick(evs.map(ev => eventTitle(rule, ev)))
+}
+const ruleChannelSummary = (rule: Rule): string => {
+  const ids = ruleDraftOf(rule).channel_ids
+  if (!ids.length) return t('app.notification.rules.noDelivery')
+  const names = userChannels.value.filter(ch => ids.includes(ch.id)).map(ch => ch.name)
+  return names.length ? summarizePick(names) : t('app.notification.rules.noDelivery')
 }
 // 选择类字段按集合比较（多选顺序不影响 dirty 判定）
 const sameSet = <T>(a: readonly T[], b: readonly T[]): boolean => {
@@ -1224,6 +1281,13 @@ const saveChannelTplFromDialog = async (): Promise<void> => {
   if (await saveChannelBodyTemplate(ch)) tplDialogVisible.value = false
 }
 
+// 弹框底部保存入口（版式统一：两模式同按钮/同确认；仅写库数据源不同）
+const tplSaving = computed(() => tplMode.value === 'rule' ? savingTpl.value : savingTplChannelId.value !== null)
+const saveTplDialog = (): void => {
+  if (tplMode.value === 'rule') void saveTemplate()
+  else void saveChannelTplFromDialog()
+}
+
 const editTemplate = async (rule: Rule): Promise<void> => {
   // 打开即重拉 rules+channels：测试态/既有模板以最新为准（不依赖页面刷新）
   try { await refreshDialogState() } catch (e) { console.error(e) }
@@ -1373,17 +1437,30 @@ onMounted(() => {
 .privacy-hint { font-size: 12px; color: #9ca3af; }
 .rule-name-text { font-weight: 600; }
 .ev-more { font-size: 11px; color: #6b7280; }
-.inline-rule-select { width: 100%; }
-.ch-untested-hint { font-size: 11px; color: #9ca3af; margin-left: 6px; }
+/* 表格多选触发器（事件/发送至）：摘要 + 展开箭头，点击弹 bordered 复选组 */
+.pick-trigger {
+  display: flex; align-items: center; gap: 6px; width: 100%; max-width: 100%;
+  height: 24px; padding: 0 8px; background: #fff;
+  border: 1px solid #dcdfe6; border-radius: 0; color: #303133;
+  font-family: inherit; font-size: 12px; line-height: 1; cursor: pointer; text-align: left;
+}
+.pick-trigger:hover { border-color: #409eff; }
+.pick-trigger:focus-visible { border-color: #409eff; outline: 2px solid #c6e2ff; outline-offset: 0; }
+.pick-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-summary.is-empty { color: #9ca3af; }
+.pick-caret { flex: none; font-size: 12px; color: #909399; }
 .tpl-channel-switch { margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
 .tpl-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .tpl-section-head .tpl-section-label { margin-bottom: 0; }
 .tpl-section-label { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
 .tpl-format-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tpl-format-label { flex: none; font-size: 12px; color: #6b7280; }
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
+.tpl-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.tpl-hints .form-hint { margin-top: 0; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; }
 /* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
 .tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
@@ -1399,10 +1476,8 @@ onMounted(() => {
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
 .daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; line-height: 24px; }
-.daily-items { max-width: 720px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
-.daily-items :deep(.el-checkbox) { margin-right: 0; height: 24px; }
+.daily-items { flex: 1; min-width: 0; }
 .daily-ch-select { flex: 1; min-width: 0; }
-.daily-ch-select :deep(.el-checkbox) { margin-right: 12px; margin-bottom: 6px; }
 /* 空选警告常驻占位槽（DESIGN_SPEC §13：条件提示 min-height 保证卡片等高） */
 .daily-warn-slot { min-height: 38px; }
 .daily-warn-slot .info-note-bar { margin: 0; }
@@ -1424,4 +1499,18 @@ onMounted(() => {
 .tpl-length-row { display: flex; justify-content: flex-end; margin-top: 4px; }
 .tpl-length-row .form-hint { margin-top: 0; font-variant-numeric: tabular-nums; }
 .tpl-length-over { color: #ef4444; font-weight: 600; }
+</style>
+
+<style>
+/* 通知中心多选组（日报卡 + 事件/发送至浮层共用同一视觉）。
+ * el-popover 内容 teleport 到 body，故用唯一前缀的全局类；bordered 复选组
+ * 自适应容器宽度换行（无固定 max-width），长标签换行不撑破浮层。 */
+.notif-pick-group { display: flex; flex-wrap: wrap; gap: 8px; }
+.notif-pick-group .el-checkbox { margin-right: 0; margin-bottom: 0; }
+.notif-pick-group .el-checkbox.is-bordered { height: auto; min-height: 24px; padding: 2px 10px; margin: 0; }
+.notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { white-space: normal; line-height: 1.35; word-break: break-word; }
+.notif-pick-panel { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; }
+.notif-pick-title { font-size: 12px; font-weight: 600; color: #374151; }
+.notif-pick-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
+.nd-pick-popper.el-popover { padding: 12px; }
 </style>
