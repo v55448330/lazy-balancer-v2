@@ -69,7 +69,8 @@ func readAuthCounters() (ok, fail, mfa int64) {
 	return authCounters.ok, authCounters.fail, authCounters.mfa
 }
 
-// joinLimitRows 把 (label,count) 行集合格式化为「label ×n；…」单行列表（空=无）。
+// joinLimitRows 把 (label,count) 行集合格式化为多行列表（每行「label ×n」，空=无）。
+// 多值拆行避免表格单元格挤排错乱；渲染层按通道形态展开（html=<br>、文本=独立行）。
 func joinLimitRows(rows [][2]string) string {
 	if len(rows) == 0 {
 		return "无"
@@ -78,7 +79,7 @@ func joinLimitRows(rows [][2]string) string {
 	for _, r := range rows {
 		parts = append(parts, r[0]+" ×"+r[1])
 	}
-	return strings.Join(parts, "；")
+	return strings.Join(parts, "\n")
 }
 
 // formatBytes 字节数→人类可读（GB/MB/KB/B）。
@@ -151,7 +152,7 @@ func certExpiringList(ctx context.Context, now time.Time) string {
 	if len(parts) == 0 {
 		return "无"
 	}
-	return strings.Join(parts, "；")
+	return strings.Join(parts, "\n")
 }
 
 // threatDBVersion 威胁库当前版本（CRS + IP2Region）。

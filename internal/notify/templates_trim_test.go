@@ -34,8 +34,8 @@ func TestRenderDailyForChannel_qqProtocolMarkdown(t *testing.T) {
 	// 机器人协议固定：qq 缺省=markdown 表格，通道样式 text 不得覆盖。
 	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil)}
 	got := renderDailyForChannel(msg, "qq", "text")
-	if !strings.Contains(got, "| 请求数 |") {
-		t.Fatalf("qq 日报应为 markdown 表格（协议固定）: %q", got)
+	if !strings.Contains(got, "**请求数**") {
+		t.Fatalf("qq 日报应为精美非表格 markdown（协议固定）: %q", got)
 	}
 	wx := renderDailyForChannel(msg, "wx_clawbot", "markdown")
 	if strings.Contains(wx, "|") {

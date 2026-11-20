@@ -59,23 +59,32 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	defaultHTML := cfg.BodyTemplate == "" && cfg.BodyFormat != "text" && msg.EventType != EvtDailyReport
 	htmlBody := cfg.BodyFormat == "html" || msg.EventType == EvtDailyReport || defaultHTML
 	if htmlBody && msg.EventType != EvtDailyReport && cfg.BodyTemplate == "" {
-		body = wrapEmailHTML(subject, body, ts)
+		body = wrapEmailHTML(subject, body, ts, msg.Level)
 	}
 	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, htmlBody, tlsEnabled, insecure)
 }
 
-// wrapEmailHTML 事件邮件 HTML 版式（品牌+时间+正文；正文含 HTML 标签时不转义）。
-func wrapEmailHTML(subject, body string, ts time.Time) string {
+// wrapEmailHTML 事件邮件统一卡片版式（深色品牌头+级别徽章+标题+正文+元信息+署名；
+// 正文含 HTML 标签时不转义）。与日报 HTML 卡片同族。
+func wrapEmailHTML(subject, body string, ts time.Time, level string) string {
 	stamp := ts.Format("2006-01-02 15:04")
 	inner := html.EscapeString(body)
 	if strings.Contains(body, "<") {
 		inner = body
 	}
-	return `<div style="font-family:-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;max-width:640px">` +
-		fmt.Sprintf(`<h3 style="margin:0 0 4px">%s</h3>`, html.EscapeString(subject)) +
-		fmt.Sprintf(`<p style="margin:0 0 12px;color:#6b7280;font-size:12px">%s · %s</p>`, html.EscapeString(BrandName()), stamp) +
-		`<div style="font-size:14px;white-space:pre-wrap">` + inner + `</div>` +
-		fmt.Sprintf(`<p style="margin:16px 0 0;color:#9ca3af;font-size:12px">—— %s · %s</p></div>`, html.EscapeString(BrandName()), stamp)
+	badge := map[string]string{"critical": "#ef4444", "warn": "#f59e0b", "info": "#3b82f6"}[level]
+	if badge == "" {
+		badge = "#3b82f6"
+	}
+	brand := html.EscapeString(BrandName())
+	return `<div style="max-width:640px;margin:0 auto;font-family:'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;">` +
+		fmt.Sprintf(`<div style="background:#1e293b;padding:16px 24px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:16px;font-weight:600;">%s</td><td style="text-align:right;"><span style="background:%s;color:#fff;font-size:11px;padding:2px 10px;">%s</span></td></tr></table></div>`, brand, badge, html.EscapeString(level)) +
+		`<div style="border:1px solid #e2e8f0;border-top:none;padding:24px;">` +
+		fmt.Sprintf(`<h2 style="margin:0 0 12px;font-size:18px;color:#0f172a;">%s</h2>`, html.EscapeString(subject)) +
+		`<div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">` + inner + `</div>` +
+		fmt.Sprintf(`<table style="width:100%%;font-size:12px;border-top:1px solid #f1f5f9;margin-top:16px;border-collapse:collapse;"><tr><td style="padding:6px 0;color:#64748b;">时间</td><td style="padding:6px 0;text-align:right;color:#334155;">%s</td></tr></table>`, stamp) +
+		`</div>` +
+		fmt.Sprintf(`<p style="text-align:center;font-size:11px;color:#94a3b8;margin:16px 0;">此邮件由 %s 通知中心自动发送 · %s</p></div>`, brand, stamp)
 }
 
 func (s emailSender) Test(ctx context.Context, targetJSON string) error {

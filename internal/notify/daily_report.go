@@ -427,6 +427,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		raw, _ := json.MarshalIndent(obj, "", "  ")
 		return string(raw)
 	case "html":
+		escBR := func(s string) string { return strings.ReplaceAll(html.EscapeString(s), "\n", "<br>") }
 		var b strings.Builder
 		b.WriteString(`<div style="max-width:640px;margin:0 auto;font-family:'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;">`)
 		fmt.Fprintf(&b, `<div style="background:#1e293b;padding:16px 24px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:16px;font-weight:600;">📊 %s 每日报告</td><td style="text-align:right;"><span style="background:#3b82f6;color:#fff;font-size:11px;padding:2px 10px;">%s</span></td></tr></table></div>`,
@@ -440,31 +441,38 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			}
 			fmt.Fprintf(&b, `<h4 style="margin:16px 0 8px;font-size:14px;color:#0f172a;">%s %s</h4><table style="width:100%%;border-collapse:collapse;font-size:13px;"><tr style="background:#f9fafb;"><th align="left" style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">指标</th><th align="left" style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">数值</th></tr>`, sec.emoji, html.EscapeString(sec.title))
 			for _, r := range rows {
-				fmt.Fprintf(&b, `<tr><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#6b7280;">%s</td><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;">%s</td></tr>`, html.EscapeString(r[0]), html.EscapeString(r[1]))
+				fmt.Fprintf(&b, `<tr><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#6b7280;vertical-align:top;">%s</td><td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;">%s</td></tr>`, html.EscapeString(r[0]), escBR(r[1]))
 			}
 			b.WriteString("</table>")
 		}
 		fmt.Fprintf(&b, `<p style="margin:16px 0 0;color:#9ca3af;font-size:12px;text-align:center;">此邮件由 %s 通知中心自动发送 · %s</p></div></div>`, html.EscapeString(brand), now)
 		return b.String()
 	case "markdown":
+		// QQ 官方 markdown 不渲染表格——改用分节标题+加粗键值+多值独立行的
+		// 精美非表格形态（现代直观，协议兼容）。
 		var b strings.Builder
-		fmt.Fprintf(&b, "## 📊 %s 每日报告（%s）\n\n", brand, date)
+		fmt.Fprintf(&b, "## 📊 %s 每日报告\n> %s · 生成于 %s\n\n", brand, date, now)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
 				continue
 			}
-			// QQ 端实测支持 markdown 表格（用户提供的 QQ 渲染截图为准，
-			// 纠正此前"不支持表格"的误判）；指标/数值两列表格呈现。
-			fmt.Fprintf(&b, "### %s %s\n\n| 指标 | 数值 |\n| --- | --- |\n", sec.emoji, sec.title)
+			fmt.Fprintf(&b, "### %s %s\n", sec.emoji, sec.title)
 			for _, r := range rows {
-				fmt.Fprintf(&b, "| %s | %s |\n", r[0], r[1])
+				if strings.Contains(r[1], "\n") {
+					fmt.Fprintf(&b, "**%s**\n", r[0])
+					for _, ln := range strings.Split(r[1], "\n") {
+						fmt.Fprintf(&b, "· %s\n", ln)
+					}
+				} else {
+					fmt.Fprintf(&b, "**%s**：%s\n", r[0], r[1])
+				}
 			}
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "> %s · %s\n", brand, now)
 		return b.String()
-	default: // text（白名单兜底；纯文本分节行）
+	default: // text（微信 iLink 纯文本协议；无 markdown 标记，多值独立行）
 		var b strings.Builder
 		fmt.Fprintf(&b, "📊 %s 每日报告（%s）\n", brand, date)
 		for _, sec := range dailySections {
@@ -474,7 +482,14 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			}
 			fmt.Fprintf(&b, "\n%s %s\n", sec.emoji, sec.title)
 			for _, r := range rows {
-				fmt.Fprintf(&b, "%s：%s\n", r[0], r[1])
+				if strings.Contains(r[1], "\n") {
+					fmt.Fprintf(&b, "%s：\n", r[0])
+					for _, ln := range strings.Split(r[1], "\n") {
+						fmt.Fprintf(&b, "  · %s\n", ln)
+					}
+				} else {
+					fmt.Fprintf(&b, "%s：%s\n", r[0], r[1])
+				}
 			}
 		}
 		fmt.Fprintf(&b, "\n—— %s · %s\n", brand, now)
