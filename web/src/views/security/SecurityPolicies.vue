@@ -1051,61 +1051,79 @@
     />
   </div>
 
-    <!-- 默认策略创建弹框（用户裁定 2026-11-20 第五轮）：预览目录→逐项创建
-         （运行中禁关）→完成指引。已存在直接复用；脏引用删除重建。 -->
+    <!-- 默认策略创建弹框（DESIGN_SPEC §7/§13/§15/§16）：DialogHeader +
+         DialogSectionHeader 分区 + dialog-panel 行 + 状态 el-tag；体高门控。 -->
     <el-dialog
       v-model="defaultsVisible"
-      :title="t('app.security.policies.defaults.title')"
-      width="640px"
+      class="dialog-body-inset"
+      width="min(720px, 94vw)"
+      top="6vh"
       :close-on-click-modal="false"
       :close-on-press-escape="!defaultsRunning"
       :show-close="!defaultsRunning"
     >
-      <!-- 预览态：按阶段列出待创建策略 + 地址列表 -->
-      <template v-if="defaultsPhase === 'preview'">
-        <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.defaults.previewTip') }}</span></div>
-        <div v-for="group in defaultsCatalogGroups" :key="group.stage" class="defaults-stage-group">
-          <div class="defaults-stage-title">{{ group.label }}</div>
-          <div v-for="pol in group.policies" :key="pol.name" class="defaults-item">
-            <div class="defaults-item-name">{{ pol.name }}</div>
-            <div class="defaults-item-desc">{{ pol.desc }}</div>
-            <div v-if="(pol.list_refs?.length ?? 0) > 0 || (pol.system_list_refs?.length ?? 0) > 0" class="defaults-item-refs">
-              {{ t('app.security.policies.defaults.refsLabel') }}{{ [...(pol.list_refs ?? []).map(refName), ...(pol.system_list_refs ?? [])].join('、') }}
+      <template #header>
+        <DialogHeader :icon="MagicStick" :title="t('app.security.policies.defaults.title')" :subtitle="t('app.security.policies.defaults.subtitle')" tone="primary" />
+      </template>
+      <div class="defaults-dialog-body">
+        <!-- 预览态：按阶段分区列出待创建策略 + 地址列表 -->
+        <template v-if="defaultsPhase === 'preview'">
+          <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.defaults.previewTip') }}</span></div>
+          <template v-for="group in defaultsCatalogGroups" :key="group.stage">
+            <DialogSectionHeader :title="group.label" :tone="group.tone" />
+            <div class="dialog-panel defaults-panel">
+              <div v-for="pol in group.policies" :key="pol.name" class="defaults-row">
+                <div class="defaults-row-main">
+                  <span class="defaults-row-name">{{ pol.name }}</span>
+                  <span class="defaults-row-desc">{{ pol.desc }}</span>
+                </div>
+                <div v-if="(pol.list_refs?.length ?? 0) > 0 || (pol.system_list_refs?.length ?? 0) > 0" class="defaults-row-refs">
+                  <el-tag v-for="r in pol.list_refs ?? []" :key="r" size="small" effect="plain">{{ refName(r) }}</el-tag>
+                  <el-tag v-for="r in pol.system_list_refs ?? []" :key="r" size="small" effect="plain" type="info">{{ r }}</el-tag>
+                </div>
+              </div>
+            </div>
+          </template>
+          <DialogSectionHeader :title="t('app.security.policies.defaults.listsTitle')" tone="success" />
+          <div class="dialog-panel defaults-panel">
+            <div v-for="l in defaultsCatalog?.lists ?? []" :key="l.key" class="defaults-row">
+              <div class="defaults-row-main">
+                <span class="defaults-row-name">{{ l.name }}</span>
+                <span class="defaults-row-desc">{{ t('app.security.policies.defaults.emptyListTip') }}</span>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="defaults-stage-group">
-          <div class="defaults-stage-title">{{ t('app.security.policies.defaults.listsTitle') }}</div>
-          <div v-for="l in defaultsCatalog?.lists ?? []" :key="l.key" class="defaults-item">
-            <div class="defaults-item-name">{{ l.name }}</div>
-            <div class="defaults-item-desc">{{ t('app.security.policies.defaults.emptyListTip') }}</div>
-          </div>
-        </div>
-      </template>
-      <!-- 运行/完成态：逐项状态 -->
-      <template v-else>
-        <div v-for="it in defaultsItems" :key="it.kind + it.name" class="defaults-item defaults-status-row">
-          <span class="defaults-status-icon" :class="`is-${it.status}`">
-            <el-icon v-if="it.status === 'created'"><CircleCheckFilled /></el-icon>
-            <el-icon v-else-if="it.status === 'rebuilt'"><RefreshLeft /></el-icon>
-            <el-icon v-else><SuccessFilled /></el-icon>
+        </template>
+        <!-- 运行/完成态：逐项状态（§15 状态标签：success/info/warning plain） -->
+        <template v-else>
+          <div v-if="defaultsPhase === 'running'" v-loading="true" class="defaults-running-mask" />
+          <template v-for="group in defaultsResultGroups" :key="group.stage + '-r'">
+            <DialogSectionHeader :title="group.label" :tone="group.tone" />
+            <div class="dialog-panel defaults-panel">
+              <div v-for="it in group.items" :key="it.kind + it.name" class="defaults-row">
+                <div class="defaults-row-main">
+                  <span class="defaults-row-name">{{ it.name }}</span>
+                </div>
+                <el-tag size="small" effect="plain" :type="defaultsStatusTagType(it.status)">{{ t(`app.security.policies.defaults.status.${it.status}`) }}</el-tag>
+              </div>
+            </div>
+          </template>
+        </template>
+        <!-- 完成指引 -->
+        <div v-if="defaultsPhase === 'done'" class="info-note-bar defaults-done-tip">
+          <span class="info-note-desc">
+            {{ t('app.security.policies.defaults.doneBindTip') }}
+            <AccessibleLink type="primary" @click="goToPoliciesList">{{ t('app.security.policies.defaults.goRules') }}</AccessibleLink>
+            {{ t('app.security.policies.defaults.doneListTip') }}
+            <AccessibleLink type="primary" @click="goToIpLists">{{ t('app.security.policies.defaults.goLists') }}</AccessibleLink>
           </span>
-          <span class="defaults-item-name">{{ it.name }}</span>
-          <span class="defaults-status-text">{{ t(`app.security.policies.defaults.status.${it.status}`) }}</span>
         </div>
-      </template>
-      <!-- 完成指引 -->
-      <div v-if="defaultsPhase === 'done'" class="info-note-bar defaults-done-tip">
-        <span class="info-note-desc">
-          {{ t('app.security.policies.defaults.doneBindTip') }}
-          <AccessibleLink type="primary" @click="goToPoliciesList">{{ t('app.security.policies.defaults.goRules') }}</AccessibleLink>
-          {{ t('app.security.policies.defaults.doneListTip') }}
-          <AccessibleLink type="primary" @click="goToIpLists">{{ t('app.security.policies.defaults.goLists') }}</AccessibleLink>
-        </span>
       </div>
       <template #footer>
-        <el-button v-if="defaultsPhase === 'preview'" :disabled="defaultsRunning" @click="defaultsVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
-        <el-button v-if="defaultsPhase === 'preview'" type="primary" :loading="defaultsRunning" :disabled="!defaultsCatalog" @click="runApplyDefaults">{{ t('app.security.policies.defaults.start') }}</el-button>
+        <template v-if="defaultsPhase === 'preview'">
+          <el-button :disabled="defaultsRunning" @click="defaultsVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
+          <el-button type="primary" :loading="defaultsRunning" :disabled="!defaultsCatalog" @click="runApplyDefaults">{{ t('app.security.policies.defaults.start') }}</el-button>
+        </template>
         <el-button v-if="defaultsPhase === 'done'" type="primary" @click="defaultsVisible = false">{{ t('app.security.policies.common.close') }}</el-button>
       </template>
     </el-dialog>
@@ -1116,7 +1134,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { cityEnName } from '@/utils/cityEnNames'
 import { useI18n } from 'vue-i18n'
-import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document, MagicStick, RefreshLeft, SuccessFilled } from '@element-plus/icons-vue'
+import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document, MagicStick } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
@@ -1169,6 +1187,10 @@ const defaultsPhase = ref<'preview' | 'running' | 'done'>('preview')
 const defaultsRunning = computed(() => defaultsPhase.value === 'running')
 const defaultsCatalog = ref<DefaultCatalog | null>(null)
 const defaultsItems = ref<DefaultApplyItem[]>([])
+// 阶段分区 tone（语义色）：信任=success 放行 / IP 控制=primary / CC=warning 挑战 / WAF=danger 拦截
+const DEFAULTS_STAGE_TONE: Record<'stage0' | 'stage1' | 'stage2' | 'stage3', 'primary' | 'success' | 'warning' | 'danger'> = {
+  stage0: 'success', stage1: 'primary', stage2: 'warning', stage3: 'danger',
+}
 const defaultsCatalogGroups = computed(() => {
   if (!defaultsCatalog.value) return []
   const byStage = new Map<string, DefaultCatalogPolicy[]>()
@@ -1177,13 +1199,29 @@ const defaultsCatalogGroups = computed(() => {
     arr.push(p)
     byStage.set(p.policy_type, arr)
   }
-  // 分组标签复用创建类型名单源 POLICY_TYPE_CREATE_OPTIONS（含 stage0 信任名单）
-  return [...byStage.entries()].map(([stage, policies]) => ({
-    stage,
-    label: POLICY_TYPE_CREATE_OPTIONS.find((o) => o.value === stage)?.label ?? stage,
-    policies,
-  }))
+  return [...byStage.entries()].flatMap(([stage, policies]) => {
+    const opt = POLICY_TYPE_CREATE_OPTIONS.find((o) => o.value === stage)
+    if (!opt) return [] // 未知阶段不入组（fail-safe，不猜 tone）
+    return [{ stage, label: opt.label, tone: DEFAULTS_STAGE_TONE[opt.value], policies }]
+  })
 })
+// 结果态同结构分组：策略按 stage，地址列表归「地址列表」区（tone success）
+const defaultsResultGroups = computed(() => {
+  if (defaultsItems.value.length === 0) return []
+  const groups: Array<{ stage: string; label: string; tone: 'primary' | 'success' | 'warning' | 'danger'; items: DefaultApplyItem[] }> = []
+  for (const g of defaultsCatalogGroups.value) {
+    const items = defaultsItems.value.filter((it) => it.kind === 'policy' && it.stage === g.stage)
+    if (items.length > 0) groups.push({ ...g, items })
+  }
+  const lists = defaultsItems.value.filter((it) => it.kind === 'list')
+  if (lists.length > 0) {
+    groups.push({ stage: 'lists', label: t('app.security.policies.defaults.listsTitle'), tone: 'success', items: lists })
+  }
+  return groups
+})
+// §15 状态标签语义：created=success / exists=info / rebuilt=warning
+const defaultsStatusTagType = (status: string): 'success' | 'info' | 'warning' =>
+  status === 'created' ? 'success' : status === 'rebuilt' ? 'warning' : 'info' 
 const refName = (ref: string): string =>
   defaultsCatalog.value?.lists.find((l) => l.key === ref)?.name ?? ref
 const openDefaultsDialog = async (): Promise<void> => {
@@ -4162,19 +4200,15 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .placeholder-code { padding: 0 4px; border-radius: 4px; background: var(--el-fill-color-light); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .form-tip-line.is-error { color: var(--el-color-danger); }
 
-/* 默认策略弹框（用户裁定 2026-11-20 第五轮） */
-.header-actions { display: flex; gap: 8px; align-items: center; }
-.header-actions :deep(.el-button .el-icon) { margin-right: 4px; }
-.defaults-stage-group { margin-bottom: 12px; }
-.defaults-stage-title { font-weight: 600; margin-bottom: 6px; color: var(--el-text-color-primary); }
-.defaults-item { padding: 6px 10px; border-radius: 6px; background: var(--el-fill-color-light); margin-bottom: 4px; }
-.defaults-item-name { font-weight: 500; }
-.defaults-item-desc { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
-.defaults-item-refs { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
-.defaults-status-row { display: flex; align-items: center; gap: 8px; }
-.defaults-status-icon.is-created { color: var(--el-color-success); }
-.defaults-status-icon.is-exists { color: var(--el-color-primary); }
-.defaults-status-icon.is-rebuilt { color: var(--el-color-warning); }
-.defaults-status-text { font-size: 12px; color: var(--el-text-color-secondary); }
+/* 默认策略弹框（DESIGN_SPEC §16 弹框体高度门 + dialog-panel 行布局） */
+.defaults-dialog-body { max-height: calc(100vh - 300px); overflow-y: auto; }
+.defaults-panel { display: flex; flex-direction: column; gap: 2px; }
+.defaults-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 8px 10px; }
+.defaults-row + .defaults-row { border-top: 1px solid var(--el-border-color-lighter, #e9edf2); }
+.defaults-row-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.defaults-row-name { font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }
+.defaults-row-desc { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; }
+.defaults-row-refs { display: flex; flex-wrap: wrap; gap: 4px; flex: none; justify-content: flex-end; }
+.defaults-running-mask { position: absolute; inset: 0; z-index: 1; }
 .defaults-done-tip { margin-top: 12px; }
 </style>

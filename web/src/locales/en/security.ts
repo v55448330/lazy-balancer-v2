@@ -1177,7 +1177,8 @@ export default {
     "defaults": {
      "btn": "Default Policies",
      "title": "Create Default Policies",
-     "previewTip": "Creates the default security policies and address lists below by stage (lists start empty); existing items are reused, items with broken references are deleted and rebuilt",
+     "subtitle": "Recommended policies per stage · address lists start empty",
+     "previewTip": "Existing items are reused, items with broken references are rebuilt; the dialog stays open during creation",
      "refsLabel": "References: ",
      "listsTitle": "Address lists (edit entries in IP lists after creation)",
      "emptyListTip": "Created empty; takes effect after adding addresses",
