@@ -6550,7 +6550,7 @@ func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType
 			req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
 		case stageZeroHuman:
 			req.HumanVerifyMode, req.HumanVerifyType = "off", "slider"
-			req.HumanVerifyTTL = 30
+			req.HumanVerifyTTL = db.DefaultHumanVerifyTTL
 			req.HumanExemptPaths = "[]"
 			req.CCDetectEnabled = false
 			req.CCRPSLimit = db.DefaultCCRPSLimit
@@ -6599,7 +6599,7 @@ func applyStageZerosToUpdate(req *models.UpdateSecurityPolicyRequest, policyType
 			req.IPWhitelist, req.IPWhitelistRefs = new("[]"), new("[]")
 		case stageZeroHuman:
 			req.HumanVerifyMode, req.HumanVerifyType = new("off"), new("slider")
-			req.HumanVerifyTTL = new(30)
+			req.HumanVerifyTTL = new(db.DefaultHumanVerifyTTL)
 			req.HumanExemptPaths = new("[]")
 			req.CCDetectEnabled = new(false)
 			req.CCRPSLimit = new(db.DefaultCCRPSLimit)
@@ -6729,7 +6729,7 @@ func updateOutOfStageConflict(req *models.UpdateSecurityPolicyRequest, policyTyp
 			activeBool := func(p *bool) bool { return p != nil && *p }
 			return activeStr(req.HumanVerifyMode, "off") ||
 				activeStr(req.HumanVerifyType, "slider") ||
-				activeInt(req.HumanVerifyTTL, 30) ||
+				activeInt(req.HumanVerifyTTL, db.DefaultHumanVerifyTTL) ||
 				(req.HumanExemptPaths != nil && jsonListPayloadNonEmpty(*req.HumanExemptPaths)) ||
 				activeBool(req.CCDetectEnabled) ||
 				activeInt(req.CCRPSLimit, db.DefaultCCRPSLimit) ||

@@ -26,14 +26,14 @@ const CONFIRMED_SCOPES = ['blocked', 'challenge_failed']
 export const AUTOBAN_PRESETS: Record<AutobanPresetId, AutobanPresetValues> = {
   // 保守：只计攻击确证（拦截+挑战失败），不升级，等权。
   conservative: {
-    threshold: 100, window_minutes: 5, duration: '1h',
+    threshold: 150, window_minutes: 10, duration: '1h',
     scope: [...CONFIRMED_SCOPES], escalation: 'off',
     counting_mode: 'classic', suspicion_multiplier: 4, confirm_floor_ratio: '0.4',
   },
   // 标准：db 默认逐字段对齐（四口径全选+等权+off 不升级）——存量默认命中
   // 本档，不静默启用累犯升级（升级需用户显式选档或改「累犯升级」）。
   standard: {
-    threshold: 100, window_minutes: 5, duration: '1h',
+    threshold: 150, window_minutes: 10, duration: '1h',
     scope: [...ALL_SCOPES], escalation: 'off',
     counting_mode: 'classic', suspicion_multiplier: 4, confirm_floor_ratio: '0.4',
   },

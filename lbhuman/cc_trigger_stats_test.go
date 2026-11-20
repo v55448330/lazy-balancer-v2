@@ -103,7 +103,7 @@ func TestServeHTTP_ccTriggerReasonsReported(t *testing.T) {
 	// rps_spike：窗口计数超阈后的下一次请求即挑战。
 	h := &HumanHandler{HumanConfig: HumanConfig{
 		Mode: "auto", Type: "js", RuleID: "trig-rps", Secret: "test-secret", TTLMinutes: 30,
-		CCEnabled: true, CCRPSLimit: 2, CCWindowSec: 600,
+		CCEnabled: true, CCRPSLimit: 2, CCWindowSec: 1, // 真 RPS：2×1=2，3请求后第4次触发
 	}}
 	for i := range 3 {
 		req := httptest.NewRequest(http.MethodGet, "/rps", nil)

@@ -143,7 +143,9 @@ type CCTriggerResult struct {
 // 阈值来自渲染配置（自动封禁 CC 检测规则）；窗口长度由 stats.WindowSec 携带
 // （计数器登记值），不再单独传参。
 func evalCC(stats CCWindowStats, rpsLimit, ratio4xx, sessionUACount int, sessionAnomaly bool) CCTriggerResult {
-	if stats.Count > rpsLimit && rpsLimit > 0 {
+	// 真 RPS 语义：窗口总计数 > rps × 窗口秒数才触发（旧实现直接比 Count，
+	// 40+10s=平均 4 RPS 即触发——现代页面首屏 30-80 资源正常用户即被挑战）。
+	if rpsLimit > 0 && stats.WindowSec > 0 && stats.Count > rpsLimit*stats.WindowSec {
 		return CCTriggerResult{Triggered: true, Reason: "rps_spike"}
 	}
 	if ratio4xx > 0 && stats.Count >= 20 && stats.Status4xx*100 >= stats.Count*ratio4xx {

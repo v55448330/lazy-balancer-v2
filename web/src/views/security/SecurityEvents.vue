@@ -681,7 +681,7 @@ const parseAutobanScope = (scope: string): string[] => {
 const autobanScopeTextOf = (scope: string): string => parseAutobanScope(scope).map(autobanScopeLabel).join(' + ')
 
 const autobanStatus = ref<AutobanStatus>({
-  enabled: false, dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: 'blocked,logged,challenge_issued,challenge_failed',
+  enabled: false, dry_run: true, threshold: 150, window_minutes: 10, duration: '1h', scope: 'blocked,logged,challenge_issued,challenge_failed',
   banned_today: 0, list_entries: 0, ban_effective: true, suggestions: [],
   // 成功响应前不得假定喂入源健康（默认 false：无额外黄条）
   feed_degraded: false, feed_degraded_reason: '',
@@ -776,7 +776,7 @@ const fetchAutobanStatus = async (): Promise<void> => {
 // 配置弹框（七项配置 + 口径/窗口变更重置提示）
 const autobanDialogVisible = ref(false)
 const autobanSaving = ref(false)
-const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[], escalation: 'off', counting_mode: 'classic', suspicion_multiplier: 4, confirm_floor_ratio: '0.4' })
+const autobanForm = ref({ dry_run: true, threshold: 150, window_minutes: 10, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[], escalation: 'off', counting_mode: 'classic', suspicion_multiplier: 4, confirm_floor_ratio: '0.4' })
 watch(() => autobanForm.value.duration, (duration) => {
   if (duration === 'permanent' && autobanForm.value.escalation !== 'off') autobanForm.value.escalation = 'off'
 })

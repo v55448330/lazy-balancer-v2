@@ -25,7 +25,8 @@ func ccTriggerFixture(t *testing.T, action string, waitSec int) (*HumanHandler, 
 		RuleID: "rule-action-" + action,
 	}}
 	key := h.RuleID + "|" + normalizeIP("203.0.113.50")
-	for range 10 {
+	// 真 RPS 语义：5 rps × 10s 窗口 = 50；记 60 请求使 60>50 触发。
+	for range 60 {
 		ccRecord(key, h.CCWindowSec, false, "ua1")
 	}
 	r := httptest.NewRequest(http.MethodGet, "https://example.com/page", nil)

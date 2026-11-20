@@ -1,6 +1,6 @@
 package handlers
 
-// CC 防护写侧契约：cc_4xx_ratio 0=关（保留 0）、合法域 [0,100]、负值回落缺省 70；
+// CC 防护写侧契约：cc_4xx_ratio 0=关（保留 0）、合法域 [0,100]、负值回落缺省 80；
 // cc_rps_window 合法域 [1,3600]、缺省 10、超上限钳制。Create/Update 同口径单源。
 
 import (
@@ -30,12 +30,12 @@ func TestSecurityPolicy_ccThresholdNormalization(t *testing.T) {
 
 	// 4xx：input → want（Create 与 Update 同口径）
 	xxCases := []struct{ input, want int }{
-		{0, 0},     // 0=关，保留（旧实现吞成 70）
+		{0, 0},     // 0=关，保留（旧实现吞成 80）
 		{150, 100}, // 超上限钳 100（旧实现直通）
-		{-5, 70},   // 负值回落缺省 70
+		{-5, 80},   // 负值回落缺省 80
 		{100, 100},
 		{1, 1},
-		{70, 70},
+		{80, 80},
 	}
 	for _, tc := range xxCases {
 		t.Run("4xx/"+fmt.Sprint(tc.input), func(t *testing.T) {
@@ -94,7 +94,7 @@ func TestSecurityPolicy_ccThresholdNormalization(t *testing.T) {
 		})
 	}
 
-	// 缺省：window 创建省略 → 10；4xx 更新省略 → 保持存量缺省 70。
+	// 缺省：window 创建省略 → 10；4xx 更新省略 → 保持存量缺省 80。
 	t.Run("defaults", func(t *testing.T) {
 		cid := createTestPolicy(t, router, map[string]any{
 			"name": "cc-def-c", "policy_type": "stage2", "cc_detect_enabled": true,
@@ -102,13 +102,13 @@ func TestSecurityPolicy_ccThresholdNormalization(t *testing.T) {
 		if got := ccContractInt(t, cid, "cc_rps_window"); got != 10 {
 			t.Fatalf("POST 省略 cc_rps_window stored=%d, want 10", got)
 		}
-		// Create 省略 cc_4xx_ratio → 缺省 70（*int 区分省略与显式 0；裸 int 会落 0=关）。
-		if got := ccContractInt(t, cid, "cc_4xx_ratio"); got != 70 {
-			t.Fatalf("POST 省略 cc_4xx_ratio stored=%d, want 70（缺省，非 0=关）", got)
+		// Create 省略 cc_4xx_ratio → 缺省 80（*int 区分省略与显式 0；裸 int 会落 0=关）。
+		if got := ccContractInt(t, cid, "cc_4xx_ratio"); got != 80 {
+			t.Fatalf("POST 省略 cc_4xx_ratio stored=%d, want 80（缺省，非 0=关）", got)
 		}
 		id := createTestPolicy(t, router, map[string]any{
 			"name": "cc-def-u", "policy_type": "stage2", "cc_detect_enabled": true,
-			"cc_4xx_ratio": 70,
+			"cc_4xx_ratio": 80,
 		})
 		rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
 			"policy_type": "stage2", "cc_rps_limit": 60, // 不带 cc_4xx_ratio
@@ -116,8 +116,8 @@ func TestSecurityPolicy_ccThresholdNormalization(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("PUT status=%d body=%s", rec.Code, rec.Body.String())
 		}
-		if got := ccContractInt(t, id, "cc_4xx_ratio"); got != 70 {
-			t.Fatalf("省略 cc_4xx_ratio 后 stored=%d, want 70（保持存量缺省）", got)
+		if got := ccContractInt(t, id, "cc_4xx_ratio"); got != 80 {
+			t.Fatalf("省略 cc_4xx_ratio 后 stored=%d, want 80（保持存量缺省）", got)
 		}
 	})
 }
@@ -295,8 +295,8 @@ func TestSecurityPolicy_stageZeroCoversCCFields(t *testing.T) {
 	})
 }
 
-// assertCCZeroed 断言人机四列与 CC 六列全部落阶段零值（off/slider/30/[] 与
-// false/40/10/70/false/5）。
+// assertCCZeroed 断言人机四列与 CC 六列全部落阶段零值（off/slider/15/[] 与
+// false/40/10/80/false/5）。
 func assertCCZeroed(t *testing.T, id int) {
 	t.Helper()
 	if got := ccContractStr(t, id, "human_verify_mode"); got != "off" {
@@ -305,8 +305,8 @@ func assertCCZeroed(t *testing.T, id int) {
 	if got := ccContractStr(t, id, "human_verify_type"); got != "slider" {
 		t.Fatalf("human_verify_type=%q, want slider", got)
 	}
-	if got := ccContractInt(t, id, "human_verify_ttl"); got != 30 {
-		t.Fatalf("human_verify_ttl=%d, want 30", got)
+	if got := ccContractInt(t, id, "human_verify_ttl"); got != 15 {
+		t.Fatalf("human_verify_ttl=%d, want 15", got)
 	}
 	if got := ccContractStr(t, id, "human_exempt_paths"); got != "[]" {
 		t.Fatalf("human_exempt_paths=%q, want []", got)
@@ -320,8 +320,8 @@ func assertCCZeroed(t *testing.T, id int) {
 	if got := ccContractInt(t, id, "cc_rps_window"); got != 10 {
 		t.Fatalf("cc_rps_window=%d, want 10", got)
 	}
-	if got := ccContractInt(t, id, "cc_4xx_ratio"); got != 70 {
-		t.Fatalf("cc_4xx_ratio=%d, want 70", got)
+	if got := ccContractInt(t, id, "cc_4xx_ratio"); got != 80 {
+		t.Fatalf("cc_4xx_ratio=%d, want 80", got)
 	}
 	if ccContractBool(t, id, "cc_session_anomaly") {
 		t.Fatal("cc_session_anomaly=true, want false")
@@ -332,7 +332,7 @@ func assertCCZeroed(t *testing.T, id int) {
 }
 
 // 显式非 stage2 类型更新携带「生效中」的人机/CC 字段 = 矛盾载荷 400（与其余阶段外
-// 族同口径）；惰性默认值（off/slider/30/[]/false/40/10/70/false/5/challenge/0）不算冲突。
+// 族同口径）；惰性默认值（off/slider/15/[]/false/40/10/80/false/5/challenge/0）不算冲突。
 func TestUpdateSecurityPolicy_rejectsActiveHumanCCForNonStage2(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	useCRSRuleIndexFixture(t)
@@ -382,10 +382,10 @@ func TestUpdateSecurityPolicy_rejectsActiveHumanCCForNonStage2(t *testing.T) {
 		})
 		rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
 			"policy_type": "stage3", "mode": "blocking",
-			"human_verify_mode": "off", "human_verify_type": "slider", "human_verify_ttl": 30,
+			"human_verify_mode": "off", "human_verify_type": "slider", "human_verify_ttl": 15,
 			"human_exempt_paths": "[]",
 			"cc_detect_enabled":  false, "cc_rps_limit": 40, "cc_rps_window": 10,
-			"cc_4xx_ratio": 70, "cc_session_anomaly": false, "cc_session_ua_threshold": 5,
+			"cc_4xx_ratio": 80, "cc_session_anomaly": false, "cc_session_ua_threshold": 5,
 			"cc_trigger_action": "challenge", "cc_queue_wait_sec": 0,
 		})
 		if rec.Code != http.StatusOK {

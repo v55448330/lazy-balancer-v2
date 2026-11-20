@@ -122,10 +122,10 @@ const (
 	// （cluster_apply.go）全部单源——与 DefaultAnomalyThreshold 同族，调整
 	// 默认值只改这里（db_truth_defaults_test 双向钉死字面量不得回流）。
 	DefaultHumanVerifyType      = "slider"
-	DefaultHumanVerifyTTL       = 30
+	DefaultHumanVerifyTTL       = 15
 	DefaultCCRPSLimit           = 40
 	DefaultCCRPSWindow          = 10
-	DefaultCC4xxRatio           = 70
+	DefaultCC4xxRatio           = 80
 	DefaultCCSessionUAThreshold = 5
 	// 安全事件保留 / 威胁大屏口径默认值
 	// 此前 90 天 / 100 万行 / 采样 -1 / 模式 'map' 在 DDL（newColumns）、启动
@@ -215,8 +215,8 @@ const (
 	// 自动封禁十列治理默认：DDL、启动回填、services 读侧 COALESCE 与
 	// 无库默认结构体共用。枚举/边界仍由 services 校验持有，db 不反向依赖。
 	DefaultAutobanEnabled       = 0
-	DefaultAutobanThreshold     = 100
-	DefaultAutobanWindowMinutes = 5
+	DefaultAutobanThreshold     = 150
+	DefaultAutobanWindowMinutes = 10
 	DefaultAutobanDuration      = "1h"
 	DefaultAutobanScope         = "blocked,logged,challenge_issued,challenge_failed"
 	DefaultAutobanDryRun        = 1

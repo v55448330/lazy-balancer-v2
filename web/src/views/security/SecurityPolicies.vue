@@ -1902,7 +1902,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5, cc_trigger_action: 'challenge', cc_queue_wait_sec: 0 })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 15, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 80, cc_session_anomaly: false, cc_session_ua_threshold: 5, cc_trigger_action: 'challenge', cc_queue_wait_sec: 0 })
 
 const form = ref(defaultForm())
 // v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）

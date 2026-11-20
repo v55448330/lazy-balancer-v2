@@ -20,19 +20,19 @@ func TestInitialize_backfillsAutobanColumns(t *testing.T) {
 		check func(t *testing.T)
 	}{
 		{"threshold-zero", `UPDATE global_config SET autoban_threshold=0 WHERE id=1`, func(t *testing.T) {
-			assertAutobanInt(t, "autoban_threshold", 100)
+			assertAutobanInt(t, "autoban_threshold", DefaultAutobanThreshold)
 		}},
 		{"threshold-over-max", `UPDATE global_config SET autoban_threshold=10001 WHERE id=1`, func(t *testing.T) {
-			assertAutobanInt(t, "autoban_threshold", 100)
+			assertAutobanInt(t, "autoban_threshold", DefaultAutobanThreshold)
 		}},
 		{"threshold-valid-untouched", `UPDATE global_config SET autoban_threshold=42 WHERE id=1`, func(t *testing.T) {
 			assertAutobanInt(t, "autoban_threshold", 42)
 		}},
 		{"window-zero", `UPDATE global_config SET autoban_window_minutes=0 WHERE id=1`, func(t *testing.T) {
-			assertAutobanInt(t, "autoban_window_minutes", 5)
+			assertAutobanInt(t, "autoban_window_minutes", DefaultAutobanWindowMinutes)
 		}},
 		{"window-over-max", `UPDATE global_config SET autoban_window_minutes=61 WHERE id=1`, func(t *testing.T) {
-			assertAutobanInt(t, "autoban_window_minutes", 5)
+			assertAutobanInt(t, "autoban_window_minutes", DefaultAutobanWindowMinutes)
 		}},
 		{"window-valid-untouched", `UPDATE global_config SET autoban_window_minutes=13 WHERE id=1`, func(t *testing.T) {
 			assertAutobanInt(t, "autoban_window_minutes", 13)

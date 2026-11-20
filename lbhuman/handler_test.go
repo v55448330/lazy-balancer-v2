@@ -98,7 +98,7 @@ func TestCCWindowAndTrigger(t *testing.T) {
 	if stats.Count != 45 {
 		t.Fatalf("count=%d want 45", stats.Count)
 	}
-	trig := evalCC(stats, 40, 0, 0, false)
+	trig := evalCC(stats, 4, 0, 0, false)
 	if !trig.Triggered || trig.Reason != "rps_spike" {
 		t.Fatalf("rps spike must trigger: %+v", trig)
 	}
