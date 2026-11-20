@@ -139,6 +139,16 @@ func TestApplyDefaultSecurityPolicies_dirtyRefRebuilds(t *testing.T) {
 // 目录 JSON 契约：数组字段恒为 []（null 会让前端展开/取长崩渲染——
 // 2026-11-20 用户实测 TypeError: system_list_refs is not iterable）。
 func TestGetDefaultSecurityCatalog_noNullArrays(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
 	raw, err := json.Marshal(GetDefaultSecurityCatalog())
 	if err != nil {
 		t.Fatalf("marshal catalog: %v", err)
@@ -157,6 +167,74 @@ func TestGetDefaultSecurityCatalog_noNullArrays(t *testing.T) {
 			t.Fatalf("policy %q refs 为 nil——须空切片", p.Name)
 		}
 	}
+}
+
+// 目录须带实时状态（missing/exists/dirty）与策略内容行——预览态行尾标签
+// 「未创建」与展开详情的数据源（2026-11-20 第六轮用户裁定）。
+func TestGetDefaultSecurityCatalog_liveStatusAndContent(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	// 空库：全 missing，且策略内容行非空
+	cat := GetDefaultSecurityCatalog()
+	for _, l := range cat.Lists {
+		if l.Status != "missing" {
+			t.Fatalf("fresh list %s status=%q want missing", l.Name, l.Status)
+		}
+	}
+	for _, p := range cat.Policies {
+		if p.Status != "missing" {
+			t.Fatalf("fresh policy %s status=%q want missing", p.Name, p.Status)
+		}
+		if strings.TrimSpace(p.Content) == "" {
+			t.Fatalf("policy %s content 为空——展开详情的策略内容行必须有数据", p.Name)
+		}
+	}
+	// apply 后：全 exists；删被引用列表：策略 dirty、列表 missing
+	if _, err := ApplyDefaultSecurityPolicies(); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	cat = GetDefaultSecurityCatalog()
+	for _, p := range cat.Policies {
+		if p.Status != "exists" {
+			t.Fatalf("applied policy %s status=%q want exists", p.Name, p.Status)
+		}
+	}
+	if _, err := database.Exec(`DELETE FROM security_ip_lists WHERE name='信任名单地址列表'`); err != nil {
+		t.Fatalf("delete list: %v", err)
+	}
+	cat = GetDefaultSecurityCatalog()
+	if findListStatus(cat, "信任名单地址列表") != "missing" {
+		t.Fatalf("deleted list status want missing")
+	}
+	if findPolicyStatus(cat, "信任名单") != "dirty" {
+		t.Fatalf("dangling-ref policy status want dirty")
+	}
+}
+
+func findListStatus(cat DefaultSecurityCatalog, name string) string {
+	for _, l := range cat.Lists {
+		if l.Name == name {
+			return l.Status
+		}
+	}
+	return ""
+}
+
+func findPolicyStatus(cat DefaultSecurityCatalog, name string) string {
+	for _, p := range cat.Policies {
+		if p.Name == name {
+			return p.Status
+		}
+	}
+	return ""
 }
 
 func jsonInt(v int64) string {

@@ -6695,14 +6695,17 @@ type DefaultCatalogList struct {
 	Name     string `json:"name"`
 	Desc     string `json:"desc"`
 	Category string `json:"category"`
+	Status   string `json:"status"` // missing | exists
 }
 
 type DefaultCatalogPolicy struct {
 	Name           string   `json:"name"`
 	Desc           string   `json:"desc"`
 	PolicyType     string   `json:"policy_type"`
-	ListRefs       []string `json:"list_refs"`        // 引用的用户地址列表 key
-	SystemListRefs []string `json:"system_list_refs"` // 引用的内置系统名单名（展示）
+	Content        string   `json:"content"` // 策略内容一行（展开详情）
+	Status         string   `json:"status"`  // missing | exists | dirty
+	ListRefs       []string `json:"list_refs"`
+	SystemListRefs []string `json:"system_list_refs"`
 }
 
 type DefaultSecurityCatalog struct {
@@ -6712,6 +6715,7 @@ type DefaultSecurityCatalog struct {
 
 type defaultPolicySeed struct {
 	name, desc, ptype    string
+	content              string
 	mode                 string
 	ipWLEnabled          int
 	ipWLRefKeys          []string
@@ -6735,58 +6739,76 @@ var defaultIPListSeeds = []DefaultCatalogList{
 
 var defaultPolicySeeds = []defaultPolicySeed{
 	{
-		name: "信任名单", desc: "[默认规则] 引用「信任名单地址列表」，名单内 IP 跳过全部安全阶段",
+		name: "信任名单", content: "名单内 IP 直通上游，跳过全部安全阶段", desc: "[默认规则] 引用「信任名单地址列表」，名单内 IP 跳过全部安全阶段",
 		ptype: "stage0", mode: "off",
 		ipWLEnabled: 1, ipWLRefKeys: []string{"trust"},
 	},
 	{
-		name: "威胁情报拦截", desc: "[默认规则] 拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP",
+		name: "威胁情报拦截", content: "命中威胁名单 IP 即拒绝（403）", desc: "[默认规则] 拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny",
 		ipACLRefKeys: []string{"sys:中科大恶意 IP 名单（USTC）", "sys:FireHOL Level 1 综合黑名单", "sys:Emerging Threats 失陷主机名单"},
 	},
 	{
-		name: "手动黑名单", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段",
+		name: "手动黑名单", content: "命中名单 IP/网段即拒绝（403）", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"manual_blacklist"},
 	},
 	{
-		name: "自动封禁联动", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截",
+		name: "自动封禁联动", content: "命中自动封禁名单即拒绝（403）", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"sys:自动封禁名单"},
 	},
 	{
-		name: "地域拦截", desc: "[默认规则] 拦截所选海外区域（其他放行）；默认勾选全部海外国家",
+		name: "地域拦截", content: "海外区域流量拒绝，其他放行", desc: "[默认规则] 拦截所选海外区域（其他放行）；默认勾选全部海外国家",
 		ptype: "stage1", mode: "off",
 		geoipMode: "deny", geoipCountries: `["海外"]`,
 	},
 	{
-		name: "基础 CC 防护", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
+		name: "基础 CC 防护", content: "突刺/4xx/多 UA 任一命中触发滑块挑战，通过后放行", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
 		ptype: "stage2", mode: "off",
 		humanMode: "auto", humanType: "slider", ccEnabled: 1,
 		blockPageID: 9005, // services.builtinHumanVerifyPageID（滑块页，包私有故字面量）
 	},
 	{
-		name: "WAF 请求防护", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
+		name: "WAF 请求防护", content: "CRS 请求方向 16 组规则阻断，记录请求体", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
 		ptype: "stage3", mode: "blocking",
 		crsGroups: `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44","49"]`, logReqBody: 1,
 	},
 	{
-		name: "WAF 响应检测", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
+		name: "WAF 响应检测", content: "CRS 响应方向 9 组规则阻断，检查响应体", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
 		ptype: "stage3", mode: "blocking",
 		crsGroups: `["50","51","52","53","54","55","56","59","80"]`, wafCheckResp: 1,
 	},
 }
 
-// GetDefaultSecurityCatalog 返回默认策略目录（预览弹框数据源，只读）。
+// GetDefaultSecurityCatalog 返回默认策略目录（预览弹框数据源）。
+// Status 为实时库态：列表按名+system=0；策略 missing/exists/dirty
+// （dirty=引用的列表已删，apply 时会删除重建）。
 func GetDefaultSecurityCatalog() DefaultSecurityCatalog {
-	cat := DefaultSecurityCatalog{Lists: defaultIPListSeeds}
+	cat := DefaultSecurityCatalog{}
+	for _, l := range defaultIPListSeeds {
+		item := l
+		item.Status = "missing"
+		var one int
+		if err := DB.QueryRow(`SELECT 1 FROM security_ip_lists WHERE name=? AND system=0`, l.Name).Scan(&one); err == nil {
+			item.Status = "exists"
+		}
+		cat.Lists = append(cat.Lists, item)
+	}
 	for _, sd := range defaultPolicySeeds {
 		// ListRefs/SystemListRefs 恒空切片起底——nil 会序列化为 null，
 		// 前端展开 ...null 直接崩渲染（2026-11-20 用户实测）。
-		cp := DefaultCatalogPolicy{Name: sd.name, Desc: sd.desc, PolicyType: sd.ptype, ListRefs: []string{}, SystemListRefs: []string{}}
+		cp := DefaultCatalogPolicy{Name: sd.name, Desc: sd.desc, PolicyType: sd.ptype, Content: sd.content, ListRefs: []string{}, SystemListRefs: []string{}, Status: "missing"}
 		cp.ListRefs = append(cp.ListRefs, sd.ipWLRefKeys...)
 		cp.ListRefs = append(cp.ListRefs, sd.ipACLRefKeys...)
+		var pid int64
+		if err := DB.QueryRow(`SELECT id FROM security_policies WHERE name=?`, sd.name).Scan(&pid); err == nil {
+			cp.Status = "exists"
+			if !policyRefsValid(pid) {
+				cp.Status = "dirty"
+			}
+		}
 		for _, r := range sd.ipACLRefKeys {
 			if len(r) > 4 && r[:4] == "sys:" {
 				cp.SystemListRefs = append(cp.SystemListRefs, r[4:])
