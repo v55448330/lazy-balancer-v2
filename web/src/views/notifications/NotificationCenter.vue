@@ -217,16 +217,16 @@
                 <span>{{ t('app.notification.rules.eventRulesTitle') }}</span>
               </div>
               <div class="card-header-actions">
+                <template v-if="anyRuleDirty">
+                  <el-button size="small" type="primary" :loading="savingAllRules" @click="saveAllRuleDrafts">{{ t('app.notification.rules.save') }}</el-button>
+                  <el-button size="small" @click="cancelAllRuleDrafts">{{ t('app.notification.rules.cancel') }}</el-button>
+                </template>
                 <div v-if="isAdmin" class="user-pick">
                   <span class="user-pick-label">{{ t('app.notification.rules.userLabel') }}</span>
                   <el-select v-model="rulesUserId" size="small" style="width:160px" @change="() => fetchRules(true)">
                     <el-option v-for="u in adminUsers" :key="u.id" :value="u.id" :label="u.username" />
                   </el-select>
                 </div>
-                <template v-if="anyRuleDirty">
-                  <el-button size="small" type="primary" :loading="savingAllRules" @click="saveAllRuleDrafts">{{ t('app.notification.rules.save') }}</el-button>
-                  <el-button size="small" @click="cancelAllRuleDrafts">{{ t('app.notification.rules.cancel') }}</el-button>
-                </template>
               </div>
             </div>
           </template>
@@ -247,7 +247,7 @@
                   </template>
                   <div class="notif-pick-panel">
                     <el-checkbox-group v-model="ruleDraftOf(asRule(row)).events" size="small" class="notif-pick-group notif-pick-sections">
-                      <div v-for="sec in eventLevelSections(asRule(row))" :key="sec.level" class="notif-level-section">
+                      <div v-for="sec in eventLevelSections(asRule(row))" :key="sec.level" class="notif-level-section" :class="`is-${sec.level}`">
                         <div class="notif-level-head">{{ t(`app.notification.subs.levels.${sec.level}`) }}</div>
                         <div class="notif-level-items">
                           <el-checkbox v-for="ev in sec.events" :key="ev" :value="ev" border size="small">{{ eventTitle(asRule(row), ev) }}</el-checkbox>
@@ -378,16 +378,9 @@
         <el-collapse v-if="tplEditorLang === 'markdown' || tplEditorLang === 'markup'" v-model="tplPreviewOpen" class="tpl-preview-collapse">
           <el-collapse-item name="preview">
             <template #title><DialogSectionHeader :title="t('app.notification.rules.preview')" /></template>
-            <div v-if="tplEditorLang === 'markup'" class="tpl-preview-mode">
-              <el-radio-group v-model="htmlPreviewMode" size="small">
-                <el-radio-button value="render">{{ t('app.notification.rules.previewRender') }}</el-radio-button>
-                <el-radio-button value="source">{{ t('app.notification.rules.previewSource') }}</el-radio-button>
-              </el-radio-group>
-            </div>
-            <!-- HTML：sandbox iframe 渲染；Markdown：渲染为 HTML 展示；其余格式纯文本 pre -->
-            <iframe v-if="tplEditorLang === 'markup' && htmlPreviewMode === 'render'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
-            <div v-else-if="tplEditorLang === 'markdown'" class="tpl-md-preview" v-html="tplPreviewHtml"></div>
-            <pre v-else class="tpl-preview">{{ previewText }}</pre>
+            <!-- 上半部分即正文源码，预览区直接渲染：HTML iframe / Markdown 渲染；不再提供源码切换 -->
+            <iframe v-if="tplEditorLang === 'markup'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
+            <div v-else class="tpl-md-preview" v-html="tplPreviewHtml"></div>
           </el-collapse-item>
         </el-collapse>
       </template>
@@ -409,9 +402,11 @@
           <el-radio-button v-for="f in dailyPreviewFormatOptions" :key="f.value" :value="f.value">{{ f.label }}</el-radio-button>
         </el-radio-group>
       </div>
-      <iframe v-if="dailyPreviewFmt === 'html'" class="daily-html-preview" sandbox="" :srcdoc="dailyPreviewText" :title="t('app.notification.daily.previewTitle')" />
-      <div v-else-if="dailyPreviewFmt === 'markdown'" v-loading="dailyPreviewLoading" class="tpl-md-preview" v-html="dailyPreviewHtml"></div>
-      <pre v-else v-loading="dailyPreviewLoading" class="tpl-preview">{{ dailyPreviewText || t('app.notification.daily.previewEmpty') }}</pre>
+      <div class="daily-preview-body">
+        <iframe v-if="dailyPreviewFmt === 'html'" class="daily-html-preview" sandbox="" :srcdoc="dailyPreviewText" :title="t('app.notification.daily.previewTitle')" />
+        <div v-else-if="dailyPreviewFmt === 'markdown'" v-loading="dailyPreviewLoading" class="tpl-md-preview" v-html="dailyPreviewHtml"></div>
+        <pre v-else v-loading="dailyPreviewLoading" class="tpl-preview">{{ dailyPreviewText || t('app.notification.daily.previewEmpty') }}</pre>
+      </div>
       <template #footer>
         <el-button @click="dailyPreviewVisible = false">{{ t('app.notification.rules.cancel') }}</el-button>
       </template>
@@ -675,7 +670,6 @@ const tplEditingRule = ref<Rule | null>(null)
 const tplChannelTab = ref('') // 通道 ID 字符串
 const tplTexts = ref<Record<string, string>>({}) // 通道 ID → 草稿模板
 const tplFormats = ref<Record<string, string>>({}) // rule 模式：通道 ID → 正文格式（编辑高亮/预览状态）
-const htmlPreviewMode = ref<'render' | 'source'>('render')
 const tplPreviewOpen = ref<string[]>([]) // 预览区默认折叠（防弹框超屏），开弹框时复位
 const savingTpl = ref(false)
 const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{event_title}}', '{{node}}', '{{brand}}']
@@ -1371,7 +1365,6 @@ const openDailyTpl = async (): Promise<void> => {
   for (const c of tplTabChannels.value) drafts[String(c.id)] = dailyTplDrafts.value[c.id] ?? defaultChannelTplFor(c.type, tplLang.value)
   tplTexts.value = drafts
   tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
-  htmlPreviewMode.value = 'render'
   tplPreviewOpen.value = []
   tplDialogVisible.value = true
 }
@@ -1455,7 +1448,6 @@ const editTemplate = async (rule: Rule): Promise<void> => {
   // tab 集=规则已保存的选定通道（未选=全部）；通道选择已前移到表格内联
   const targets = tplTabChannels.value
   tplChannelTab.value = targets.length ? String(targets[0].id) : ''
-  htmlPreviewMode.value = 'render'
   tplPreviewOpen.value = []
   tplDialogVisible.value = true
 }
@@ -1665,6 +1657,15 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-level-section + .notif-level-section { border-top: 1px dashed #eef2f7; padding-top: 12px; }
 .notif-level-head { font-size: 12px; font-weight: 600; color: #6b7280; line-height: 1.4; margin-bottom: 2px; }
 .notif-level-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.notif-level-head { position: relative; padding-left: 12px; }
+.notif-level-head::before { content: ''; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; background: var(--el-color-primary, #409eff); }
+.notif-level-section.is-critical .notif-level-head::before { background: var(--el-color-danger, #f56c6c); }
+.notif-level-section.is-warn .notif-level-head::before { background: var(--el-color-warning, #e6a23c); }
+.notif-level-section.is-info .notif-level-head::before { background: var(--el-color-primary, #409eff); }
+.rule-edit-dialog .el-dialog__body { max-height: calc(100vh - 240px); overflow-y: auto; }
+.daily-preview-dialog .el-dialog__body { max-height: calc(100vh - 240px); overflow-y: auto; }
+.daily-preview-body { height: 420px; max-height: 46vh; overflow: auto; border: 1px solid #eef2f7; }
+.daily-preview-body .daily-html-preview, .daily-preview-body .tpl-preview, .daily-preview-body .tpl-md-preview { height: 100%; max-height: none; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }
 .daily-items .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
