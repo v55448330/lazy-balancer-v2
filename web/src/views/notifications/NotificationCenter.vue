@@ -1663,9 +1663,10 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-level-section.is-critical .notif-level-head::before { background: var(--el-color-danger, #f56c6c); }
 .notif-level-section.is-warn .notif-level-head::before { background: var(--el-color-warning, #e6a23c); }
 .notif-level-section.is-info .notif-level-head::before { background: var(--el-color-primary, #409eff); }
-.rule-edit-dialog .el-dialog__body { max-height: calc(100vh - 240px); overflow-y: auto; }
-.daily-preview-dialog .el-dialog__body { max-height: calc(100vh - 240px); overflow-y: auto; }
-.daily-preview-body { height: 420px; max-height: 46vh; overflow: auto; border: 1px solid #eef2f7; }
+.rule-edit-dialog .el-dialog__body { max-height: calc(100vh - 300px); overflow-y: auto; overflow-x: hidden; }
+.daily-preview-dialog .el-dialog__body { max-height: calc(100vh - 280px); overflow-y: auto; overflow-x: hidden; }
+.daily-preview-body { height: 420px; max-height: 46vh; overflow-y: auto; overflow-x: hidden; border: 1px solid #eef2f7; }
+.daily-preview-body iframe { display: block; width: 100%; height: 100%; border: 0; }
 .daily-preview-body .daily-html-preview, .daily-preview-body .tpl-preview, .daily-preview-body .tpl-md-preview { height: 100%; max-height: none; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }
