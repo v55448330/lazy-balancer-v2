@@ -96,13 +96,13 @@ var catalog = []catalogEntry{
 	{EvtBackupFailed, LevelCritical, true, "备份失败", "自动备份失败：%s"},
 	{EvtRestoreDone, LevelInfo, false, "还原完成", "%s 完成了配置还原"},
 	{EvtRestoreFailed, LevelCritical, true, "还原失败", "配置还原失败：%s"},
-	{EvtBlockedAggregate, LevelInfo, true, "拦截聚合", "%d 分钟内拦截 %d 次（TOP 规则：%s）"},
+	{EvtBlockedAggregate, LevelInfo, true, "拦截聚合", "%s 分钟内拦截 %s 次（TOP 规则：%s）"},
 	{EvtCCTriggered, LevelWarn, true, "CC 防护触发", "%s 命中 CC 异常阈值（%s）"},
 	{EvtAutobanTriggered, LevelWarn, true, "自动封禁触发", "%s 被自动封禁（%s）"},
 	{EvtAutobanExpired, LevelInfo, false, "自动封禁已到期", "%s 的自动封禁已到期解封"},
 	{EvtCertIssued, LevelInfo, true, "证书签发成功", "%s 签发成功（%s）"},
 	{EvtCertFailed, LevelCritical, true, "证书签发失败", "%s 签发失败：%s"},
-	{EvtCertExpiryWarning, LevelWarn, true, "证书临期预警", "%s 将于 %s 到期（剩余 %d 天）"},
+	{EvtCertExpiryWarning, LevelWarn, true, "证书临期预警", "%s 将于 %s 到期（剩余 %s 天）"},
 	{EvtClusterOffline, LevelCritical, true, "集群节点失联", "节点 %s 失联（最后活动 %s）"},
 	{EvtClusterRoleChanged, LevelCritical, true, "集群角色翻转", "节点 %s 角色变更为 %s"},
 	{EvtClusterNodeJoined, LevelInfo, false, "集群节点加入", "节点 %s 已加入集群"},
@@ -115,7 +115,7 @@ var catalog = []catalogEntry{
 	{EvtNotifyChannelDown, LevelWarn, true, "通知通道离线", "通知通道「%s」已离线（%s）——事件将暂存重投"},
 	{EvtNotifyChannelRecovered, LevelInfo, true, "通知通道恢复", "通知通道已恢复（%s），投递正常"},
 	{EvtTaskFailed, LevelWarn, true, "定时任务失败", "任务 %s 执行失败：%s"},
-	{EvtAPIKeyExpiryWarning, LevelWarn, true, "API 密钥临期", "API 密钥「%s」将于 %s 到期（剩余 %d 天）"},
+	{EvtAPIKeyExpiryWarning, LevelWarn, true, "API 密钥临期", "API 密钥「%s」将于 %s 到期（剩余 %s 天）"},
 }
 
 // defaultSubscribedFor 新用户默认订阅集：critical+warn 全开，info 与日报默认关。

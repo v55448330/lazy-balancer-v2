@@ -23,7 +23,7 @@ func richValues() map[string]string {
 func TestRenderDailyRich_itemsAndTrim(t *testing.T) {
 	items := []string{"requests", "top_ips", "cert_expiring", "uptime", "threat_db", "login_status"}
 	md := renderDailyFromValues("2026-11-19", richValues(), items, "markdown")
-	for _, want := range []string{"· 45.33.32.9 ×321", "a.com · 2026-11-25", "32 天 4 小时", "CRS 4.0", "MFA失败 1", "**请求数**：1200"} {
+	for _, want := range []string{"- 45.33.32.9 ×321", "a.com · 2026-11-25", "32 天 4 小时", "CRS 4.0", "MFA失败 1", "| 请求数 | 1200 |"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown 缺富项 %q:\n%s", want, md)
 		}

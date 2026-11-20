@@ -44,7 +44,7 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 	}
 
 	qq := renderDailyForChannel(msg, "qq", "")
-	if !strings.Contains(qq, "**请求数**：1200") || strings.Contains(qq, "攻击") {
+	if !strings.Contains(qq, "| 请求数 | 1200 |") || strings.Contains(qq, "攻击") {
 		t.Fatalf("qq 渲染非 markdown 表格（QQ 实测支持表格）或未裁剪: %s", qq)
 	}
 
@@ -65,7 +65,7 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 func TestRenderDailyForChannel_styleOverride(t *testing.T) {
 	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil), Title: "每日日报"}
 	got := renderDailyForChannel(msg, "qq", "text")
-	if !strings.Contains(got, "**请求数**：1200") {
+	if !strings.Contains(got, "| 请求数 | 1200 |") {
 		t.Fatalf("qq 协议固定应 markdown（样式 text 不覆盖）: %q", got)
 	}
 	// 非机器人：通道卡 daily_format=text 覆盖自动映射（webhook 缺省 json）。

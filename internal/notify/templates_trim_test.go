@@ -34,11 +34,33 @@ func TestRenderDailyForChannel_qqProtocolMarkdown(t *testing.T) {
 	// 机器人协议固定：qq 缺省=markdown 表格，通道样式 text 不得覆盖。
 	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil)}
 	got := renderDailyForChannel(msg, "qq", "text")
-	if !strings.Contains(got, "**请求数**") {
-		t.Fatalf("qq 日报应为精美非表格 markdown（协议固定）: %q", got)
+	if !strings.Contains(got, "| 请求数 |") {
+		t.Fatalf("qq 日报应为 markdown 表格（协议固定）: %q", got)
 	}
 	wx := renderDailyForChannel(msg, "wx_clawbot", "markdown")
 	if strings.Contains(wx, "|") {
 		t.Fatalf("wx 日报应为纯文本（协议固定）: %q", wx)
+	}
+}
+
+func TestRenderTitle_zeroVerbNoExtra(t *testing.T) {
+	// 标题 0 动词 + 测试 6 参：不得产出 %!(EXTRA …)。
+	entry := catalogEntry{ID: EvtClusterOffline, TitleFormat: "集群节点失联", BodyFormat: "节点 %s 失联（最后活动 %s）"}
+	evt := Event{Type: EvtClusterOffline, Fields: map[string]string{"1": "example.com", "2": "示例详情", "3": "样例来源", "4": "3", "5": "样例", "6": "样例"}}
+	if got := renderTitle(entry, evt); got != "集群节点失联" {
+		t.Fatalf("0 动词标题超配: %q", got)
+	}
+	if got := renderBody(entry, evt); strings.Contains(got, "EXTRA") {
+		t.Fatalf("正文超配: %q", got)
+	}
+}
+
+func TestRenderBody_stringDaysNoVerbMismatch(t *testing.T) {
+	// Fields 全字符串：%d 动词会产 %!d(string=3)；目录已改 %s。
+	entry, _ := catalogByID(EvtAPIKeyExpiryWarning)
+	evt := Event{Type: EvtAPIKeyExpiryWarning, Fields: map[string]string{"1": "test1", "2": "2026-11-23", "3": "3"}}
+	got := renderBody(entry, evt)
+	if strings.Contains(got, "%!") || !strings.Contains(got, "剩余 3 天") {
+		t.Fatalf("字符串参数动词不匹配: %q", got)
 	}
 }

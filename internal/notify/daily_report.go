@@ -448,27 +448,33 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		fmt.Fprintf(&b, `<p style="margin:16px 0 0;color:#9ca3af;font-size:12px;text-align:center;">此邮件由 %s 通知中心自动发送 · %s</p></div></div>`, html.EscapeString(brand), now)
 		return b.String()
 	case "markdown":
-		// QQ 官方 markdown 不渲染表格——改用分节标题+加粗键值+多值独立行的
-		// 精美非表格形态（现代直观，协议兼容）。
+		// QQ 原生 markdown 支持 #/## 标题、**加粗**、> 引用、- 列表（官方文档），
+		// 表格经用户实测可渲染。标量入指标表，多值用加粗标签+无序列表拆行。
 		var b strings.Builder
-		fmt.Fprintf(&b, "## 📊 %s 每日报告\n> %s · 生成于 %s\n\n", brand, date, now)
+		fmt.Fprintf(&b, "# 📊 %s 每日报告\n> %s · 生成于 %s\n\n", brand, date, now)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {
 				continue
 			}
-			fmt.Fprintf(&b, "### %s %s\n", sec.emoji, sec.title)
+			fmt.Fprintf(&b, "## %s %s\n\n", sec.emoji, sec.title)
+			var tbl, lists strings.Builder
 			for _, r := range rows {
 				if strings.Contains(r[1], "\n") {
-					fmt.Fprintf(&b, "**%s**\n", r[0])
+					fmt.Fprintf(&lists, "**%s**\n", r[0])
 					for _, ln := range strings.Split(r[1], "\n") {
-						fmt.Fprintf(&b, "· %s\n", ln)
+						fmt.Fprintf(&lists, "- %s\n", ln)
 					}
 				} else {
-					fmt.Fprintf(&b, "**%s**：%s\n", r[0], r[1])
+					fmt.Fprintf(&tbl, "| %s | %s |\n", r[0], r[1])
 				}
 			}
-			b.WriteString("\n")
+			if tbl.Len() > 0 {
+				b.WriteString("| 指标 | 数值 |\n| --- | --- |\n" + tbl.String() + "\n")
+			}
+			if lists.Len() > 0 {
+				b.WriteString(lists.String() + "\n")
+			}
 		}
 		fmt.Fprintf(&b, "> %s · %s\n", brand, now)
 		return b.String()

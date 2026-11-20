@@ -29,10 +29,13 @@ func renderBody(e catalogEntry, evt Event) string {
 }
 
 // trimArgs 截断参数至模板动词数——测试样例统一供 6 参而各事件模板动词数
-// 不同，超配会产出 %!(EXTRA …) 垃圾后缀；按动词数取前 N 个参数。
+// 不同（含 0 动词标题），超配会产出 %!(EXTRA …)；0 动词不传参。
 func trimArgs(format string, args []any) []any {
 	n := strings.Count(format, "%s") + strings.Count(format, "%d") + strings.Count(format, "%v")
-	if n <= 0 || n >= len(args) {
+	if n == 0 {
+		return nil
+	}
+	if n >= len(args) {
 		return args
 	}
 	return args[:n]
