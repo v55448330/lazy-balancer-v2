@@ -126,7 +126,9 @@
               <el-button v-if="bindPhase === 'idle' && !editTarget" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               <el-button v-if="bindPhase === 'idle' && editTarget" size="small" type="primary" plain :loading="rebindStarting" :disabled="writeBlocked" @click="startRebind">{{ t('app.notification.channels.rebindAction') }}</el-button>
               <div v-if="bindPhase === 'idle' && editTarget" class="bind-hint">{{ t('app.notification.channels.rebindIdleHint') }}</div>
-              <el-alert v-if="rebindActive" type="warning" :closable="false" show-icon class="bind-success-alert">
+              <!-- 重绑暂停提示：连接成功前只说暂停+扫码，不提前要求发送「绑定测试」
+                   （指令延迟到 awaiting_message 阶段——用户裁定 2026-11-21）。 -->
+              <el-alert v-if="rebindActive && bindPhase !== 'awaiting_message' && bindPhase !== 'confirmed'" type="warning" :closable="false" show-icon class="bind-success-alert">
                 <template #title><span v-for="(p, i) in bindParts(t('app.notification.channels.rebindPausedHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></template>
               </el-alert>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
@@ -141,7 +143,7 @@
                 <template #title>{{ t('app.notification.channels.bindConnecting') }}</template>
               </el-alert>
               <el-alert v-if="bindPhase === 'awaiting_message'" type="warning" :closable="false" show-icon class="bind-success-alert">
-                <template #title><span v-for="(p, i) in bindParts(t('app.notification.channels.bindAwaitMsg'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></template>
+                <template #title><span v-for="(p, i) in bindParts(t(rebindActive ? 'app.notification.channels.rebindAwaitMsg' : 'app.notification.channels.bindAwaitMsg'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></template>
               </el-alert>
               <el-alert v-if="bindPhase === 'confirmed'" type="success" :closable="false" show-icon class="bind-success-alert">
                 <template #title>{{ t('app.notification.channels.bindConfirmed') }}</template>

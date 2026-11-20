@@ -407,6 +407,61 @@ func TestAutobanStatus_banEffectiveTruthTable(t *testing.T) {
 	})
 }
 
+// ban_missing 细分缺失环节（2026-11-21 用户裁定）：策略未引用名单=policy
+// （提示创建/引用）；策略就绪但无规则绑定=binding（提示关联规则——不得再
+// 引导去创建策略）。
+func TestAutobanStatus_banMissingDistinguishesLink(t *testing.T) {
+	seed := func(t *testing.T, withPolicy, withBinding bool) string {
+		t.Helper()
+		router := newAutobanTestEnv(t)
+		seedAutobanListEntries(t, `[{"value":"198.51.100.8"}]`)
+		listID := autobanPresetID(t)
+		if withPolicy {
+			res, err := db.DB.Exec(`INSERT INTO security_policies (name,enabled,ip_acl_enabled,ip_acl_mode,ip_acl_list_refs) VALUES ('ban-missing',1,1,'deny',?)`, fmt.Sprintf("[%d]", listID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			policyID, _ := res.LastInsertId()
+			if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_bm','bm','http','bm.test',8080,1)`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_bm','127.0.0.1',9000,1,1,'http')`); err != nil {
+				t.Fatal(err)
+			}
+			if withBinding {
+				if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_bm',?)`, policyID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		response := getRequest(t, router, "/security/autoban/status")
+		var payload struct {
+			Data struct {
+				BanMissing string `json:"ban_missing"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload.Data.BanMissing
+	}
+	t.Run("no policy referencing list", func(t *testing.T) {
+		if got := seed(t, false, false); got != "policy" {
+			t.Fatalf("ban_missing=%q want policy", got)
+		}
+	})
+	t.Run("policy ready but unbound", func(t *testing.T) {
+		if got := seed(t, true, false); got != "binding" {
+			t.Fatalf("ban_missing=%q want binding", got)
+		}
+	})
+	t.Run("fully wired", func(t *testing.T) {
+		if got := seed(t, true, true); got != "" {
+			t.Fatalf("ban_missing=%q want empty", got)
+		}
+	})
+}
+
 // autobanListReferenced / autobanBanEffectiveIP 的 fail-closed 构造不变量：
 // 未携带名单 id 的状态（构造缺失）必须按「已引用/已生效」处理，不弹误导性
 // 黄条。读取故障在 GetAutobanStatus 更早的 AutobanListEntries 已 500 返回，

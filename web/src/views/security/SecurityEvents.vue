@@ -77,7 +77,7 @@
       <!-- 未生效黄条：判据单源 utils/autobanStatus（enabled ∧ ban_effective===false，
            IP 名单通道：名单为空或未被启用中的 deny 策略引用） -->
       <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">{{ t('app.security.events.ineffectiveNotice') }}</span>
+        <span class="info-note-desc">{{ t(autobanStatus?.ban_missing === 'binding' ? 'app.security.events.ineffectiveBindingNotice' : 'app.security.events.ineffectiveNotice') }}</span>
       </div>
       <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
            运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
@@ -636,6 +636,9 @@ interface AutobanStatus {
   // 后端 list_referenced 为热路径资格门的四面引用集（含白名单/受信代理/CRS
   // 排除），不能区分「引用」与「拦截生效」——纯后端内部字段，本卡不声明不消费。
   ban_effective: boolean
+  // 缺失环节细分：policy=无 deny 策略引用名单（引导创建）；binding=策略就绪
+  // 但未关联规则（引导关联规则——不得引导去创建策略）。旧后端缺省 → 走 policy 文案。
+  ban_missing?: string
   // 累犯披露键（旧后端缺省 → 档位按 off、升级数按 0，防御式消费）。
   escalation?: string; escalated_count?: number
   // 证据分层计数键（旧后端缺省 → classic/4/0.4，防御式消费）。

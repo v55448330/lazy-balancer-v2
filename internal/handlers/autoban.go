@@ -132,8 +132,13 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		// 拦截、无 xdb 降级空串、永不报错）。
 		suggestions[i].Location = enrichIPLocation(suggestions[i].IP)
 	}
-	// 封禁生效判定（ban_effective=IP 名单引用通道）。
+	// 封禁生效判定（ban_effective=IP 名单引用通道）+ 缺失环节细分（用户裁定
+	// 2026-11-21：binding 缺失时提示关联规则，不得引导去创建策略）。
 	ipEffective := h.autobanBanEffectiveIP(preset)
+	banMissing := ""
+	if !ipEffective {
+		banMissing = h.autobanMissingLink(preset)
+	}
 	resp := gin.H{
 		"enabled":              cfg.Enabled,
 		"dry_run":              cfg.DryRun,
@@ -155,6 +160,7 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		// 四面引用集（含白名单/受信代理/CRS 排除），不能区分「引用」与
 		// 「拦截生效」，曾抑制唯一的不生效告警。
 		"ban_effective":    ipEffective,
+		"ban_missing":      banMissing,
 		"ban_effective_ip": ipEffective,
 		"tracked_ips":      services.AutobanTrackedIPs(),
 		"suggestions":      suggestions,
@@ -331,4 +337,25 @@ func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 		return true
 	}
 	return count > 0
+}
+
+// autobanMissingLink 细分封禁链路缺失环节：policy=无启用 deny 策略引用名单
+// （提示创建/引用）；binding=策略就绪但未关联到启用 HTTP 规则+启用上游（提示
+// 关联规则）。查询失败返回空（fail-closed，黄条侧已有 ban_effective 兜底）。
+func (h *Handlers) autobanMissingLink(preset autobanPresetListState) string {
+	if preset.id <= 0 {
+		return ""
+	}
+	var policyReady int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies p
+		WHERE COALESCE(p.enabled,0)=1 AND COALESCE(p.ip_acl_enabled,0)=1 AND COALESCE(p.ip_acl_mode,'')='deny'
+		  AND json_valid(COALESCE(p.ip_acl_list_refs,'[]'))
+		  AND EXISTS (SELECT 1 FROM json_each(COALESCE(p.ip_acl_list_refs,'[]')) je WHERE je.value=?)`,
+		preset.id).Scan(&policyReady); err != nil {
+		return ""
+	}
+	if policyReady == 0 {
+		return "policy"
+	}
+	return "binding"
 }

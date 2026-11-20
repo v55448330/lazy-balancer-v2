@@ -367,7 +367,7 @@
       </template>
       <!-- 未生效黄条：判据单源 utils/autobanStatus（enabled ∧ ban_effective===false，
            IP 名单通道：名单为空或未被启用中的 deny 策略引用） -->
-      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="autoban-alert" :title="t('app.security.overview.autoban.ineffective')" />
+      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="autoban-alert" :title="t(autobanStatus?.ban_missing === 'binding' ? 'app.security.overview.autoban.ineffectiveBinding' : 'app.security.overview.autoban.ineffective')" />
       <el-alert v-if="autobanStatus?.enabled && autobanStatus?.feed_degraded" type="warning" show-icon :closable="false" class="autoban-alert" :title="autobanStatus?.feed_degraded_reason || t('app.security.overview.autoban.feedDegraded')" />
       <div class="autoban-body">
         <div class="autoban-stats">
@@ -787,7 +787,7 @@ interface AutobanSuggestion { ip: string; count: number; ip_location?: string; w
 interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   duration: string; scope: string; banned_today: number; list_entries: number
-  ban_effective: boolean; tracked_ips: number; suggestions: AutobanSuggestion[]
+  ban_effective: boolean; ban_missing?: string; tracked_ips: number; suggestions: AutobanSuggestion[]
   is_master: boolean; feed_degraded: boolean; feed_degraded_reason: string
   // 累犯披露键（旧后端缺省 → 档位按 off、升级数按 0，防御式消费）。
   escalation?: string; escalated_count?: number
