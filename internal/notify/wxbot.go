@@ -93,6 +93,42 @@ func saveWxBotCred(cred wxBotCred) error {
 	return SetSettings(map[string]string{KeyWxBotCred: string(raw)})
 }
 
+// pruneStaleGlobalWx 脏全局凭据治理：全局 bot 登录态过期（fatal）且无任何微信
+// 通道钉住它时，清除全局 cred（避免过期 bot 残留枚举产生掉线告警噪声）。
+// 多 bot 通道合法（钉住凭据不受影响）；仅清理无引用的过期全局 bot。
+func pruneStaleGlobalWx() {
+	g, ok := loadWxBotCred()
+	if !ok {
+		return
+	}
+	key := wxCredKey(g)
+	rows, err := db.DB.Query(`SELECT target FROM notification_channels WHERE type='wx_clawbot'`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var target string
+		if rows.Scan(&target) != nil {
+			continue
+		}
+		var t struct {
+			AccountID string `json:"account_id"`
+			Token     string `json:"token"`
+		}
+		if json.Unmarshal([]byte(target), &t) == nil {
+			if t.AccountID == key || (t.AccountID == "" && t.Token == key) {
+				return // 仍被通道引用，不清理
+			}
+		}
+	}
+	connected, lastErr, _ := WxLinkStatusFor(key)
+	if connected || !strings.Contains(lastErr, "登录态过期") {
+		return
+	}
+	_ = SetSettings(map[string]string{KeyWxBotCred: ""})
+}
+
 // wxCredKey bot 唯一键（account_id 优先，缺省 token）：在线态登记/游标/
 // context_token 命名空间/枚举去重均用此键。
 func wxCredKey(cred wxBotCred) string {
@@ -646,6 +682,7 @@ func RunWxBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 	defer wg.Wait() // Run 同步等待全部 bot 会话 goroutine 收口（引擎形态②子协程）
 	workers := map[string]*wxBotWorker{}
 	reconcile := func() {
+		pruneStaleGlobalWx() // 先治理脏全局 cred，再枚举（过期无引用 bot 不再上线）
 		bots := wxEnumerateBots()
 		desired := map[string]wxBotCred{}
 		for _, b := range bots {

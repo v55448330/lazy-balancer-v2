@@ -167,6 +167,10 @@
                 <span>{{ t('app.notification.rules.dailyTitle') }}</span>
               </div>
               <div class="card-header-actions">
+                <template v-if="dailyDraftDirty">
+                  <el-button size="small" link type="primary" :loading="savingDaily" @click="saveDailyDraft">{{ t('app.notification.rules.save') }}</el-button>
+                  <el-button size="small" link @click="cancelDailyDraft">{{ t('app.notification.rules.cancel') }}</el-button>
+                </template>
                 <el-button size="small" link type="primary" @click="openDailyConfig">{{ t('app.notification.daily.configBtn') }}</el-button>
                 <el-button size="small" link type="primary" :loading="testingDaily" @click="testDaily">{{ t('app.notification.daily.testSend') }}</el-button>
                 <el-button size="small" link type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
@@ -174,27 +178,33 @@
               </div>
             </div>
           </template>
-          <div class="daily-body">
+          <div v-if="dailyDraft" class="daily-body">
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.dailySendTime') }}</span>
-              <span class="daily-value">{{ dailyRule.send_time || '09:00' }}</span>
+              <el-time-select v-model="dailyDraft.send_time" start="00:00" end="23:30" step="00:30" size="small" style="width: 120px" />
               <span class="form-hint">{{ t('app.notification.rules.dailyTimeHint') }}</span>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
-              <div class="tag-wrap tag-wrap-limit">
-                <el-tag v-for="it in (dailyRule.items || [])" :key="it" size="small" effect="plain">{{ dailyItemLabel(it) }}</el-tag>
-              </div>
+              <el-checkbox-group v-model="dailyDraft.items" size="small" class="daily-items">
+                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
+              </el-checkbox-group>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.sendTo') }}</span>
-              <div class="tag-wrap">
-                <el-tag v-for="ch in dailyTargetChannels" :key="ch.id" size="small" effect="plain">{{ ch.name }}</el-tag>
-                <span v-if="dailyRule.channel_ids && dailyRule.channel_ids.length === 0" class="ev-more">{{ t('app.notification.rules.noDelivery') }}</span>
-                <span v-else-if="!userChannels.length" class="ev-more">{{ t('app.notification.rules.noChannelsHint') }}</span>
+              <div class="daily-ch-select">
+                <el-checkbox-group v-model="dailyDraft.channel_ids">
+                  <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.last_test_ok !== true" :title="ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined">
+                    {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
+                  </el-checkbox>
+                </el-checkbox-group>
+                <div class="form-hint">{{ t('app.notification.rules.channelSelectHint') }}</div>
+                <span v-if="!userChannels.length" class="ev-more">{{ t('app.notification.rules.noChannelsHint') }}</span>
+                <div class="daily-warn-slot">
+                  <div v-if="dailyDraft.channel_ids.length === 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.rules.noDeliveryWarn') }}</span></div>
+                </div>
               </div>
             </div>
-            <span class="form-hint">{{ t('app.notification.daily.configHint') }}</span>
           </div>
         </el-card>
 
@@ -206,7 +216,7 @@
                 <span>{{ t('app.notification.rules.eventRulesTitle') }}</span>
               </div>
               <div v-if="isAdmin" class="card-header-actions">
-                <el-select v-model="rulesUserId" size="small" style="width:160px" @change="fetchRules">
+                <el-select v-model="rulesUserId" size="small" style="width:160px" @change="() => fetchRules(true)">
                   <el-option v-for="u in adminUsers" :key="u.id" :value="u.id" :label="u.username" />
                 </el-select>
                 <span class="privacy-hint">{{ t('app.notification.rules.privacyHint') }}</span>
@@ -221,9 +231,11 @@
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.events')" min-width="280">
               <template #default="{ row }">
-                <div class="tag-wrap">
-                  <el-tag v-for="ev in (row.events || [])" :key="ev" size="small" effect="plain" :type="eventTagType(asRule(row), ev)">{{ eventTitle(asRule(row), ev) }}</el-tag>
-                </div>
+                <el-select v-model="ruleDraftOf(asRule(row)).events" multiple filterable size="small" class="inline-rule-select" collapse-tags collapse-tags-tooltip :max-collapse-tags="2" :placeholder="t('app.notification.rules.events')">
+                  <el-option-group :label="eventGroup(row.title)">
+                    <el-option v-for="ev in rowEventOptions(asRule(row))" :key="ev" :value="ev" :label="eventTitle(asRule(row), ev)" />
+                  </el-option-group>
+                </el-select>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.minLevel')" width="120">
@@ -231,19 +243,21 @@
                 <span>{{ t('app.notification.rules.minLevel') }}<FieldHelpIcon :content="t('app.notification.rules.minLevelHint')" /></span>
               </template>
               <template #default="{ row }">
-                <el-select v-model="row.min_level" size="small" style="width:96px" @change="saveRuleField(asRule(row))">
+                <el-select v-model="ruleDraftOf(asRule(row)).min_level" size="small" style="width:96px">
                   <el-option value="info" :label="t('app.notification.subs.levels.info')" />
                   <el-option value="warn" :label="t('app.notification.subs.levels.warn')" />
                   <el-option value="critical" :label="t('app.notification.subs.levels.critical')" />
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.sendTo')" min-width="130">
+            <el-table-column :label="t('app.notification.rules.sendTo')" min-width="200">
               <template #default="{ row }">
-                <span v-if="row.channel_ids && row.channel_ids.length === 0" class="ev-more">{{ t('app.notification.rules.noDelivery') }}</span>
-                <div v-else class="tag-wrap">
-                  <el-tag v-for="ch in (row.channels || [])" :key="ch.id" size="small" effect="plain">{{ ch.name }}</el-tag>
-                </div>
+                <el-select v-model="ruleDraftOf(asRule(row)).channel_ids" multiple size="small" class="inline-rule-select" collapse-tags collapse-tags-tooltip :max-collapse-tags="2" :placeholder="t('app.notification.rules.noDelivery')">
+                  <el-option v-for="ch in userChannels" :key="ch.id" :value="ch.id" :label="ch.name" :disabled="ch.last_test_ok !== true">
+                    <span>{{ ch.name }}（{{ channelTypeLabel(ch.type) }}）</span>
+                    <span v-if="ch.last_test_ok !== true" class="ch-untested-hint">{{ t('app.notification.rules.channelUntestedHint') }}</span>
+                  </el-option>
+                </el-select>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.notification.rules.bodyTemplate')" width="90">
@@ -254,8 +268,10 @@
             <el-table-column :label="t('app.notification.rules.enabled')" width="65">
               <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="toggleRule(asRule(row))" /></template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.actions')" width="80" fixed="right">
+            <el-table-column :label="t('app.notification.rules.actions')" width="150" fixed="right">
               <template #default="{ row }">
+                <el-button v-if="ruleDraftDirty(asRule(row))" size="small" link type="primary" :loading="savingRuleId === row.id" @click="saveRuleDraft(asRule(row))">{{ t('app.notification.rules.save') }}</el-button>
+                <el-button v-if="ruleDraftDirty(asRule(row))" size="small" link @click="cancelRuleDraft(asRule(row))">{{ t('app.notification.rules.cancel') }}</el-button>
                 <el-button size="small" link type="primary" :loading="testingRuleId === row.id" @click="testRule(asRule(row))">{{ t('app.notification.rules.test') }}</el-button>
               </template>
             </el-table-column>
@@ -275,30 +291,15 @@
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 模板弹框（事件规则与日报每通道共享）：rule 模式=接收通道+每通道规则模板；
-         daily 模式=通道正文模板（style_config：机器人 content_template/webhook payload_template/email body_template）。
+    <!-- 模板弹框（事件规则与日报每通道共享）：rule 模式=每通道规则模板（接收通道已前移到
+         事件规则表格内联编辑）；daily 模式=通道正文模板（style_config：机器人 content_template/webhook payload_template/email body_template）。
          机器人格式协议固定（仅高亮/预览样式）；webhook/email 格式可选。 -->
     <el-dialog v-model="tplDialogVisible" append-to-body class="dialog-body-inset rule-edit-dialog" width="min(860px, 94vw)" top="5vh">
       <template #header>
         <DialogHeader :icon="Bell" :title="t('app.notification.rules.editTemplateTitle')" :subtitle="tplMode === 'rule' ? (tplEditingRule?.title || '') : (tplActiveChannel?.name || '')" tone="primary" />
       </template>
 
-      <!-- 接收通道（rule 模式）：勾选=仅发选定通道；全不选=不投递（保存即生效） -->
-      <template v-if="tplMode === 'rule'">
-        <div class="tpl-section-label">{{ t('app.notification.rules.sendTo') }}</div>
-        <div class="rule-ch-select">
-          <el-checkbox-group v-model="tplSelectedChannels">
-            <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.last_test_ok !== true" :title="ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined">
-              {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
-            </el-checkbox>
-          </el-checkbox-group>
-          <div class="form-hint">{{ t('app.notification.rules.channelSelectHint') }}</div>
-          <div v-if="tplSelectedChannels.length === 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.rules.noDeliveryWarn') }}</span></div>
-        </div>
-        <el-divider />
-      </template>
-
-      <!-- 每通道模板：tab=目标通道（rule 模式=选定通道，未选=全部；daily 模式=全部通道） -->
+      <!-- 每通道模板：tab=目标通道（rule 模式=规则已保存的选定通道，未选=全部；daily 模式=全部通道） -->
       <template v-if="userChannels.length">
         <el-radio-group v-model="tplChannelTab" size="small" class="tpl-channel-switch">
           <el-radio-button v-for="ch in tplTabChannels" :key="ch.id" :value="String(ch.id)">{{ ch.name }}</el-radio-button>
@@ -363,41 +364,14 @@
       </template>
     </el-dialog>
 
-    <!-- 日报配置弹窗：基本配置（时间/项目/目标通道）+ 每通道格式与正文模板入口。
-         机器人协议固定（QQ=Markdown 高亮/微信=纯文本），webhook/email 格式可选。 -->
+    <!-- 日报配置弹窗：每通道格式与正文模板入口（投递时间/包含项目/目标通道已前移到
+         每日摘要卡内联编辑）。机器人协议固定（QQ=Markdown 高亮/微信=纯文本），webhook/email 格式可选。 -->
     <el-dialog v-model="dailyConfigVisible" class="dialog-body-inset daily-config-dialog" width="min(860px, 94vw)" top="5vh">
       <template #header>
-        <DialogHeader :icon="Calendar" :title="t('app.notification.daily.configTitle')" :subtitle="t('app.notification.daily.configSubtitle')" tone="primary" />
+        <DialogHeader :icon="Calendar" :title="t('app.notification.daily.configTitle')" tone="primary" />
       </template>
       <div v-loading="dailyConfigLoading" class="daily-config-body">
         <template v-if="dailyRule">
-          <DialogSectionHeader :title="t('app.notification.daily.basicSection')" />
-          <div class="daily-config-basic">
-            <div class="daily-field">
-              <span class="daily-label">{{ t('app.notification.rules.dailySendTime') }}</span>
-              <el-time-select v-model="dailyRule.send_time" start="00:00" end="23:30" step="00:30" size="small" style="width: 120px" @change="saveRuleField(dailyRule)" />
-              <span class="form-hint">{{ t('app.notification.rules.dailyTimeHint') }}</span>
-            </div>
-            <div class="daily-field">
-              <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
-              <el-checkbox-group v-model="dailyRule.items" size="small" class="daily-items" @change="saveDailyItems(dailyRule)">
-                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
-              </el-checkbox-group>
-            </div>
-            <div class="daily-field">
-              <span class="daily-label">{{ t('app.notification.daily.channelsLabel') }}</span>
-              <div class="daily-ch-select">
-                <el-checkbox-group v-model="dailyChannelSelection" @change="saveDailyChannels(dailyRule)">
-                  <el-checkbox v-for="ch in userChannels" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.last_test_ok !== true" :title="ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined">
-                    {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
-                  </el-checkbox>
-                </el-checkbox-group>
-                <div class="form-hint">{{ t('app.notification.rules.channelSelectHint') }}</div>
-                <div v-if="dailyChannelSelection.length === 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.rules.noDeliveryWarn') }}</span></div>
-              </div>
-            </div>
-          </div>
-          <el-divider />
           <DialogSectionHeader :title="t('app.notification.daily.channelSection')" :description="t('app.notification.daily.botFormatHint')" class="daily-section-head" />
           <div class="daily-config-rows">
             <!-- 单行协调布局：名+类型 tag 左、格式右、编辑/预览行内 -->
@@ -446,7 +420,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Calendar, Bell, ChatDotRound, CircleCheckFilled, DataAnalysis, Odometer, TrendCharts } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -455,7 +429,7 @@ import VChart from 'vue-echarts'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import { axisChartBase, barSeries, lineSeries, pieChartBase } from '@/utils/chartBase'
 import { securityActionColors } from '@/utils/chartTheme'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { hasOwn } from '@/utils/hasOwn'
 import type { NotificationChannel } from '@/types/notifications.ts'
 import { useAuthStore } from '@/stores/auth'
@@ -480,6 +454,8 @@ interface Rule {
   body_template: string; enabled: boolean
   items?: string[]; formats?: Record<string, string>
 }
+// 事件目录行（rules 端点返回；内联事件选项数据源，按 group 分组）
+interface CatalogEvent { id: string; title: string; level: string; group: string }
 
 // 事件可读标题多语言：优先当前语言 eventTitles 映射（tm 原始对象索引，键含点号
 // 不走 t 路径解析），回退后端 catalog title，再回退事件键。禁止裸键展示。
@@ -493,19 +469,19 @@ const eventGroup = (group: string): string => {
   const m = (tm('app.notification.eventGroups') || {}) as Record<string, string>
   return hasOwn(m, group) ? m[group] : group
 }
-// 事件标签按目录默认级别配色（info=蓝/warn=橙/critical=红），直观传达分级。
-const eventTagType = (row: Rule, ev: string): 'info' | 'warning' | 'danger' => {
-  const lv = row.event_levels?.[ev]
-  if (lv === 'critical') return 'danger'
-  if (lv === 'warn') return 'warning'
-  return 'info'
-}
 
 const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
 const rulesUserId = ref<number>(0) // 管理员视角用户（0=未初始化，adminUsers 到达后默认本人）；非管理员恒本人
 const adminUsers = ref<{ id: number; username: string }[]>([])
 const channelDist = ref<{ type: string; count: number }[]>([])
 const userChannels = ref<RuleChannel[]>([])
+const eventCatalog = ref<CatalogEvent[]>([])
+// 行事件选项=该行所属 catalog 分组的事件（group: 端点按组写订阅）；
+// catalog 未到达时回退规则自带 events。
+const rowEventOptions = (rule: Rule): string[] => {
+  const ids = eventCatalog.value.filter(e => e.group === rule.title).map(e => e.id)
+  return ids.length ? ids : (rule.events ?? [])
+}
 
 // 7 天投递趋势（ECharts：成功/失败堆叠柱 + 成功率折线，SecurityOverview/Dashboard 同构）
 const trendData = ref<{ date: string; total: number; sent: number; rate: number }[]>([])
@@ -645,11 +621,10 @@ const dailyFormatLabel = (v: string): string => {
 const dailyFormatOptions = computed(() => ['auto', 'markdown', 'text', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) })))
 
 // ===== 模板弹框（事件规则 + 日报每通道共享） =====
-// rule 模式=接收通道选择+每通道规则模板；daily 模式=通道正文模板（style_config）。
+// rule 模式=每通道规则模板（接收通道已前移到事件规则表格内联编辑）；daily 模式=通道正文模板（style_config）。
 const tplDialogVisible = ref(false)
 const tplMode = ref<'rule' | 'daily'>('rule')
 const tplEditingRule = ref<Rule | null>(null)
-const tplSelectedChannels = ref<number[]>([])
 const tplChannelTab = ref('') // 通道 ID 字符串
 const tplTexts = ref<Record<string, string>>({}) // 通道 ID → 草稿模板
 const tplFormats = ref<Record<string, string>>({}) // rule 模式：通道 ID → 正文格式（编辑高亮/预览状态）
@@ -659,11 +634,13 @@ const savingTpl = ref(false)
 const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{event_title}}', '{{node}}', '{{brand}}']
 const tplFormatOptions = ['text', 'markdown', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
 
-// 模板 tab 通道集：rule 模式=选定通道（未选=全部，仍可编辑模板，保存后不投递）；daily 模式=全部通道
+// 模板 tab 通道集：rule 模式=规则已保存的选定通道∩userChannels（未选/缺省=全部，
+// 仍可编辑模板）；daily 模式=全部通道。通道选择不再在弹框内编辑。
 const tplTabChannels = computed<RuleChannel[]>(() => {
   if (tplMode.value === 'daily') return userChannels.value
-  if (tplSelectedChannels.value.length === 0) return userChannels.value
-  return userChannels.value.filter(ch => tplSelectedChannels.value.includes(ch.id))
+  const ids = tplEditingRule.value?.channel_ids
+  if (ids === undefined || ids === null || ids.length === 0) return userChannels.value
+  return userChannels.value.filter(ch => ids.includes(ch.id))
 })
 const tplActiveChannel = computed(() => tplTabChannels.value.find(ch => String(ch.id) === tplChannelTab.value) ?? tplTabChannels.value[0])
 const tplText = computed({
@@ -816,12 +793,12 @@ const tplLengthLimit = computed<number>(() => {
   return 0
 })
 
-const fetchRules = async (): Promise<void> => {
+const fetchRules = async (reseedDrafts: boolean): Promise<void> => {
   loading.value = true
   try {
     // 默认当前用户；管理员可选其他用户（规则/通道按用户区分，概览才全平台）
     const rulesUrl = isAdmin.value && rulesUserId.value > 0 ? `/notification/rules?user_id=${rulesUserId.value}` : '/notification/rules'
-    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; daily_items?: { id: string; label: string }[] } }>(rulesUrl)
+    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; catalog?: CatalogEvent[]; daily_items?: { id: string; label: string }[] } }>(rulesUrl)
     rules.value = res.data?.rules ?? []
     // 最低级别预选：空值回退目录默认级别 info（目录各组最低级别，亦为后端
     // 新建订阅行的起始级别）——下拉不再呈现空「请选择」态；仅显示兜底，不写库。
@@ -829,7 +806,9 @@ const fetchRules = async (): Promise<void> => {
       if (r.trigger === 'event' && !r.min_level) r.min_level = 'info'
     }
     userChannels.value = res.data?.channels ?? []
+    eventCatalog.value = res.data?.catalog ?? []
     dailyItemOptions.value = res.data?.daily_items ?? []
+    seedDrafts(reseedDrafts)
     if (!isAdmin.value) {
       const chs = userChannels.value
       overviewStats.value = { channels: chs.length, rules: rules.value.filter(r => r.enabled).length, deliveries: overviewStats.value.deliveries, successRate: overviewStats.value.successRate }
@@ -852,44 +831,137 @@ const toggleRule = async (rule: Rule): Promise<void> => {
   try { await ElMessageBox.confirm(confirmText, t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
   catch { rule.enabled = !rule.enabled; return }
   try { await request.post(ruleWriteUrl(rule.id), { enabled: rule.enabled }) }
-  catch { rule.enabled = !rule.enabled }
+  catch (e) {
+    rule.enabled = !rule.enabled
+    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+  }
 }
 
-const saveRuleField = async (rule: Rule): Promise<void> => {
-  // 部分更新：只提交变更字段（后端缺省键不动既有值）
-  const body = rule.trigger === 'daily' ? { send_time: rule.send_time } : { min_level: rule.min_level }
-  try { await request.post(ruleWriteUrl(rule.id), body) } catch { /* */ }
+// ===== 内联编辑草稿（事件规则行 + 每日摘要卡） =====
+// 选择类字段在表格/卡片内联编辑：草稿 dirty 时行内（卡头）呈现保存/取消；
+// 保存=确认后部分更新 POST，取消=回滚草稿。通道三态同口径：undefined=全部
+// （草稿呈现全选）、[]=不投递、非空=选定。
+interface RuleDraft { events: string[]; channel_ids: number[]; min_level: string }
+interface DailyDraft { items: string[]; channel_ids: number[]; send_time: string }
+const ruleDrafts = ref<Record<string, RuleDraft>>({})
+const dailyDraft = ref<DailyDraft | null>(null)
+const savingRuleId = ref<string | null>(null)
+const savingDaily = ref(false)
+const allChannelIds = (): number[] => userChannels.value.map(ch => ch.id)
+const newRuleDraft = (rule: Rule): RuleDraft => ({
+  events: [...(rule.events ?? [])],
+  channel_ids: [...(rule.channel_ids ?? allChannelIds())],
+  min_level: rule.min_level || 'info',
+})
+const newDailyDraft = (rule: Rule): DailyDraft => ({
+  items: [...(rule.items ?? [])],
+  channel_ids: [...(rule.channel_ids ?? allChannelIds())],
+  send_time: rule.send_time || '09:00',
+})
+// 草稿播种：force=全量重建（首次加载/管理员切换视角）；否则保留已有脏草稿
+// （弹框打开/模板保存后的刷新不得抹掉未保存的内联编辑）。
+const seedDrafts = (force: boolean): void => {
+  const drafts: Record<string, RuleDraft> = {}
+  for (const r of rules.value) {
+    if (r.trigger !== 'event') continue
+    const existing = ruleDrafts.value[r.id]
+    drafts[r.id] = !force && existing ? existing : newRuleDraft(r)
+  }
+  ruleDrafts.value = drafts
+  const daily = dailyRule.value
+  if (daily) dailyDraft.value = !force && dailyDraft.value ? dailyDraft.value : newDailyDraft(daily)
+}
+const ruleDraftOf = (rule: Rule): RuleDraft => {
+  const existing = ruleDrafts.value[rule.id]
+  if (existing) return existing
+  const fresh = newRuleDraft(rule)
+  ruleDrafts.value = { ...ruleDrafts.value, [rule.id]: fresh }
+  return fresh
+}
+// 选择类字段按集合比较（多选顺序不影响 dirty 判定）
+const sameSet = <T>(a: readonly T[], b: readonly T[]): boolean => {
+  if (a.length !== b.length) return false
+  const s = new Set(b)
+  return a.every(x => s.has(x))
+}
+const ruleDraftDirty = (rule: Rule): boolean => {
+  const d = ruleDrafts.value[rule.id]
+  if (!d) return false
+  return !sameSet(d.events, rule.events ?? [])
+    || !sameSet(d.channel_ids, rule.channel_ids ?? allChannelIds())
+    || d.min_level !== (rule.min_level || 'info')
+}
+const dailyDraftDirty = computed<boolean>(() => {
+  const r = dailyRule.value
+  const d = dailyDraft.value
+  if (!r || !d) return false
+  return !sameSet(d.items, r.items ?? [])
+    || !sameSet(d.channel_ids, r.channel_ids ?? allChannelIds())
+    || d.send_time !== (r.send_time || '09:00')
+})
+
+// 事件规则行保存：确认后将草稿（事件/通道/级别）部分更新写库；取消不写。
+const saveRuleDraft = async (rule: Rule): Promise<void> => {
+  const d = ruleDrafts.value[rule.id]
+  if (!d || savingRuleId.value !== null) return
+  try { await ElMessageBox.confirm(t('app.notification.rules.saveRuleConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  catch { return }
+  savingRuleId.value = rule.id
+  try {
+    await request.post(ruleWriteUrl(rule.id), { events: d.events, channel_ids: d.channel_ids, min_level: d.min_level })
+    rule.events = [...d.events]
+    rule.channel_ids = [...d.channel_ids]
+    rule.min_level = d.min_level
+    mfaAwareSuccess(t('app.notification.rules.saved'))
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+  } finally { savingRuleId.value = null }
+}
+const cancelRuleDraft = (rule: Rule): void => {
+  ruleDrafts.value = { ...ruleDrafts.value, [rule.id]: newRuleDraft(rule) }
 }
 
-// 日报包含项目保存（部分更新：仅提交 items）
-const saveDailyItems = async (rule: Rule | null): Promise<void> => {
-  if (!rule) return
-  if (!rule.items || rule.items.length === 0) { ElMessage.warning(t('app.notification.daily.itemsRequired')); return }
-  try { await request.post(ruleWriteUrl(rule.id), { items: rule.items }) } catch { /* */ }
+// 每日摘要卡保存：确认后部分更新 items/channel_ids/send_time；空项目拦截同口径。
+const saveDailyDraft = async (): Promise<void> => {
+  const r = dailyRule.value
+  const d = dailyDraft.value
+  if (!r || !d || savingDaily.value) return
+  if (d.items.length === 0) { ElMessage.warning(t('app.notification.daily.itemsRequired')); return }
+  try { await ElMessageBox.confirm(t('app.notification.daily.saveDailyConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  catch { return }
+  savingDaily.value = true
+  try {
+    await request.post(ruleWriteUrl(r.id), { items: d.items, channel_ids: d.channel_ids, send_time: d.send_time })
+    r.items = [...d.items]
+    r.channel_ids = [...d.channel_ids]
+    r.send_time = d.send_time
+    mfaAwareSuccess(t('app.notification.rules.saved'))
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+  } finally { savingDaily.value = false }
 }
-// 日报目标通道（与事件规则三态同口径：undefined=全部、[]=不投递、非空=选定）；
-// 部分更新仅提交 channel_ids，即时保存
-const dailyChannelSelection = computed<number[]>({
-  get: () => dailyRule.value?.channel_ids ?? userChannels.value.map(ch => ch.id),
-  set: (v) => { if (dailyRule.value) dailyRule.value.channel_ids = v },
-})
-const dailyTargetChannels = computed<RuleChannel[]>(() => {
-  const ids = dailyRule.value?.channel_ids
-  if (ids === undefined || ids === null) return userChannels.value
-  return userChannels.value.filter(ch => ids.includes(ch.id))
-})
-const saveDailyChannels = async (rule: Rule | null): Promise<void> => {
-  if (!rule) return
-  try { await request.post(ruleWriteUrl(rule.id), { channel_ids: rule.channel_ids ?? [] }) } catch { /* */ }
+const cancelDailyDraft = (): void => {
+  const r = dailyRule.value
+  if (r) dailyDraft.value = newDailyDraft(r)
 }
-// 日报 per-channel 格式保存：formats 键=通道族；auto=删除该键（回退自动映射）
+// 日报 per-channel 格式保存：formats 键=通道族；auto=删除该键（回退自动映射）；
+// 写操作需确认，失败回滚本地格式（select 经 :model-value 单向绑定随回滚复位）
 const saveDailyFormat = async (rule: Rule | null, channelType: string, format: string): Promise<void> => {
   if (!rule) return
+  try { await ElMessageBox.confirm(t('app.notification.daily.formatSaveConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  catch { return }
   const formats: Record<string, string> = { ...(rule.formats || {}) }
   if (format === 'auto') delete formats[channelType]
   else formats[channelType] = format
+  const prev = rule.formats
   rule.formats = formats
-  try { await request.post(ruleWriteUrl(rule.id), { formats }) } catch { /* */ }
+  try {
+    await request.post(ruleWriteUrl(rule.id), { formats })
+    mfaAwareSuccess(t('app.notification.rules.saved'))
+  } catch (e) {
+    rule.formats = prev
+    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+  }
 }
 const dailyFormatOf = (rule: Rule | null, channelType: string): string => rule?.formats?.[channelType] || 'auto'
 // 通道自动映射（webhook=json/email=html；机器人协议固定：QQ=markdown、微信=纯文本）
@@ -909,11 +981,13 @@ const testDaily = async (): Promise<void> => {
   testingDaily.value = true
   try {
     await request.post('/notification/daily/test', {})
-    ElMessage.success(t('app.notification.daily.testSent'))
-  } catch (e) { console.error(e) } finally { testingDaily.value = false }
+    mfaAwareSuccess(t('app.notification.daily.testSent'))
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+  } finally { testingDaily.value = false }
 }
 
-// ===== 日报配置弹窗（基本配置 + 每通道格式/内容模板） =====
+// ===== 日报配置弹窗（每通道格式/内容模板；基本配置已前移到摘要卡内联） =====
 const dailyConfigVisible = ref(false)
 const dailyConfigLoading = ref(false)
 const dailyFullChannels = ref<NotificationChannel[]>([])
@@ -1056,11 +1130,11 @@ const defaultChannelTplFor = (typ: string): string => {
   return defaultDailyTplFor(typ)
 }
 
-// 弹框打开即时刷新（不依赖页面刷新）：rules=日报配置/规则勾选+通道摘要测试态；
-// channels=全量 DTO（enabled/style_config——规则端点摘要不含样式键）。
+// 弹框打开即时刷新（不依赖页面刷新）：rules=日报配置/规则数据+通道摘要测试态
+// （不重建内联脏草稿）；channels=全量 DTO（enabled/style_config——规则端点摘要不含样式键）。
 // 管理员代管 user_id 与规则视角同口径。
 const refreshDialogState = async (): Promise<void> => {
-  await fetchRules()
+  await fetchRules(false)
   const url = isAdmin.value && rulesUserId.value > 0 ? `/notification/channels?user_id=${rulesUserId.value}` : '/notification/channels'
   const res = await request.get<{ data?: { channels?: NotificationChannel[] } }>(url, { silent: true })
   dailyFullChannels.value = res.data?.channels ?? []
@@ -1119,7 +1193,10 @@ const saveChannelBodyTemplate = async (ch: RuleChannel): Promise<boolean> => {
     full.style_config = JSON.stringify(style)
     mfaAwareSuccess(t('app.notification.daily.templateSaved'))
     return true
-  } catch (e) { console.error(e); return false } finally { savingTplChannelId.value = null }
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+    return false
+  } finally { savingTplChannelId.value = null }
 }
 
 // 通道模式入口（日报配置每通道「编辑模板」）：打开与事件规则共享的模板弹框；
@@ -1148,15 +1225,11 @@ const saveChannelTplFromDialog = async (): Promise<void> => {
 }
 
 const editTemplate = async (rule: Rule): Promise<void> => {
-  // 打开即重拉 rules+channels：勾选/测试态以最新为准（不依赖页面刷新）
+  // 打开即重拉 rules+channels：测试态/既有模板以最新为准（不依赖页面刷新）
   try { await refreshDialogState() } catch (e) { console.error(e) }
   const fresh = rules.value.find(r => r.id === rule.id) ?? rule
   tplMode.value = 'rule'
   tplEditingRule.value = fresh
-  // channel_ids 三态：undefined=缺省（全部通道，UI 呈现为全选）；[]=显式不投递
-  tplSelectedChannels.value = fresh.channel_ids === undefined || fresh.channel_ids === null
-    ? userChannels.value.map(ch => ch.id)
-    : [...fresh.channel_ids]
   // 草稿初始化：既有每通道模板 > 事件级模板 > 通道形态预置；格式=类型缺省
   const drafts: Record<string, string> = {}
   const formats: Record<string, string> = {}
@@ -1166,43 +1239,36 @@ const editTemplate = async (rule: Rule): Promise<void> => {
   }
   tplTexts.value = drafts
   tplFormats.value = formats
-  const targets = tplSelectedChannels.value.length ? userChannels.value.filter(ch => tplSelectedChannels.value.includes(ch.id)) : userChannels.value
+  // tab 集=规则已保存的选定通道（未选=全部）；通道选择已前移到表格内联
+  const targets = tplTabChannels.value
   tplChannelTab.value = targets.length ? String(targets[0].id) : ''
   htmlPreviewMode.value = 'render'
   tplPreviewOpen.value = []
   tplDialogVisible.value = true
 }
-// 通道选择变化：tab 不在当前 tab 集内时回落到首个
-watch(tplSelectedChannels, () => {
-  if (!tplTabChannels.value.some(ch => String(ch.id) === tplChannelTab.value)) {
-    tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
-  }
-}, { deep: true })
 
 const saveTemplate = async (): Promise<void> => {
   if (!tplEditingRule.value || savingTpl.value) return
   // 保存写库需确认（取消不执行）
-  try { await ElMessageBox.confirm(t('app.notification.rules.saveConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  try { await ElMessageBox.confirm(t('app.notification.rules.saveTplConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
   catch { return }
   savingTpl.value = true
   try {
-    // 通道选择 + 每通道模板（部分更新：不动启用态/级别/时间）。
+    // 每通道模板部分更新（不动启用态/级别/时间/通道选择——通道选择已前移到表格内联）。
     // 仅提交与预置/事件级模板不同的草稿（空差异=沿用默认链）。
     const tpls: Record<string, string> = {}
     for (const ch of userChannels.value) {
       const draft = tplTexts.value[String(ch.id)] ?? ''
       if (draft && draft !== defaultTplFor(ch.type)) tpls[String(ch.id)] = draft
     }
-    await request.post(ruleWriteUrl(tplEditingRule.value.id), {
-      channel_ids: tplSelectedChannels.value,
-      channel_templates: tpls,
-    })
-    tplEditingRule.value.channel_ids = [...tplSelectedChannels.value]
+    await request.post(ruleWriteUrl(tplEditingRule.value.id), { channel_templates: tpls })
     tplEditingRule.value.channel_templates = tpls
     mfaAwareSuccess(t('app.notification.rules.saved'))
     tplDialogVisible.value = false
-    await fetchRules()
-  } catch (e) { console.error(e) } finally { savingTpl.value = false }
+    await fetchRules(false)
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+  } finally { savingTpl.value = false }
 }
 
 const testRule = async (rule: Rule): Promise<void> => {
@@ -1272,7 +1338,7 @@ const previewChannelDaily = (ch: RuleChannel): void => {
 }
 
 onMounted(() => {
-  void fetchRules()
+  void fetchRules(true)
   void fetchAdminOverview()
   void fetchTrend()
   void fetchDeliveryStats()
@@ -1306,9 +1372,9 @@ onMounted(() => {
 .chart-container .echarts { height: 100%; }
 .privacy-hint { font-size: 12px; color: #9ca3af; }
 .rule-name-text { font-weight: 600; }
-.tag-wrap { display: flex; flex-wrap: wrap; gap: 4px; }
-.tag-wrap-limit { max-width: 720px; align-items: center; }
 .ev-more { font-size: 11px; color: #6b7280; }
+.inline-rule-select { width: 100%; }
+.ch-untested-hint { font-size: 11px; color: #9ca3af; margin-left: 6px; }
 .tpl-channel-switch { margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
 .tpl-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -1326,8 +1392,6 @@ onMounted(() => {
 .tpl-preview-collapse :deep(.el-collapse-item__content) { padding-bottom: 0; }
 .tpl-preview-mode { margin-bottom: 8px; }
 .scope-hint { font-size: 12px; color: #9ca3af; }
-.rule-ch-select { margin-bottom: 4px; }
-.rule-ch-select :deep(.el-checkbox) { margin-right: 12px; margin-bottom: 6px; }
 .tpl-html-preview { width: 100%; height: 300px; border: 1px solid #e5e7eb; background: #fff; }
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
 .daily-card { margin-bottom: 16px; }
@@ -1335,14 +1399,15 @@ onMounted(() => {
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
 .daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; line-height: 24px; }
-.daily-items { max-width: 640px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.daily-items { max-width: 720px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .daily-items :deep(.el-checkbox) { margin-right: 0; height: 24px; }
-.daily-value { font-size: 13px; font-weight: 600; color: #111827; }
 .daily-ch-select { flex: 1; min-width: 0; }
 .daily-ch-select :deep(.el-checkbox) { margin-right: 12px; margin-bottom: 6px; }
-/* 日报配置弹窗：基本配置 + 每通道单行卡（名+类型 tag 左 / 格式右 / 编辑预览行内） */
+/* 空选警告常驻占位槽（DESIGN_SPEC §13：条件提示 min-height 保证卡片等高） */
+.daily-warn-slot { min-height: 38px; }
+.daily-warn-slot .info-note-bar { margin: 0; }
+/* 日报配置弹窗：每通道单行卡（名+类型 tag 左 / 格式右 / 编辑预览行内） */
 .daily-config-body { min-height: 80px; }
-.daily-config-basic { display: flex; flex-direction: column; gap: 12px; }
 .daily-config-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
 .daily-config-rows { display: flex; flex-direction: column; gap: 8px; }
 .daily-config-row { border: 1px solid #ebeef5; border-radius: 0; padding: 10px 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

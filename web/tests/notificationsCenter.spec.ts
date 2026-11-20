@@ -74,26 +74,44 @@ test('通道卡 REST 契约：卡片网格+测试/启停/删除+样式编辑', (
 })
 
 
-test('规则编辑契约：通道选择+每通道模板部分更新，不改启用态；事件可读标题', () => {
+test('规则编辑契约：行内草稿保存+每通道模板部分更新，不改启用态；事件可读标题', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
   const tplBlock = text.slice(text.indexOf('const saveTemplate'), text.indexOf('const testRule'))
-  assert.match(tplBlock, /channel_ids: tplSelectedChannels\.value/, '保存必须提交通道选择')
+  assert.doesNotMatch(tplBlock, /channel_ids/, '模板保存不再写通道选择（已前移到事件规则表格内联）')
   assert.match(tplBlock, /channel_templates: tpls/, '保存必须提交每通道模板')
   assert.doesNotMatch(tplBlock, /enabled: true/, '模板保存不得强制启用规则')
   assert.doesNotMatch(tplBlock, /body_template:/, '每通道模板取代单一 body_template 直写')
-  const fieldBlock = text.slice(text.indexOf('const saveRuleField'), text.indexOf('const editTemplate'))
-  assert.match(fieldBlock, /rule\.trigger === 'daily' \? \{ send_time: rule\.send_time \} : \{ min_level: rule\.min_level \}/, '字段保存只提交变更键')
+  assert.match(tplBlock, /ElMessageBox\.confirm/, '模板保存需确认（取消不写）')
+  // 行草稿保存：事件/通道/级别三键部分更新 + 确认 + MFA 感知成功提示
+  const rowBlock = text.slice(text.indexOf('const saveRuleDraft'), text.indexOf('const cancelRuleDraft'))
+  assert.match(rowBlock, /events: d\.events, channel_ids: d\.channel_ids, min_level: d\.min_level/, '行保存只提交事件/通道/级别三键')
+  assert.match(rowBlock, /ElMessageBox\.confirm/, '行保存需确认（取消不写）')
+  assert.match(rowBlock, /mfaAwareSuccess/, '行保存成功经 MFA 感知提示')
+  // 摘要卡保存：项目/通道/时间三键部分更新 + 确认
+  const dailyBlock = text.slice(text.indexOf('const saveDailyDraft'), text.indexOf('const cancelDailyDraft'))
+  assert.match(dailyBlock, /items: d\.items, channel_ids: d\.channel_ids, send_time: d\.send_time/, '卡保存只提交项目/通道/时间三键')
+  assert.match(dailyBlock, /ElMessageBox\.confirm/, '卡保存需确认（取消不写）')
+  assert.match(dailyBlock, /mfaAwareSuccess/, '卡保存成功经 MFA 感知提示')
   // 级别列=下拉选择（radio-button 三按钮在窄列竖排堆叠的缺陷形态禁止回潮）；
   // 选项文案走 subs.levels 多语言词条（信息/警告/严重）
-  assert.match(text, /el-select v-model="row\.min_level"/, '级别列必须为紧凑下拉')
+  assert.match(text, /el-select v-model="ruleDraftOf\(asRule\(row\)\)\.min_level"/, '级别列必须为紧凑下拉（绑定行草稿）')
   assert.match(text, /t\('app\.notification\.subs\.levels\.info'\)/, '级别选项必须多语言')
-  // 每日摘要独立卡片（不混事件规则表格）
+  // 事件/发送至列=内联多选（绑定行草稿；未测试通道禁选+提示）
+  assert.match(text, /el-select v-model="ruleDraftOf\(asRule\(row\)\)\.events" multiple/, '事件列必须为内联多选')
+  assert.match(text, /el-select v-model="ruleDraftOf\(asRule\(row\)\)\.channel_ids" multiple/, '发送至列必须为内联多选')
+  assert.match(text, /:disabled="ch\.last_test_ok !== true"/, '未测试通道禁选')
+  // 每日摘要独立卡片（不混事件规则表格）+ 三字段卡内联编辑
   assert.match(text, /daily-card/, '每日摘要必须独立卡片')
+  assert.match(text, /el-time-select v-model="dailyDraft\.send_time"/, '投递时间必须卡内联编辑')
+  assert.match(text, /el-checkbox-group v-model="dailyDraft\.items"/, '包含项目必须卡内联编辑')
+  assert.match(text, /el-checkbox-group v-model="dailyDraft\.channel_ids"/, '目标通道必须卡内联编辑')
   assert.match(text, /eventRules/, '事件规则独立表格数据源')
   // 规则测试走 /test 端点（按选定通道+模板渲染）
   assert.match(text, /\/test/, '规则测试必须走规则级 test 端点')
   // 事件展示=可读标题（event_titles 单源），禁止裸事件键
-  assert.match(text, /eventTitle\(asRule\(row\), ev\)/, '事件列必须经可读标题映射')
+  assert.match(text, /eventTitle\(asRule\(row\), ev\)/, '事件选项必须经可读标题映射')
+  // 模板弹框不再承载接收通道选择（tplSelectedChannels 残留清零）
+  assert.doesNotMatch(text, /tplSelectedChannels/, '接收通道选择已前移到表格，弹框残留必须清零')
   // 邮件 HTML 预览=sandbox iframe；webhook/邮件编辑=CodeEditor 高亮
   assert.match(text, /sandbox="" :srcdoc="previewText"/, '邮件渲染预览必须 sandbox iframe')
   assert.match(text, /CodeEditor v-if="tplEditorLang !== 'text'"/, 'JSON/HTML 必须高亮编辑')

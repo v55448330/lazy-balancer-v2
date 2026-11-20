@@ -228,6 +228,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 
 	var req struct {
 		Enabled          *bool             `json:"enabled"`
+		Events           *[]string         `json:"events"` // 组内事件选择（inline 编辑；未选=取消订阅）
 		MinLevel         *string           `json:"min_level"`
 		BodyTemplate     *string           `json:"body_template"`
 		ChannelIDs       *[]int64          `json:"channel_ids"`       // 显式通道选择（空数组=全部启用通道）
@@ -292,7 +293,25 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			return
 		}
 		for _, ev := range eventIDs {
-			if req.Enabled != nil && !*req.Enabled {
+			// inline 事件选择：未选=取消订阅（删行）；选中=确保订阅行存在。
+			wantOn := req.Enabled != nil && *req.Enabled
+			if req.Events != nil {
+				selected := false
+				for _, s := range *req.Events {
+					if s == ev {
+						selected = true
+						break
+					}
+				}
+				if !selected {
+					if _, err := db.DB.Exec(`DELETE FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev); err != nil {
+						c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("取消订阅失败", err)})
+						return
+					}
+					continue
+				}
+				wantOn = true
+			} else if req.Enabled != nil && !*req.Enabled {
 				// 显式停用=取消订阅（删行）
 				if _, err := db.DB.Exec(`DELETE FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev); err != nil {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("取消订阅失败", err)})
@@ -300,12 +319,12 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				}
 				continue
 			}
-			// 部分更新：先读既有行，缺省键沿用现值；无行且未显式启用=不动。
+			// 部分更新：先读既有行，缺省键沿用现值；无行且未要求启用=不动。
 			var curLevel, curTpl, curIDs, curTpls string
 			err := db.DB.QueryRow(`SELECT COALESCE(min_level,''), COALESCE(body_template,''),
 				COALESCE(channel_ids,''), COALESCE(channel_templates,'') FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev).Scan(&curLevel, &curTpl, &curIDs, &curTpls)
 			if err != nil {
-				if req.Enabled == nil || !*req.Enabled {
+				if !wantOn {
 					continue // 未订阅且未要求启用：不建行
 				}
 				curLevel, curTpl, curIDs, curTpls = "info", "", "", ""
