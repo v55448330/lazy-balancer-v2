@@ -813,7 +813,7 @@
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
-                <el-option v-if="!(editorPolicyType === 'stage2' && (ccEffectiveActionValue === 'challenge' || ccEffectiveActionValue === 'queue'))" :value="0" :label="t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault')" />
+                <el-option v-if="editorPolicyType !== 'stage2'" :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in ccFilteredBlockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
               <!-- 错误校验保留 form-item 内（is-error 换行体系）；归属汇总卡非 stage2 保留。 -->
@@ -839,7 +839,7 @@
             <div v-if="editorPolicyType === 'stage2' && ccEffectiveActionValue === 'reject'" class="info-note-bar cc-step-note"><span class="info-note-desc">
               {{ t('app.security.policies.human.rejectPageTip') }}
             </span></div>
-            <div v-if="!challengePageMissingWidget && form.block_page_id === 0" class="info-note-bar cc-step-note"><span class="info-note-desc">{{ t(editorPolicyType === 'stage2' ? (ccEffectiveActionValue === 'queue' ? 'app.security.policies.bp.stage2NoPageQueueTip' : ccEffectiveActionValue === 'reject' ? 'app.security.policies.bp.stage2NoPageRejectTip' : 'app.security.policies.bp.stage2NoPageTip') : 'app.security.policies.bp.noPageTipDefault') }}</span></div>
+            <div v-if="!challengePageMissingWidget && form.block_page_id === 0" class="info-note-bar cc-step-note"><span class="info-note-desc">{{ t('app.security.policies.bp.noPageTipDefault') }}</span></div>
             <div v-if="!challengePageMissingWidget && form.block_page_id > 0" class="info-note-bar cc-step-note"><span class="info-note-desc">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></span></div>
 
             <!-- 阶段 2 状态码/响应方式由处置动作语义决定（ challenge/queue=200、
@@ -1626,7 +1626,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
         { label: t('app.security.policies.bp.pageLabel'), value: d.block_page_id > 0
           ? t('app.security.policies.view.pageWithStatus', { name: page?.name ?? t('app.security.policies.common.pageNum', { n: d.block_page_id }), code: d.block_status_code || 403 })
             + ' · ' + t(`app.security.policies.bp.response${d.block_response_mode === 'html' ? 'Html' : d.block_response_mode === 'json' ? 'Json' : 'Auto'}`)
-          : t((d.human_verify_mode && d.human_verify_mode !== 'off') || d.cc_detect_enabled ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault') },
+          : t((d.human_verify_mode && d.human_verify_mode !== 'off') || d.cc_detect_enabled ? 'app.security.policies.bp.stage2BuiltinPageLegacy' : 'app.security.policies.bp.noPageDefault') },
         { label: t('app.security.policies.view.attributionLabel'), value: t('app.security.policies.view.attributionValue') },
       ],
     },
@@ -3311,6 +3311,11 @@ watch([ccEffectiveActionValue, () => form.value.human_verify_type], () => {
         : form.value.human_verify_type === 'js' ? 9006 : 9005
     }
     return
+  }
+  // reject：0（已隐藏的 auto 态）或通用默认页(1)时接管为语义对应的限流拦截页 9001，
+  // 用户显式选过的其他页不覆盖。
+  if (action === 'reject' && (form.value.block_page_id === 0 || form.value.block_page_id === 1)) {
+    form.value.block_page_id = 9001
   }
   if (form.value.block_page_id > 0 && challengePageNeedsWidgetCheck({
     policyType: editorPolicyType.value,

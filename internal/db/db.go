@@ -6692,7 +6692,7 @@ func SeedDefaultSecurityPolicies() error {
 	// 1) 信任名单地址列表（用户可编辑）
 	res, _ := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES (?,?,?,?,0,datetime('now'),datetime('now'))`,
 		"信任名单地址列表", "[默认规则] 内网/可信 IP 网段，名单内 IP 跳过全部安全阶段", "内网",
-		`["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]`)
+		`[{"value":"10.0.0.0/8"},{"value":"172.16.0.0/12"},{"value":"192.168.0.0/16"}]`)
 	trustListID, _ := res.LastInsertId()
 	// 2) 手动黑名单地址列表（用户可编辑）
 	res2, _ := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES (?,?,?,?,0,datetime('now'),datetime('now'))`,

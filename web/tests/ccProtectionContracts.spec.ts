@@ -83,26 +83,29 @@ test('阶段 2 未配挑战页（0）：保存校验放行（内置挑战页一�
   assert.match(save, /challengePageMissingWidget\.value/, '保存门必须消费占位符校验谓词')
 })
 
-test('阶段 2 未配挑战页（0）：下拉选项与提示走挑战语境（内置挑战页，不宣称 403/绑定链兜底）', () => {
-  // 下拉 0 选项与提示线按 stage 分流（stage2 → 挑战语境键）
-  assert.match(policies, /:label="t\(editorPolicyType === 'stage2' \? 'app\.security\.policies\.bp\.stage2NoPageDefault' : 'app\.security\.policies\.bp\.noPageDefault'\)"/, '0 选项 label 按 stage 分流')
-  // 三态（按有效处置动作，force 恒 challenge）：stage2 按动作分流挑战/排队/拒绝语境键
-  assert.match(policies, /ccEffectiveActionValue === 'queue' \? 'app\.security\.policies\.bp\.stage2NoPageQueueTip' : ccEffectiveActionValue === 'reject' \? 'app\.security\.policies\.bp\.stage2NoPageRejectTip' : 'app\.security\.policies\.bp\.stage2NoPageTip'/, '未配页提示必须按有效处置动作三态分流')
-  // 只读查看投影同样分流
-  assert.match(policies, /d\.human_verify_mode[\s\S]{0,80}stage2NoPageDefault/, '只读查看投影 0 页按 stage2 分流')
-  // zh 文案：内置挑战页语义，无 403/绑定链兜底
-  const opt = zhSec.match(/"stage2NoPageDefault": "([^"]*)"/)
-  const tip = zhSec.match(/"stage2NoPageTip": "([^"]*)"/)
-  assert.ok(opt && tip, 'stage2 专用 0 页选项/提示词条必须成对在场')
-  for (const text of [opt![1], tip![1]]) {
-    assert.match(text, /内置挑战页/, '必须如实呈现内置挑战页回退')
-    assert.doesNotMatch(text, /403|绑定链|兜底/, 'stage2 挑战语境不得宣称 403/绑定链兜底')
+test('拦截页 0 选项：stage2 全隐藏（auto 语义由显式内置页取代），非 stage2 如实叫「不使用拦截页」', () => {
+  // stage2：0 选项整体隐藏（challenge/queue/reject 一致）——0=内置自动选页与显式选页语义混淆
+  assert.match(policies, /:label="t\('app\.security\.policies\.bp\.noPageDefault'\)"/, '0 选项 label 统一 noPageDefault')
+  assert.match(policies, /<el-option v-if="editorPolicyType !== 'stage2'" :value="0"/, 'stage2 必须隐藏 0 选项')
+  // 向导按语义自动选内置页：challenge 滑块/JS、queue 排队、reject 限流拦截页
+  assert.match(policies, /action === 'queue' \? 9007\s*: form\.value\.human_verify_type === 'js' \? 9006 : 9005/, 'challenge/queue 自动选语义内置页')
+  assert.match(policies, /action === 'reject' && \(form\.value\.block_page_id === 0 \|\| form\.value\.block_page_id === 1\)/, 'reject 0/通用默认页接管为 9001')
+  // 只读投影：stage2 存量 0 行显示内置自动语义（不宣称「不使用自定义」）
+  assert.match(policies, /d\.human_verify_mode[\s\S]{0,80}stage2BuiltinPageLegacy/, '只读查看投影 0 页走内置页口径')
+  // zh 文案：非 stage2 0 选项如实=直接返回状态码；存量 stage2 0 行=内置自动
+  const opt = zhSec.match(/"noPageDefault": "([^"]*)"/)
+  const legacy = zhSec.match(/"stage2BuiltinPageLegacy": "([^"]*)"/)
+  assert.ok(opt && legacy, 'noPageDefault/stage2BuiltinPageLegacy 词条必须在场')
+  assert.match(opt![1], /不使用拦截页（直接返回状态码）/, '0 选项必须如实宣称无拦截页')
+  assert.match(legacy![1], /内置挑战页（按动作自动选用）/, '存量 stage2 0 行如实呈现内置自动')
+  assert.ok(enSec.includes('"stage2BuiltinPageLegacy"'), 'en 侧齐备')
+  // 死键不得复活：stage2 三态提示键已随 0 不可达退役
+  for (const dead of ['stage2NoPageDefault', 'stage2NoPageTip', 'stage2NoPageQueueTip', 'stage2NoPageRejectTip']) {
+    assert.ok(!zhSec.includes(`"${dead}"`), `死键 ${dead} 不得复活`)
   }
-  assert.ok(enSec.includes('"stage2NoPageDefault"') && enSec.includes('"stage2NoPageTip"'), 'en 必须成对在场')
   // stage3 的 403 口径保持不变（noPageTipDefault 仍服务 WAF 拦截兜底）
   assert.match(zhSec, /"noPageTipDefault": "[^"]*Caddy 默认 403/, 'stage3 拦截兜底口径不得被误改')
 })
-
 // ── 4. 阶段 2 副标题（退役「速率限制」→ CC 防护/人机验证口径） ──
 test('阶段 2 副标题：CC 防护/人机验证口径（速率限制已退役），zh/en 同步', () => {
   assert.equal(stageSubLabel(2), '人机挑战 · CC 异常检测')
@@ -295,8 +298,7 @@ test('双语 parity：CC 改动域 zh/en 键集完全一致（无单侧裸键）
 test('新增/改动词条 zh 侧可解析（无裸键回退）', () => {
   const keys: Array<[string, string]> = [
     ['app.security.policies.human.ccNeedsHuman', 'CC'],
-    ['app.security.policies.bp.stage2NoPageDefault', '内置挑战页'],
-    ['app.security.policies.bp.stage2NoPageTip', '内置挑战页'],
+    ['app.security.policies.bp.stage2BuiltinPageLegacy', '内置挑战页'],
     ['common.app.views.stages.sub2', 'CC'],
     ['common.app.views.stages.stage2Footnote', 'CC'],
     ['common.app.views.stages.blockPageBrokenStage2', '内置挑战页'],
