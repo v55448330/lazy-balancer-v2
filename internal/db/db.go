@@ -6727,9 +6727,9 @@ func SeedDefaultSecurityPolicies() error {
 
 	// ── CRS 请求/响应组号（CRS v3.3.x 稳定组，排除基础设施组） ──
 	// 请求组：协议异常(20-22)/协议(30-34)/SQL 注入(42)/XSS(41)/文件上传(43)/阻断评估(49)等
-	requestGroups := `["20","21","22","30","31","32","33","34","41","42","43","44","49"]`
+	requestGroups := `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44","49"]`
 	// 响应组：数据泄露(50-53)/服务器错误(54-56)/阻断评估(59)
-	responseGroups := `["50","51","52","53","54","55","56","59"]`
+	responseGroups := `["50","51","52","53","54","55","56","59","80"]`
 
 	type ps struct {
 		name, desc, ptype, mode string
@@ -6745,6 +6745,7 @@ func SeedDefaultSecurityPolicies() error {
 		logReqBody              int
 		humanMode, humanType    string
 		ccEnabled               int
+		blockPageID             int
 	}
 	seeds := []ps{
 		{
@@ -6768,14 +6769,15 @@ func SeedDefaultSecurityPolicies() error {
 			ipACLEnabled: 1, ipACLMode: "deny", ipACLRefs: autobanRefJSON,
 		},
 		{
-			name: "地域拦截", desc: "[默认规则] 仅允许中国大陆 IP，拒绝海外/境外流量",
+			name: "地域拦截", desc: "[默认规则] 拦截所选海外区域（其他放行）；默认勾选全部海外国家",
 			ptype: "stage1", mode: "off",
-			geoipMode: "allow", geoipCountries: `["CN"]`,
+			geoipMode: "deny", geoipCountries: `["海外"]`,
 		},
 		{
 			name: "基础 CC 防护", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
 			ptype: "stage2", mode: "off",
 			humanMode: "auto", humanType: "slider", ccEnabled: 1,
+			blockPageID: 9005, // services.builtinHumanVerifyPageID（滑块页，包私有故字面量）
 		},
 		{
 			name: "WAF 请求防护", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
@@ -6824,15 +6826,15 @@ func SeedDefaultSecurityPolicies() error {
 			 geoip_mode, geoip_countries,
 			 crs_rule_groups, waf_check_response, log_request_body,
 			 human_verify_mode, human_verify_type, human_verify_ttl,
-			 cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio)
-			VALUES (?,?,?,?,?,1, ?,?, ?,?,?, ?,?, ?,?,?, ?,?,?, ?,?,?,?)`,
+			 cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, block_page_id)
+			VALUES (?,?,?,?,?,1, ?,?, ?,?,?, ?,?, ?,?,?, ?,?,?, ?,?,?,?,?)`,
 			100+i, sd.name, sd.desc, sd.mode, sd.ptype,
 			sd.ipWLEnabled, ipWLRefs,
 			sd.ipACLEnabled, sd.ipACLMode, ipACLRefsVal,
 			gm, gc,
 			crs, sd.wafCheckResp, sd.logReqBody,
 			hm, ht, DefaultHumanVerifyTTL,
-			sd.ccEnabled, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio); err != nil {
+			sd.ccEnabled, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, sd.blockPageID); err != nil {
 			return fmt.Errorf("seed %q: %w", sd.name, err)
 		}
 	}

@@ -813,7 +813,7 @@
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
-                <el-option :value="0" :label="t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault')" />
+                <el-option v-if="!(editorPolicyType === 'stage2' && (ccEffectiveActionValue === 'challenge' || ccEffectiveActionValue === 'queue'))" :value="0" :label="t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in ccFilteredBlockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
               <!-- 错误校验保留 form-item 内（is-error 换行体系）；归属汇总卡非 stage2 保留。 -->
@@ -3296,12 +3296,28 @@ const ccEffectiveActionValue = computed<string>(() => ccEffectiveAction(form.val
 // 避免下拉显示空值。mixed 不重置（单页兼 WAF，由校验提示引导）。
 watch([ccEffectiveActionValue, () => form.value.human_verify_type], () => {
   if (editorPolicyType.value !== 'stage2') return
+  // challenge/queue：0=「不使用」已从下拉隐藏，为 0 或不兼容时自动选语义对应
+  // 的内置页（滑块 9005 / JS 9006 / 排队 9007），用户想用自定义页自行改选。
+  const action = ccEffectiveActionValue.value
+  if (action === 'challenge' || action === 'queue') {
+    if (form.value.block_page_id === 0 || challengePageNeedsWidgetCheck({
+      policyType: editorPolicyType.value,
+      blockPageId: form.value.block_page_id,
+      blockPages: blockPages.value,
+      humanVerifyType: form.value.human_verify_type,
+      ccTriggerAction: action,
+    })) {
+      form.value.block_page_id = action === 'queue' ? 9007
+        : form.value.human_verify_type === 'js' ? 9006 : 9005
+    }
+    return
+  }
   if (form.value.block_page_id > 0 && challengePageNeedsWidgetCheck({
     policyType: editorPolicyType.value,
     blockPageId: form.value.block_page_id,
     blockPages: blockPages.value,
     humanVerifyType: form.value.human_verify_type,
-    ccTriggerAction: ccEffectiveActionValue.value,
+    ccTriggerAction: action,
   })) {
     form.value.block_page_id = 0
   }
