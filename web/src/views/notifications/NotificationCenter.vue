@@ -1592,9 +1592,10 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-pick-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
 .nd-pick-popper.el-popover { padding: 12px; box-sizing: border-box; }
 /* 事件浮层按级别分区（严重/警告/信息）：中性样式，仅节标题分组，不着色 */
-.notif-pick-group.notif-pick-sections { display: flex; flex-direction: column; gap: 10px; }
-.notif-level-section { display: flex; flex-direction: column; gap: 6px; }
-.notif-level-head { font-size: 12px; color: #6b7280; }
+.notif-pick-group.notif-pick-sections { display: flex; flex-direction: column; gap: 14px; }
+.notif-level-section { display: flex; flex-direction: column; gap: 8px; }
+.notif-level-section + .notif-level-section { border-top: 1px dashed #eef2f7; padding-top: 12px; }
+.notif-level-head { font-size: 12px; font-weight: 600; color: #6b7280; }
 .notif-level-items { display: flex; flex-wrap: wrap; gap: 8px; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled { border-color: #e4e7ed; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled .el-checkbox__label { color: #a8abb2; }

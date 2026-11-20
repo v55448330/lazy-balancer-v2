@@ -203,8 +203,9 @@ test('投递记录消费 deliveries 契约：恒全量+用户/通道维度+失�
   assert.doesNotMatch(text, /allScope/, '全平台开关已删（投递记录恒全量，用户裁定）')
   assert.match(text, /request\.get<NotificationDeliveriesResponse>\(`\/notification\/deliveries\?/)
   assert.match(text, /request\.post\(`\/notification\/deliveries\/\$\{row\.id\}\/resend`\)/)
-  // 用户/通道维度列在位；裸事件键列禁止回潮
-  assert.match(text, /colChannels/, '投递通道列必须在位')
+  // 用户维度列在位；投递通道列改为「成功/失败」计数（细节在展开行）；裸事件键列禁止回潮
+  assert.match(text, /colResult/, '成功/失败计数列必须在位')
+  assert.doesNotMatch(text, /colChannels/, '投递通道列已移除（细节在展开行）')
   assert.match(text, /scope\.row\.username/, '用户列必须显示用户名')
   assert.doesNotMatch(text, /colEventType/, '裸事件键列禁止回潮（可读标题单源）')
   const resendable = text.slice(text.indexOf('const RESENDABLE'), text.indexOf('const deliveries ='))

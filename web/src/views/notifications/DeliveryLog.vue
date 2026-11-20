@@ -55,16 +55,14 @@
       <el-table-column :label="t('app.notification.deliveries.colUser')" width="130" show-overflow-tooltip>
         <template #default="scope">{{ scope.row.username || ('#' + scope.row.user_id) }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colEvent')" min-width="160" show-overflow-tooltip>
+      <el-table-column :label="t('app.notification.deliveries.colEvent')" width="200" show-overflow-tooltip>
         <template #default="scope">{{ deliveryEventTitle(scope.row) }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colChannels')" min-width="180">
+      <el-table-column :label="t('app.notification.deliveries.colResult')" width="110">
         <template #default="scope">
-          <div v-if="scope.row.channels?.length" class="ch-tags">
-            <el-tooltip v-for="ch in scope.row.channels" :key="ch.channel_id" :content="ch.status === 'sent' ? t('app.notification.deliveries.chSent') : (ch.error || t('app.notification.deliveries.chFailed'))" placement="top">
-              <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small" effect="plain">{{ ch.channel_name }}</el-tag>
-            </el-tooltip>
-          </div>
+          <span v-if="scope.row.channels?.length" class="ch-result">
+            <span class="ch-ok">{{ channelCount(scope.row, true) }}</span><span class="ch-sep">/</span><span class="ch-fail">{{ channelCount(scope.row, false) }}</span>
+          </span>
           <span v-else class="ev-more">—</span>
         </template>
       </el-table-column>
@@ -192,6 +190,12 @@ const channelStatusLabel = (status: string): string => {
   }
 }
 
+// channelCount 通道结果计数（success=sent 数；否则=非 sent 数）。表格「成功/失败」列。
+const channelCount = (row: { channels?: { status: string }[] }, success: boolean): number => {
+  const chs = row.channels ?? []
+  return chs.filter(ch => (ch.status === 'sent') === success).length
+}
+
 const levelTagType = (level: NotificationDelivery['level']): 'info' | 'warning' | 'danger' => {
   switch (level) {
     case 'info': return 'info'
@@ -276,7 +280,10 @@ defineExpose({ fetchDeliveries })
 .scope-hint { font-size: 12px; color: var(--text-secondary, #6b7280); }
 .deliveries-footer { margin-top: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: nowrap; }
 .deliveries-pagination { flex: 0 0 auto; white-space: nowrap; }
-.ch-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.ch-result { font-size: 13px; font-weight: 600; }
+.ch-result .ch-ok { color: #10b981; }
+.ch-result .ch-sep { color: #9ca3af; margin: 0 2px; }
+.ch-result .ch-fail { color: #ef4444; }
 .ev-more { font-size: 11px; color: #6b7280; }
 /* 展开行：分通道投递结果（通道-状态-错误一一对应） */
 .ch-expand { padding: 4px 12px 8px 36px; display: flex; flex-direction: column; gap: 6px; }
