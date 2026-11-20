@@ -127,3 +127,37 @@
   十项（DailyItemIDs 单源），分节 全局概览/安全风险/证书/集群；缺失值显「无」不省略行。
 - **消息署名**：机器人文本/邮件/日报统一附加品牌+时间署名（`{{brand}}`/`{{time}}` 变量，
   BrandName() 单源）；QQ 用 markdown 表格、微信纯文本、邮件内联样式 HTML、webhook JSON。
+## 16. 增补裁定（2026-11-20 第六轮，表单描述/分区标题/弹框与预览/多选/表格）
+- **表单描述 MUST 用标准类**（main.css 单源，禁组件内重定义）：
+  - 同行简短后缀 → `form-tip-inline`；控件下方块级说明 → `form-tip-line`。
+  - 禁止自写 `.xxx-hint` 覆写或 `el-text` 包裹；`form-hint` 为遗留类，新代码不得再用。
+- **分区标题 MUST 用 `DialogSectionHeader`**：标题前带彩色竖条（primary/danger/success/warning tone）；
+  事件弹框的级别分区标题同样用竖条（严重=红/警告=橙/信息=蓝）。禁止纯文本裸标题。
+- **弹框高度**：弹框体 MUST `max-height: calc(100vh - 240~300px); overflow-y:auto`，footer 不贴屏/不超屏；
+  用全局类选择器（append-to-body 下 scoped `:deep` 不可靠）。
+- **预览区**：
+  - 上半正文即源码，预览区只渲染（HTML=iframe、Markdown=渲染 HTML、文本/JSON=占位符替换样例后的纯文本）；
+    禁止提供「渲染/源码」切换。
+  - 预览容器固定高度（统一 `height:360px; max-height:46vh`；日报预览 `.daily-preview-body` 四格式同高）。
+  - 禁横向滚动条（容器 `overflow-x:hidden`，iframe 100% 宽）。
+- **多选控件**：bordered el-checkbox 组自适应换行（无固定 max-width）；**隐藏勾选对号**（`.el-checkbox__inner{display:none}`），
+  仅以边框/选中态表达；禁用通道 disabled 且已选自动移除并提示。
+- **选择浮层**：popover 宽度=触发器 `offsetWidth`（点击时测量）；placement 底部优先，底部不足翻到上方，
+  `preventOverflow altAxis:false` 不横向位移；高度超限内部滚动。
+- **卡头操作**：保存/取消放卡片 header，保存为 `size=small type=primary`，取消为 `size=small`；
+  顺序在用户选择器左侧；表格行内不再放保存/取消。
+- **表格填满**：末列/主内容列用 `min-width` 吸收剩余宽度，禁止右侧大片空白；列宽按内容设定。
+- **时间显示**：统一 `formatDate`（面板时区设置），禁裸 UTC 字符串。
+- **协议固定**：QQ 日报=Markdown（表格）、微信=纯文本；iLink 会话上下文有时效，失效时卡片提示「会话待刷新」+重绑入口。
+- **更新人/更新时间**：列表体现最近更新用户（display_name 优先）与更新时间；订阅表 updated_at/updated_by 单源。
+
+## 17. 如何避免新改动违反规范（执行机制）
+1. 开始任何前端改动前：读本规范 §1-16；对照参考页（Dashboard/SecurityPolicies/通道编辑弹框）实际实现，不凭记忆。
+2. 复用标准类/组件：`form-tip-inline/line`、`DialogSectionHeader`、`el-card.list-card`、`formatDate`；
+   禁止在 scoped CSS 重新定义标准类或新造近似类。
+3. 机械门禁（npm test 必跑，违规即红）：
+   - `tests/designGuard.spec.ts` — 通知面设计标准守卫（描述类/DialogSectionHeader/弹框体高度/预览固定高度/多选隐藏对号/表格填宽）。
+   - `tests/notificationsCenter.spec.ts` — 交互契约（卡头保存、事件分区、浮层宽度/定位、语言切换、消息模板列删除等）。
+   - `tests/ansiHtml.spec.ts` — 所有 v-html 面登记。
+4. 新增标准时：先加规范条款 + 机械断言，再改实现；无守卫的新约定视为未落地。
+5. 交付前视觉核验：浏览器 computed style/DOM 对照参考页（阴影/边框/直角/间距/高度），不凭代码推理。

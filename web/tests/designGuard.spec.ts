@@ -77,3 +77,24 @@ test('设计守卫：通知/密钥面表头左对齐（设计标准 bearer，禁
     assert.ok(!/align="(center|right)"/.test(src), `${f} 表头/列 align=center/right，违反表头左对齐标准`)
   }
 })
+
+test('设计守卫：通知面标准（描述类/分区竖条/弹框体高度/预览固定/多选去对号）', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  // 描述必须用标准类，禁自写 hint 覆写
+  assert.ok(!/tpl-lang-hint/.test(nc), '描述禁用自写 tpl-lang-hint（应 form-tip-inline）')
+  assert.match(nc, /class="form-tip-inline"/, '同行描述必须用 form-tip-inline')
+  assert.match(nc, /class="form-tip-line"/, '块级描述必须用 form-tip-line')
+  // 分区标题彩色竖条：DialogSectionHeader
+  assert.match(nc, /import DialogSectionHeader from '@\/components\/DialogSectionHeader\.vue'/, '分区标题必须用 DialogSectionHeader')
+  assert.match(nc, /<DialogSectionHeader :title="tplEditorLabel" \/>/, '内容模板分区标题带竖条')
+  // 弹框体高度上限（append-to-body 用全局类）
+  assert.match(nc, /\.rule-edit-dialog \.el-dialog__body \{ max-height: calc\(100vh - \d+px\); overflow-y: auto; overflow-x: hidden; \}/, '模板弹框体必须限高滚动')
+  assert.match(nc, /\.daily-preview-dialog \.el-dialog__body \{ max-height: calc\(100vh - \d+px\)/, '日报预览弹框体必须限高')
+  // 预览固定高度 + 禁横向滚动
+  assert.match(nc, /height: 360px; max-height: 46vh/, '预览区必须固定高度')
+  assert.match(nc, /\.daily-preview-body \{ height: 420px; max-height: 46vh; overflow-y: auto; overflow-x: hidden;/, '日报预览固定同高且无横向滚动')
+  // bordered 多选隐藏勾选对号
+  assert.match(nc, /\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__inner \{ display: none; \}/, 'bordered 多选必须隐藏勾选对号')
+  // 卡头保存为实体按钮（非 link）
+  assert.ok(!/link type="primary" :loading="savingDaily"/.test(nc), '每日摘要保存必须为实体按钮（与规则卡头一致）')
+})
