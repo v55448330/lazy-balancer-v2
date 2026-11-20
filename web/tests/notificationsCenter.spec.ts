@@ -169,7 +169,7 @@ test('统一模板弹框+停用通道联动+事件级别分区+正文语言切�
   assert.match(text, /EVENT_SECTION_ORDER: readonly EventLevel\[\] = \['critical', 'warn', 'info'\]/, '分段顺序=严重→警告→信息')
   assert.match(text, /v-for="sec in eventLevelSections\(asRule\(row\)\)"/, '浮层按分区渲染')
   assert.match(text, /class="notif-level-head">\{\{ t\(`app\.notification\.subs\.levels\.\$\{sec\.level\}`\) \}\}/, '段标题=级别词条')
-  assert.match(text, /class="notif-pick-title">\{\{ eventGroup\(row\.title\) \}\}/, '浮层保留分组标题')
+  assert.doesNotMatch(text, /class="notif-pick-title">/, '组标题已删（级别段标题即标题）')
   assert.doesNotMatch(text, /ev-level-|ev-level-legend|ev-legend-dot|ev-dot-/, '级别着色与图例必须清零')
   assert.doesNotMatch(text, /--ev-critical/, '级别色变量必须清零')
 

@@ -240,7 +240,6 @@
                     </button>
                   </template>
                   <div class="notif-pick-panel">
-                    <div class="notif-pick-title">{{ eventGroup(row.title) }}</div>
                     <el-checkbox-group v-model="ruleDraftOf(asRule(row)).events" size="small" class="notif-pick-group notif-pick-sections">
                       <div v-for="sec in eventLevelSections(asRule(row))" :key="sec.level" class="notif-level-section">
                         <div class="notif-level-head">{{ t(`app.notification.subs.levels.${sec.level}`) }}</div>
@@ -1588,7 +1587,6 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-pick-group .el-checkbox.is-bordered { height: auto; min-height: 24px; padding: 2px 10px; margin: 0; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { white-space: normal; line-height: 1.35; word-break: break-word; }
 .notif-pick-panel { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; }
-.notif-pick-title { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 12px; }
 .notif-pick-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
 .nd-pick-popper.el-popover { padding: 12px; box-sizing: border-box; }
 /* 事件浮层按级别分区（严重/警告/信息）：中性样式，仅节标题分组，不着色 */
