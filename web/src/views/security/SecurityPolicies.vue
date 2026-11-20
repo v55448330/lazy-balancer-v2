@@ -1250,6 +1250,12 @@ const openDefaultsDialog = async (): Promise<void> => {
   }
 }
 const runApplyDefaults = async (): Promise<void> => {
+  // §14 操作确认：批量创建/重建为状态变更操作，取消不执行
+  try {
+    await ElMessageBox.confirm(t('app.security.policies.defaults.applyConfirm'), t('app.security.policies.common.confirmTitle'), { type: 'warning' })
+  } catch {
+    return
+  }
   defaultsPhase.value = 'running'
   try {
     const res = await request.post<APIResponse<DefaultApplyItem[]>>('/security/policies/apply-defaults')
@@ -4227,7 +4233,7 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .defaults-row:hover { background: var(--el-fill-color-light, #f5f7fa); }
 .defaults-row.is-open { background: var(--el-fill-color-lighter, #fafafa); }
 .defaults-row + .defaults-row { border-top: 1px solid var(--el-border-color-lighter, #e9edf2); }
-.defaults-row-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; min-height: 36px; }
+.defaults-row-head { display: flex; align-items: center; gap: 8px; padding: 5px 12px; min-height: 32px; }
 .defaults-chevron { font-size: 12px; color: var(--el-text-color-secondary); transition: transform 0.2s; }
 .defaults-row.is-open .defaults-chevron { transform: rotate(90deg); }
 .defaults-row-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -1183,6 +1183,7 @@ export default {
      "listsTitle": "地址列表（创建后可在 IP 名单中编辑条目）",
      "emptyListTip": "创建空列表，添加地址后生效",
      "start": "开始创建",
+     "applyConfirm": "将创建缺失的默认策略与地址列表（已存在项直接复用，引用失效项删除重建）。创建过程不可关闭弹框，确认开始？",
      "status": {
       "missing": "未创建",
       "created": "已创建",

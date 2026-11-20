@@ -1183,6 +1183,7 @@ export default {
      "listsTitle": "Address lists (edit entries in IP lists after creation)",
      "emptyListTip": "Created empty; takes effect after adding addresses",
      "start": "Start",
+     "applyConfirm": "This will create missing default policies and address lists (existing items reused, broken ones rebuilt). The dialog cannot be closed during creation. Start?",
      "status": {
       "missing": "Not created",
       "created": "Created",
