@@ -206,11 +206,10 @@
                 </div>
               </div>
             </div>
-            <div class="daily-field">
-              <span class="daily-label">{{ t('app.notification.rules.colUpdatedBy') }}</span>
-              <span class="daily-value">{{ dailyRule.updated_by_name || '—' }}</span>
-              <span class="daily-label">{{ t('app.notification.rules.colUpdatedAt') }}</span>
-              <span class="daily-value">{{ formatDate(dailyRule.updated_at) || '—' }}</span>
+            <div class="daily-meta">
+              <span class="daily-meta-item">{{ t('app.notification.rules.colUpdatedBy') }}：<b>{{ dailyRule.updated_by_name || '—' }}</b></span>
+              <span class="daily-meta-sep">·</span>
+              <span class="daily-meta-item">{{ t('app.notification.rules.colUpdatedAt') }}：<b>{{ formatDate(dailyRule.updated_at) || '—' }}</b></span>
             </div>
           </div>
         </el-card>
@@ -1116,6 +1115,7 @@ const saveAllRuleDrafts = async (): Promise<void> => {
       rule.min_level = d.min_level
     }
     mfaAwareSuccess(t('app.notification.rules.saved'))
+    await fetchRules(true) // 刷新更新用户/更新时间与草稿基线
   } catch (e) {
     if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
   } finally { savingAllRules.value = false }
@@ -1141,6 +1141,7 @@ const saveDailyDraft = async (): Promise<void> => {
     r.channel_ids = [...d.channel_ids]
     r.send_time = d.send_time
     mfaAwareSuccess(t('app.notification.rules.saved'))
+    await fetchRules(true) // 刷新摘要更新用户/更新时间
   } catch (e) {
     if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
   } finally { savingDaily.value = false }
@@ -1646,6 +1647,9 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .daily-card { margin-bottom: 16px; }
 .daily-icon { color: #8b5cf6; }
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
+.daily-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6b7280; }
+.daily-meta b { font-weight: 600; color: #111827; }
+.daily-meta-sep { color: #d1d5db; }
 .daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; line-height: 24px; }
 .daily-items { flex: 1; min-width: 0; }

@@ -122,14 +122,15 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 	defer tx.Rollback()
 	for _, op := range ops {
 		if op.minLevel == "" {
-			if _, err := tx.Exec(`DELETE FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, op.eventType); err != nil {
+			// 取消订阅=停用行（保留更新者/时间；投递侧按 enabled=0 过滤并 opt-out 默认兜底）。
+			if _, err := tx.Exec(`UPDATE notification_subscriptions SET enabled=0, updated_at=datetime('now'), updated_by=? WHERE user_id=? AND event_type=?`, uid, uid, op.eventType); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
 				return
 			}
 			continue
 		}
-		if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, updated_at, updated_by) VALUES (?,?,?,?,datetime('now'),?)
-			ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template,
+		if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, enabled, updated_at, updated_by) VALUES (?,?,?,?,1,datetime('now'),?)
+			ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template, enabled=1,
 			updated_at=excluded.updated_at, updated_by=excluded.updated_by`, uid, op.eventType, op.minLevel, op.bodyTemplate, uid); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
 			return

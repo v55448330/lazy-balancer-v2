@@ -80,15 +80,15 @@ func TestUpdateNotificationRule_partialUpdatePreservesState(t *testing.T) {
 		t.Fatalf("级别保存后 level=%q tpl=%q, want critical+模板保留", level, tpl)
 	}
 
-	// 显式停用=删行（取消订阅语义不变）
+	// 显式停用=停用行（保留更新用户/时间；投递侧按 enabled=0 过滤）
 	status, out = doNotifyRequest(t, r, http.MethodPost, "/notification/rules/"+gid, `{"enabled":false}`)
 	if status != http.StatusOK || out["code"].(float64) != 0 {
 		t.Fatalf("停用 status=%d body=%v", status, out)
 	}
-	var n int
-	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=7 AND event_type='cert.failed'`).Scan(&n)
-	if n != 0 {
-		t.Fatalf("停用后订阅行数=%d, want 0", n)
+	var n, en int
+	_ = db.DB.QueryRow(`SELECT COUNT(*), COALESCE(MAX(enabled),-1) FROM notification_subscriptions WHERE user_id=7 AND event_type='cert.failed'`).Scan(&n, &en)
+	if n != 1 || en != 0 {
+		t.Fatalf("停用后行数=%d enabled=%d, want 1/0（保留行+停用）", n, en)
 	}
 
 	// 未订阅组只写模板：不得静默建行（无 enabled=true 不激活）
@@ -96,9 +96,9 @@ func TestUpdateNotificationRule_partialUpdatePreservesState(t *testing.T) {
 	if status != http.StatusOK || out["code"].(float64) != 0 {
 		t.Fatalf("未订阅写模板 status=%d body=%v", status, out)
 	}
-	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=7 AND event_type='cert.failed'`).Scan(&n)
-	if n != 0 {
-		t.Fatalf("未订阅写模板后行数=%d, want 0（不得静默启用）", n)
+	_ = db.DB.QueryRow(`SELECT COUNT(*), COALESCE(MAX(enabled),-1) FROM notification_subscriptions WHERE user_id=7 AND event_type='cert.failed'`).Scan(&n, &en)
+	if n != 1 || en != 0 {
+		t.Fatalf("停用后写模板行数=%d enabled=%d, want 1/0（不得静默启用）", n, en)
 	}
 }
 

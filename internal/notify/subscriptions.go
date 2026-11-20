@@ -14,17 +14,24 @@ func subscribersFor(eventType string, level Level) ([]int64, error) {
 	if !ok {
 		return nil, nil
 	}
-	rows, err := db.DB.Query(`SELECT user_id, min_level FROM notification_subscriptions WHERE event_type=?`, eventType)
+	rows, err := db.DB.Query(`SELECT user_id, min_level, COALESCE(enabled,1) FROM notification_subscriptions WHERE event_type=?`, eventType)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	byEvent := map[int64]string{}
+	disabled := map[int64]bool{}
 	for rows.Next() {
 		var uid int64
 		var minLevel string
-		if err := rows.Scan(&uid, &minLevel); err != nil {
+		var enabled int
+		if err := rows.Scan(&uid, &minLevel, &enabled); err != nil {
 			return nil, err
+		}
+		if enabled == 0 {
+			// 显式停用行：作为「用户意志」排除默认兜底（opt-out），不投递。
+			disabled[uid] = true
+			continue
 		}
 		byEvent[uid] = minLevel
 	}
@@ -68,6 +75,9 @@ func subscribersFor(eventType string, level Level) ([]int64, error) {
 		for uid := range hasChannel {
 			if _, explicit := byEvent[uid]; explicit {
 				continue
+			}
+			if disabled[uid] {
+				continue // 显式停用=opt-out，不参与默认兜底
 			}
 			if AtLeast(level, entry.Level) {
 				out = append(out, uid)

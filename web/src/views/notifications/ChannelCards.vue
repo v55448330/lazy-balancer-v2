@@ -57,7 +57,7 @@
                 <span class="ch-transport-value">{{ transportSummary(ch) }}</span>
               </div>
             </div>
-            <div v-if="ch.type === 'wx_clawbot' && ch.session_ready === false" class="info-note-bar rebind-note">
+            <div v-if="ch.type === 'wx_clawbot' && !wxSessionOk(ch)" class="info-note-bar rebind-note">
               <span class="info-note-desc">{{ t('app.notification.channels.wxSessionStaleHint') }}</span>
               <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">{{ t('app.notification.channels.rebindRetry') }}</el-button>
             </div>
@@ -69,8 +69,8 @@
               <span v-if="ch.type === 'qq' || ch.type === 'wx_clawbot'" class="ch-link" :class="ch.link_connected ? 'is-online' : 'is-offline'">
                 <i class="ch-link-dot" />{{ ch.link_connected ? t('app.notification.channels.linkOnline') : t('app.notification.channels.linkOffline') }}
               </span>
-              <span v-if="ch.type === 'wx_clawbot'" class="ch-session" :class="ch.session_ready ? 'is-ready' : 'is-pending'" :title="t('app.notification.channels.sessionHint')">
-                {{ ch.session_ready ? t('app.notification.channels.sessionReady') : t('app.notification.channels.sessionPending') }}
+              <span v-if="ch.type === 'wx_clawbot'" class="ch-session" :class="wxSessionOk(ch) ? 'is-ready' : 'is-pending'" :title="t('app.notification.channels.sessionHint')">
+                {{ wxSessionOk(ch) ? t('app.notification.channels.sessionReady') : t('app.notification.channels.sessionPending') }}
               </span>
               <span class="ch-test" :class="testStateClass(ch)">
                 <i class="ch-test-dot" :class="!ch.last_test_at ? 'is-none' : ch.last_test_ok ? 'is-ok' : 'is-fail'" />
@@ -345,6 +345,8 @@ const testStateText = (ch: NotificationChannel): string => {
   if (!ch.last_test_at) return t('app.notification.channels.neverTested')
   return ch.last_test_ok ? t('app.notification.channels.testStateOk') : t('app.notification.channels.testStateFail')
 }
+// 微信会话真实可用性：context_token 存在且最近测试未失败（后端 token 存在≠服务端未过期）。
+const wxSessionOk = (ch: NotificationChannel): boolean => ch.session_ready === true && ch.last_test_ok !== false
 const testStateClass = (ch: NotificationChannel): string =>
   !ch.last_test_at ? 'test-none' : ch.last_test_ok ? 'test-ok' : 'test-fail'
 
