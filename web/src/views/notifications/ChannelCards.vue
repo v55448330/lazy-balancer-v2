@@ -66,16 +66,10 @@
               <el-button size="small" link type="primary" :disabled="writeBlocked" @click="openEdit(ch)">{{ t('app.notification.channels.rebindRetry') }}</el-button>
             </div>
             <div class="ch-foot">
-              <span v-if="ch.type === 'qq' || ch.type === 'wx_clawbot'" class="ch-link" :class="ch.link_connected ? 'is-online' : 'is-offline'">
-                <i class="ch-link-dot" />{{ ch.link_connected ? t('app.notification.channels.linkOnline') : t('app.notification.channels.linkOffline') }}
-              </span>
-              <span v-if="ch.type === 'wx_clawbot'" class="ch-session" :class="wxSessionOk(ch) ? 'is-ready' : 'is-pending'" :title="t('app.notification.channels.sessionHint')">
-                {{ wxSessionOk(ch) ? t('app.notification.channels.sessionReady') : t('app.notification.channels.sessionPending') }}
-              </span>
-              <span class="ch-test" :class="testStateClass(ch)">
-                <i class="ch-test-dot" :class="!ch.last_test_at ? 'is-none' : ch.last_test_ok ? 'is-ok' : 'is-fail'" />
-                {{ testStateText(ch) }}
-              </span>
+              <el-tooltip :content="channelHealthTip(ch)" placement="top">
+                <el-tag size="small" effect="plain" :type="channelHealth(ch).type">{{ channelHealth(ch).label }}</el-tag>
+              </el-tooltip>
+              <span class="ch-verified">{{ ch.last_test_at ? formatDate(ch.last_test_at) : t('app.notification.channels.healthNeverVerified') }}</span>
               <div class="ch-actions">
                 <el-button size="small" link type="primary" :loading="testingId === ch.id" :disabled="writeBlocked" @click="testChannel(ch)">
                   {{ t('app.notification.channels.test') }}
@@ -219,6 +213,7 @@ import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChatDotRound, ChatLineRound, Edit, Link, Message, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { formatDate } from '@/utils/date'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { safeLocalStorageGet, safeLocalStorageSet } from '@/utils/safeWebStorage'
 import { useAuthStore } from '@/stores/auth'
@@ -341,11 +336,6 @@ const transportSummary = (ch: NotificationChannel): string => {
   return t('app.notification.channels.styleFormatText') // 微信 iLink 仅文本
 }
 
-const testStateText = (ch: NotificationChannel): string => {
-  if (!ch.last_test_at) return t('app.notification.channels.neverTested')
-  return ch.last_test_ok ? t('app.notification.channels.testStateOk') : t('app.notification.channels.testStateFail')
-}
-// 微信会话真实可用性：context_token 存在且最近测试未失败（后端 token 存在≠服务端未过期）。
 // 「绑定测试」关键词加粗（提示更醒目，降低困惑）。
 const bindParts = (s: string): { text: string; bold: boolean }[] => {
   const parts: { text: string; bold: boolean }[] = []
@@ -361,9 +351,26 @@ const bindParts = (s: string): { text: string; bold: boolean }[] => {
   if (rest) parts.push({ text: rest, bold: false })
   return parts
 }
+// 复合健康态（单一事实呈现，避免「在线+就绪+测试失败」自相矛盾）：
+// disabled > link_down > session_stale(wx) > test_failed > unverified > ready
+type HealthState = 'disabled' | 'link_down' | 'session_stale' | 'test_failed' | 'unverified' | 'ready'
+const channelHealth = (ch: NotificationChannel): { state: HealthState; label: string; type: 'info' | 'success' | 'warning' | 'danger' } => {
+  if (!ch.enabled) return { state: 'disabled', label: t('app.notification.channels.healthDisabled'), type: 'info' }
+  if ((ch.type === 'qq' || ch.type === 'wx_clawbot') && ch.link_connected === false) {
+    return { state: 'link_down', label: t('app.notification.channels.healthLinkDown'), type: 'danger' }
+  }
+  if (ch.type === 'wx_clawbot' && !wxSessionOk(ch)) {
+    return { state: 'session_stale', label: t('app.notification.channels.healthSessionStale'), type: 'warning' }
+  }
+  if (ch.last_test_ok === false) return { state: 'test_failed', label: t('app.notification.channels.healthTestFailed'), type: 'danger' }
+  if (!ch.last_test_at) return { state: 'unverified', label: t('app.notification.channels.healthUnverified'), type: 'info' }
+  return { state: 'ready', label: t('app.notification.channels.healthReady'), type: 'success' }
+}
+const channelHealthTip = (ch: NotificationChannel): string => {
+  const verified = ch.last_test_at ? formatDate(ch.last_test_at) : t('app.notification.channels.healthNeverVerified')
+  return t('app.notification.channels.healthTooltip', { state: channelHealth(ch).label, time: verified })
+}
 const wxSessionOk = (ch: NotificationChannel): boolean => ch.session_ready === true && ch.last_test_ok !== false
-const testStateClass = (ch: NotificationChannel): string =>
-  !ch.last_test_at ? 'test-none' : ch.last_test_ok ? 'test-ok' : 'test-fail'
 
 const fetchChannels = async (silent = false): Promise<void> => {
   const seq = ++fetchSeq
@@ -832,6 +839,11 @@ const toggleEnabled = async (ch: NotificationChannel): Promise<void> => {
     await request.put(`/notification/channels/${ch.id}`, { enabled: target })
     if (target) markRebindIncomplete(ch.id, false)
     await fetchChannels() // 刷新连接/会话/测试态，状态准确
+    // 启用即复验：主动测一次使状态从「未验证」变为真实结果（失败给出引导）
+    if (target && (ch.type === 'qq' || ch.type === 'wx_clawbot')) {
+      const cur = channels.value.find(c => c.id === ch.id)
+      if (cur) await doTestChannel(cur)
+    }
   } catch {
     ch.enabled = !target
   }
@@ -939,21 +951,7 @@ defineExpose({ fetchChannels })
 
 /* 底栏：测试态（左）+文字操作（右），分隔线收口，margin-top:auto 齐高 */
 .ch-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; margin-top: auto; }
-.ch-test { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
-.ch-test-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.ch-test-dot.is-ok { background: #059669; }
-.ch-test-dot.is-fail { background: #f56c6c; }
-.ch-test-dot.is-none { background: #9ca3af; }
-.ch-link { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
-.ch-link-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.ch-link.is-online { color: #059669; }
-.ch-link.is-online .ch-link-dot { background: #059669; }
-.ch-link.is-offline { color: #f56c6c; }
-.ch-link.is-offline .ch-link-dot { background: #f56c6c; }
-.ch-session { font-size: 12px; padding: 1px 6px; border-radius: 3px; }
-.ch-session.is-ready { color: #059669; background: #ecfdf5; }
-.ch-session.is-pending { color: #d97706; background: #fffbeb; }
-.ch-test { margin-right: auto; }
+.ch-verified { font-size: 12px; color: #6b7280; margin-right: auto; }
 .test-ok { color: #059669; }
 .test-fail { color: #f56c6c; }
 .test-none { color: #9ca3af; }
