@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -132,6 +133,29 @@ func TestApplyDefaultSecurityPolicies_dirtyRefRebuilds(t *testing.T) {
 	}
 	if want := "[" + jsonInt(newListID) + "]"; wlRefs != want {
 		t.Fatalf("rebuilt refs=%s want %s", wlRefs, want)
+	}
+}
+
+// 目录 JSON 契约：数组字段恒为 []（null 会让前端展开/取长崩渲染——
+// 2026-11-20 用户实测 TypeError: system_list_refs is not iterable）。
+func TestGetDefaultSecurityCatalog_noNullArrays(t *testing.T) {
+	raw, err := json.Marshal(GetDefaultSecurityCatalog())
+	if err != nil {
+		t.Fatalf("marshal catalog: %v", err)
+	}
+	for _, nullField := range []string{`"list_refs":null`, `"system_list_refs":null`} {
+		if strings.Contains(string(raw), nullField) {
+			t.Fatalf("catalog JSON contains %s——空集须序列化为 [] 而非 null", nullField)
+		}
+	}
+	var cat DefaultSecurityCatalog
+	if err := json.Unmarshal(raw, &cat); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, p := range cat.Policies {
+		if p.ListRefs == nil || p.SystemListRefs == nil {
+			t.Fatalf("policy %q refs 为 nil——须空切片", p.Name)
+		}
 	}
 }
 

@@ -6782,7 +6782,10 @@ var defaultPolicySeeds = []defaultPolicySeed{
 func GetDefaultSecurityCatalog() DefaultSecurityCatalog {
 	cat := DefaultSecurityCatalog{Lists: defaultIPListSeeds}
 	for _, sd := range defaultPolicySeeds {
-		cp := DefaultCatalogPolicy{Name: sd.name, Desc: sd.desc, PolicyType: sd.ptype, ListRefs: sd.ipWLRefKeys}
+		// ListRefs/SystemListRefs 恒空切片起底——nil 会序列化为 null，
+		// 前端展开 ...null 直接崩渲染（2026-11-20 用户实测）。
+		cp := DefaultCatalogPolicy{Name: sd.name, Desc: sd.desc, PolicyType: sd.ptype, ListRefs: []string{}, SystemListRefs: []string{}}
+		cp.ListRefs = append(cp.ListRefs, sd.ipWLRefKeys...)
 		cp.ListRefs = append(cp.ListRefs, sd.ipACLRefKeys...)
 		for _, r := range sd.ipACLRefKeys {
 			if len(r) > 4 && r[:4] == "sys:" {

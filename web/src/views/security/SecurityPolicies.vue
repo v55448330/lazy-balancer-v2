@@ -1069,8 +1069,8 @@
           <div v-for="pol in group.policies" :key="pol.name" class="defaults-item">
             <div class="defaults-item-name">{{ pol.name }}</div>
             <div class="defaults-item-desc">{{ pol.desc }}</div>
-            <div v-if="pol.list_refs.length > 0 || pol.system_list_refs.length > 0" class="defaults-item-refs">
-              {{ t('app.security.policies.defaults.refsLabel') }}{{ [...pol.list_refs.map(refName), ...pol.system_list_refs].join('、') }}
+            <div v-if="(pol.list_refs?.length ?? 0) > 0 || (pol.system_list_refs?.length ?? 0) > 0" class="defaults-item-refs">
+              {{ t('app.security.policies.defaults.refsLabel') }}{{ [...(pol.list_refs ?? []).map(refName), ...(pol.system_list_refs ?? [])].join('、') }}
             </div>
           </div>
         </div>
@@ -4163,7 +4163,8 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .form-tip-line.is-error { color: var(--el-color-danger); }
 
 /* 默认策略弹框（用户裁定 2026-11-20 第五轮） */
-.header-actions { display: flex; gap: 8px; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.header-actions :deep(.el-button .el-icon) { margin-right: 4px; }
 .defaults-stage-group { margin-bottom: 12px; }
 .defaults-stage-title { font-weight: 600; margin-bottom: 6px; color: var(--el-text-color-primary); }
 .defaults-item { padding: 6px 10px; border-radius: 6px; background: var(--el-fill-color-light); margin-bottom: 4px; }
