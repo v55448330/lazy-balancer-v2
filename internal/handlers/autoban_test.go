@@ -336,7 +336,9 @@ func TestAutobanStatus_banEffectiveTruthTable(t *testing.T) {
 		{name: "bound deny policy with active entries", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, upstreams: []bool{true}, want: true},
 		{name: "unbound deny policy", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", ruleEnabled: true, upstreams: []bool{true}, want: false},
 		{name: "disabled rule", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: false, upstreams: []bool{true}, want: false},
-		{name: "empty list", entries: `[]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, upstreams: []bool{true}, want: false},
+		// 2026-11-21 用户裁定：名单为空≠功能未生效——空名单时封禁链路已就绪
+		// （写入名单即拦截），黄条不得再以「名单为空」为由误报。
+		{name: "empty list with wired deny policy", entries: `[]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, upstreams: []bool{true}, want: true},
 		{name: "IP ACL disabled", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: false, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, upstreams: []bool{true}, want: false},
 		{name: "whitelist reference only", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: false, aclMode: "deny", refsField: "ip_whitelist_refs", bind: true, ruleEnabled: true, upstreams: []bool{true}, want: false},
 		// 渲染层对零启用上游的规则整条 continue——此时名单

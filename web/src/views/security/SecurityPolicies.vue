@@ -1114,7 +1114,7 @@
       <template #footer>
         <template v-if="defaultsPhase !== 'done'">
           <el-button :disabled="defaultsRunning" @click="defaultsVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
-          <el-button type="primary" :loading="defaultsRunning" :disabled="!defaultsCatalog" @click="runApplyDefaults">{{ t('app.security.policies.defaults.start') }}</el-button>
+          <el-button type="primary" :loading="defaultsRunning" :disabled="!defaultsCatalog" @click="runApplyDefaults">{{ t(defaultsAllExist ? 'app.security.policies.defaults.reCreate' : 'app.security.policies.defaults.start') }}</el-button>
         </template>
         <el-button v-else type="primary" @click="defaultsVisible = false">{{ t('app.security.policies.common.close') }}</el-button>
       </template>
@@ -1235,6 +1235,12 @@ const defaultsSections = computed<DefaultsSection[]>(() => {
 // §15 状态标签语义：未创建/已存在=info·success、创建后=success、需重建/已重建=warning
 const defaultsStatusTagType = (status: string): 'success' | 'info' | 'warning' =>
   status === 'missing' || status === 'exists' ? 'info' : status === 'created' ? 'success' : 'warning'
+// 全部已存在（列表+策略，无 missing/dirty）→ 弹框按钮切「重新创建」（reset）
+const defaultsAllExist = computed(() => {
+  const cat = defaultsCatalog.value
+  if (!cat) return false
+  return cat.lists.every((l) => l.status === 'exists') && cat.policies.every((p) => p.status === 'exists')
+})
 const refName = (ref: string): string =>
   defaultsCatalog.value?.lists.find((l) => l.key === ref)?.name ?? ref
 const openDefaultsDialog = async (): Promise<void> => {
@@ -1250,15 +1256,21 @@ const openDefaultsDialog = async (): Promise<void> => {
   }
 }
 const runApplyDefaults = async (): Promise<void> => {
-  // §14 操作确认：批量创建/重建为状态变更操作，取消不执行
+  // §14 操作确认：批量创建/重建为状态变更操作，取消不执行；全部已存在时走
+  // 重新创建（reset）——删除重建全部默认策略（自定义修改丢失，绑定保留）。
+  const reset = defaultsAllExist.value
   try {
-    await ElMessageBox.confirm(t('app.security.policies.defaults.applyConfirm'), t('app.security.policies.common.confirmTitle'), { type: 'warning' })
+    await ElMessageBox.confirm(
+      t(reset ? 'app.security.policies.defaults.reConfirm' : 'app.security.policies.defaults.applyConfirm'),
+      t('app.security.policies.common.confirmTitle'),
+      { type: 'warning' },
+    )
   } catch {
     return
   }
   defaultsPhase.value = 'running'
   try {
-    const res = await request.post<APIResponse<DefaultApplyItem[]>>('/security/policies/apply-defaults')
+    const res = await request.post<APIResponse<DefaultApplyItem[]>>('/security/policies/apply-defaults', { reset })
     defaultsItems.value = res.data || []
     defaultsPhase.value = 'done'
     ElMessage.success(t('app.security.policies.defaults.doneToast'))
@@ -4243,5 +4255,5 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .defaults-detail-text { font-size: 12px; color: var(--el-text-color-primary); line-height: 1.6; }
 .defaults-detail-refs { display: flex; flex-wrap: wrap; gap: 4px; }
 .defaults-done-tip { margin-top: 12px; }
-.defaults-done-tip :deep(.el-link) { font-size: 12px; }
+.defaults-done-tip :deep(.el-link) { font-size: 12px; vertical-align: baseline; }
 </style>

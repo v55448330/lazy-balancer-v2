@@ -1149,7 +1149,17 @@ func (h *Handlers) GetDefaultPolicyCatalog(c *gin.Context) {
 // ApplyDefaultPolicies 逐项创建/复用/重建默认地址列表与策略（用户裁定
 // 2026-11-20 第五轮：启动不再自动播种，面板按钮驱动；脏引用删除重建）。
 func (h *Handlers) ApplyDefaultPolicies(c *gin.Context) {
-	items, err := db.ApplyDefaultSecurityPolicies()
+	var req struct {
+		Reset bool `json:"reset"`
+	}
+	_ = c.ShouldBindJSON(&req) // 空 body 兼容（存量调用方/测试不发 body）
+	var items []db.DefaultApplyItem
+	var err error
+	if req.Reset {
+		items, err = db.ApplyDefaultSecurityPoliciesReset()
+	} else {
+		items, err = db.ApplyDefaultSecurityPolicies()
+	}
 	if err != nil {
 		// 部分成功也返回已建项：前端展示进度，重跑走 exists/rebuilt 恢复
 		recordAudit(c, "创建", "安全策略", services.FormatAuditDetail("默认策略批量创建：失败", services.AuditResultPart(fmt.Sprintf("已建 %d 项", len(items)))))
@@ -1158,6 +1168,12 @@ func (h *Handlers) ApplyDefaultPolicies(c *gin.Context) {
 	}
 	recordAudit(c, "创建", "安全策略", fmt.Sprintf("默认策略批量创建：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
 		countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt")))
+	// 新建/重建的策略可能已被立即绑定（含既有绑定指向同名新行）——必须重渲染
+	// 配置，否则 Caddy 侧无安全链（创建成功≠生效）。
+	if applyErr := h.applyCaddyConfigE(); applyErr != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_7d87740a", services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_7d87740a", Data: items})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: items})
 }
 

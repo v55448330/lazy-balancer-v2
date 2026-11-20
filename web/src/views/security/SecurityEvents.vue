@@ -78,7 +78,6 @@
            IP 名单通道：名单为空或未被启用中的 deny 策略引用） -->
       <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
         <span class="info-note-desc">{{ t('app.security.events.ineffectiveNotice') }}</span>
-        <el-button v-if="autobanWritable" size="small" type="primary" plain :loading="autobanFixing" @click="fixAutobanIneffective">{{ t('app.security.events.fixAction') }}</el-button>
       </div>
       <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
            运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
@@ -612,7 +611,7 @@ import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, 
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { useIpListAdd } from '@/composables/useIpListAdd'
 import { useClampedPagination } from '@/composables/useClampedPagination'
-import { parseRefIds, invalidateSharedEntriesCache } from '@/utils/securityStages'
+import { invalidateSharedEntriesCache } from '@/utils/securityStages'
 import { showSaveResult } from '@/utils/saveResult'
 import { requestBodyEmptyNotice, viewerCanReadRequestBody } from '@/utils/requestBodyAccess'
 import { activateOnce } from '@/utils/keyboardActivate'
@@ -997,37 +996,7 @@ const onBanIpChanged = (): void => {
   void fetchAutobanStatus()
 }
 
-// —— 未生效一键修复：把 autoban 名单绑到启用中的 deny 策略（复用补引用链）——
-const autobanFixing = ref(false)
-const fixAutobanIneffective = async (): Promise<void> => {
-  const listId = autobanStatus.value.list_id
-  if (!listId || autobanFixing.value || !autobanWritable.value) return
-  autobanFixing.value = true
-  try {
-    const res = await request.get<APIResponse<Array<{ id: number; name: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; ip_acl_list_refs?: string }>>>('/security/policies?enabled=true', { silent: true })
-    const candidates = (res.data ?? []).filter((p) => p.enabled && p.ip_acl_enabled && p.ip_acl_mode === 'deny')
-    if (candidates.length === 0) {
-      // 无可用 deny 策略：深链引导创建。
-      window.open(pageUrl('security-policies'), '_blank', 'noopener')
-      ElMessage.info(t('app.security.events.fixNoPolicy'))
-      return
-    }
-    const target = candidates[0]
-    await ElMessageBox.confirm(
-      t('app.security.events.fixConfirm', { policy: target.name }),
-      t('app.security.events.fixTitle'),
-      { confirmButtonText: t('app.security.events.fixOk'), cancelButtonText: t('app.security.events.cancel'), type: 'info' },
-    )
-    // 确认后重读最新 refs（防并发覆盖，与 useTrustAssociation 同口径）。
-    const latest = await request.get<APIResponse<{ policy?: { ip_acl_list_refs?: string } }>>(`/security/policies/${target.id}`, { silent: true })
-    const refs = parseRefIds(latest.data?.policy?.ip_acl_list_refs)
-    if (refs.includes(listId)) { ElMessage.info(t('app.security.events.fixAlready')); await fetchAutobanStatus(); return }
-    await request.put(`/security/policies/${target.id}`, { ip_acl_list_refs: JSON.stringify([...refs, listId]) })
-    mfaAwareSuccess(t('app.security.events.fixDone'))
-    await fetchAutobanStatus()
-  } catch { /* 取消/失败由确认框/全局拦截器处理 */ }
-  finally { autobanFixing.value = false }
-}
+
 
 // —— 观察闭环：候选行封禁（复用 useIpListAdd）+ 开始执法（PUT dry_run=false）——
 const { addIpToList } = useIpListAdd()

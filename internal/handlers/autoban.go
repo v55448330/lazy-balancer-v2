@@ -315,9 +315,8 @@ func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 	if preset.id <= 0 {
 		return true
 	}
-	if preset.activeCount == 0 {
-		return false // 无生效条目时，deny 引用也不会产生拦截
-	}
+	// 2026-11-21 用户裁定：名单为空≠功能未生效——封禁链路就绪（deny 引用+
+	// 绑定+启用规则+启用上游）即生效，写入名单即拦截；空名单不弹不生效黄条。
 	var count int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies p
 		WHERE COALESCE(p.enabled,0)=1 AND COALESCE(p.ip_acl_enabled,0)=1 AND COALESCE(p.ip_acl_mode,'')='deny'

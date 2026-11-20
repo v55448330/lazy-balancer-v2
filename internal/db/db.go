@@ -6853,6 +6853,17 @@ func policyRefsValid(policyID int64) bool {
 // 每项独立提交：中途失败时已建项成为下次运行的 exists/rebuilt 输入
 // （用户裁定的脏数据恢复路径——先删除后重建）。
 func ApplyDefaultSecurityPolicies() ([]DefaultApplyItem, error) {
+	return applyDefaultSecurityPolicies(false)
+}
+
+// ApplyDefaultSecurityPoliciesReset 重新创建（用户裁定 2026-11-21）：全部默认
+// 策略删除重建（恢复默认字段值，绑定迁移到新 id，status=rebuilt）；地址列表
+// 不动（保留用户条目）。用于「全部已存在」时的重置默认策略入口。
+func ApplyDefaultSecurityPoliciesReset() ([]DefaultApplyItem, error) {
+	return applyDefaultSecurityPolicies(true)
+}
+
+func applyDefaultSecurityPolicies(reset bool) ([]DefaultApplyItem, error) {
 	items := make([]DefaultApplyItem, 0, 10)
 	// 1) 用户地址列表：按名复用，缺失创建（空条目）
 	listIDs := make(map[string]int64, len(defaultIPListSeeds))
@@ -6896,15 +6907,37 @@ func ApplyDefaultSecurityPolicies() ([]DefaultApplyItem, error) {
 
 		var existingID int64
 		status := "created"
+		// 重建前捕获旧绑定（rule_caddy_id, rank）——重建后重指到新 id，否则
+		// 绑定悬空、渲染层静默跳过该策略（2026-11-21 用户实测安全链不生成）。
+		type boundRule struct {
+			ruleCaddyID string
+			rank        int64
+		}
+		var oldBindings []boundRule
 		err := DB.QueryRow(`SELECT id FROM security_policies WHERE name=?`, sd.name).Scan(&existingID)
+		rebuild := false
 		switch {
-		case err == nil && policyRefsValid(existingID):
+		case err == nil && policyRefsValid(existingID) && !reset:
 			status = "exists"
-		case err == nil: // 脏引用——删除重建
+		case err == nil:
+			rows, qerr := DB.Query(`SELECT rule_caddy_id, COALESCE(rank,0) FROM security_policy_bindings WHERE policy_id=?`, existingID)
+			if qerr != nil {
+				return items, fmt.Errorf("read bindings of %q: %w", sd.name, qerr)
+			}
+			for rows.Next() {
+				var br boundRule
+				if e := rows.Scan(&br.ruleCaddyID, &br.rank); e != nil {
+					rows.Close()
+					return items, fmt.Errorf("scan binding of %q: %w", sd.name, e)
+				}
+				oldBindings = append(oldBindings, br)
+			}
+			rows.Close()
 			if _, derr := DB.Exec(`DELETE FROM security_policies WHERE id=?`, existingID); derr != nil {
 				return items, fmt.Errorf("clean dirty policy %q: %w", sd.name, derr)
 			}
 			status = "rebuilt"
+			rebuild = true
 		}
 		if status != "exists" {
 			res, ierr := DB.Exec(`INSERT INTO security_policies
@@ -6918,7 +6951,7 @@ func ApplyDefaultSecurityPolicies() ([]DefaultApplyItem, error) {
 				VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				sd.name, sd.desc, sd.mode, sd.ptype,
 				sd.ipWLEnabled, string(wlJSON),
-				sd.ipACLEnabled, sd.ipACLMode, string(aclJSON),
+				sd.ipACLEnabled, orString(sd.ipACLMode, "deny"), string(aclJSON),
 				orString(sd.geoipMode, "off"), orString(sd.geoipCountries, "[]"),
 				orString(sd.crsGroups, "[]"), sd.wafCheckResp, sd.logReqBody,
 				orString(sd.humanMode, "off"), orString(sd.humanType, DefaultHumanVerifyType), DefaultHumanVerifyTTL,
@@ -6927,8 +6960,19 @@ func ApplyDefaultSecurityPolicies() ([]DefaultApplyItem, error) {
 				return items, fmt.Errorf("create policy %q: %w", sd.name, ierr)
 			}
 			existingID, _ = res.LastInsertId()
+			if rebuild {
+				for _, br := range oldBindings {
+					if _, berr := DB.Exec(`INSERT OR REPLACE INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES (?,?,?)`, br.ruleCaddyID, existingID, br.rank); berr != nil {
+						return items, fmt.Errorf("migrate binding %s→%q: %w", br.ruleCaddyID, sd.name, berr)
+					}
+				}
+			}
 		}
 		items = append(items, DefaultApplyItem{Kind: "policy", Name: sd.name, Stage: sd.ptype, Status: status, ID: existingID})
+	}
+	// 悬空绑定清理（指向已删除策略的历史行——含本批重建残留与更早的孤儿）
+	if _, derr := DB.Exec(`DELETE FROM security_policy_bindings WHERE policy_id NOT IN (SELECT id FROM security_policies)`); derr != nil {
+		return items, fmt.Errorf("clean dangling bindings: %w", derr)
 	}
 	return items, nil
 }
