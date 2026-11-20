@@ -259,18 +259,6 @@
                 </el-popover>
               </template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.minLevel')" width="120">
-              <template #header>
-                <span>{{ t('app.notification.rules.minLevel') }}<FieldHelpIcon :content="t('app.notification.rules.minLevelHint')" /></span>
-              </template>
-              <template #default="{ row }">
-                <el-select v-model="ruleDraftOf(asRule(row)).min_level" size="small" style="width:96px">
-                  <el-option value="info" :label="t('app.notification.subs.levels.info')" />
-                  <el-option value="warn" :label="t('app.notification.subs.levels.warn')" />
-                  <el-option value="critical" :label="t('app.notification.subs.levels.critical')" />
-                </el-select>
-              </template>
-            </el-table-column>
             <el-table-column :label="t('app.notification.rules.sendTo')" min-width="320">
               <template #default="{ row }">
                 <el-popover placement="bottom-start" trigger="click" :width="pickWidth.channels" :popper-options="pickPopperOptions" popper-class="nd-pick-popper">
@@ -431,7 +419,6 @@ import type { NotificationChannel, NotificationChannelsResponse } from '@/types/
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
-import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
 import ChannelCards from './ChannelCards.vue'

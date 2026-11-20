@@ -92,10 +92,9 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   assert.match(dailyBlock, /items: d\.items, channel_ids: d\.channel_ids, send_time: d\.send_time/, '卡保存只提交项目/通道/时间三键')
   assert.match(dailyBlock, /ElMessageBox\.confirm/, '卡保存需确认（取消不写）')
   assert.match(dailyBlock, /mfaAwareSuccess/, '卡保存成功经 MFA 感知提示')
-  // 级别列=下拉选择（radio-button 三按钮在窄列竖排堆叠的缺陷形态禁止回潮）；
-  // 选项文案走 subs.levels 多语言词条（信息/警告/严重）
-  assert.match(text, /el-select v-model="ruleDraftOf\(asRule\(row\)\)\.min_level"/, '级别列必须为紧凑下拉（绑定行草稿）')
-  assert.match(text, /t\('app\.notification\.subs\.levels\.info'\)/, '级别选项必须多语言')
+  // 最低级别列已下线（事件可选后不再需要）；行草稿仍保留 min_level（默认 info 随保存）
+  assert.doesNotMatch(text, /app\.notification\.rules\.minLevel/, '最低级别列已下线')
+  assert.match(text, /min_level/, '行草稿仍保留 min_level（默认 info 随保存）')
   // 事件/发送至列=点击浮层内的 bordered 多选（绑定行草稿；未测试通道禁选+提示）
   assert.match(text, /<el-popover[^>]*trigger="click"/, '事件/发送至列必须为点击浮层多选')
   assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.events"/, '事件列必须为浮层多选（绑定行草稿）')
