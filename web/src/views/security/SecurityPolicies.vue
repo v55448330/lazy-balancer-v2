@@ -4220,18 +4220,18 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 
 /* 默认策略弹框（第六轮：折叠行交互 + §16 体高门） */
 .defaults-dialog-body { max-height: calc(100vh - 300px); overflow-y: auto; }
-.defaults-dialog-body .dsh-head { margin-top: 18px; }
+.defaults-dialog-body .dsh-head { margin-top: 14px; }
 .defaults-dialog-body .dsh-head:first-of-type { margin-top: 0; }
 .defaults-panel { padding: 4px 0; }
 .defaults-row { padding: 0; cursor: pointer; transition: background-color 0.15s; }
 .defaults-row:hover { background: var(--el-fill-color-light, #f5f7fa); }
 .defaults-row.is-open { background: var(--el-fill-color-lighter, #fafafa); }
 .defaults-row + .defaults-row { border-top: 1px solid var(--el-border-color-lighter, #e9edf2); }
-.defaults-row-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; min-height: 48px; }
+.defaults-row-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; min-height: 36px; }
 .defaults-chevron { font-size: 12px; color: var(--el-text-color-secondary); transition: transform 0.2s; }
 .defaults-row.is-open .defaults-chevron { transform: rotate(90deg); }
 .defaults-row-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.defaults-row-detail { padding: 2px 14px 14px 34px; display: flex; flex-direction: column; gap: 8px; }
+.defaults-row-detail { padding: 2px 12px 10px 32px; display: flex; flex-direction: column; gap: 6px; }
 .defaults-detail-line { display: flex; align-items: flex-start; gap: 10px; }
 .defaults-detail-label { flex: none; font-size: 12px; color: var(--el-text-color-secondary); }
 .defaults-detail-text { font-size: 12px; color: var(--el-text-color-primary); line-height: 1.6; }

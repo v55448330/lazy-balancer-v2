@@ -6733,34 +6733,34 @@ type defaultPolicySeed struct {
 }
 
 var defaultIPListSeeds = []DefaultCatalogList{
-	{Key: "trust", Name: "信任名单地址列表", Desc: "[默认规则] 内网/可信 IP 网段，名单内 IP 跳过全部安全阶段", Category: "内网"},
-	{Key: "manual_blacklist", Name: "手动黑名单地址列表", Desc: "[默认规则] 手动维护的拒绝 IP/网段名单", Category: "黑名单"},
+	{Key: "trust", Name: "信任名单地址列表", Desc: "[默认规则] 内网/可信 IP 网段；可在安全事件页点 IP 经快捷弹框快速添加/移除；由「信任名单」策略引用", Category: "内网"},
+	{Key: "manual_blacklist", Name: "手动黑名单地址列表", Desc: "[默认规则] 手动维护的拒绝 IP/网段；可在安全事件页点 IP 经快捷弹框快速添加/移除；由「手动黑名单」策略引用", Category: "黑名单"},
 }
 
 var defaultPolicySeeds = []defaultPolicySeed{
 	{
-		name: "信任名单", content: "名单内 IP 直通上游，跳过全部安全阶段", desc: "[默认规则] 引用「信任名单地址列表」，名单内 IP 跳过全部安全阶段",
+		name: "信任名单", content: "名单内 IP 直通上游，跳过全部安全阶段", desc: "[默认规则] 引用「信任名单地址列表」，名单内 IP 跳过全部安全阶段；地址可经安全事件页 IP 快捷弹框快速添加/移除",
 		ptype: "stage0", mode: "off",
 		ipWLEnabled: 1, ipWLRefKeys: []string{"trust"},
 	},
 	{
-		name: "威胁情报拦截", content: "命中威胁名单 IP 即拒绝（403）", desc: "[默认规则] 拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP",
+		name: "威胁情报拦截", content: "命中威胁名单 IP 即拒绝（403）", desc: "[默认规则] 拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP；威胁库可经规则集页面更新",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny",
 		ipACLRefKeys: []string{"sys:中科大恶意 IP 名单（USTC）", "sys:FireHOL Level 1 综合黑名单", "sys:Emerging Threats 失陷主机名单"},
 	},
 	{
-		name: "手动黑名单", content: "命中名单 IP/网段即拒绝（403）", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段",
+		name: "手动黑名单", content: "命中名单 IP/网段即拒绝（403）", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段；地址可经安全事件页 IP 快捷弹框快速添加/移除",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"manual_blacklist"},
 	},
 	{
-		name: "自动封禁联动", content: "命中自动封禁名单即拒绝（403）", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截",
+		name: "自动封禁联动", content: "命中自动封禁名单即拒绝（403）", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截；需在安全事件页手动开启自动封禁功能后生效",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"sys:自动封禁名单"},
 	},
 	{
-		name: "地域拦截", content: "海外区域流量拒绝，其他放行", desc: "[默认规则] 拦截所选海外区域（其他放行）；默认勾选全部海外国家",
+		name: "地域拦截", content: "海外区域流量拒绝，其他放行", desc: "[默认规则] 拦截所选海外区域（其他放行）；IP 库可经规则集页面更新",
 		ptype: "stage1", mode: "off",
 		geoipMode: "deny", geoipCountries: `["海外"]`,
 	},
