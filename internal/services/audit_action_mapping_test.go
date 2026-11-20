@@ -638,7 +638,7 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	const (
 		// 119=117 基线+绑定会话注册/取消 2 路由 Explicit（handler 留痕）；
 		// 8=Generic 不变；19=skip 不变。新增见 auditpolicy.go 登记处注释。
-		wantExplicit = 119
+		wantExplicit = 120
 		wantGeneric  = 8
 		wantSkip     = 19
 	)

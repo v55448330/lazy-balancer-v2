@@ -179,6 +179,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/certificates/jobs/:id/retry":            AuditPolicyExplicit,
 	"DELETE /api/v1/certificates/jobs/:id":                AuditPolicyExplicit,
 	"POST /api/v1/security/policies":                      AuditPolicyExplicit,
+	"POST /api/v1/security/policies/apply-defaults":       AuditPolicyExplicit,
 	"PUT /api/v1/security/policies/:id":                   AuditPolicyExplicit,
 	"DELETE /api/v1/security/policies/:id":                AuditPolicyExplicit,
 	"POST /api/v1/security/policies/:id/bind":             AuditPolicyExplicit,

@@ -8,10 +8,16 @@
         </h2>
         <p class="page-desc">{{ t('app.security.policies.page.desc') }}</p>
       </div>
-      <el-button v-if="!isReadOnly" type="primary" :disabled="loading" @click="openDialog()">
-        <el-icon><Plus /></el-icon>
-        {{ t('app.security.policies.page.create') }}
-      </el-button>
+      <div v-if="!isReadOnly" class="header-actions">
+        <el-button :disabled="loading" @click="openDefaultsDialog">
+          <el-icon><MagicStick /></el-icon>
+          {{ t('app.security.policies.defaults.btn') }}
+        </el-button>
+        <el-button type="primary" :disabled="loading" @click="openDialog()">
+          <el-icon><Plus /></el-icon>
+          {{ t('app.security.policies.page.create') }}
+        </el-button>
+      </div>
     </div>
 
     <!-- 主数据失败与「确实没有策略」必须可区分——保留旧表 + 重试入口
@@ -1044,6 +1050,65 @@
       @saved="onBindRulesSaved"
     />
   </div>
+
+    <!-- 默认策略创建弹框（用户裁定 2026-11-20 第五轮）：预览目录→逐项创建
+         （运行中禁关）→完成指引。已存在直接复用；脏引用删除重建。 -->
+    <el-dialog
+      v-model="defaultsVisible"
+      :title="t('app.security.policies.defaults.title')"
+      width="640px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!defaultsRunning"
+      :show-close="!defaultsRunning"
+    >
+      <!-- 预览态：按阶段列出待创建策略 + 地址列表 -->
+      <template v-if="defaultsPhase === 'preview'">
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.defaults.previewTip') }}</span></div>
+        <div v-for="group in defaultsCatalogGroups" :key="group.stage" class="defaults-stage-group">
+          <div class="defaults-stage-title">{{ group.label }}</div>
+          <div v-for="pol in group.policies" :key="pol.name" class="defaults-item">
+            <div class="defaults-item-name">{{ pol.name }}</div>
+            <div class="defaults-item-desc">{{ pol.desc }}</div>
+            <div v-if="pol.list_refs.length > 0 || pol.system_list_refs.length > 0" class="defaults-item-refs">
+              {{ t('app.security.policies.defaults.refsLabel') }}{{ [...pol.list_refs.map(refName), ...pol.system_list_refs].join('、') }}
+            </div>
+          </div>
+        </div>
+        <div class="defaults-stage-group">
+          <div class="defaults-stage-title">{{ t('app.security.policies.defaults.listsTitle') }}</div>
+          <div v-for="l in defaultsCatalog?.lists ?? []" :key="l.key" class="defaults-item">
+            <div class="defaults-item-name">{{ l.name }}</div>
+            <div class="defaults-item-desc">{{ t('app.security.policies.defaults.emptyListTip') }}</div>
+          </div>
+        </div>
+      </template>
+      <!-- 运行/完成态：逐项状态 -->
+      <template v-else>
+        <div v-for="it in defaultsItems" :key="it.kind + it.name" class="defaults-item defaults-status-row">
+          <span class="defaults-status-icon" :class="`is-${it.status}`">
+            <el-icon v-if="it.status === 'created'"><CircleCheckFilled /></el-icon>
+            <el-icon v-else-if="it.status === 'rebuilt'"><RefreshLeft /></el-icon>
+            <el-icon v-else><SuccessFilled /></el-icon>
+          </span>
+          <span class="defaults-item-name">{{ it.name }}</span>
+          <span class="defaults-status-text">{{ t(`app.security.policies.defaults.status.${it.status}`) }}</span>
+        </div>
+      </template>
+      <!-- 完成指引 -->
+      <div v-if="defaultsPhase === 'done'" class="info-note-bar defaults-done-tip">
+        <span class="info-note-desc">
+          {{ t('app.security.policies.defaults.doneBindTip') }}
+          <AccessibleLink type="primary" @click="goToPoliciesList">{{ t('app.security.policies.defaults.goRules') }}</AccessibleLink>
+          {{ t('app.security.policies.defaults.doneListTip') }}
+          <AccessibleLink type="primary" @click="goToIpLists">{{ t('app.security.policies.defaults.goLists') }}</AccessibleLink>
+        </span>
+      </div>
+      <template #footer>
+        <el-button v-if="defaultsPhase === 'preview'" :disabled="defaultsRunning" @click="defaultsVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
+        <el-button v-if="defaultsPhase === 'preview'" type="primary" :loading="defaultsRunning" :disabled="!defaultsCatalog" @click="runApplyDefaults">{{ t('app.security.policies.defaults.start') }}</el-button>
+        <el-button v-if="defaultsPhase === 'done'" type="primary" @click="defaultsVisible = false">{{ t('app.security.policies.common.close') }}</el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -1051,7 +1116,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { cityEnName } from '@/utils/cityEnNames'
 import { useI18n } from 'vue-i18n'
-import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
+import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document, MagicStick, RefreshLeft, SuccessFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
@@ -1093,6 +1158,66 @@ interface BindingInfo { policy_id: number; name: string; mode: string; enabled: 
 interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
 interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; showPerfTip: boolean }
 interface BlockPage { id: number; name: string; content?: string }
+
+// ── 默认策略弹框（用户裁定 2026-11-20 第五轮）──
+interface DefaultCatalogList { key: string; name: string; desc: string; category: string }
+interface DefaultCatalogPolicy { name: string; desc: string; policy_type: string; list_refs: string[]; system_list_refs: string[] }
+interface DefaultCatalog { lists: DefaultCatalogList[]; policies: DefaultCatalogPolicy[] }
+interface DefaultApplyItem { kind: string; name: string; stage?: string; status: string; id: number }
+const defaultsVisible = ref(false)
+const defaultsPhase = ref<'preview' | 'running' | 'done'>('preview')
+const defaultsRunning = computed(() => defaultsPhase.value === 'running')
+const defaultsCatalog = ref<DefaultCatalog | null>(null)
+const defaultsItems = ref<DefaultApplyItem[]>([])
+const defaultsCatalogGroups = computed(() => {
+  if (!defaultsCatalog.value) return []
+  const byStage = new Map<string, DefaultCatalogPolicy[]>()
+  for (const p of defaultsCatalog.value.policies) {
+    const arr = byStage.get(p.policy_type) ?? []
+    arr.push(p)
+    byStage.set(p.policy_type, arr)
+  }
+  // 分组标签复用创建类型名单源 POLICY_TYPE_CREATE_OPTIONS（含 stage0 信任名单）
+  return [...byStage.entries()].map(([stage, policies]) => ({
+    stage,
+    label: POLICY_TYPE_CREATE_OPTIONS.find((o) => o.value === stage)?.label ?? stage,
+    policies,
+  }))
+})
+const refName = (ref: string): string =>
+  defaultsCatalog.value?.lists.find((l) => l.key === ref)?.name ?? ref
+const openDefaultsDialog = async (): Promise<void> => {
+  defaultsPhase.value = 'preview'
+  defaultsItems.value = []
+  defaultsVisible.value = true
+  try {
+    const res = await request.get<APIResponse<DefaultCatalog>>('/security/policies/default-catalog')
+    defaultsCatalog.value = res.data ?? null
+  } catch {
+    defaultsCatalog.value = null
+    ElMessage.error(t('app.security.policies.defaults.loadFailed'))
+  }
+}
+const runApplyDefaults = async (): Promise<void> => {
+  defaultsPhase.value = 'running'
+  try {
+    const res = await request.post<APIResponse<DefaultApplyItem[]>>('/security/policies/apply-defaults')
+    defaultsItems.value = res.data || []
+    defaultsPhase.value = 'done'
+    ElMessage.success(t('app.security.policies.defaults.doneToast'))
+    void fetchData()
+  } catch (e) {
+    // 部分成功：后端 500 也会带回已建项——展示进度后停在完成态（重跑恢复）
+    if (e instanceof ApiRequestError && Array.isArray((e as unknown as { payload?: { data?: DefaultApplyItem[] } }).payload?.data)) {
+      defaultsItems.value = ((e as unknown as { payload?: { data?: DefaultApplyItem[] } }).payload?.data) ?? []
+      defaultsPhase.value = 'done'
+    }
+    ElMessage.error(t('app.security.policies.defaults.applyFailed'))
+  }
+}
+// 指引链接：同款深链 window.open（goToBlockPagesPage 同范式）
+const goToIpLists = () => { window.open(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'ip-lists' }), '_blank', 'noopener') }
+const goToPoliciesList = () => { window.open(pageUrl('security-policies'), '_blank', 'noopener') }
 
 const blockPages = ref<BlockPage[]>([])
 
@@ -4036,4 +4161,19 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 <style scoped>
 .placeholder-code { padding: 0 4px; border-radius: 4px; background: var(--el-fill-color-light); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .form-tip-line.is-error { color: var(--el-color-danger); }
+
+/* 默认策略弹框（用户裁定 2026-11-20 第五轮） */
+.header-actions { display: flex; gap: 8px; }
+.defaults-stage-group { margin-bottom: 12px; }
+.defaults-stage-title { font-weight: 600; margin-bottom: 6px; color: var(--el-text-color-primary); }
+.defaults-item { padding: 6px 10px; border-radius: 6px; background: var(--el-fill-color-light); margin-bottom: 4px; }
+.defaults-item-name { font-weight: 500; }
+.defaults-item-desc { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.defaults-item-refs { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.defaults-status-row { display: flex; align-items: center; gap: 8px; }
+.defaults-status-icon.is-created { color: var(--el-color-success); }
+.defaults-status-icon.is-exists { color: var(--el-color-primary); }
+.defaults-status-icon.is-rebuilt { color: var(--el-color-warning); }
+.defaults-status-text { font-size: 12px; color: var(--el-text-color-secondary); }
+.defaults-done-tip { margin-top: 12px; }
 </style>

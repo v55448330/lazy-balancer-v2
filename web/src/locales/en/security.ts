@@ -1174,6 +1174,27 @@ export default {
      "crsOverlapIfCoBound": "{names} also select the same CRS rule groups ({groups}); if both bind the same rule, requests will be inspected twice",
      "crsOverlapNow": "{names} already select the same CRS rule groups ({groups}); binding both to the same rule would inspect the same request twice — keep only one"
     },
+    "defaults": {
+     "btn": "Default Policies",
+     "title": "Create Default Policies",
+     "previewTip": "Creates the default security policies and address lists below by stage (lists start empty); existing items are reused, items with broken references are deleted and rebuilt",
+     "refsLabel": "References: ",
+     "listsTitle": "Address lists (edit entries in IP lists after creation)",
+     "emptyListTip": "Created empty; takes effect after adding addresses",
+     "start": "Start",
+     "status": {
+      "created": "Created",
+      "exists": "Exists, reused",
+      "rebuilt": "Broken refs, rebuilt"
+     },
+     "doneBindTip": "Done. To bind forwarding rules: open the policy editor's rule binding step, or",
+     "goRules": "back to policy list",
+     "doneListTip": ". To add addresses: edit the address list directly, or",
+     "goLists": "open IP lists",
+     "doneToast": "Default policies created",
+     "loadFailed": "Failed to load default policy catalog",
+     "applyFailed": "Failed to apply default policies (created items recover on retry)"
+    },
     "stageName": {
      "s1": "Stage 1",
      "s2": "Stage 2",

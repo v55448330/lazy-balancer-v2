@@ -6677,167 +6677,240 @@ func repairPolicyStageMergeV2() error {
 	return nil
 }
 
-// SeedDefaultSecurityPolicies 首次安装时播种各阶段默认安全策略。
-// 仅由 cmd/server/main.go 调用（Initialize 不播——测试/导入环境不受干扰）。
-// 幂等条件=security_policies 为空（用户建过/导入过任何策略即不播）。
-func SeedDefaultSecurityPolicies() error {
-	var count int
-	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_policies`).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	// ── 播种地址列表 ──
-	// 1) 信任名单地址列表（用户可编辑）
-	res, _ := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES (?,?,?,?,0,datetime('now'),datetime('now'))`,
-		"信任名单地址列表", "[默认规则] 内网/可信 IP 网段，名单内 IP 跳过全部安全阶段", "内网",
-		`[{"value":"10.0.0.0/8"},{"value":"172.16.0.0/12"},{"value":"192.168.0.0/16"}]`)
-	trustListID, _ := res.LastInsertId()
-	// 2) 手动黑名单地址列表（用户可编辑）
-	res2, _ := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES (?,?,?,?,0,datetime('now'),datetime('now'))`,
-		"手动黑名单地址列表", "[默认规则] 手动维护的拒绝 IP/网段名单", "黑名单",
-		`[]`)
-	blacklistID, _ := res2.LastInsertId()
+// ── 默认策略目录与按需创建（用户裁定 2026-11-20 第五轮）──
+// 启动不再自动播种；面板「默认策略」按钮驱动 ApplyDefaultSecurityPolicies：
+// 逐项检查地址列表与策略——缺失创建、已存在复用、脏引用（引用的列表已删）
+// 删除重建。地址列表只建列表与引用关系，不填条目。
 
-	// ── 查内置系统名单 ID ──
-	threatNames := []string{
-		"中科大恶意 IP 名单（USTC）",
-		"FireHOL Level 1 综合黑名单",
-		"Emerging Threats 失陷主机名单",
+type DefaultApplyItem struct {
+	Kind   string `json:"kind"` // "list" | "policy"
+	Name   string `json:"name"`
+	Stage  string `json:"stage,omitempty"`
+	Status string `json:"status"` // created | exists | rebuilt
+	ID     int64  `json:"id"`
+}
+
+type DefaultCatalogList struct {
+	Key      string `json:"key"`
+	Name     string `json:"name"`
+	Desc     string `json:"desc"`
+	Category string `json:"category"`
+}
+
+type DefaultCatalogPolicy struct {
+	Name           string   `json:"name"`
+	Desc           string   `json:"desc"`
+	PolicyType     string   `json:"policy_type"`
+	ListRefs       []string `json:"list_refs"`        // 引用的用户地址列表 key
+	SystemListRefs []string `json:"system_list_refs"` // 引用的内置系统名单名（展示）
+}
+
+type DefaultSecurityCatalog struct {
+	Lists    []DefaultCatalogList   `json:"lists"`
+	Policies []DefaultCatalogPolicy `json:"policies"`
+}
+
+type defaultPolicySeed struct {
+	name, desc, ptype    string
+	mode                 string
+	ipWLEnabled          int
+	ipWLRefKeys          []string
+	ipACLEnabled         int
+	ipACLMode            string
+	ipACLRefKeys         []string // 用户列表 key；"sys:名字" 前缀解析系统名单
+	geoipMode            string
+	geoipCountries       string
+	crsGroups            string
+	wafCheckResp         int
+	logReqBody           int
+	humanMode, humanType string
+	ccEnabled            int
+	blockPageID          int
+}
+
+var defaultIPListSeeds = []DefaultCatalogList{
+	{Key: "trust", Name: "信任名单地址列表", Desc: "[默认规则] 内网/可信 IP 网段，名单内 IP 跳过全部安全阶段", Category: "内网"},
+	{Key: "manual_blacklist", Name: "手动黑名单地址列表", Desc: "[默认规则] 手动维护的拒绝 IP/网段名单", Category: "黑名单"},
+}
+
+var defaultPolicySeeds = []defaultPolicySeed{
+	{
+		name: "信任名单", desc: "[默认规则] 引用「信任名单地址列表」，名单内 IP 跳过全部安全阶段",
+		ptype: "stage0", mode: "off",
+		ipWLEnabled: 1, ipWLRefKeys: []string{"trust"},
+	},
+	{
+		name: "威胁情报拦截", desc: "[默认规则] 拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP",
+		ptype: "stage1", mode: "off",
+		ipACLEnabled: 1, ipACLMode: "deny",
+		ipACLRefKeys: []string{"sys:中科大恶意 IP 名单（USTC）", "sys:FireHOL Level 1 综合黑名单", "sys:Emerging Threats 失陷主机名单"},
+	},
+	{
+		name: "手动黑名单", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段",
+		ptype: "stage1", mode: "off",
+		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"manual_blacklist"},
+	},
+	{
+		name: "自动封禁联动", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截",
+		ptype: "stage1", mode: "off",
+		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"sys:自动封禁名单"},
+	},
+	{
+		name: "地域拦截", desc: "[默认规则] 拦截所选海外区域（其他放行）；默认勾选全部海外国家",
+		ptype: "stage1", mode: "off",
+		geoipMode: "deny", geoipCountries: `["海外"]`,
+	},
+	{
+		name: "基础 CC 防护", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
+		ptype: "stage2", mode: "off",
+		humanMode: "auto", humanType: "slider", ccEnabled: 1,
+		blockPageID: 9005, // services.builtinHumanVerifyPageID（滑块页，包私有故字面量）
+	},
+	{
+		name: "WAF 请求防护", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
+		ptype: "stage3", mode: "blocking",
+		crsGroups: `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44","49"]`, logReqBody: 1,
+	},
+	{
+		name: "WAF 响应检测", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
+		ptype: "stage3", mode: "blocking",
+		crsGroups: `["50","51","52","53","54","55","56","59","80"]`, wafCheckResp: 1,
+	},
+}
+
+// GetDefaultSecurityCatalog 返回默认策略目录（预览弹框数据源，只读）。
+func GetDefaultSecurityCatalog() DefaultSecurityCatalog {
+	cat := DefaultSecurityCatalog{Lists: defaultIPListSeeds}
+	for _, sd := range defaultPolicySeeds {
+		cp := DefaultCatalogPolicy{Name: sd.name, Desc: sd.desc, PolicyType: sd.ptype, ListRefs: sd.ipWLRefKeys}
+		cp.ListRefs = append(cp.ListRefs, sd.ipACLRefKeys...)
+		for _, r := range sd.ipACLRefKeys {
+			if len(r) > 4 && r[:4] == "sys:" {
+				cp.SystemListRefs = append(cp.SystemListRefs, r[4:])
+			}
+		}
+		// 纯系统引用不进 ListRefs（预览只展示用户可建列表）
+		userOnly := make([]string, 0, len(cp.ListRefs))
+		for _, r := range cp.ListRefs {
+			if len(r) > 4 && r[:4] == "sys:" {
+				continue
+			}
+			userOnly = append(userOnly, r)
+		}
+		cp.ListRefs = userOnly
+		cat.Policies = append(cat.Policies, cp)
 	}
-	threatIDs := make([]int64, 0, len(threatNames))
-	for _, name := range threatNames {
+	return cat
+}
+
+// policyRefsValid 校验策略两个 refs JSON 数组里的列表 id 全部存在。
+func policyRefsValid(policyID int64) bool {
+	var wlRefs, aclRefs string
+	if err := DB.QueryRow(`SELECT COALESCE(ip_whitelist_refs,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?`, policyID).Scan(&wlRefs, &aclRefs); err != nil {
+		return false
+	}
+	for _, raw := range []string{wlRefs, aclRefs} {
+		var ids []int64
+		if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+			return false
+		}
+		for _, id := range ids {
+			var one int
+			if err := DB.QueryRow(`SELECT 1 FROM security_ip_lists WHERE id=?`, id).Scan(&one); err != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ApplyDefaultSecurityPolicies 逐项创建/复用/重建默认地址列表与策略。
+// 每项独立提交：中途失败时已建项成为下次运行的 exists/rebuilt 输入
+// （用户裁定的脏数据恢复路径——先删除后重建）。
+func ApplyDefaultSecurityPolicies() ([]DefaultApplyItem, error) {
+	items := make([]DefaultApplyItem, 0, 10)
+	// 1) 用户地址列表：按名复用，缺失创建（空条目）
+	listIDs := make(map[string]int64, len(defaultIPListSeeds))
+	for _, l := range defaultIPListSeeds {
 		var id int64
-		if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1`, name).Scan(&id); err == nil {
-			threatIDs = append(threatIDs, id)
+		status := "exists"
+		if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=0`, l.Name).Scan(&id); err != nil {
+			res, ierr := DB.Exec(`INSERT INTO security_ip_lists (name,description,category,entries,system,created_at,updated_at) VALUES (?,?,?,?,0,datetime('now'),datetime('now'))`,
+				l.Name, l.Desc, l.Category, `[]`)
+			if ierr != nil {
+				return items, fmt.Errorf("create list %q: %w", l.Name, ierr)
+			}
+			id, _ = res.LastInsertId()
+			status = "created"
 		}
+		listIDs[l.Key] = id
+		items = append(items, DefaultApplyItem{Kind: "list", Name: l.Name, Status: status, ID: id})
 	}
-	threatRefs, _ := json.Marshal(threatIDs)
+	// 2) 策略
+	for _, sd := range defaultPolicySeeds {
+		var wlIDs, aclIDs []int64
+		for _, key := range sd.ipWLRefKeys {
+			if id, ok := listIDs[key]; ok {
+				wlIDs = append(wlIDs, id)
+			}
+		}
+		for _, ref := range sd.ipACLRefKeys {
+			if len(ref) > 4 && ref[:4] == "sys:" {
+				var id int64
+				if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1`, ref[4:]).Scan(&id); err == nil {
+					aclIDs = append(aclIDs, id)
+				}
+				continue // 系统名单缺失（威胁源未初始化）不阻塞创建，引用留空
+			}
+			if id, ok := listIDs[ref]; ok {
+				aclIDs = append(aclIDs, id)
+			}
+		}
+		wlJSON, _ := json.Marshal(wlIDs)
+		aclJSON, _ := json.Marshal(aclIDs)
 
-	var autobanID int64
-	_ = DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name='自动封禁名单' AND system=1`).Scan(&autobanID)
+		var existingID int64
+		status := "created"
+		err := DB.QueryRow(`SELECT id FROM security_policies WHERE name=?`, sd.name).Scan(&existingID)
+		switch {
+		case err == nil && policyRefsValid(existingID):
+			status = "exists"
+		case err == nil: // 脏引用——删除重建
+			if _, derr := DB.Exec(`DELETE FROM security_policies WHERE id=?`, existingID); derr != nil {
+				return items, fmt.Errorf("clean dirty policy %q: %w", sd.name, derr)
+			}
+			status = "rebuilt"
+		}
+		if status != "exists" {
+			res, ierr := DB.Exec(`INSERT INTO security_policies
+				(name, description, mode, policy_type, enabled,
+				 ip_whitelist_enabled, ip_whitelist_refs,
+				 ip_acl_enabled, ip_acl_mode, ip_acl_list_refs,
+				 geoip_mode, geoip_countries,
+				 crs_rule_groups, waf_check_response, log_request_body,
+				 human_verify_mode, human_verify_type, human_verify_ttl,
+				 cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, block_page_id)
+				VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				sd.name, sd.desc, sd.mode, sd.ptype,
+				sd.ipWLEnabled, string(wlJSON),
+				sd.ipACLEnabled, sd.ipACLMode, string(aclJSON),
+				orString(sd.geoipMode, "off"), orString(sd.geoipCountries, "[]"),
+				orString(sd.crsGroups, "[]"), sd.wafCheckResp, sd.logReqBody,
+				orString(sd.humanMode, "off"), orString(sd.humanType, DefaultHumanVerifyType), DefaultHumanVerifyTTL,
+				sd.ccEnabled, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, sd.blockPageID)
+			if ierr != nil {
+				return items, fmt.Errorf("create policy %q: %w", sd.name, ierr)
+			}
+			existingID, _ = res.LastInsertId()
+		}
+		items = append(items, DefaultApplyItem{Kind: "policy", Name: sd.name, Stage: sd.ptype, Status: status, ID: existingID})
+	}
+	return items, nil
+}
 
-	trustRefJSON, _ := json.Marshal([]int64{trustListID})
-	blacklistRefJSON, _ := json.Marshal([]int64{blacklistID})
-	autobanRefJSON := "[]"
-	if autobanID > 0 {
-		autobanRefJSON = fmt.Sprintf("[%d]", autobanID)
+func orString(v, fallback string) string {
+	if v == "" {
+		return fallback
 	}
-
-	// ── CRS 请求/响应组号（CRS v3.3.x 稳定组，排除基础设施组） ──
-	// 请求组：协议异常(20-22)/协议(30-34)/SQL 注入(42)/XSS(41)/文件上传(43)/阻断评估(49)等
-	requestGroups := `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44","49"]`
-	// 响应组：数据泄露(50-53)/服务器错误(54-56)/阻断评估(59)
-	responseGroups := `["50","51","52","53","54","55","56","59","80"]`
-
-	type ps struct {
-		name, desc, ptype, mode string
-		ipWLEnabled             int
-		ipWLRefs                string
-		ipACLEnabled            int
-		ipACLMode               string
-		ipACLRefs               string
-		geoipMode               string
-		geoipCountries          string
-		crsGroups               string
-		wafCheckResp            int
-		logReqBody              int
-		humanMode, humanType    string
-		ccEnabled               int
-		blockPageID             int
-	}
-	seeds := []ps{
-		{
-			name: "信任名单", desc: "[默认规则] 引用「信任名单地址列表」，名单内 IP 跳过全部安全阶段",
-			ptype: "stage0", mode: "off",
-			ipWLEnabled: 1, ipWLRefs: string(trustRefJSON),
-		},
-		{
-			name: "威胁情报拦截", desc: "[默认规则] 拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP",
-			ptype: "stage1", mode: "off",
-			ipACLEnabled: 1, ipACLMode: "deny", ipACLRefs: string(threatRefs),
-		},
-		{
-			name: "手动黑名单", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段",
-			ptype: "stage1", mode: "off",
-			ipACLEnabled: 1, ipACLMode: "deny", ipACLRefs: string(blacklistRefJSON),
-		},
-		{
-			name: "自动封禁联动", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截",
-			ptype: "stage1", mode: "off",
-			ipACLEnabled: 1, ipACLMode: "deny", ipACLRefs: autobanRefJSON,
-		},
-		{
-			name: "地域拦截", desc: "[默认规则] 拦截所选海外区域（其他放行）；默认勾选全部海外国家",
-			ptype: "stage1", mode: "off",
-			geoipMode: "deny", geoipCountries: `["海外"]`,
-		},
-		{
-			name: "基础 CC 防护", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
-			ptype: "stage2", mode: "off",
-			humanMode: "auto", humanType: "slider", ccEnabled: 1,
-			blockPageID: 9005, // services.builtinHumanVerifyPageID（滑块页，包私有故字面量）
-		},
-		{
-			name: "WAF 请求防护", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
-			ptype: "stage3", mode: "blocking",
-			crsGroups: requestGroups, logReqBody: 1,
-		},
-		{
-			name: "WAF 响应检测", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
-			ptype: "stage3", mode: "blocking",
-			crsGroups: responseGroups, wafCheckResp: 1,
-		},
-	}
-	for i, sd := range seeds {
-		ipWLRefs := sd.ipWLRefs
-		if ipWLRefs == "" {
-			ipWLRefs = "[]"
-		}
-		ipACLRefsVal := sd.ipACLRefs
-		if ipACLRefsVal == "" {
-			ipACLRefsVal = "[]"
-		}
-		hm := sd.humanMode
-		if hm == "" {
-			hm = "off"
-		}
-		ht := sd.humanType
-		if ht == "" {
-			ht = DefaultHumanVerifyType
-		}
-		gm := sd.geoipMode
-		if gm == "" {
-			gm = "off"
-		}
-		gc := sd.geoipCountries
-		if gc == "" {
-			gc = "[]"
-		}
-		crs := sd.crsGroups
-		if crs == "" {
-			crs = "[]"
-		}
-		if _, err := DB.Exec(`INSERT INTO security_policies
-			(id, name, description, mode, policy_type, enabled,
-			 ip_whitelist_enabled, ip_whitelist_refs,
-			 ip_acl_enabled, ip_acl_mode, ip_acl_list_refs,
-			 geoip_mode, geoip_countries,
-			 crs_rule_groups, waf_check_response, log_request_body,
-			 human_verify_mode, human_verify_type, human_verify_ttl,
-			 cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, block_page_id)
-			VALUES (?,?,?,?,?,1, ?,?, ?,?,?, ?,?, ?,?,?, ?,?,?, ?,?,?,?,?)`,
-			100+i, sd.name, sd.desc, sd.mode, sd.ptype,
-			sd.ipWLEnabled, ipWLRefs,
-			sd.ipACLEnabled, sd.ipACLMode, ipACLRefsVal,
-			gm, gc,
-			crs, sd.wafCheckResp, sd.logReqBody,
-			hm, ht, DefaultHumanVerifyTTL,
-			sd.ccEnabled, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, sd.blockPageID); err != nil {
-			return fmt.Errorf("seed %q: %w", sd.name, err)
-		}
-	}
-	log.Printf("[db] 已播种 %d 条默认安全策略 + 2 条地址列表（各阶段内置，可编辑/可删除）", len(seeds))
-	return nil
+	return v
 }

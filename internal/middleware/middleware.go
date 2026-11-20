@@ -1057,6 +1057,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/notification/settings/smtp-test", noStoreResponse(), h.TestSMTPSettings)
 
 				// Security (admin write)
+				admin.POST("/security/policies/apply-defaults", h.ApplyDefaultPolicies)
 				admin.POST("/security/policies", h.CreateSecurityPolicy)
 				admin.PUT("/security/policies/:id", h.UpdateSecurityPolicy)
 				admin.DELETE("/security/policies/:id", h.DeleteSecurityPolicy)
@@ -1218,6 +1219,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 				// Security (read for all, write for admin)
 				business.GET("/security/policies", h.ListSecurityPolicies)
+				business.GET("/security/policies/default-catalog", h.GetDefaultPolicyCatalog)
 				business.GET("/security/policies/:id", h.GetSecurityPolicy)
 				business.GET("/security/overview", h.GetSecurityOverview)
 				// 威胁大屏：聚合 + 增量事件流（只读，从节点可读）

@@ -1131,6 +1131,36 @@ func validatePolicyReferenceExistence(q policyQueryRower, blockPageID int, custo
 	return "", nil
 }
 
+func countApplyStatus(items []db.DefaultApplyItem, status string) int {
+	n := 0
+	for _, it := range items {
+		if it.Status == status {
+			n++
+		}
+	}
+	return n
+}
+
+// GetDefaultPolicyCatalog 默认策略目录（「默认策略」弹框预览数据，只读）。
+func (h *Handlers) GetDefaultPolicyCatalog(c *gin.Context) {
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: db.GetDefaultSecurityCatalog()})
+}
+
+// ApplyDefaultPolicies 逐项创建/复用/重建默认地址列表与策略（用户裁定
+// 2026-11-20 第五轮：启动不再自动播种，面板按钮驱动；脏引用删除重建）。
+func (h *Handlers) ApplyDefaultPolicies(c *gin.Context) {
+	items, err := db.ApplyDefaultSecurityPolicies()
+	if err != nil {
+		// 部分成功也返回已建项：前端展示进度，重跑走 exists/rebuilt 恢复
+		recordAudit(c, "创建", "安全策略", services.FormatAuditDetail("默认策略批量创建：失败", services.AuditResultPart(fmt.Sprintf("已建 %d 项", len(items)))))
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("创建默认策略失败", err), Data: items})
+		return
+	}
+	recordAudit(c, "创建", "安全策略", fmt.Sprintf("默认策略批量创建：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
+		countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt")))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: items})
+}
+
 func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if rejectWriteDuringImport(c, "执行安全策略写操作") {
 		return

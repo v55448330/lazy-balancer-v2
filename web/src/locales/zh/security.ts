@@ -1174,6 +1174,27 @@ export default {
      "crsOverlapIfCoBound": "{names}也选择了相同的 CRS 规则组（{groups}），若二者绑定同一规则将重复检测",
      "crsOverlapNow": "{names}已选择相同的 CRS 规则组（{groups}），绑定到同一规则时将被重复检测，建议只保留一个"
     },
+    "defaults": {
+     "btn": "默认策略",
+     "title": "创建默认策略",
+     "previewTip": "将按阶段创建以下默认安全策略与地址列表（地址列表不预填条目）；已存在的项直接复用，引用失效的项会删除重建",
+     "refsLabel": "引用：",
+     "listsTitle": "地址列表（创建后可在 IP 名单中编辑条目）",
+     "emptyListTip": "创建空列表，添加地址后生效",
+     "start": "开始创建",
+     "status": {
+      "created": "已创建",
+      "exists": "已存在，直接引用",
+      "rebuilt": "引用失效，已删除重建"
+     },
+     "doneBindTip": "创建完成。要关联转发规则：打开策略编辑的「关联规则」步骤，或",
+     "goRules": "返回策略列表",
+     "doneListTip": "。要添加地址：直接编辑地址列表，或",
+     "goLists": "打开 IP 名单",
+     "doneToast": "默认策略创建完成",
+     "loadFailed": "默认策略目录加载失败",
+     "applyFailed": "默认策略创建失败（已创建项可重跑恢复）"
+    },
     "stageName": {
      "s1": "阶段 1",
      "s2": "阶段 2",
