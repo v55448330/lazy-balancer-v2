@@ -375,7 +375,7 @@
 
         <el-divider />
         <!-- 预览区默认折叠（防弹框超屏）：展开后渲染/源码切换与预览正文 -->
-        <el-collapse v-model="tplPreviewOpen" class="tpl-preview-collapse">
+        <el-collapse v-if="tplEditorLang === 'markdown' || tplEditorLang === 'markup'" v-model="tplPreviewOpen" class="tpl-preview-collapse">
           <el-collapse-item name="preview">
             <template #title><DialogSectionHeader :title="t('app.notification.rules.preview')" /></template>
             <div v-if="tplEditorLang === 'markup'" class="tpl-preview-mode">
@@ -1606,8 +1606,8 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
 .tpl-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .tpl-hints .form-hint { margin-top: 0; }
-.tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; max-height: 42vh; overflow: auto; }
-.tpl-md-preview { background: #f9fafb; padding: 10px 12px; font-size: 13px; line-height: 1.7; color: #111827; border: 1px solid #eef2f7; max-height: 42vh; overflow: auto; }
+.tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; height: 360px; max-height: 46vh; overflow: auto; }
+.tpl-md-preview { background: #f9fafb; padding: 10px 12px; font-size: 13px; line-height: 1.7; color: #111827; border: 1px solid #eef2f7; height: 360px; max-height: 46vh; overflow: auto; }
 .tpl-md-preview h2 { font-size: 16px; margin: 6px 0; }
 .tpl-md-preview h3 { font-size: 14px; margin: 8px 0 6px; }
 .tpl-md-preview h4 { font-size: 13px; margin: 8px 0 4px; }
@@ -1617,9 +1617,9 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-md-preview blockquote { border-left: 3px solid #d1d5db; margin: 6px 0; padding: 2px 10px; color: #6b7280; }
 .tpl-md-preview ul { margin: 4px 0; padding-left: 18px; }
 .tpl-md-preview code { background: #eef2f7; padding: 1px 4px; font-family: ui-monospace, monospace; }
-.tpl-html-preview, .daily-html-preview { max-height: 42vh; }
-.rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 200px); overflow-y: auto; }
-.daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 200px); overflow-y: auto; }
+.tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
+.rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
+.daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
 /* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
 .tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
 .tpl-preview-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; border-bottom: none; }
@@ -1665,6 +1665,10 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-level-section + .notif-level-section { border-top: 1px dashed #eef2f7; padding-top: 12px; }
 .notif-level-head { font-size: 12px; font-weight: 600; color: #6b7280; line-height: 1.4; margin-bottom: 2px; }
 .notif-level-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.notif-pick-group .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
+.notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }
+.daily-items .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
+.daily-items .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled { border-color: #e4e7ed; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled .el-checkbox__label { color: #a8abb2; }
 </style>
