@@ -6680,80 +6680,119 @@ func repairPolicyStageMergeV2() error {
 // SeedDefaultSecurityPolicies 首次安装时播种各阶段默认安全策略。
 // 仅由 cmd/server/main.go 调用（Initialize 不播——测试/导入环境不受干扰）。
 // 幂等条件=security_policies 为空（用户建过/导入过任何策略即不播）。
-// 威胁名单引用按 name 查 system=1 行 ID，不依赖 auto-increment 假设。
 func SeedDefaultSecurityPolicies() error {
 	var count int
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_policies`).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
-		return nil // 已有策略（用户创建或备份导入），不播种
+		return nil
 	}
-	// 查内置威胁名单 ID（按 name，system=1）
+	// 1) 播种"内网地址"用户名单（信任策略引用）
+	var intranetListID int64
+	res, err := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system) VALUES (?,?,?,?,0)`,
+		"内网地址", "RFC1918 私有网段（可自行增删条目）", "内网",
+		`["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]`)
+	if err == nil {
+		intranetListID, _ = res.LastInsertId()
+	}
+	// 2) 查内置威胁名单 ID（按 name，system=1，无论是否有条目——更新任务会填充）
 	threatNames := []string{
 		"中科大恶意 IP 名单（USTC）",
 		"FireHOL Level 1 综合黑名单",
 		"Emerging Threats 失陷主机名单",
 	}
-	listIDs := make([]int64, 0, len(threatNames))
+	threatIDs := make([]int64, 0, len(threatNames))
 	for _, name := range threatNames {
 		var id int64
-		var entries string
-		// 仅当名单在场且有条目时才引用（空名单引用在导入侧产生悬空校验失败）
-		if err := DB.QueryRow(`SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE name=? AND system=1`, name).Scan(&id, &entries); err == nil && entries != "[]" && entries != "" {
-			listIDs = append(listIDs, id)
+		if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1`, name).Scan(&id); err == nil {
+			threatIDs = append(threatIDs, id)
 		}
 	}
-	threatRefs, _ := json.Marshal(listIDs)
+	threatRefs, _ := json.Marshal(threatIDs)
+	// 3) 查自动封禁名单 ID
+	var autobanListID int64
+	_ = DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name='自动封禁名单' AND system=1`).Scan(&autobanListID)
+	var autobanRefs []int64
+	if autobanListID > 0 {
+		autobanRefs = []int64{autobanListID}
+	}
+	autobanRefJSON, _ := json.Marshal(autobanRefs)
+	// 4) 信任名单引用
+	var trustRefs []int64
+	if intranetListID > 0 {
+		trustRefs = []int64{intranetListID}
+	}
+	trustRefJSON, _ := json.Marshal(trustRefs)
 
 	type policySeed struct {
 		name, desc, ptype    string
 		mode                 string
 		ipWLEnabled          int
-		ipWL                 string
+		ipWLRefs             string
 		ipACLEnabled         int
 		ipACLMode            string
 		ipACLRefs            string
-		crsGroups            string
+		ipBlacklist          string
+		geoipMode            string
+		geoipCountries       string
+		wafCheckResp         int
+		logReqBody           int
 		humanMode, humanType string
 		ccEnabled            int
 	}
 	seeds := []policySeed{
 		{
-			name: "内网直通", desc: "信任 RFC1918 私有网段，跳过全部安全阶段（默认适合本地/内网部署）",
+			name: "信任名单", desc: "引用「内网地址」名单，名单内 IP 跳过全部安全阶段",
 			ptype: "stage0", mode: "off",
-			ipWLEnabled: 1, ipWL: `["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]`,
+			ipWLEnabled: 1, ipWLRefs: string(trustRefJSON),
 		},
 		{
-			name: "威胁情报拦截", desc: "拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP",
+			name: "威胁情报拦截", desc: "拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP，名单由更新任务自动维护",
 			ptype: "stage1", mode: "off",
 			ipACLEnabled: 1, ipACLMode: "deny",
 			ipACLRefs: string(threatRefs),
 		},
 		{
-			name: "基础 CC 防护", desc: "自动模式人机验证：突刺/4xx/多 UA 触发滑块挑战，保护后端不被高频脚本耗尽",
+			name: "手动黑名单", desc: "手动维护的拒绝名单，添加需要封禁的 IP/网段",
+			ptype: "stage1", mode: "off",
+			ipACLEnabled: 1, ipACLMode: "deny",
+		},
+		{
+			name: "自动封禁联动", desc: "自动封禁触发的 IP 加入「自动封禁名单」后由本策略拦截",
+			ptype: "stage1", mode: "off",
+			ipACLEnabled: 1, ipACLMode: "deny",
+			ipACLRefs: string(autobanRefJSON),
+		},
+		{
+			name: "地域拦截", desc: "仅允许中国大陆 IP 访问，拒绝海外流量",
+			ptype: "stage1", mode: "off",
+			geoipMode: "deny", geoipCountries: `["CN"]`,
+		},
+		{
+			name: "基础 CC 防护", desc: "自动模式人机验证：突刺/4xx/多 UA 任一命中即触发滑块挑战",
 			ptype: "stage2", mode: "off",
 			humanMode: "auto", humanType: "slider",
 			ccEnabled: 1,
 		},
 		{
-			name: "基础 WAF 防护", desc: "CRS 阻断模式（推荐勾选协议异常/SQL 注入/XSS 核心规则组）",
+			name: "WAF 请求防护", desc: "CRS 阻断模式，检测请求头/URI/请求体（推荐勾选协议异常/SQL 注入/XSS）",
 			ptype: "stage3", mode: "blocking",
-			crsGroups: "", // 留空：CRS 组测试环境不可用；UI 打开后用户勾选
+		},
+		{
+			name: "WAF 响应检测", desc: "CRS 阻断模式，额外检查响应体泄露+记录请求体供审计回溯",
+			ptype: "stage3", mode: "blocking",
+			wafCheckResp: 1, logReqBody: 1,
 		},
 	}
 	for i, sd := range seeds {
-		ipWLVal := sd.ipWL
-		if ipWLVal == "" {
-			ipWLVal = "[]"
+		ipWLRefs := sd.ipWLRefs
+		if ipWLRefs == "" {
+			ipWLRefs = "[]"
 		}
 		ipACLRefsVal := sd.ipACLRefs
 		if ipACLRefsVal == "" {
 			ipACLRefsVal = "[]"
-		}
-		crsVal := sd.crsGroups
-		if crsVal == "" {
-			crsVal = "[]"
 		}
 		hm := sd.humanMode
 		if hm == "" {
@@ -6763,23 +6802,33 @@ func SeedDefaultSecurityPolicies() error {
 		if ht == "" {
 			ht = DefaultHumanVerifyType
 		}
+		gm := sd.geoipMode
+		if gm == "" {
+			gm = "off"
+		}
+		gc := sd.geoipCountries
+		if gc == "" {
+			gc = "[]"
+		}
 		if _, err := DB.Exec(`INSERT INTO security_policies
 			(id, name, description, mode, policy_type, enabled,
-			 ip_whitelist_enabled, ip_whitelist,
+			 ip_whitelist_enabled, ip_whitelist_refs,
 			 ip_acl_enabled, ip_acl_mode, ip_acl_list_refs,
-			 crs_rule_groups,
+			 geoip_mode, geoip_countries,
+			 waf_check_response, log_request_body,
 			 human_verify_mode, human_verify_type, human_verify_ttl,
 			 cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio)
-			VALUES (100+?,?,?,?,?,1, ?,?, ?,?,?, ?, ?,?,?, ?,?,?,?)`,
+			VALUES (100+?,?,?,?,?,1, ?,?, ?,?,?, ?,?, ?,?, ?,?,?, ?,?,?,?)`,
 			i, sd.name, sd.desc, sd.mode, sd.ptype,
-			sd.ipWLEnabled, ipWLVal,
+			sd.ipWLEnabled, ipWLRefs,
 			sd.ipACLEnabled, sd.ipACLMode, ipACLRefsVal,
-			crsVal,
+			gm, gc,
+			sd.wafCheckResp, sd.logReqBody,
 			hm, ht, DefaultHumanVerifyTTL,
 			sd.ccEnabled, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio); err != nil {
 			return fmt.Errorf("seed %q: %w", sd.name, err)
 		}
 	}
-	log.Printf("[db] 已播种 %d 条默认安全策略（各阶段内置，可编辑/可删除）", len(seeds))
+	log.Printf("[db] 已播种 %d 条默认安全策略 + 1 条内网地址名单（各阶段内置，可编辑/可删除）", len(seeds))
 	return nil
 }

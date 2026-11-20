@@ -1009,7 +1009,7 @@ export default {
     },
     "human": {
       "ccSection": "异常阈值（突刺 / 4xx / 多 UA）",
-      "ccEvalTip": "三个条件任一命中即触发（互为或关系，非全部满足）；阈值设 0 或关闭会话异常开关=停用该项检测",
+      "ccEvalTip": "三个条件任一命中即触发（或关系）",
       "ccNeedsHuman": "CC 检测仅在人机验证开启时生效：当前人机验证已关闭，突刺/4xx/多UA 阈值不会发起挑战（保存不受影响，开启人机验证后生效）。",
       "challengePageTip": "挑战页必须包含当前验证方式的验证组件占位符；内置验证页已包含，自定义页请在拦截页编辑器插入对应组件。",
       "challengePageNeedsWidget": "所选拦截页未包含当前验证方式的验证组件；请先在拦截页编辑器插入对应组件。",
@@ -1030,7 +1030,7 @@ export default {
       "whenNone": "关闭",
       "whenAlways": "始终验证",
       "whenAnomaly": "智能触发",
-      "whenTip": "关闭=不启用人机验证；始终验证=每个新访客首次访问即挑战；智能触发=命中下方异常阈值（突刺/4xx/多UA）时才挑战。IP 级放行请用阶段 0 信任名单",
+      "whenTip": "智能触发=命中下方异常阈值时才挑战；始终验证=每个新访客首次即挑战。IP 级放行请用阶段 0 信任名单",
       "actionSection": "触发后动作",
       "actionLabel": "触发后动作",
       "actionChallenge": "人机验证",
