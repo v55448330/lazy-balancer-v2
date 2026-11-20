@@ -278,6 +278,7 @@ export default {
         rebindRollbackFailed: '重新绑定未完成，回滚原接收者失败，通道保持停用',
         rebindIncompleteWarn: '重新绑定未完成：旧机器人不可用，通道保持停用，请稍后重试',
         rebindIncompleteTag: '重绑未完成',
+        disabledTag: '已停用',
         rebindIncompleteHint: '重新绑定未完成，通道已停用且旧接收者不可用；请重新绑定以恢复投递。',
         rebindRetry: '重新绑定',
         transportMovedHint: '消息正文模板与日报渲染格式已移至「通知规则」按通道/日报配置；此处仅保留传输层设置。',

@@ -42,6 +42,7 @@
                   <el-tag size="small" effect="plain" type="info">{{ typeLabel(ch.type) }}</el-tag>
                   <el-tag v-if="!isMine(ch)" size="small" effect="plain">{{ t('app.notification.channels.ownerTag', { id: ch.user_id }) }}</el-tag>
                   <el-tag v-if="rebindIncompleteIds.has(ch.id)" size="small" effect="plain" type="danger">{{ t('app.notification.channels.rebindIncompleteTag') }}</el-tag>
+                  <el-tag v-if="!ch.enabled" size="small" effect="plain" type="warning">{{ t('app.notification.channels.disabledTag') }}</el-tag>
                 </div>
               </div>
               <el-switch v-model="ch.enabled" size="small" :disabled="writeBlocked" @change="toggleEnabled(ch)" />
@@ -804,6 +805,7 @@ const toggleEnabled = async (ch: NotificationChannel): Promise<void> => {
   try {
     await request.put(`/notification/channels/${ch.id}`, { enabled: target })
     if (target) markRebindIncomplete(ch.id, false)
+    await fetchChannels() // 刷新连接/会话/测试态，状态准确
   } catch {
     ch.enabled = !target
   }

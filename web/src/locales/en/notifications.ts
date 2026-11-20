@@ -271,6 +271,7 @@ export default {
         rebindRollbackFailed: 'Rebind did not complete; failed to roll back the original receiver, channel stays disabled',
         rebindIncompleteWarn: 'Rebind did not complete: the old bot is unavailable, the channel stays disabled; please retry later',
         rebindIncompleteTag: 'Rebind incomplete',
+        disabledTag: 'Disabled',
         rebindIncompleteHint: 'Rebind did not complete: the channel is disabled and the old receiver is unavailable. Rebind to resume delivery.',
         rebindRetry: 'Rebind',
         transportMovedHint: 'Message body templates and daily render format now live under Notification Rules (per channel / daily); only transport-layer settings remain here.',
