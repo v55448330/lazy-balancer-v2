@@ -6,6 +6,7 @@ package notify
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderBody_trimsExtraArgs(t *testing.T) {
@@ -62,5 +63,26 @@ func TestRenderBody_stringDaysNoVerbMismatch(t *testing.T) {
 	got := renderBody(entry, evt)
 	if strings.Contains(got, "%!") || !strings.Contains(got, "剩余 3 天") {
 		t.Fatalf("字符串参数动词不匹配: %q", got)
+	}
+}
+
+func TestBotTemplate_nodeAndEventTitleRendered(t *testing.T) {
+	// {{node}}/{{event_title}} 必须被替换，不得残留字面量；事件元信息用可读标题。
+	msg := Message{EventType: EvtAPIKeyExpiryWarning, Title: "API 密钥临期", Body: "正文", Node: "node-a", Level: "warn"}
+	got := renderBotMessage("", msg, time.Now(), "qq")
+	if strings.Contains(got, "{{node}}") || strings.Contains(got, "{{event_title}}") || strings.Contains(got, "{{event}}") {
+		t.Fatalf("bot 模板变量残留: %q", got)
+	}
+	if !strings.Contains(got, "node-a") || !strings.Contains(got, "API 密钥临期") || strings.Contains(got, "apikey.expiry_warning") {
+		t.Fatalf("bot 元信息应可读标题+节点: %q", got)
+	}
+}
+
+func TestEventDisplayTitle(t *testing.T) {
+	if got := eventDisplayTitle(EvtAPIKeyExpiryWarning); got != "API 密钥临期" {
+		t.Fatalf("可读标题=%q", got)
+	}
+	if got := eventDisplayTitle(EvtClusterOffline); got != "集群节点失联" {
+		t.Fatalf("0 动词标题=%q", got)
 	}
 }

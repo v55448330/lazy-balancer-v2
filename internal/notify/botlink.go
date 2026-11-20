@@ -211,6 +211,8 @@ func formatBotTextWithTemplate(tpl string, msg Message, ts time.Time) string {
 		"{{body}}", msg.Body,
 		"{{level}}", msg.Level,
 		"{{event}}", event,
+		"{{event_title}}", eventDisplayTitle(msg.EventType),
+		"{{node}}", msg.Node,
 		"{{time}}", ts.Format("2006-01-02 15:04"),
 		"{{brand}}", BrandName(),
 	}

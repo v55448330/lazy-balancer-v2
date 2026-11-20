@@ -80,6 +80,7 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 		"{{node}}", msg.Node,
 		"{{brand}}", BrandName(),
 		"{{date}}", templateDate(msg, ts),
+		"{{event_title}}", eventDisplayTitle(msg.EventType),
 	)
 	return r.Replace(tpl)
 }
@@ -108,6 +109,7 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 		"{{node}}", enc(msg.Node),
 		"{{brand}}", enc(BrandName()),
 		"{{date}}", enc(templateDate(msg, ts)),
+		"{{event_title}}", enc(eventDisplayTitle(msg.EventType)),
 	)
 	return r.Replace(tpl)
 }
@@ -126,9 +128,9 @@ func templateDate(msg Message, ts time.Time) string {
 func defaultEventTemplate(typ string) string {
 	switch typ {
 	case "qq":
-		return "# 🔔 {{title}}\n\n> {{body}}\n\n## 📋 事件详情\n\n| 项目 | 内容 |\n| --- | --- |\n| 级别 | {{level}} |\n| 事件 | {{event}} |\n| 节点 | {{node}} |\n| 时间 | {{time}} |\n\n> {{brand}} · {{time}}"
+		return "# 🔔 {{title}}\n\n> {{body}}\n\n## 📋 事件详情\n\n| 项目 | 内容 |\n| --- | --- |\n| 级别 | {{level}} |\n| 事件 | {{event_title}} |\n| 节点 | {{node}} |\n| 时间 | {{time}} |\n\n> {{brand}} · {{time}}"
 	case "wx_clawbot":
-		return "【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}} | 事件：{{event}}\n时间：{{time}}\n—— {{brand}}"
+		return "【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}}\n事件：{{event_title}}\n时间：{{time}}\n—— {{brand}} · {{time}}"
 	}
 	return ""
 }

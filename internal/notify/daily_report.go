@@ -490,7 +490,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		return b.String()
 	default: // text（微信 iLink 纯文本协议；无 markdown 标记，多值独立行）
 		var b strings.Builder
-		fmt.Fprintf(&b, "📊 %s 每日报告（%s）\n", brand, date)
+		fmt.Fprintf(&b, "📊 %s 每日报告\n%s · 生成于 %s\n────────────\n", brand, date, now)
 		for _, sec := range dailySections {
 			rows := secRows(sec.items, enabled, label, val)
 			if len(rows) == 0 {

@@ -41,6 +41,21 @@ func trimArgs(format string, args []any) []any {
 	return args[:n]
 }
 
+// eventDisplayTitle 事件可读标题（目录 TitleFormat 去除动词占位，供消息元信息
+// 展示，避免裸事件键如 apikey.expiry_warning 出现在用户消息中）。
+func eventDisplayTitle(typ string) string {
+	e, ok := catalogByID(typ)
+	if !ok {
+		return typ
+	}
+	t := strings.NewReplacer("%s", "", "%d", "", "%v", "").Replace(e.TitleFormat)
+	t = strings.TrimSpace(strings.NewReplacer("（）", "", "()", "").Replace(t))
+	if t == "" {
+		return typ
+	}
+	return t
+}
+
 func fieldsArgs(evt Event) []any {
 	args := make([]any, 0, len(evt.Fields))
 	// Fields 以 "1","2",… 为键序（发布方模板参数序约定，契约见 catalog.go

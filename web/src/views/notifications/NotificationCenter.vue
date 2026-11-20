@@ -656,7 +656,7 @@ const tplFormats = ref<Record<string, string>>({}) // rule 模式：通道 ID �
 const htmlPreviewMode = ref<'render' | 'source'>('render')
 const tplPreviewOpen = ref<string[]>([]) // 预览区默认折叠（防弹框超屏），开弹框时复位
 const savingTpl = ref(false)
-const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{node}}', '{{brand}}']
+const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{event_title}}', '{{node}}', '{{brand}}']
 const tplFormatOptions = ['text', 'markdown', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
 
 // 模板 tab 通道集：rule 模式=选定通道（未选=全部，仍可编辑模板，保存后不投递）；daily 模式=全部通道
@@ -741,7 +741,7 @@ const defaultTplFor = (typ: string): string => {
   if (typ === 'webhook') return JSON.stringify({ level: '{{level}}', time: '{{time}}', node: '{{node}}', title: '{{title}}', body: '{{body}}', event: '{{event}}' }, null, 2)
   if (typ === 'email') return emailCardTpl('{{title}}',
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
-    [['事件', '{{event}}'], ['节点', '{{node}}'], ['时间', '{{time}}']])
+    [['事件', '{{event_title}}'], ['节点', '{{node}}'], ['时间', '{{time}}']])
   if (typ === 'qq') return [
     '# 🔔 {{title}}',
     '',
@@ -752,7 +752,7 @@ const defaultTplFor = (typ: string): string => {
     '| 项目 | 内容 |',
     '| --- | --- |',
     '| 级别 | {{level}} |',
-    '| 事件 | {{event}} |',
+    '| 事件 | {{event_title}} |',
     '| 节点 | {{node}} |',
     '| 时间 | {{time}} |',
     '',
@@ -764,7 +764,7 @@ const defaultTplFor = (typ: string): string => {
     '{{body}}',
     '────────────',
     '级别：{{level}}',
-    '事件：{{event}}',
+    '事件：{{event_title}}',
     '节点：{{node}}',
     '时间：{{time}}',
     '—— {{brand}} · {{time}}',
