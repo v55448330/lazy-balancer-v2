@@ -101,7 +101,7 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.events"/, '事件列必须为浮层多选（绑定行草稿）')
   assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.channel_ids"/, '发送至列必须为浮层多选（绑定行草稿）')
   assert.match(text, /<el-checkbox[^>]*border size="small"/, '多选组必须为 bordered 复选组')
-  assert.match(text, /:disabled="ch\.last_test_ok !== true"/, '未测试通道禁选')
+  assert.match(text, /:disabled="ch\.enabled === false \|\| ch\.last_test_ok !== true"/, '未测试/停用通道禁选')
   // 每日摘要独立卡片（不混事件规则表格）+ 三字段卡内联编辑
   assert.match(text, /daily-card/, '每日摘要必须独立卡片')
   assert.match(text, /el-time-select v-model="dailyDraft\.send_time"/, '投递时间必须卡内联编辑')
@@ -121,6 +121,55 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   assert.match(text, /delivery-stats/, '分布统计端点必须消费')
   assert.match(text, /distByChannelTitle/, '通道投递分布图必须在位')
   assert.match(text, /distByEventTitle/, '事件分布图必须在位')
+})
+
+test('统一模板弹框+停用通道联动+事件级别着色+正文语言切换', () => {
+  const text = code('src/views/notifications/NotificationCenter.vue')
+
+  // 1) 日报配置弹框整体并入统一模板弹框（旧弹框/入口零残留；日报卡只剩「编辑模板」）
+  assert.doesNotMatch(text, /dailyConfigVisible|dailyConfigLoading|openDailyConfig/, '日报配置弹框状态/入口必须清零')
+  assert.doesNotMatch(text, /daily-config-dialog|daily-config-row/, '日报配置弹框版式残留必须清零')
+  assert.doesNotMatch(text, /配置日报/, '「配置日报」按钮语义必须改为「编辑模板」')
+  assert.match(text, /@click="openDailyTpl"[\s\S]{0,80}daily\.editTemplate/, '日报卡入口=编辑模板（打开统一弹框）')
+  assert.match(text, /const openDailyTpl = async \(\): Promise<void> => \{[\s\S]{0,300}tplMode\.value = 'daily'/, '日报入口进入 daily 模式（同一弹框）')
+  assert.match(text, /const tplMode = ref<'rule' \| 'daily'>/, 'rule/daily 共用同一模板弹框')
+
+  // 2) 停用通道联动：全量通道 DTO + 禁选 + 已选自动移出草稿 + 提示
+  assert.match(text, /const allChannels = ref<RuleChannel\[\]>\(\[\]\)/, '停用通道态必须经全量通道 DTO 补齐')
+  assert.match(text, /const channelOptions = computed<RuleChannel\[\]>/, '发送至选项=启用+停用通道合并集')
+  assert.match(text, /request\.get<NotificationChannelsResponse>\(url, \{ silent: true \}\)/, '全量通道经 /notification/channels')
+  assert.match(text, /const pruneChannelIds = \(ids: number\[\]\): number\[\] =>/, '停用通道必须从草稿中移出')
+  const seedBlock = text.slice(text.indexOf('const seedDrafts'), text.indexOf('const ruleDraftOf'))
+  assert.match(seedBlock, /pruneChannelIds/, '草稿播种时停用通道同样移出（不产生伪脏态）')
+  assert.match(text, /const baselineChannelIds = \(ids\?: number\[\]\): number\[\] =>/, '脏判定基线同口径裁剪')
+  assert.match(text, /channelDisabledHint/, '停用通道必须有提示（info-note-bar/form-hint）')
+  assert.match(text, /class="info-note-bar"><span class="info-note-desc">\{\{ t\('app\.notification\.rules\.channelDisabledHint'\) \}\}/, '发送至浮层提示用 info-note-bar')
+  assert.match(text, /:title="channelPickTitle\(ch\)"/, '停用/未测试通道 title 提示单源')
+
+  // 3) 触发器 min-width 与浮层面板同宽（摘要不截断）
+  assert.match(text, /:width="340"[\s\S]{0,200}pick-trigger--events/, '事件浮层宽度与触发器类绑定')
+  assert.match(text, /pick-trigger--events \{ min-width: 340px; \}/, '事件触发器 min-width=面板宽')
+  assert.match(text, /pick-trigger--channels \{ min-width: 300px; \}/, '发送至触发器 min-width=面板宽')
+  assert.match(text, /:width="300"[\s\S]{0,200}pick-trigger--channels/, '发送至浮层宽度=触发器 min-width')
+
+  // 4) 事件按级别着色 + 分组标题 + 图例（级别取 catalog level）
+  assert.match(text, /const eventLevel = \(row: Rule, ev: string\): EventLevel =>/, '事件级别必须解析自目录')
+  assert.match(text, /ev-level-\$\{eventLevel\(asRule\(row\), ev\)\}/, '事件选项必须按级别着色')
+  assert.match(text, /class="notif-pick-title">\{\{ eventGroup\(row\.title\) \}\}/, '浮层保留分组标题')
+  assert.match(text, /class="ev-level-legend"/, '级别图例必须在位')
+  assert.match(text, /ev-dot-\$\{lv\}/, '图例色点随级别')
+  assert.match(text, /ev-level-critical \.el-checkbox__label \{ color: var\(--ev-critical\); \}/, 'critical 红')
+  assert.match(text, /ev-level-warn \.el-checkbox__label \{ color: var\(--ev-warn\); \}/, 'warn 橙')
+  assert.match(text, /ev-level-info \.el-checkbox__label \{ color: var\(--ev-info\); \}/, 'info 蓝')
+
+  // 5) 模板弹框语言切换：zh/en 默认预设（保存即正文语言）
+  assert.match(text, /const tplLang = ref<TplLang>/, '弹框语言态')
+  assert.match(text, /<el-radio-button value="zh">中文<\/el-radio-button>/, '中文切换项')
+  assert.match(text, /<el-radio-button value="en">English<\/el-radio-button>/, 'English 切换项')
+  assert.match(text, /const onTplLangChange = \(v: string \| number \| boolean \| undefined\): void =>/, '切换即载入该语言预设')
+  assert.match(text, /const defaultTplFor = \(typ: string, lang: TplLang\): string =>/, '事件预置 zh/en 双版本')
+  assert.match(text, /const defaultDailyTplFor = \(typ: string, lang: TplLang\): string =>/, '日报预置 zh/en 双版本')
+  assert.match(text, /draft !== defaultTplFor\(ch\.type, 'zh'\) && draft !== defaultTplFor\(ch\.type, 'en'\)/, '任一语言预置均视为默认（不冗余落库）')
 })
 
 test('投递记录消费 deliveries 契约：恒全量+用户/通道维度+失败重发', () => {
