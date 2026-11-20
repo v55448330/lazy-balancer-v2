@@ -1586,14 +1586,14 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-pick-group .el-checkbox { margin-right: 0; margin-bottom: 0; }
 .notif-pick-group .el-checkbox.is-bordered { height: auto; min-height: 24px; padding: 2px 10px; margin: 0; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { white-space: normal; line-height: 1.35; word-break: break-word; }
-.notif-pick-panel { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; }
+.notif-pick-panel { display: flex; flex-direction: column; gap: 12px; max-height: 380px; overflow-y: auto; padding-top: 2px; }
 .notif-pick-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
-.nd-pick-popper.el-popover { padding: 12px; box-sizing: border-box; }
+.nd-pick-popper.el-popover { padding: 18px 16px 14px; box-sizing: border-box; }
 /* 事件浮层按级别分区（严重/警告/信息）：中性样式，仅节标题分组，不着色 */
 .notif-pick-group.notif-pick-sections { display: flex; flex-direction: column; gap: 14px; }
 .notif-level-section { display: flex; flex-direction: column; gap: 8px; }
 .notif-level-section + .notif-level-section { border-top: 1px dashed #eef2f7; padding-top: 12px; }
-.notif-level-head { font-size: 12px; font-weight: 600; color: #6b7280; }
+.notif-level-head { font-size: 12px; font-weight: 600; color: #6b7280; line-height: 1.4; margin-bottom: 2px; }
 .notif-level-items { display: flex; flex-wrap: wrap; gap: 8px; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled { border-color: #e4e7ed; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled .el-checkbox__label { color: #a8abb2; }
