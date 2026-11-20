@@ -241,7 +241,7 @@ export default {
         bindReceiverCaptured: 'Receiver captured: {id}',
         bindConnecting: 'Connection test… verifying bot API and connectivity',
         bindAwaitMsg: 'Connected! Send "绑定测试" (bind test) to the bot in WeChat/QQ to complete binding (auto-reply confirmation on receipt).',
-        rebindAwaitMsg: 'Bot connected. Send "绑定测试" to confirm.',
+        rebindAwaitMsg: 'Bot connected. Send "绑定测试" manually to confirm the status.',
         bindConfirmed: 'Bound! Confirmation message received; you may save the channel.',
         wxLoggedIn: 'WeChat logged in',
         wxSendMsgHint: 'After scanning and a successful connection test, send "绑定测试" (bind test) to the bot in WeChat to complete binding (the bot replies a confirmation); only then can you save and receive notifications. Saving auto-verifies delivery; failures are surfaced. Different receivers = different channels; bind multiple.',
