@@ -734,7 +734,7 @@ const tplEditorLabel = computed(() => {
 // 占位符集：rule 模式=事件变量；daily 模式机器人/邮件=日报+事件变量（后端日报
 // 派发对 content_template/renderStyleTemplate 两类同时替换）；webhook 载荷模板仅事件变量。
 const tplActivePh = computed<string[]>(() => {
-  if (tplMode.value === 'daily' && tplActiveChannel.value?.type !== 'webhook') return [...dailyPh, ...tplPh]
+  if (tplMode.value === 'daily') return [...dailyPh, ...tplPh]
   return tplPh
 })
 const tplPlaceholder = computed(() => {
@@ -1310,12 +1310,31 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
 const defaultChannelTplFor = (typ: string, lang: TplLang): string => {
   if (typ === 'webhook') return [
     '{',
-    '  "level": {{level}},',
-    '  "time": {{time}},',
-    '  "node": {{node}},',
-    '  "title": {{title}},',
-    '  "body": {{body}},',
-    '  "event": {{event}}',
+    '  "date": {{date}},',
+    '  "brand": {{brand}},',
+    '  "requests": {{requests}},',
+    '  "allowed": {{allowed}},',
+    '  "logged": {{logged}},',
+    '  "blocked": {{blocked}},',
+    '  "distinct_ips": {{distinct_ips}},',
+    '  "bandwidth": {{bandwidth}},',
+    '  "peak_qps": {{peak_qps}},',
+    '  "attack_top": {{attack_top}},',
+    '  "top_ips": {{top_ips}},',
+    '  "top_paths": {{top_paths}},',
+    '  "cc_triggered": {{cc_triggered}},',
+    '  "autoban": {{autoban}},',
+    '  "cert_status": {{cert_status}},',
+    '  "cert_expiring": {{cert_expiring}},',
+    '  "cluster_status": {{cluster_status}},',
+    '  "uptime": {{uptime}},',
+    '  "threat_db": {{threat_db}},',
+    '  "app_version": {{app_version}},',
+    '  "api_calls": {{api_calls}},',
+    '  "mcp_calls": {{mcp_calls}},',
+    '  "task_status": {{task_status}},',
+    '  "backup_status": {{backup_status}},',
+    '  "login_status": {{login_status}}',
     '}',
   ].join('\n')
   return defaultDailyTplFor(typ, lang)
@@ -1419,8 +1438,7 @@ const saveTplDialog = (): void => {
 }
 
 const editTemplate = async (rule: Rule): Promise<void> => {
-  // 打开即重拉 rules+channels：测试态/既有模板以最新为准（不依赖页面刷新）
-  try { await refreshDialogState() } catch (e) { console.error(e) }
+  // 直接用当前行数据打开（不重拉 rules，避免表格重排导致行跳到首行）
   const fresh = rules.value.find(r => r.id === rule.id) ?? rule
   tplMode.value = 'rule'
   tplEditingRule.value = fresh
@@ -1573,7 +1591,7 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .pick-summary.is-empty { color: #9ca3af; }
 .pick-caret { flex: none; font-size: 12px; color: #909399; }
 .tpl-lang-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.tpl-lang-hint { margin-top: 0; }
+.tpl-lang-hint { margin: 0 0 0 4px; }
 .tpl-channel-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
 .tpl-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
