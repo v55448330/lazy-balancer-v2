@@ -51,7 +51,7 @@ export interface NotificationDelivery {
   error: string
   created_at: string
   sent_at: string
-  channels: { channel_id: number; channel_name: string; channel_type: string; status: string; error: string }[]
+  channels: { channel_id: number; channel_name: string; channel_type: string; status: string; error: string; duration_ms?: number }[]
 }
 
 export type NotificationDeliveriesResponse = APIResponse<{ deliveries: NotificationDelivery[]; total: number }>

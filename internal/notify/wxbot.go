@@ -346,6 +346,10 @@ func WxDefaultReceiver() string {
 // wx_bot_cred 同表，无新表）；命名空间 per-bot per-receiver 隔离（多通道共存）。
 const wxContextKeyPrefix = "notify.wx_ctx:"
 
+// wxCursorKeyPrefix 长轮询游标持久化（复用 notify_settings KV）：面板重启后从
+// 上次游标继续，避免从头拉取导致入站消息重放/重复处理（QwenPaw #8757 同类教训）。
+const wxCursorKeyPrefix = "notify.wx_cursor:"
+
 func wxContextKey(botKey, receiver string) string {
 	return wxContextKeyPrefix + botKey + ":" + receiver
 }
@@ -453,7 +457,22 @@ func WxSessionReady(targetJSON string) bool {
 	if key == "" {
 		return false
 	}
-	return wxContextTokenFor(key, cfg.Receiver) != ""
+	// token 存在≠服务端未过期：超过 TTL 视为失效（iLink 约 15h 无入站即拒发，
+	// 取保守 12h），提前提示「会话待刷新」并引导重绑/让用户先发消息。
+	token := wxContextTokenFor(key, cfg.Receiver)
+	if token == "" {
+		return false
+	}
+	stored := GetSetting(wxContextKey(key, cfg.Receiver))
+	parts := strings.SplitN(stored, wxContextSep, 2)
+	if len(parts) == 2 {
+		if ts, err := strconv.ParseInt(parts[1], 10, 64); err == nil && ts > 0 {
+			if time.Since(time.Unix(ts, 0)) > 12*time.Hour {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func wxUIN() string {
@@ -822,6 +841,9 @@ func wxBotSession(ctx context.Context, cred wxBotCred, link *botLinkState) error
 		}
 		wxCtxMu.Lock()
 		buf := wxUpdatesBufs[key]
+		if buf == "" {
+			buf = GetSetting(wxCursorKeyPrefix + key)
+		}
 		wxCtxMu.Unlock()
 		payload, err := json.Marshal(map[string]any{
 			"get_updates_buf": buf,
@@ -868,6 +890,7 @@ func wxBotSession(ctx context.Context, cred wxBotCred, link *botLinkState) error
 			wxCtxMu.Lock()
 			wxUpdatesBufs[key] = ur.GetUpdatesBuf
 			wxCtxMu.Unlock()
+			_ = SetSettings(map[string]string{wxCursorKeyPrefix + key: ur.GetUpdatesBuf})
 		}
 		if first {
 			first = false
