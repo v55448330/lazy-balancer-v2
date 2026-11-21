@@ -197,11 +197,13 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 	"cluster-sync":        taskengine.KindDaemon,
 	"startup:config-load": taskengine.KindOneshot,
 	// 通知中心（2026-11-18）：投递常驻/日报定时/QQ+微信长连出站
-	"notification-delivery":      taskengine.KindDaemon,
-	"qq-bot-connection":          taskengine.KindDaemon,
-	"wx-bot-connection":          taskengine.KindDaemon,
-	"notification-daily-report":  taskengine.KindScheduled,
-	"notification-apikey-expiry": taskengine.KindPeriodic,
+	"notification-delivery":     taskengine.KindDaemon,
+	"qq-bot-connection":         taskengine.KindDaemon,
+	"wx-bot-connection":         taskengine.KindDaemon,
+	"notification-daily-report": taskengine.KindScheduled,
+	// 集群集中汇聚（2026-11-22）：从节点每日 00:05 上报本节点昨日统计块
+	"notification-node-stats-report": taskengine.KindScheduled,
+	"notification-apikey-expiry":     taskengine.KindPeriodic,
 }
 
 // Given v2.0 四类型标准全量注册。

@@ -647,6 +647,7 @@ const TASK_NAME_KEYS: Record<string, string> = {
   // 通知中心任务族（后端 services/notification_tasks.go 注册名；Category=通知）
   '通知投递': 'notificationDelivery',
   '通知日报': 'notificationDailyReport',
+  '节点统计上报': 'notificationNodeStatsReport',
   'QQ 机器人连接': 'qqBotConnection',
   '微信机器人连接': 'wxBotConnection',
   '通知投递保留清理': 'notificationDeliveryRetention',

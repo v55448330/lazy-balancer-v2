@@ -69,7 +69,8 @@ func newDailyTestDBs(t *testing.T) {
 			event_type TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'info', title TEXT NOT NULL,
 			body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
 			attempts INTEGER NOT NULL DEFAULT 0, error TEXT DEFAULT '', created_at TEXT NOT NULL,
-			sent_at DATETIME, is_test INTEGER NOT NULL DEFAULT 0, retry_channel_ids TEXT NOT NULL DEFAULT '')`,
+			sent_at DATETIME, is_test INTEGER NOT NULL DEFAULT 0, retry_channel_ids TEXT NOT NULL DEFAULT '',
+			node TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE notification_channels (
 			id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, type TEXT NOT NULL,
 			name TEXT NOT NULL DEFAULT '', target TEXT NOT NULL DEFAULT '',

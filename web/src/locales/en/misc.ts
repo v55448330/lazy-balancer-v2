@@ -31,6 +31,7 @@ export default {
       secEventRetention: 'Security event retention cleanup',
       notificationDelivery: 'Notification delivery',
       notificationDailyReport: 'Notification daily report',
+      notificationNodeStatsReport: 'Node stats report',
       qqBotConnection: 'QQ bot connection',
       wxBotConnection: 'WeChat bot connection',
       notificationDeliveryRetention: 'Notification delivery retention cleanup',

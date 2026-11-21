@@ -27,8 +27,9 @@ func pendingDeliveries(limit int) ([]struct {
 	Level     string
 	Title     string
 	Body      string
+	Node      string
 }, error) {
-	rows, err := db.DB.Query(`SELECT id, user_id, event_type, level, title, body
+	rows, err := db.DB.Query(`SELECT id, user_id, event_type, level, title, body, COALESCE(node,'')
 		FROM notification_deliveries WHERE status='pending' ORDER BY id LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -41,6 +42,7 @@ func pendingDeliveries(limit int) ([]struct {
 		Level     string
 		Title     string
 		Body      string
+		Node      string
 	}
 	for rows.Next() {
 		var d struct {
@@ -50,8 +52,9 @@ func pendingDeliveries(limit int) ([]struct {
 			Level     string
 			Title     string
 			Body      string
+			Node      string
 		}
-		if err := rows.Scan(&d.ID, &d.UserID, &d.EventType, &d.Level, &d.Title, &d.Body); err != nil {
+		if err := rows.Scan(&d.ID, &d.UserID, &d.EventType, &d.Level, &d.Title, &d.Body, &d.Node); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

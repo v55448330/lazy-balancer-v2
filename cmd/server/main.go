@@ -129,6 +129,9 @@ func run() error {
 	// 通知中心分发循环与 pending 重投兜底（库装配后尽早挂接——启动期已发生
 	// 的事件（自动封禁/证书任务恢复等）由此可落投递队列）。
 	notify.Bootstrap()
+	// 集群上报 TLS 信任（与快照同步同 TOFU pin 体系；自签主节点下事件/统计
+	// 上报不再握手失败）。
+	services.InstallNotifyClusterForwardTransport()
 	// 配置载入期告警重放：此刻运行日志文件写端与级别门都已装配，误配信号
 	// （未知键/类型错误/弱 JWT 密钥/caddy_admin_url 失联/APP_VERSION 未注入）
 	// 才进入统一日志链——此前只到容器 stdout，只采集日志文件的部署看不到。

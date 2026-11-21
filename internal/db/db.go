@@ -595,7 +595,8 @@ func createTables() error {
 		created_at TEXT NOT NULL,
 		sent_at DATETIME,
 		is_test INTEGER NOT NULL DEFAULT 0,
-		retry_channel_ids TEXT NOT NULL DEFAULT ''
+		retry_channel_ids TEXT NOT NULL DEFAULT '',
+		node TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status ON notification_deliveries(status, id);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_user ON notification_deliveries(user_id, id);
@@ -639,6 +640,17 @@ func createTables() error {
 		user_id INTEGER PRIMARY KEY,
 		config TEXT NOT NULL DEFAULT '{}',
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	-- 集群从节点日报统计（2026-11-22 主节点集中汇聚）：从节点每日 00:05
+	-- 上报本节点昨日统计块，主节点日报「各节点摘要」按此渲染；主节点本地
+	-- 表、不同步（nodes.name 为键，与事件上报同认证口径）。
+	CREATE TABLE IF NOT EXISTS cluster_node_daily_stats (
+		date TEXT NOT NULL,
+		node TEXT NOT NULL,
+		stats_json TEXT NOT NULL DEFAULT '{}',
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (date, node)
 	);
 
 	CREATE TABLE IF NOT EXISTS mcp_sessions (
@@ -1327,16 +1339,19 @@ var newColumnsRegistry = map[string]string{
 	// failed_only 重发的失败通道过滤（JSON 数组，派发消费后清空，''=全量）。
 	"notification_deliveries.is_test":           "INTEGER NOT NULL DEFAULT 0",
 	"notification_deliveries.retry_channel_ids": "TEXT NOT NULL DEFAULT ''",
-	"users.display_name":                        "VARCHAR(100)",
-	"users.is_enabled":                          "BOOLEAN NOT NULL DEFAULT 1",
-	"users.is_setup_admin":                      "INTEGER NOT NULL DEFAULT 0",
-	"api_keys.is_enabled":                       "BOOLEAN DEFAULT TRUE",
-	"api_keys.mcp_enabled":                      "INTEGER DEFAULT 0",
-	"api_keys.read_only":                        "INTEGER DEFAULT 0",
-	"api_keys.mcp_ip_whitelist":                 "TEXT DEFAULT ''",
-	"api_keys.api_enabled":                      "INTEGER DEFAULT 1",
-	"api_keys.api_read_only":                    "INTEGER DEFAULT 0",
-	"api_keys.mcp_read_only":                    "INTEGER DEFAULT 0",
+	// 集群事件来源节点（2026-11-22 集中汇聚）：从节点上报事件以 nodes.name
+	// 落行，投递模板 {{node}} 可见；主节点本地事件为空（=本机）。
+	"notification_deliveries.node": "TEXT NOT NULL DEFAULT ''",
+	"users.display_name":           "VARCHAR(100)",
+	"users.is_enabled":             "BOOLEAN NOT NULL DEFAULT 1",
+	"users.is_setup_admin":         "INTEGER NOT NULL DEFAULT 0",
+	"api_keys.is_enabled":          "BOOLEAN DEFAULT TRUE",
+	"api_keys.mcp_enabled":         "INTEGER DEFAULT 0",
+	"api_keys.read_only":           "INTEGER DEFAULT 0",
+	"api_keys.mcp_ip_whitelist":    "TEXT DEFAULT ''",
+	"api_keys.api_enabled":         "INTEGER DEFAULT 1",
+	"api_keys.api_read_only":       "INTEGER DEFAULT 0",
+	"api_keys.mcp_read_only":       "INTEGER DEFAULT 0",
 	// ALTER ADD COLUMN 禁非常量默认（SQLite 限制）：updated_at 补列无默认，
 	// 存量行由 newColumnBackfills 回填 created_at；fresh DDL 仍有 DEFAULT。
 	"api_keys.updated_at":                 "DATETIME",

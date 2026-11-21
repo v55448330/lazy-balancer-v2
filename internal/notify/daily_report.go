@@ -111,7 +111,7 @@ func DefaultFormatForChannel(channelType string) string {
 var DailyItemIDs = []string{
 	"requests", "allowed", "logged", "distinct_ips", "bandwidth", "peak_qps",
 	"blocked", "attack_top", "top_ips", "top_paths", "cc_triggered", "autoban",
-	"cert_status", "cert_expiring", "cluster_status", "uptime", "threat_db", "app_version",
+	"cert_status", "cert_expiring", "cluster_status", "nodes_summary", "uptime", "threat_db", "app_version",
 	"api_calls", "mcp_calls", "task_status", "backup_status", "login_status",
 }
 
@@ -130,11 +130,25 @@ func normalizeDailyItems(items []string) []string {
 	for _, id := range legacyDailyItemIDs {
 		drop[id] = true
 	}
-	out := make([]string, 0, len(items))
+	out := make([]string, 0, len(items)+1)
+	hasCluster, hasNodes := false, false
 	for _, id := range items {
-		if !drop[id] {
-			out = append(out, id)
+		if drop[id] {
+			continue
 		}
+		if id == "cluster_status" {
+			hasCluster = true
+		}
+		if id == "nodes_summary" {
+			hasNodes = true
+		}
+		out = append(out, id)
+	}
+	// 存量配置升级（2026-11-22）：集群模块老配置只含 cluster_status——
+	// 自动补「各节点摘要」，避免升级后集群视角静默缺失。UI 模块勾选会整组
+	// 增删（取消集群模块连 cluster_status 一起去掉），不会出现「反复复活」。
+	if hasCluster && !hasNodes {
+		out = append(out, "nodes_summary")
 	}
 	return out
 }
@@ -156,6 +170,7 @@ var DailyItemLabels = map[string]string{
 	"cert_status":    "证书状态",
 	"cert_expiring":  "临期证书明细",
 	"cluster_status": "集群状态",
+	"nodes_summary":  "各节点摘要",
 	"uptime":         "运行时长",
 	"threat_db":      "威胁库版本",
 	"app_version":    "应用版本",
@@ -337,6 +352,7 @@ func dailyValues(data DailyData) map[string]string {
 		"cert_status":    fmt.Sprintf("活跃 %d / 失败 %d", data.CertsActive, data.CertsFailed),
 		"cert_expiring":  data.CertExpiring,
 		"cluster_status": data.ClusterNote,
+		"nodes_summary":  data.NodesSummary,
 		"uptime":         data.Uptime,
 		"threat_db":      data.ThreatDB,
 		"app_version":    data.AppVersion,
@@ -388,6 +404,7 @@ type DailyData struct {
 	CertExpiring string
 	ClusterOK    bool
 	ClusterNote  string
+	NodesSummary string // 各从节点昨日统计摘要（多行；主节点本地表聚合）
 	Uptime       string
 	ThreatDB     string
 	AppVersion   string
@@ -459,7 +476,50 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='failed'`, u0, u1).Scan(&d.BackupFailed)
 	// 用户认证：昨日（日期标签同源）登录成功/失败/MFA 失败（Publish 累加）。
 	d.LoginOK, d.LoginFailed, d.MFAFailed = readAuthCounters(d.Date)
+	// 集群从节点昨日统计（2026-11-22 主节点集中汇聚；声明了集群且上报过的
+	// 节点逐行列出，未上报标「未上报」——数据缺失可见，不静默).
+	d.NodesSummary = collectNodesSummary(ctx, d.Date)
 	return d, nil
+}
+
+// collectNodesSummary 主节点本地表聚合各从节点昨日统计摘要（多行文本）。
+// 无节点行（单机/未声明集群）返回空串=该行整项在渲染层省略。
+func collectNodesSummary(ctx context.Context, date string) string {
+	if db.DB == nil {
+		return ""
+	}
+	rows, err := db.DB.QueryContext(ctx, `SELECT node, stats_json FROM cluster_node_daily_stats WHERE date=? ORDER BY node`, date)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var node, raw string
+		if err := rows.Scan(&node, &raw); err != nil {
+			continue
+		}
+		var st ClusterNodeStats
+		if err := json.Unmarshal([]byte(raw), &st); err != nil {
+			lines = append(lines, fmt.Sprintf("%s：数据损坏", node))
+			continue
+		}
+		line := fmt.Sprintf("%s：请求 %d · 拦截 %d · 独立IP %d", node, st.Requests, st.Blocked, st.DistinctIPs)
+		if st.TopRule != "" && st.TopRule != "无" {
+			line += " · TOP 规则 " + st.TopRule
+		}
+		if st.CCTriggered > 0 {
+			line += fmt.Sprintf(" · CC %d", st.CCTriggered)
+		}
+		if st.Autobans > 0 {
+			line += fmt.Sprintf(" · 自动封禁 %d", st.Autobans)
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 // peakWindowRequests 昨日采样窗峰值请求数（相邻全局累计采样的最大增量）。
@@ -616,7 +676,7 @@ var dailySections = []struct {
 	{"🌐", "全局概览", []string{"requests", "allowed", "logged", "distinct_ips", "bandwidth", "peak_qps"}},
 	{"🛡", "安全风险", []string{"blocked", "attack_top", "top_ips", "top_paths", "cc_triggered", "autoban"}},
 	{"🔒", "证书状态", []string{"cert_status", "cert_expiring"}},
-	{"🖥", "集群与运行", []string{"cluster_status", "uptime", "threat_db", "app_version"}},
+	{"🖥", "集群与运行", []string{"cluster_status", "nodes_summary", "uptime", "threat_db", "app_version"}},
 	{"🔌", "接入与任务", []string{"api_calls", "mcp_calls", "task_status", "backup_status"}},
 	{"👤", "用户认证", []string{"login_status"}},
 }

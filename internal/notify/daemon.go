@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	deliveryTickInterval = 15 * time.Second
+	deliveryTickInterval = 10 * time.Second
 	deliveryBatchSize    = 50
 )
 
@@ -55,7 +55,7 @@ func processPendingBatch(ctx context.Context) {
 			return
 		}
 		deliverOne(ctx, d.ID, d.UserID, Message{
-			EventType: d.EventType, Level: d.Level, Title: d.Title, Body: d.Body,
+			EventType: d.EventType, Level: d.Level, Title: d.Title, Body: d.Body, Node: d.Node,
 		})
 	}
 }

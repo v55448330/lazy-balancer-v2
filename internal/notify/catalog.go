@@ -179,6 +179,7 @@ func CatalogLookup(id string) bool {
 	_, ok := catalogByID(id)
 	return ok
 }
+
 // catalogByID 事件 ID → 目录条目。
 func catalogByID(id string) (catalogEntry, bool) {
 	for _, e := range catalog {

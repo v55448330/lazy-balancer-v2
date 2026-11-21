@@ -795,7 +795,7 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     requests: '请求数', allowed: '放行次数', logged: '观察次数', distinctIps: '独立 IP 数',
     bandwidth: '总带宽', peakQps: '峰值请求/窗', blocked: '拦截次数', attackTop: '攻击 TOP 规则',
     topIps: 'TOP 攻击源 IP', topPaths: 'TOP 攻击路径', cc: 'CC 触发次数', autoban: '自动封禁次数',
-    certStatus: '证书状态', certExpiring: '临期证书明细', clusterStatus: '集群状态',
+    certStatus: '证书状态', certExpiring: '临期证书明细', clusterStatus: '集群状态', nodesSummary: '各节点摘要',
     uptime: '运行时长', threatDb: '威胁库版本', appVersion: '应用版本',
     apiCalls: 'API 调用(今日)', mcpCalls: 'MCP 调用', taskStatus: '定时任务', backup: '自动备份',
     loginStatus: '登录认证',
@@ -815,7 +815,7 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     requests: 'Requests', allowed: 'Allowed', logged: 'Logged', distinctIps: 'Distinct IPs',
     bandwidth: 'Bandwidth', peakQps: 'Peak QPS', blocked: 'Blocked', attackTop: 'Top attack rule',
     topIps: 'Top source IPs', topPaths: 'Top attack paths', cc: 'CC triggers', autoban: 'Auto bans',
-    certStatus: 'Certificate status', certExpiring: 'Expiring certificates', clusterStatus: 'Cluster status',
+    certStatus: 'Certificate status', certExpiring: 'Expiring certificates', clusterStatus: 'Cluster status', nodesSummary: 'Per-node summary',
     uptime: 'Uptime', threatDb: 'Threat DB', appVersion: 'App version',
     apiCalls: 'API calls (today)', mcpCalls: 'MCP calls', taskStatus: 'Scheduled tasks', backup: 'Backup',
     loginStatus: 'Login',
@@ -904,7 +904,7 @@ const dailySampleValues = {
   top_paths: '/login × 200\n/api × 150',
   cc_triggered: '3', autoban: '17',
   cert_status: 'OK', cert_expiring: 'a.com · 2026-11-25\nb.com · 2026-11-28',
-  cluster_status: '3/3', uptime: '32 天',
+  cluster_status: '3/3', nodes_summary: 'slave-a：请求 22014 · 拦截 156 · 独立IP 402\nslave-b：请求 9821 · 拦截 12 · 独立IP 210', uptime: '32 天',
   threat_db: 'CRS 4.0 · IP库 2026-11', app_version: 'v2.4.4',
   api_calls: '1200', mcp_calls: '300',
   task_status: '成功 12 / 失败 1', backup_status: '成功 7 / 失败 0',
@@ -1235,7 +1235,7 @@ const savingTplChannelId = ref<number | null>(null)
 const isBotChannel = (typ: string): boolean => typ === 'qq' || typ === 'wx_clawbot'
 const fixedDailyFormat = (typ: string): string => (typ === 'qq' ? 'markdown' : 'text')
 // 日报变量（后端派发时从日报载荷 values 替换；键集=DailyItemIDs 全集+date）
-const dailyPh = ['{{date}}', '{{requests}}', '{{allowed}}', '{{logged}}', '{{blocked}}', '{{distinct_ips}}', '{{bandwidth}}', '{{peak_qps}}', '{{attack_top}}', '{{top_ips}}', '{{top_paths}}', '{{cc_triggered}}', '{{autoban}}', '{{cert_status}}', '{{cert_expiring}}', '{{cluster_status}}', '{{uptime}}', '{{threat_db}}', '{{app_version}}', '{{api_calls}}', '{{mcp_calls}}', '{{task_status}}', '{{backup_status}}', '{{login_status}}']
+const dailyPh = ['{{date}}', '{{requests}}', '{{allowed}}', '{{logged}}', '{{blocked}}', '{{distinct_ips}}', '{{bandwidth}}', '{{peak_qps}}', '{{attack_top}}', '{{top_ips}}', '{{top_paths}}', '{{cc_triggered}}', '{{autoban}}', '{{cert_status}}', '{{cert_expiring}}', '{{cluster_status}}', '{{nodes_summary}}', '{{uptime}}', '{{threat_db}}', '{{app_version}}', '{{api_calls}}', '{{mcp_calls}}', '{{task_status}}', '{{backup_status}}', '{{login_status}}']
 // 精美预置日报模板（事件与日报同族版式；分节=全局概览/安全风险/证书/集群与系统/运行状态）：
 // QQ=Markdown 分节表格（含 top_ips/top_paths/cert_expiring 多行变量），
 // 微信=纯文本分节行（iLink 协议无 markdown 能力），email=统一 HTML 卡片（日报版式）。
@@ -1294,113 +1294,8 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     row(L.threatDb, 'threat_db'),
     row(L.appVersion, 'app_version'),
     '',
-    `## ${L.secIntegrations}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.apiCalls, 'api_calls'),
-    row(L.mcpCalls, 'mcp_calls'),
-    row(L.taskStatus, 'task_status'),
-    row(L.backup, 'backup_status'),
-    '',
-    `## ${L.secAuth}`,
-    `## ${L.secOverview}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.loginStatus, 'login_status'),
-    row(L.requests, 'requests'),
-    row(L.allowed, 'allowed'),
-    row(L.logged, 'logged'),
-    row(L.distinctIps, 'distinct_ips'),
-    row(L.bandwidth, 'bandwidth'),
-    row(L.peakQps, 'peak_qps'),
-    '',
-    `## ${L.secSecurity}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.blocked, 'blocked'),
-    row(L.attackTop, 'attack_top'),
-    row(L.cc, 'cc_triggered'),
-    row(L.autoban, 'autoban'),
-    '',
-    `**${L.topIps}**`,
-    '{{top_ips}}',
-    `**${L.topPaths}**`,
-    '{{top_paths}}',
-    '',
-    `## ${L.secCert}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.certStatus, 'cert_status'),
-    '',
-    `**${L.certExpiring}**`,
-    '{{cert_expiring}}',
-    '',
-    `## ${L.secCluster}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.clusterStatus, 'cluster_status'),
-    row(L.uptime, 'uptime'),
-    row(L.threatDb, 'threat_db'),
-    row(L.appVersion, 'app_version'),
-    '',
-    `## ${L.secIntegrations}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.apiCalls, 'api_calls'),
-    row(L.mcpCalls, 'mcp_calls'),
-    row(L.taskStatus, 'task_status'),
-    row(L.backup, 'backup_status'),
-    '',
-    `## ${L.secAuth}`,
-    `## ${L.secOverview}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.loginStatus, 'login_status'),
-    row(L.requests, 'requests'),
-    row(L.allowed, 'allowed'),
-    row(L.logged, 'logged'),
-    row(L.distinctIps, 'distinct_ips'),
-    row(L.bandwidth, 'bandwidth'),
-    row(L.peakQps, 'peak_qps'),
-    '',
-    `## ${L.secSecurity}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.blocked, 'blocked'),
-    row(L.attackTop, 'attack_top'),
-    row(L.cc, 'cc_triggered'),
-    row(L.autoban, 'autoban'),
-    '',
-    `**${L.topIps}**`,
-    '{{top_ips}}',
-    `**${L.topPaths}**`,
-    '{{top_paths}}',
-    '',
-    `## ${L.secCert}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.certStatus, 'cert_status'),
-    '',
-    `**${L.certExpiring}**`,
-    '{{cert_expiring}}',
-    '',
-    `## ${L.secCluster}`,
-    '',
-    `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    row(L.clusterStatus, 'cluster_status'),
-    row(L.uptime, 'uptime'),
-    row(L.threatDb, 'threat_db'),
-    row(L.appVersion, 'app_version'),
+    `**${L.nodesSummary}**`,
+    '{{nodes_summary}}',
     '',
     `## ${L.secIntegrations}`,
     '',
@@ -1446,78 +1341,14 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     line(L.certStatus, 'cert_status'),
     `${L.certExpiring}${c}`,
     '{{cert_expiring}}',
-    L.secOverview,
-    line(L.requests, 'requests'),
-    line(L.allowed, 'allowed'),
-    line(L.logged, 'logged'),
-    line(L.distinctIps, 'distinct_ips'),
-    line(L.wxBandwidth, 'bandwidth'),
-    line(L.wxPeakQps, 'peak_qps'),
     '',
     L.wxCluster,
     line(L.clusterStatus, 'cluster_status'),
     line(L.uptime, 'uptime'),
     line(L.wxThreatDb, 'threat_db'),
     line(L.wxAppVersion, 'app_version'),
-    line(L.apiCalls, 'api_calls'),
-    line(L.mcpCalls, 'mcp_calls'),
-    L.secSecurity,
-    line(L.blocked, 'blocked'),
-    line(L.attackTop, 'attack_top'),
-    `${L.topIps}${c}`,
-    '{{top_ips}}',
-    `${L.topPaths}${c}`,
-    '{{top_paths}}',
-    line(L.cc, 'cc_triggered'),
-    line(L.autoban, 'autoban'),
-    '',
-    L.secRun,
-    line(L.taskStatus, 'task_status'),
-    line(L.wxBackup, 'backup_status'),
-    line(L.wxLogin, 'login_status'),
-    L.secCert,
-    line(L.certStatus, 'cert_status'),
-    `${L.certExpiring}${c}`,
-    '{{cert_expiring}}',
-    L.secOverview,
-    line(L.requests, 'requests'),
-    line(L.allowed, 'allowed'),
-    line(L.logged, 'logged'),
-    line(L.distinctIps, 'distinct_ips'),
-    line(L.wxBandwidth, 'bandwidth'),
-    line(L.wxPeakQps, 'peak_qps'),
-    '',
-    L.wxCluster,
-    line(L.clusterStatus, 'cluster_status'),
-    line(L.uptime, 'uptime'),
-    line(L.wxThreatDb, 'threat_db'),
-    line(L.wxAppVersion, 'app_version'),
-    line(L.apiCalls, 'api_calls'),
-    line(L.mcpCalls, 'mcp_calls'),
-    L.secSecurity,
-    line(L.blocked, 'blocked'),
-    line(L.attackTop, 'attack_top'),
-    `${L.topIps}${c}`,
-    '{{top_ips}}',
-    `${L.topPaths}${c}`,
-    '{{top_paths}}',
-    line(L.cc, 'cc_triggered'),
-    line(L.autoban, 'autoban'),
-    '',
-    L.secRun,
-    line(L.taskStatus, 'task_status'),
-    line(L.wxBackup, 'backup_status'),
-    line(L.wxLogin, 'login_status'),
-    L.secCert,
-    line(L.certStatus, 'cert_status'),
-    `${L.certExpiring}${c}`,
-    '{{cert_expiring}}',
-    '',
-    L.wxCluster,
-    line(L.clusterStatus, 'cluster_status'),
-    line(L.uptime, 'uptime'),
-    line(L.wxThreatDb, 'threat_db'),
-    line(L.wxAppVersion, 'app_version'),
+    `${L.nodesSummary}${c}`,
+    '{{nodes_summary}}',
     line(L.apiCalls, 'api_calls'),
     line(L.mcpCalls, 'mcp_calls'),
     '',
@@ -1528,74 +1359,6 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     '',
     '—— {{brand}} · {{time}}',
   ].join('\n')
-}
-// 通道模式预置（日报）：机器人=分节日报模板；email=统一 HTML 卡片（日报版式）；
-// webhook=JSON 载荷模板（占位符不裹引号，与保存侧 probe 校验同口径）。
-const defaultChannelTplFor = (typ: string, lang: TplLang): string => {
-  if (typ === 'webhook') return [
-    '{',
-    '  "date": {{date}},',
-    '  "brand": {{brand}},',
-    '  "requests": {{requests}},',
-    '  "allowed": {{allowed}},',
-    '  "logged": {{logged}},',
-    '  "blocked": {{blocked}},',
-    '  "distinct_ips": {{distinct_ips}},',
-    '  "bandwidth": {{bandwidth}},',
-    '  "peak_qps": {{peak_qps}},',
-    '  "attack_top": {{attack_top}},',
-    '  "top_ips": {{top_ips}},',
-    '  "top_paths": {{top_paths}},',
-    '  "cc_triggered": {{cc_triggered}},',
-    '  "autoban": {{autoban}},',
-    '  "cert_status": {{cert_status}},',
-    '  "cert_expiring": {{cert_expiring}},',
-    '  "cluster_status": {{cluster_status}},',
-    '  "uptime": {{uptime}},',
-    '  "threat_db": {{threat_db}},',
-    '  "app_version": {{app_version}},',
-    '  "api_calls": {{api_calls}},',
-    '  "mcp_calls": {{mcp_calls}},',
-    '  "task_status": {{task_status}},',
-    '  "backup_status": {{backup_status}},',
-    '  "login_status": {{login_status}}',
-    '}',
-  ].join('\n')
-  return defaultDailyTplFor(typ, lang)
-}
-// 通道模式预置（日报）：机器人=分节日报模板；email=统一 HTML 卡片（日报版式）；
-// webhook=JSON 载荷模板（占位符不裹引号，与保存侧 probe 校验同口径）。
-const defaultChannelTplFor = (typ: string, lang: TplLang): string => {
-  if (typ === 'webhook') return [
-    '{',
-    '  "date": {{date}},',
-    '  "brand": {{brand}},',
-    '  "requests": {{requests}},',
-    '  "allowed": {{allowed}},',
-    '  "logged": {{logged}},',
-    '  "blocked": {{blocked}},',
-    '  "distinct_ips": {{distinct_ips}},',
-    '  "bandwidth": {{bandwidth}},',
-    '  "peak_qps": {{peak_qps}},',
-    '  "attack_top": {{attack_top}},',
-    '  "top_ips": {{top_ips}},',
-    '  "top_paths": {{top_paths}},',
-    '  "cc_triggered": {{cc_triggered}},',
-    '  "autoban": {{autoban}},',
-    '  "cert_status": {{cert_status}},',
-    '  "cert_expiring": {{cert_expiring}},',
-    '  "cluster_status": {{cluster_status}},',
-    '  "uptime": {{uptime}},',
-    '  "threat_db": {{threat_db}},',
-    '  "app_version": {{app_version}},',
-    '  "api_calls": {{api_calls}},',
-    '  "mcp_calls": {{mcp_calls}},',
-    '  "task_status": {{task_status}},',
-    '  "backup_status": {{backup_status}},',
-    '  "login_status": {{login_status}}',
-    '}',
-  ].join('\n')
-  return defaultDailyTplFor(typ, lang)
 }
 // 通道模式预置（日报）：机器人=分节日报模板；email=统一 HTML 卡片（日报版式）；
 // webhook=JSON 载荷模板（占位符不裹引号，与保存侧 probe 校验同口径）。
@@ -1664,140 +1427,6 @@ const openDailyTpl = async (): Promise<void> => {
   for (const c of tplTabChannels.value) drafts[String(c.id)] = dailyTplDrafts.value[c.id] ?? defaultChannelTplFor(c.type, tplLang.value)
   tplTexts.value = drafts
   tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
-  tplPreviewOpen.value = []
-  tplDialogVisible.value = true
-}
-
-// 日报草稿库：既有正文模板 > 通道形态预置（逐通道；未保存过=预置形态）
-const seedDailyTplDrafts = (): void => {
-  const drafts: Record<number, string> = {}
-  for (const ch of channelOptions.value) {
-    const full = dailyFullChannels.value.find(c => c.id === ch.id)
-// 通道正文模板键位：机器人=content_template（事件+日报变量）、webhook=payload_template
-// （JSON 载荷）、email=body_template（正文；标题在通道传输配置）。
-const channelBodyTplKey = (typ: string): string => typ === 'webhook' ? 'payload_template' : typ === 'email' ? 'body_template' : 'content_template'
-
-// 正文模板保存：PUT 通道 style_config 为全量覆盖语义——回读既有键仅替换
-// 正文模板键（空模板=移除该键回退默认形态）；保存写库需确认。返回是否成功。
-const saveChannelBodyTemplate = async (ch: RuleChannel): Promise<boolean> => {
-  const full = dailyFullChannels.value.find(c => c.id === ch.id)
-  if (!full || savingTplChannelId.value !== null) return false
-  const draft = (dailyTplDrafts.value[ch.id] ?? '').trim()
-  if (isBotChannel(ch.type) && draft.length > 2000) { ElMessage.error(t('app.notification.daily.templateTooLong')); return false }
-  if (ch.type === 'email' && draft.length > 4000) { ElMessage.error(t('app.notification.daily.bodyTemplateTooLong')); return false }
-  try {
-    await ElMessageBox.confirm(t('app.notification.daily.saveTplConfirm', { name: ch.name }), t('app.notification.rules.confirmTitle'), { type: 'warning' })
-  } catch { return false }
-  savingTplChannelId.value = ch.id
-  try {
-    let style: Record<string, unknown> = {}
-    try { style = JSON.parse(full?.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-    const tpl = style[channelBodyTplKey(ch.type)]
-    const saved = typeof tpl === 'string' ? tpl : ''
-    drafts[ch.id] = saved || defaultChannelTplFor(ch.type, tplLang.value)
-  }
-  dailyTplDrafts.value = drafts
-    try { style = JSON.parse(full.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-    const key = channelBodyTplKey(ch.type)
-    if (draft) style[key] = draft
-    else delete style[key]
-    await request.put(`/notification/channels/${ch.id}`, { style_config: style })
-    full.style_config = JSON.stringify(style)
-    mfaAwareSuccess(t('app.notification.daily.templateSaved'))
-    return true
-  } catch (e) {
-    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
-    return false
-  } finally { savingTplChannelId.value = null }
-}
-
-// 日报模式入口（每日摘要卡「编辑模板」）：与事件规则共享同一模板弹框——
-// 仅数据源不同：daily 模式通道范围=全部通道，默认模板=日报版式。
-const openDailyTpl = async (): Promise<void> => {
-  if (!dailyRule.value) return
-  tplMode.value = 'daily'
-  tplEditingRule.value = null
-  try { await refreshDialogState() } catch (e) { console.error(e) }
-  const drafts: Record<string, string> = {}
-  for (const c of tplTabChannels.value) drafts[String(c.id)] = dailyTplDrafts.value[c.id] ?? defaultChannelTplFor(c.type, tplLang.value)
-  const formats: Record<string, string> = {}
-  for (const ch of userChannels.value) {
-    drafts[String(ch.id)] = fresh.channel_templates?.[String(ch.id)] || fresh.body_template || defaultTplFor(ch.type, tplLang.value)
-    formats[String(ch.id)] = ch.type === 'webhook' ? 'json' : ch.type === 'email' ? 'html' : fixedDailyFormat(ch.type)
-  }
-  tplTexts.value = drafts
-  tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
-  tplFormats.value = formats
-  // tab 集=规则已保存的选定通道（未选=全部）；通道选择已前移到表格内联
-  const targets = tplTabChannels.value
-  tplChannelTab.value = targets.length ? String(targets[0].id) : ''
-  tplPreviewOpen.value = []
-  tplDialogVisible.value = true
-}
-
-// 日报草稿库：既有正文模板 > 通道形态预置（逐通道；未保存过=预置形态）
-const seedDailyTplDrafts = (): void => {
-  const drafts: Record<number, string> = {}
-  for (const ch of channelOptions.value) {
-    const full = dailyFullChannels.value.find(c => c.id === ch.id)
-// 通道正文模板键位：机器人=content_template（事件+日报变量）、webhook=payload_template
-// （JSON 载荷）、email=body_template（正文；标题在通道传输配置）。
-const channelBodyTplKey = (typ: string): string => typ === 'webhook' ? 'payload_template' : typ === 'email' ? 'body_template' : 'content_template'
-
-// 正文模板保存：PUT 通道 style_config 为全量覆盖语义——回读既有键仅替换
-// 正文模板键（空模板=移除该键回退默认形态）；保存写库需确认。返回是否成功。
-const saveChannelBodyTemplate = async (ch: RuleChannel): Promise<boolean> => {
-  const full = dailyFullChannels.value.find(c => c.id === ch.id)
-  if (!full || savingTplChannelId.value !== null) return false
-  const draft = (dailyTplDrafts.value[ch.id] ?? '').trim()
-  if (isBotChannel(ch.type) && draft.length > 2000) { ElMessage.error(t('app.notification.daily.templateTooLong')); return false }
-  if (ch.type === 'email' && draft.length > 4000) { ElMessage.error(t('app.notification.daily.bodyTemplateTooLong')); return false }
-  try {
-    await ElMessageBox.confirm(t('app.notification.daily.saveTplConfirm', { name: ch.name }), t('app.notification.rules.confirmTitle'), { type: 'warning' })
-  } catch { return false }
-  savingTplChannelId.value = ch.id
-  try {
-    let style: Record<string, unknown> = {}
-    try { style = JSON.parse(full?.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-    const tpl = style[channelBodyTplKey(ch.type)]
-    const saved = typeof tpl === 'string' ? tpl : ''
-    drafts[ch.id] = saved || defaultChannelTplFor(ch.type, tplLang.value)
-  }
-  dailyTplDrafts.value = drafts
-    try { style = JSON.parse(full.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-    const key = channelBodyTplKey(ch.type)
-    if (draft) style[key] = draft
-    else delete style[key]
-    await request.put(`/notification/channels/${ch.id}`, { style_config: style })
-    full.style_config = JSON.stringify(style)
-    mfaAwareSuccess(t('app.notification.daily.templateSaved'))
-    return true
-  } catch (e) {
-    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
-    return false
-  } finally { savingTplChannelId.value = null }
-}
-
-// 日报模式入口（每日摘要卡「编辑模板」）：与事件规则共享同一模板弹框——
-// 仅数据源不同：daily 模式通道范围=全部通道，默认模板=日报版式。
-const openDailyTpl = async (): Promise<void> => {
-  if (!dailyRule.value) return
-  tplMode.value = 'daily'
-  tplEditingRule.value = null
-  try { await refreshDialogState() } catch (e) { console.error(e) }
-  const drafts: Record<string, string> = {}
-  for (const c of tplTabChannels.value) drafts[String(c.id)] = dailyTplDrafts.value[c.id] ?? defaultChannelTplFor(c.type, tplLang.value)
-  const formats: Record<string, string> = {}
-  for (const ch of userChannels.value) {
-    drafts[String(ch.id)] = fresh.channel_templates?.[String(ch.id)] || fresh.body_template || defaultTplFor(ch.type, tplLang.value)
-    formats[String(ch.id)] = ch.type === 'webhook' ? 'json' : ch.type === 'email' ? 'html' : fixedDailyFormat(ch.type)
-  }
-  tplTexts.value = drafts
-  tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
-  tplFormats.value = formats
-  // tab 集=规则已保存的选定通道（未选=全部）；通道选择已前移到表格内联
-  const targets = tplTabChannels.value
-  tplChannelTab.value = targets.length ? String(targets[0].id) : ''
   tplPreviewOpen.value = []
   tplDialogVisible.value = true
 }

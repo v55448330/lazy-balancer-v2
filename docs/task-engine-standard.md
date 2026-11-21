@@ -158,9 +158,9 @@ type Descriptor struct {
 
 已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为；`ToggleFn`/`ToggleName`（2026-10-11）——v2.0 调度开关统一（StartLoop/StopLoop）后声明族零消费退役，TaskMeta/TaskInfo 的 `toggleable`/`toggle_name` 序列化字段一并删除；`ManualRun`（勘误）——手动触发能力由 Kind 派生（DescribeAll `CanTrigger`），声明字段无消费；`TaskMeta.Enabled`（任务监控只认 `loop_on`，`Lookup/DescribeAll` 不再求值 `EnabledFn`）——`Descriptor.EnabledFn` 仍保留为 Scheduled/Periodic 调度门。
 
-## 2. 任务清单（33 注册任务；实时全集以 `DescribeAll` 为准）
+## 2. 任务清单（34 注册任务；实时全集以 `DescribeAll` 为准）
 
-### 定时（6）——排程槽驱动，Run 纯业务
+### 定时（7）——排程槽驱动，Run 纯业务
 
 | 任务 | NextSlotFn 数据源 | Run 体 |
 |---|---|---|
@@ -169,7 +169,8 @@ type Descriptor struct {
 | ip2region | `security_ip2region_version.next_update` | `StartUpdate`+wait |
 | crawlerbot-update | `security_crawler_sources.next_update` 最早值（UTC） | `CrawlerUpdateManager.RunUpdate` 直达 |
 | auto-backup | `nextAutoBackupSlot()`（last_run 感知——漏跑追补/已跑步进） | `runAutoBackupScheduled` |
-| notification-daily-report | 每日 09:00 本地时间（错过跨点下一 tick 立即补发一次） | 渲染昨日摘要→Publish(daily_report)（发送全走投递 Daemon） |
+| notification-daily-report | 每日 09:00 本地时间（错过跨点下一 tick 立即补发一次） | 渲染昨日摘要→Publish(daily_report)（发送全走投递 Daemon）；**RunsOn=MasterOnly**（通道/订阅/日报配置只在主节点） |
+| notification-node-stats-report | 每日 00:05 本地时间（次日零点后上报昨日块，早于默认日报槽） | 从节点采集本节点昨日统计块→POST 主节点 `/cluster/node-stats/report`（(date,node) upsert）；**RunsOn=SlaveOnly**，主节点日报「各节点摘要」数据源 |
 
 到期检查全部移出 Run 体——引擎保证在排程槽调用，Run 只执行业务。
 

@@ -31,6 +31,15 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		Kind:        taskengine.KindDaemon,
 		RunsOn:      taskengine.RoleAny,
 		Run: func(rc taskengine.RunContext) error {
+			// 集群集中汇聚（2026-11-22 用户裁定）：通道/订阅/日报配置只在主节点，
+			// 从节点不本地投递（无通道配置=空转），只承载事件 spool 重传循环；
+			// 从节点事件经 Publish 即时推送到主节点总线，由主节点统一订阅匹配与投递。
+			// 从节点：无通道配置，投递收敛主节点；本 daemon 只承载事件 spool 重传
+			// 节拍（RunTicker 驱动，不自建 ticker——任务引擎标准 v2.2）。
+			if !te.IsMaster() {
+				taskengine.RunTicker(rc.Ctx, notify.ClusterForwardSpoolRetryInterval, nil, notify.DrainClusterForwardSpool)
+				return nil
+			}
 			return notify.RunDeliveryLoop(rc.Ctx)
 		},
 	})
@@ -42,9 +51,34 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		Description: "按各用户配置时间渲染昨日摘要（请求/拦截/攻击 TOP/证书/集群/封禁）并按用户订阅通道投递",
 		Category:    "通知",
 		Kind:        taskengine.KindScheduled,
-		NextSlotFn:  func() time.Time { return nextDailyReportSlot(time.Now()) },
+		// 集群集中汇聚（2026-11-22 用户裁定）：通道/订阅/日报配置只在主节点，
+		// 日报只在主节点渲染投递（集群口径=主节点本地+各从节点上报统计）。
+		// 从节点若也跑本任务，会为本地用户落 pending 行而无通道可用（空转堆积）。
+		RunsOn:     taskengine.RoleMasterOnly,
+		NextSlotFn: func() time.Time { return nextDailyReportSlot(time.Now()) },
 		Run: func(rc taskengine.RunContext) error {
 			return notify.DailyReportRun(rc)
+		},
+	})
+
+	// 从节点日报统计上报（2026-11-22 主节点集中汇聚）：每日 00:05 把本节点
+	// 昨日统计块上报主节点（(date,node) upsert），主节点日报「各节点摘要」
+	// 由此渲染。仅从节点运行（RoleSlaveOnly）；主节点不注册执行面。
+	mustRegisterTask(te, taskengine.Descriptor{
+		ID:          "notification-node-stats-report",
+		Family:      "notification",
+		Name:        "节点统计上报",
+		Description: "从节点每日上报本节点昨日统计块（请求/拦截/攻击 TOP/CC/封禁）至主节点，供主节点日报的集群各节点摘要使用",
+		Category:    "通知",
+		Kind:        taskengine.KindScheduled,
+		RunsOn:      taskengine.RoleSlaveOnly,
+		NextSlotFn:  func() time.Time { return nextNodeStatsSlot(time.Now()) },
+		Run: func(rc taskengine.RunContext) error {
+			stats, err := notify.CollectNodeStats(rc.Ctx, time.Now())
+			if err != nil {
+				return err
+			}
+			return notify.ReportNodeStatsToMaster(rc.Ctx, stats)
 		},
 	})
 
@@ -138,6 +172,21 @@ func registerNotificationTasks(te *taskengine.Engine) {
 // 槽推到次日，due 恒 false——定时日报永不投递（audit153 NOTIF153-01）。
 // 时区用全站配置时区（CurrentLocation，与投递侧 dailySlotDue 的 loc 同源）：
 // 容器 TZ≠配置时区时，槽与宽限必须按同一时区比较（NOTIF153-04）。
+// nextNodeStatsSlot 从节点统计上报槽（每日 00:05 配置时区，次日零点后立即
+// 上报昨日块——早于默认 09:00 日报槽，保证主节点渲染时数据已在).
+func nextNodeStatsSlot(now time.Time) time.Time {
+	loc := CurrentLocation()
+	if loc == nil {
+		loc = time.Local
+	}
+	n := now.In(loc)
+	slot := time.Date(n.Year(), n.Month(), n.Day(), 0, 5, 0, 0, loc)
+	if !slot.After(n) {
+		slot = slot.AddDate(0, 0, 1)
+	}
+	return slot
+}
+
 func nextDailyReportSlot(now time.Time) time.Time {
 	times, err := notify.AllDailySendTimes()
 	if err != nil || len(times) == 0 {

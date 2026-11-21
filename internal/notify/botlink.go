@@ -216,11 +216,13 @@ func formatBotTextWithTemplate(tpl string, msg Message, ts time.Time) string {
 		"{{time}}", ts.Format("2006-01-02 15:04"),
 		"{{brand}}", BrandName(),
 	}
-	// 日报变量（{{date}}/{{requests}}/…）：值来自日报载荷（deliverOne 注入
-	// msg.Fields），用户日报模板可插入包含项目变量；非日报消息 Fields 无这些键不替换。
-	for _, k := range []string{"date", "requests", "blocked", "attack_top", "autoban", "cert_status", "cluster_status"} {
-		if v, ok := msg.Fields[k]; ok {
-			pairs = append(pairs, "{{"+k+"}}", v)
+	// 日报变量（{{date}}/{{requests}}/{{nodes_summary}}/…）：值来自日报载荷
+	// （deliverOne 注入 msg.Fields）。2026-11-22 用户裁定「模块选择与自定义
+	// 模板二选一」——模板模式下令牌全量可放置，不再限定 7 个变量子集。
+	// 非日报消息 Fields 无这些键不替换（事件模板不受影响）。
+	if msg.EventType == EvtDailyReport {
+		for _, k := range dailyFieldKeys(msg.Fields, botReservedPlaceholders) {
+			pairs = append(pairs, "{{"+k+"}}", msg.Fields[k])
 		}
 	}
 	return strings.NewReplacer(pairs...).Replace(tpl)

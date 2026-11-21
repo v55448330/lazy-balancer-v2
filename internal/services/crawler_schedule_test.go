@@ -155,7 +155,10 @@ func TestInitTaskEngine_nonExemptTasksLoopOn(t *testing.T) {
 	te := newWireTestEngine(t)
 	// Then：除明确豁免（cert-waiting-ca 默认关、autoban/auto-backup 按业务开关）外，
 	// 所有非 oneshot 任务都必须 loop_on，新增任务不得漏进默认 StartLoop。
-	exempt := map[string]bool{"cert-waiting-ca": true, "autoban": true, "auto-backup": true}
+	// notification-node-stats-report：RoleSlaveOnly——测试引擎为角色，角色门不启动
+	// （主节点本就不该有从节点上报；从节点上按 roleAllows 默认 loop_on）。
+	exempt := map[string]bool{"cert-waiting-ca": true, "autoban": true, "auto-backup": true,
+		"notification-node-stats-report": true}
 	for _, meta := range te.DescribeAll() {
 		if meta.Kind == taskengine.KindOneshot || exempt[meta.ID] {
 			continue

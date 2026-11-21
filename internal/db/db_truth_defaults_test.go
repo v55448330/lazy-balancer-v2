@@ -812,7 +812,6 @@ var freshOriginalColumns = map[string][]string{
 	"notification_deliveries":        {"id", "user_id", "event_type", "level", "title", "body", "status", "attempts", "error", "created_at", "sent_at"},
 	"notification_delivery_channels": {"id", "delivery_id", "user_id", "channel_id", "channel_name", "channel_type", "event_type", "status", "error", "duration_ms", "created_at"},
 	"notification_daily":             {"user_id", "config", "updated_at"},
-	"notification_subscriptions":     {"user_id", "event_type", "min_level", "body_template", "channel_ids", "channel_templates", "enabled", "updated_at", "updated_by"},
 	// 集群从节点日报统计（2026-11-22）：全新表，首发即含全部列（CREATE TABLE
 	// IF NOT EXISTS 每次启动执行，存量库自动建表补全）——无需迁移登记。
 	"cluster_node_daily_stats":   {"date", "node", "stats_json", "updated_at"},

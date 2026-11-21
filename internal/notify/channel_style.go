@@ -13,6 +13,7 @@ package notify
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 )
@@ -71,7 +72,7 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 	if event == "" {
 		event = "notification"
 	}
-	r := strings.NewReplacer(
+	pairs := []string{
 		"{{title}}", msg.Title,
 		"{{body}}", msg.Body,
 		"{{level}}", msg.Level,
@@ -81,8 +82,15 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 		"{{brand}}", BrandName(),
 		"{{date}}", templateDate(msg, ts),
 		"{{event_title}}", eventDisplayTitle(msg.EventType),
-	)
-	return r.Replace(tpl)
+	}
+	// 日报变量（2026-11-22 二选一裁定）：模板模式下全部日常变量可放置。
+	// 事件消息 Fields 为编号键（"1"/"2"），不参与替换。
+	if msg.EventType == EvtDailyReport {
+		for _, k := range dailyFieldKeys(msg.Fields, styleReservedPlaceholders) {
+			pairs = append(pairs, "{{"+k+"}}", msg.Fields[k])
+		}
+	}
+	return strings.NewReplacer(pairs...).Replace(tpl)
 }
 
 // renderStyleTemplateJSON webhook payload_template 专用：占位符值经 JSON
@@ -100,7 +108,7 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 		b, _ := json.Marshal(s)
 		return string(b)
 	}
-	r := strings.NewReplacer(
+	pairs := []string{
 		"{{title}}", enc(msg.Title),
 		"{{body}}", enc(msg.Body),
 		"{{level}}", enc(msg.Level),
@@ -110,8 +118,38 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 		"{{brand}}", enc(BrandName()),
 		"{{date}}", enc(templateDate(msg, ts)),
 		"{{event_title}}", enc(eventDisplayTitle(msg.EventType)),
-	)
-	return r.Replace(tpl)
+	}
+	// 日报变量同文本变体：值经 JSON 编码嵌入（保存校验同口径）。
+	if msg.EventType == EvtDailyReport {
+		for _, k := range dailyFieldKeys(msg.Fields, styleReservedPlaceholders) {
+			pairs = append(pairs, "{{"+k+"}}", enc(msg.Fields[k]))
+		}
+	}
+	return strings.NewReplacer(pairs...).Replace(tpl)
+}
+
+// 各渲染器已内置的占位符键集（Fields 扩展须排除，防 NewReplacer 重复键 panic）。
+var styleReservedPlaceholders = map[string]bool{"date": true, "title": true, "body": true,
+	"level": true, "event": true, "time": true, "node": true, "brand": true, "event_title": true}
+
+var botReservedPlaceholders = map[string]bool{"title": true, "body": true,
+	"level": true, "event": true, "time": true, "node": true, "brand": true, "event_title": true}
+
+// dailyFieldKeys 日报载荷 Fields 中可作文本变量的键（排除渲染器已内置键；
+// 确定性排序便于测试与排查）。
+func dailyFieldKeys(fields map[string]string, reserved map[string]bool) []string {
+	if len(fields) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		if reserved[k] {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // templateDate 日报日期变量：优先载荷 Fields["date"]（昨日），缺省=消息时间日期。

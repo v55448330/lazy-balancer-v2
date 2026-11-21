@@ -144,10 +144,10 @@ func dispatch(evt Event) {
 // 的启用通道展开为多通道投递并更新状态）。
 func insertDeliveryPending(userID int64, evt Event) {
 	_, err := db.DB.Exec(`INSERT INTO notification_deliveries
-		(user_id, event_type, level, title, body, status, attempts, created_at)
-		VALUES (?,?,?,?,?, 'pending', 0, ?)`,
+		(user_id, event_type, level, title, body, status, attempts, created_at, node)
+		VALUES (?,?,?,?,?, 'pending', 0, ?, ?)`,
 		userID, evt.Type, string(evt.Level), evt.Title, evt.Body,
-		evt.Time.UTC().Format("2006-01-02 15:04:05"))
+		evt.Time.UTC().Format("2006-01-02 15:04:05"), evt.Node)
 	if err != nil {
 		log.Printf("WARN: notify 投递行落库失败（user=%d event=%s）: %v", userID, evt.Type, err)
 	}

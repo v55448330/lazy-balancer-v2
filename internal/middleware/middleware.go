@@ -931,6 +931,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.GET("/cluster/sync/waf-files", clusterMachineRateLimit("sync-waf-files", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.GetClusterWafFiles)
 		v1.POST("/cluster/registration/confirm", clusterMachineRateLimit("registration-confirm", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.ConfirmClusterRegistration)
 		v1.POST("/cluster/nodes/report", clusterMachineRateLimit("node-report", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.ReportClusterNode)
+		// 集群事件上报（2026-11-22 主节点集中汇聚）：从节点事件→主节点总线。
+		v1.POST("/cluster/events/report", clusterMachineRateLimit("cluster-event-report", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.HandleClusterEventReport)
+		// 从节点日报统计上报：(date,node) upsert，主节点日报「各节点摘要」数据源。
+		v1.POST("/cluster/node-stats/report", clusterMachineRateLimit("node-stats-report", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.HandleClusterNodeStatsReport)
 		// 从节点服务控制：票据即凭证（主节点签发的一次性 HMAC，与登录票据同
 		// 机制），不走 clusterTokenAuth——主节点无法取回令牌明文（仅存哈希）。
 		v1.POST("/cluster/service-control", clusterRateLimit("service-control", 20, "服务控制请求过于频繁，请稍后再试"), h.ClusterServiceControl)

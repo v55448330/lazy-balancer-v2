@@ -33,6 +33,7 @@ export default {
       secEventRetention: '安全事件保留清理',
       notificationDelivery: '通知投递',
       notificationDailyReport: '通知日报',
+      notificationNodeStatsReport: '节点统计上报',
       qqBotConnection: 'QQ 机器人连接',
       wxBotConnection: '微信机器人连接',
       notificationDeliveryRetention: '通知投递保留清理',
