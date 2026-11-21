@@ -28,18 +28,17 @@ func TestRenderBody_noNodeSuffix(t *testing.T) {
 
 func TestDefaultEventTemplateQQ_compactLayout(t *testing.T) {
 	tpl := defaultEventTemplate("qq")
-	if strings.Contains(tpl, "事件详情") {
-		t.Fatalf("QQ 模板不得再含「事件详情」分节标题: %q", tpl)
+	// 2026-11-22 定稿样稿逐字：## 标题 → --- → 加粗正文 → --- → 加粗标签列表
+	// （级别去 ⚠️、冒号后留一空格）→ --- → 品牌引用页脚，全程无空行。
+	want := "## 🔔 {{title}}\n---\n**{{body}}**\n---\n* **级别**： {{level}}\n* **事件名称**：{{event_title}}\n* **所属节点**：{{node}}\n* **发生时间**：{{time}}\n---\n> {{brand}} 通知中心"
+	if tpl != want {
+		t.Fatalf("QQ 默认模板偏离定稿样稿:\n got %q\nwant %q", tpl, want)
 	}
-	if strings.Contains(tpl, "\n# ") || strings.HasPrefix(tpl, "# ") {
-		t.Fatalf("QQ 模板不得用单 # 一级标题（### 样稿为三级）: %q", tpl)
+	if strings.Contains(tpl, "### ") || strings.Contains(tpl, "\n# ") || strings.HasPrefix(tpl, "# ") {
+		t.Fatalf("QQ 模板标题层级须为 ##（定稿）: %q", tpl)
 	}
-	if !strings.Contains(tpl, "### ") {
-		t.Fatalf("QQ 模板须保留 ### markdown 标题（用户样稿）: %q", tpl)
-	}
-
-	if strings.Contains(tpl, "{{title}} · {{level}}") || strings.Contains(tpl, "🔔 {{title}} ·") {
-		t.Fatalf("标题不得混排级别（正文主角凸显）: %q", tpl)
+	if strings.Contains(tpl, "⚠️") {
+		t.Fatalf("定稿模板级别行不带 ⚠️ 前缀: %q", tpl)
 	}
 	for _, ph := range []string{"{{title}}", "{{level}}", "{{body}}", "{{event_title}}", "{{node}}", "{{time}}", "{{brand}}"} {
 		if !strings.Contains(tpl, ph) {
@@ -66,7 +65,7 @@ func TestDefaultEventTemplateWX_carriesNode(t *testing.T) {
 // 标题/正文各两份、外层 ** 字面量泄漏）：事件级模板渲染完成的 Body 是最终
 // 消息全量——通道样式模板（content/body/payload_template）不得再套一层。
 func TestTemplateApplied_bypassesChannelStyleTemplates(t *testing.T) {
-	rendered := "### 🔔 标题\n---\n**正文**\n---\n* 级别：⚠️ 警告\n\n> 品牌通知中心"
+	rendered := "## 🔔 标题\n---\n**正文**\n---\n* **级别**： 警告\n* **事件名称**：证书即将过期\n---\n> 品牌通知中心"
 	msg := Message{EventType: "cfg.caddy_apply_failed", Level: "warn", Title: "标题", Body: rendered, TemplateApplied: true}
 	// 机器人：通道 content_template 存在也必须旁路，原样发送
 	if got := renderBotMessage("## 外层 {{title}}\n> **{{body}}**", msg, time.Unix(0, 0), "qq"); got != rendered {

@@ -229,3 +229,39 @@ func TestEmailSenderTargetValidation(t *testing.T) {
 		}
 	}
 }
+
+// emailHTMLBody 契约（2026-11-22 残留交互修复）：事件模板已全量渲染
+// （TemplateApplied）的正文是 markdown 文本——邮件不得再包 HTML 卡片
+// （卡片标题/徽章/元信息与模板自身布局视觉重复），也不得进 HTML 上下文
+// （NOTIF153-02 同源纪律），一律 text/plain 原文直发，显式 html 格式不破例。
+func TestEmailHTMLBody_templateAppliedPlainText(t *testing.T) {
+	tplApplied := Message{EventType: "cfg.caddy_apply_failed", TemplateApplied: true,
+		Body: "## 🔔 标题\n---\n**正文**"}
+	if emailHTMLBody("", "", tplApplied) {
+		t.Fatal("TemplateApplied 正文=markdown 文本，必须 text/plain 原文直发（不得包 HTML 卡片）")
+	}
+	if emailHTMLBody("", "html", tplApplied) {
+		t.Fatal("TemplateApplied 显式 html 格式也不破例：模板产物不是 HTML，进 HTML 上下文即注入面")
+	}
+	// 回归：默认事件链（无事件模板、通道无正文模板）仍走 HTML 卡片
+	if !emailHTMLBody("", "", Message{EventType: "cfg.caddy_apply_failed"}) {
+		t.Fatal("默认事件链（无模板）应走 HTML 卡片")
+	}
+	if emailHTMLBody("", "text", Message{EventType: "cfg.caddy_apply_failed"}) {
+		t.Fatal("显式纯文本格式须 text/plain")
+	}
+	// 回归：通道正文模板存在时跟随显式格式
+	if !emailHTMLBody("<p>{{body}}</p>", "html", Message{EventType: "cfg.caddy_apply_failed"}) {
+		t.Fatal("通道 HTML 正文模板应按 text/html 发送")
+	}
+	if emailHTMLBody("<p>{{body}}</p>", "", Message{EventType: "cfg.caddy_apply_failed"}) {
+		t.Fatal("通道正文模板未显式 html 时不得进 HTML 上下文")
+	}
+	// 回归：日报跟随实际渲染格式（ContentFormat）
+	if !emailHTMLBody("", "", Message{EventType: EvtDailyReport, ContentFormat: "html"}) {
+		t.Fatal("日报 html 渲染应按 text/html 发送")
+	}
+	if emailHTMLBody("", "", Message{EventType: EvtDailyReport, ContentFormat: "text"}) {
+		t.Fatal("日报 text 渲染必须 text/plain（fail-closed）")
+	}
+}

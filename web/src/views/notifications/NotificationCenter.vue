@@ -807,6 +807,7 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     signature: 'Sent automatically by {{brand}} Notification Center · {{time}}',
     fieldHeader: 'Field', valueHeader: 'Value',
     level: 'Level', event: 'Event', node: 'Node', time: 'Time', date: 'Date',
+    eventName: 'Event', nodeName: 'Node', occurredAt: 'Occurred at', notifyCenter: 'Notification Center', levelB: 'Level',
     dailyHeader: '📊 {{brand}} Daily Report', generatedAt: 'Generated at',
     secOverview: '🌐 Overview', secSecurity: '🛡 Security', secCert: '🔒 Certificates',
     secCluster: '🖥 Service Status', secIntegrations: '🔌 Integrations & Tasks', secAuth: '👤 User Authentication',
@@ -859,19 +860,18 @@ const defaultTplFor = (typ: string, lang: TplLang): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
     [[L.event, '{{event_title}}'], [L.node, '{{node}}'], [L.time, '{{time}}']],
     L.signature)
-  // QQ 事件预置（2026-11-22 用户样稿逐字）：### 标题 / **正文** / --- /
-  // * 列表（级别 ⚠️）/ 品牌引用页脚。
+  // QQ 事件预置（2026-11-22 定稿样稿逐字）：## 标题 / --- / **正文** / --- /
+  // * 加粗标签列表（级别去 ⚠️、冒号后留一空格）/ --- / 品牌引用页脚，无空行。
   if (typ === 'qq') return [
-    `### 🔔 {{title}}`,
-    '',
+    `## 🔔 {{title}}`,
+    '---',
     `**{{body}}**`,
     '---',
-    '',
-    `* ${L.levelB}${L.colon}⚠️ {{level}}`,
-    `* ${L.eventName}${L.colon}{{event_title}}`,
-    `* ${L.nodeName}${L.colon}{{node}}`,
-    `* ${L.occurredAt}${L.colon}{{time}}`,
-    '',
+    `* **${L.levelB}**${L.colon} {{level}}`,
+    `* **${L.eventName}**${L.colon}{{event_title}}`,
+    `* **${L.nodeName}**${L.colon}{{node}}`,
+    `* **${L.occurredAt}**${L.colon}{{time}}`,
+    '---',
     `> {{brand}} ${L.notifyCenter}`,
   ].join('\n')
   return [

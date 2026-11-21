@@ -54,23 +54,33 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 		body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
 	}
 	tlsEnabled, insecure := smtpTLSOptions()
-	// 日报渲染底座产出 HTML，须 text/html；事件邮件缺省（无正文模板且非显式 text）
-	// 用内联样式 HTML 卡片（品牌+时间），与全站精美裁定同口径；显式 text 才纯文本。
-	defaultHTML := cfg.BodyTemplate == "" && cfg.BodyFormat != "text" && msg.EventType != EvtDailyReport
-	htmlBody := cfg.BodyFormat == "html" || defaultHTML
-	if msg.EventType == EvtDailyReport {
-		// NOTIF153-02：日报 Content-Type 跟随**实际渲染格式**（派发侧
-		// renderDailyForChannelFormat 写入 ContentFormat，与渲染决序同源）。
-		// 只有 html 渲染可按 text/html 原样发送；text/markdown/json 产物
-		// 必须 text/plain——否则日报值里的 '<script>' 等未转义内容会被邮件
-		// 客户端当 HTML 执行。ContentFormat 未知（载荷损坏回退原文/直调
-		// Sender）按纯文本 fail-closed。
-		htmlBody = msg.ContentFormat == "html"
-	}
+	htmlBody := emailHTMLBody(cfg.BodyTemplate, cfg.BodyFormat, msg)
 	if htmlBody && msg.EventType != EvtDailyReport && cfg.BodyTemplate == "" {
 		body = wrapEmailHTML(msg, subject, body, ts)
 	}
 	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, htmlBody, tlsEnabled, insecure)
+}
+
+// emailHTMLBody 邮件 Content-Type 决策（单源）：
+//   - TemplateApplied：事件模板已全量渲染，正文是 markdown 文本——不得再包
+//     HTML 卡片（卡片标题/徽章/元信息与模板自身布局视觉重复），也不得进
+//     HTML 上下文（NOTIF153-02 同源纪律），一律 text/plain 原文直发，显式
+//     html 格式不破例（模板产物不是 HTML）。
+//   - 日报：跟随实际渲染格式 ContentFormat（派发侧写入，未知按纯文本
+//     fail-closed）。
+//   - 事件缺省（无正文模板且非显式 text）：HTML 卡片（全站精美同口径）；
+//     通道正文模板存在时只有显式 html 才 text/html。
+func emailHTMLBody(bodyTemplate, bodyFormat string, msg Message) bool {
+	if msg.TemplateApplied {
+		return false
+	}
+	if msg.EventType == EvtDailyReport {
+		return msg.ContentFormat == "html"
+	}
+	if bodyTemplate != "" {
+		return bodyFormat == "html"
+	}
+	return bodyFormat != "text"
 }
 
 // wrapEmailHTML 事件邮件统一精美卡片：深色品牌头+级别徽章+标题+accent 条+
