@@ -46,6 +46,7 @@ func postClusterJSON(router *gin.Engine, path, body string) *httptest.ResponseRe
 }
 
 func TestHandleClusterEventReport_pinsNodeNameToAuthenticatedNode(t *testing.T) {
+	withIsolatedGlobal(t) // 改写 clusterEventPublish seam
 	h := newBackupTestHandlers(t)
 	seedClusterNodeForReport(t, 42, "slave-a")
 	var captured []notify.Event
@@ -71,6 +72,7 @@ func TestHandleClusterEventReport_pinsNodeNameToAuthenticatedNode(t *testing.T) 
 }
 
 func TestHandleClusterEventReport_dedupsSpoolBatchAndDropsUnknownEvents(t *testing.T) {
+	withIsolatedGlobal(t) // 改写 clusterEventPublish seam
 	h := newBackupTestHandlers(t)
 	seedClusterNodeForReport(t, 43, "slave-b")
 	var captured []notify.Event

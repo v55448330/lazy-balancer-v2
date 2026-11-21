@@ -166,6 +166,8 @@ func captureHandlerGlobalSeams() map[string]any {
 		"caddyMetricsFetchTimeout":        caddyMetricsFetchTimeout,
 		// 提交后清理的预算检查缝：漏复位会让后续用例的产物清理在循环前即
 		// 被当作「预算耗尽」跳过（文件/指标留残），故按 seam 指针判定泄漏。
+		// 集群事件上报的入总线缝：用例替换后漏复位会让后续事件断言静默失效。
+		"clusterEventPublish":               handlerGlobalPointer(clusterEventPublish),
 		"importCleanupShouldStop":           handlerGlobalPointer(importCleanupShouldStop),
 		"configImportBeforeLock":            handlerGlobalPointer(configImportBeforeLock),
 		"configBackupExportAfterDBSnapshot": handlerGlobalPointer(configBackupExportAfterDBSnapshot),

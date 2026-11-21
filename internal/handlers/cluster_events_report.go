@@ -54,10 +54,12 @@ func clusterEventDedupRecord(batchID string) bool {
 func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 	var req notify.ClusterEventReport
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Events) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上报载荷无效", MessageKey: "k_76de02a0"})
+		// 直写豁免：集群机器接口，消费方为从节点重试逻辑（无用户语言面）。
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上报载荷无效"})
 		return
 	}
 	if len(req.Events) > 100 {
+		// 直写豁免：集群机器接口（同上，无用户语言面）。
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "单批事件数超限（≤100）"})
 		return
 	}
