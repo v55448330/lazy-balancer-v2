@@ -5,9 +5,10 @@
 //   - 事件源埋点直调 Publish；Publish 仅入进程内缓冲队列（满则丢弃+计数，
 //     绝不阻塞事件源）——事实已在库，通知丢失不丢数据。
 //   - dispatcher 单消费者：查订阅矩阵 → 写 notification_deliveries(pending)
-//     → 唤醒投递 Daemon。
+//     （不主动唤醒投递 Daemon——循环每 10s tick 自扫 pending；测试/重发端点
+//     才经 deliveryWakeCh 加速）。
 //   - 投递 Daemon（taskengine notification-delivery）取 pending 按通道发送、
-//     失败重试、健康探测、MCP 会话清理。
+//     失败重试、MCP 会话清理。
 //   - 通道：webhook / email / qq(官方 WebSocket) / wx_clawbot(iLink) / mcp。
 //     QQ 与微信为长连出站（各自 Daemon 维护连接），发送经连接管理器下发；
 //     webhook/email/MCP 为按需短连，由投递 Daemon 直接调用。
@@ -41,4 +42,12 @@ type Event struct {
 	Title  string
 	Body   string
 	Fields map[string]string // 结构化附加字段（通道可格式化呈现）
+	// Origin/Hop 集群转发防回荡标记（主节点集中汇聚）：Origin=事件起源节点名，
+	// Hop=已经历的转发跳数。从节点 Publish 只在 Hop==0 且 Origin≠本机时才
+	// 转发；主端接收后复制这两个字段入总线（主节点本地路径零语义）。
+	Origin string
+	Hop    int
+	// BatchID 集群上报客户端幂等键（内容寻址，仅在转发路径填充）：同一事件
+	// live 上报与 spool 重传必须携带同键，主节点按 batch_id 去重。
+	BatchID string
 }

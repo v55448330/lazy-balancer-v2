@@ -1,0 +1,4 @@
+{
+  "qq": "## 🔔 {{title}}\n---\n**{{body}}**\n---\n* **级别**： {{level}}\n* **事件名称**：{{event_title}}\n* **所属节点**：{{node}}\n* **发生时间**：{{time}}\n---\n> {{brand}} 通知中心",
+  "wx_clawbot": "【{{title}}】\n────────────\n{{body}}\n────────────\n级别：⚠️ {{level}}\n事件名称：{{event_title}}\n所属节点：{{node}}\n发生时间：{{time}}\n\n—— {{brand}} 通知中心"
+}

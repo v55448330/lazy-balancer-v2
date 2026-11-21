@@ -14,10 +14,12 @@ test('任务接口声明 role_applicable（服务端派生的角色适用性）'
   assert.match(vue, /role_applicable\?: boolean/)
 })
 
-test('从节点不适用的任务在调度列标注「仅主节点」并解释开关不可用', () => {
-  assert.match(scheduleColumn, /row\.role_applicable === false/)
-  assert.match(scheduleColumn, /app\.settings\.taskMonitor\.schedule\.masterOnlyTag/)
-  assert.match(scheduleColumn, /app\.settings\.taskMonitor\.schedule\.masterOnlyTip/)
+test('不适用的任务在调度列标示角色方向并解释开关不可用（方向由节点角色补全）', () => {
+  // 三态收口：调度列经 roleScopeOf 派生（主节点上的 slave-only 任务不再被标成「仅主节点」）
+  assert.match(scheduleColumn, /roleScopeOf\(row as TaskInfo\) !== 'any'/)
+  assert.match(scheduleColumn, /roleScopeTag\(row as TaskInfo\)/)
+  assert.match(scheduleColumn, /roleScopeTip\(row as TaskInfo\)/)
+  assert.ok(!/masterOnlyTag/.test(scheduleColumn), '标签文案不得硬编码方向（由 helpers 按 scope 选择）')
 })
 
 test('不适用的任务不展示下次执行时刻（避免「马上要跑」的误解）', () => {

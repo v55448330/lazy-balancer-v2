@@ -118,6 +118,31 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 	return strings.NewReplacer(pairs...).Replace(tpl)
 }
 
+// renderSubjectTemplate 邮件主题窄渲染器：只替换元信息占位符
+// （title/level/event/time/node/brand/date/event_title），**不替换 {{body}}**。
+// TemplateApplied 时 Body 是整篇最终正文，主题模板若沿用通用渲染器会把多行
+// markdown 全文顶进主题（NOTIF154-P2-01）；保留 {{body}} 字面量供用户自查。
+func renderSubjectTemplate(tpl string, msg Message, ts time.Time) string {
+	if !strings.Contains(tpl, "{{") {
+		return tpl
+	}
+	event := msg.EventType
+	if event == "" {
+		event = "notification"
+	}
+	pairs := []string{
+		"{{title}}", msg.Title,
+		"{{level}}", levelLabelZh(msg.Level),
+		"{{event}}", event,
+		"{{time}}", ts.Format("2006-01-02 15:04"),
+		"{{node}}", msg.Node,
+		"{{brand}}", BrandName(),
+		"{{date}}", templateDate(msg, ts),
+		"{{event_title}}", eventDisplayTitle(msg.EventType),
+	}
+	return strings.NewReplacer(pairs...).Replace(tpl)
+}
+
 // renderStyleTemplateJSON webhook payload_template 专用：占位符值经 JSON
 // 编码（加引号+转义）后嵌入，与保存校验「占位符替换为 "probe" 仍合法 JSON」
 // 同口径——模板写 `"title": {{title}}`，运行时产出合法 JSON 字符串值。

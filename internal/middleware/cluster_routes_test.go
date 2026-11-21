@@ -146,7 +146,7 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 }
 
 func TestClusterMachineEndpoints_rateLimitBeforeAuthentication(t *testing.T) {
-	// Given：五个 token/registration 机器端点，均携带无效但非空凭证以覆盖 DB 查询路径。
+	// Given：七个 token/registration 机器端点，均携带无效但非空凭证以覆盖 DB 查询路径。
 	tests := []struct {
 		name   string
 		method string
@@ -159,6 +159,8 @@ func TestClusterMachineEndpoints_rateLimitBeforeAuthentication(t *testing.T) {
 		{name: "waf files", method: http.MethodGet, path: "/api/v1/cluster/sync/waf-files", header: "X-Cluster-Token", ip: "198.51.100.13:1234"},
 		{name: "registration confirm", method: http.MethodPost, path: "/api/v1/cluster/registration/confirm", header: "X-Cluster-Token", ip: "198.51.100.14:1234"},
 		{name: "node report", method: http.MethodPost, path: "/api/v1/cluster/nodes/report", header: "X-Cluster-Token", ip: "198.51.100.15:1234"},
+		{name: "cluster event report", method: http.MethodPost, path: "/api/v1/cluster/events/report", header: "X-Cluster-Token", ip: "198.51.100.16:1234"},
+		{name: "node stats report", method: http.MethodPost, path: "/api/v1/cluster/node-stats/report", header: "X-Cluster-Token", ip: "198.51.100.17:1234"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

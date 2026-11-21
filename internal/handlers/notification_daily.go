@@ -36,6 +36,31 @@ func (h *Handlers) GetNotificationDaily(c *gin.Context) {
 	}})
 }
 
+// validateDailySendTime 校验日报投递时间（HH:MM）。独立日报端点与聚合规则
+// 端点共用同一实现——两处各写一份会让其中一侧静默接受非法时间。
+func validateDailySendTime(c *gin.Context, sendTime string) bool {
+	if _, err := time.Parse("15:04", sendTime); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_f9986707"), MessageKey: msgDailySendTimeInvalid})
+		return false
+	}
+	return true
+}
+
+// validateDailyItems 校验日报项目白名单（空切片合法=不改）。
+func validateDailyItems(c *gin.Context, items []string) bool {
+	validItems := map[string]bool{}
+	for _, it := range notify.DailyItemIDs {
+		validItems[it] = true
+	}
+	for _, it := range items {
+		if !validItems[it] {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d1a39d14", it), MessageKey: msgDailyItemUnknown})
+			return false
+		}
+	}
+	return true
+}
+
 // PutNotificationDaily PUT /notification/daily——保存配置（items 白名单校验、
 // send_time HH:MM 校验、format 白名单校验）。审计留痕。
 func (h *Handlers) PutNotificationDaily(c *gin.Context) {
@@ -53,19 +78,11 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if _, err := time.Parse("15:04", req.SendTime); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_f9986707"), MessageKey: msgDailySendTimeInvalid})
+	if !validateDailySendTime(c, req.SendTime) {
 		return
 	}
-	validItems := map[string]bool{}
-	for _, it := range notify.DailyItemIDs {
-		validItems[it] = true
-	}
-	for _, it := range req.Items {
-		if !validItems[it] {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d1a39d14", it), MessageKey: msgDailyItemUnknown})
-			return
-		}
+	if !validateDailyItems(c, req.Items) {
+		return
 	}
 	cfg := notify.DailyConfig{UserID: uid, Enabled: req.Enabled, SendTime: req.SendTime,
 		Items: req.Items, Formats: req.Formats}

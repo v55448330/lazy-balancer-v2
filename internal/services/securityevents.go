@@ -2900,7 +2900,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					//     （级联抑制/逐 IP 去抖在 notify 包内收敛）。改判升级的
 					//   行不在此路径（dedupe 改判分支），拦截聚合口径=首次落库。
 					if rec.Action == "blocked" {
-						notify.RecordBlockedEvent(rule.name, notify.Publish)
+						notify.RecordBlockedEvent(rule.name)
 					} else if rec.Action == "challenged" && strings.HasPrefix(rec.RuleTriggered, "cc_") {
 						notify.PublishCCTriggered(rec.ClientIP, AutobanCCTriggerReasonLabel(strings.TrimPrefix(rec.RuleTriggered, "cc_")))
 					}

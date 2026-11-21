@@ -3,6 +3,8 @@ package notify
 // 发布总线：Publish 仅入缓冲通道（满则丢弃+计数，绝不阻塞事件源）；
 // dispatcher 单消费者把事件按订阅矩阵落 notification_deliveries(pending)。
 // 投递 Daemon（taskengine notification-delivery）扫描 pending 按通道发送。
+// 从节点转发同样是异步的（有界队列+单 worker，见 cluster_forward.go）：
+// 网络外呼永不在事件源 goroutine 上执行。
 
 import (
 	"log"
@@ -35,7 +37,14 @@ func Start() {
 }
 
 // Stop 停止分发循环（进程关停兜底；在途事件随进程回收——事实已在库）。
-func Stop() { stopOnce.Do(func() { close(stopCh) }) }
+// 集群转发队列不同：事件未落库，关停时把队列剩余条目全部落 spool，下次启动
+// 重传（不静默丢）。
+func Stop() {
+	stopOnce.Do(func() {
+		close(stopCh)
+		drainClusterForwardQueueOnStop()
+	})
+}
 
 // Bootstrap 进程启动挂接（cmd/server 启动链 DB 装配后调用一次）：启动分发
 // 循环并做一次 pending 重投兜底（超龄判 dead、近期 pending 留队交投递
@@ -54,8 +63,9 @@ func Bootstrap() {
 func DroppedCount() int64 { return droppedCount.Load() }
 
 // Publish 发布事件（目录外事件拒绝——订阅矩阵与模板均以目录为唯一事实源）。
-// 集群从节点（用户裁定 2026-11-22 主节点集中汇聚）：不入本地队列，转发主节点
-// （即时推送，失败 spool 兜底）；订阅匹配/投递全部在主节点完成。
+// 集群从节点（用户裁定 2026-11-22 主节点集中汇聚）：不入本地队列，交给转发
+// 队列异步推送主节点（有界队列+单 worker，队列满或推送失败即落 spool 兜底）；
+// 订阅匹配/投递全部在主节点完成。本函数恒非阻塞。
 func Publish(evt Event) {
 	if _, ok := catalogByID(evt.Type); !ok {
 		log.Printf("WARN: notify.Publish 事件 %q 不在目录中，已丢弃", evt.Type)
@@ -66,9 +76,13 @@ func Publish(evt Event) {
 		evt.Time = time.Now()
 	}
 	if shouldForwardClusterEvent(evt) {
-		if err := forwardEventToMaster(evt); err != nil {
-			spoolClusterEvent(evt)
+		// 防回荡（两从节点互指 master_url 时若无标记会无限转圈）：已转过一次
+		// 的事件（Hop>=1）与起源为本机的事件在本节点不再外发。
+		if evt.Hop >= 1 || (evt.Origin != "" && evt.Origin == LocalNodeName()) {
+			log.Printf("INFO: notify 集群转发终止事件 %s（hop=%d origin=%q 已到达转发终点），本地丢弃", evt.Type, evt.Hop, evt.Origin)
+			return
 		}
+		enqueueClusterForward(evt) // 异步：绝不阻塞事件源
 		return
 	}
 	// 主节点/单机本地事件补节点标识（2026-11-22 用户裁定：通知里只有从节点

@@ -1,16 +1,19 @@
 package handlers
 
+// 集群机器接口请求体上限钉测：
+//   - 既有注册/模式/服务控制端点统一引 clusterMachineBodyLimitBytes（16KiB）；
+//   - 2026-11-22 两上报端点（事件/统计，spool 批次可含多事件）统一引
+//     clusterReportBodyLimitBytes（128KiB）。
+//
+// 裸字面量（16<<10 / 128<<10）只允许出现在常量定义处——端点必须引语义名，
+// 否则调上限时会漏改某一路径/两族常量漂移。
+
 import (
 	"os"
 	"regexp"
 	"testing"
 )
 
-// 集群机器接口族（注册/上报/模式切换/服务控制）请求体防滥用上限必须单源：
-// clusterMachineBodyLimitBytes（cluster_registration.go）。此前上限以裸
-// 16<<10 字面量散落四处（含 registerRequestMaxBytes 定义处），改值需逐处
-// 手改且漏改即口径分叉。本钉为源码钉：三文件中该字面量只允许在定义处出现
-// 一次，端点处回潮裸字面量或 registerRequestMaxBytes 退回硬编码即红。
 func TestClusterMachineBodyLimitPin(t *testing.T) {
 	literalRe := regexp.MustCompile(`16\s*<<\s*10`)
 	definitionRe := regexp.MustCompile(`(?m)^const clusterMachineBodyLimitBytes int64 = 16 << 10$`)
@@ -36,6 +39,28 @@ func TestClusterMachineBodyLimitPin(t *testing.T) {
 		}
 		if len(hits) != 0 {
 			t.Fatalf("%s 出现裸 16<<10 字面量 %d 处：请求体上限必须引 clusterMachineBodyLimitBytes 单源", file, len(hits))
+		}
+	}
+
+	reportLiteralRe := regexp.MustCompile(`128\s*<<\s*10`)
+	reportDefinitionRe := regexp.MustCompile(`(?m)^const clusterReportBodyLimitBytes int64 = 128 << 10$`)
+	for _, file := range []string{"cluster_events_report.go", "cluster_node_stats_report.go"} {
+		source, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hits := reportLiteralRe.FindAllStringIndex(string(source), -1)
+		if file == "cluster_node_stats_report.go" {
+			if len(hits) != 1 {
+				t.Fatalf("%s 的 128<<10 字面量出现 %d 处，want 仅 clusterReportBodyLimitBytes 定义处一处（端点必须引语义名）", file, len(hits))
+			}
+			if !reportDefinitionRe.MatchString(string(source)) {
+				t.Fatalf("%s 的 clusterReportBodyLimitBytes 定义形态被改（本钉需同步）", file)
+			}
+			continue
+		}
+		if len(hits) != 0 {
+			t.Fatalf("%s 出现裸 128<<10 字面量 %d 处：请求体上限必须引 clusterReportBodyLimitBytes 单源", file, len(hits))
 		}
 	}
 }

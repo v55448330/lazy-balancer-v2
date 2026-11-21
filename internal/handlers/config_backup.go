@@ -33,6 +33,53 @@ import (
 
 var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources", "nodes"}
 
+// configBackupRuntimeTables 备份面之外的表（运行时/统计/会话/本地凭据），值=不
+// 随备份的理由。与 configBackupTables 互补且必须覆盖 schema 全集——由
+// TestConfigBackupTableClassificationCoversSchema 扫描 internal/db 的 DDL 强制
+// 归类：新增表两处都未登记即测试红，防止新表静默落入「以为备份了其实没备份」
+// 或「被导入覆写」的黑箱面。
+var configBackupRuntimeTables = map[string]string{
+	// 全局配置单行：备份面经 config 字段承载（凭据/节点身份等受保护键另行剔除），
+	// 不作为表导入——列清单由 configBackupProtectedConfigKeys 单源维护。
+	"global_config": "单行全局配置经备份 config 字段承载（非表格面）",
+	// 通知中心本地运行态：通道/订阅/投递记录/日报统计与加密凭据。凭据经静态
+	// 加密且密钥为节点本地主密钥，导入他机备份也解不开——跨实例迁移必须重新
+	// 扫码绑定；导出说明与审计已披露「通知中心配置不随备份」。
+	"notification_channels":          "通知通道（本节点运行态；跨实例需重新绑定）",
+	"notification_subscriptions":     "通知订阅矩阵（本节点用户维度）",
+	"notification_deliveries":        "通知投递记录（运行历史）",
+	"notification_delivery_channels": "通知逐通道投递结果（运行历史）",
+	"notify_settings":                "通知凭据/设置（本节点主密钥加密，跨实例不可解）",
+	"notification_daily":             "通知日报运行记录",
+	"cluster_node_daily_stats":       "从节点日报统计（主端聚合派生，次日重算）",
+	// 任务引擎、会话与一次性令牌：节点本地运行态。
+	"task_runs":                "任务运行记录（本节点执行历史）",
+	"task_loop_prefs":          "任务循环偏好（本节点 UI 态）",
+	"cluster_register_tokens":  "集群注册令牌（本节点签发的一次性状态）",
+	"used_login_tickets":       "已用登录票据（一次性防重放状态）",
+	"mfa_challenges":           "MFA 挑战（短时一次性状态）",
+	"revoked_jti":              "吊销 JWT 记账（本节点会话状态）",
+	"auto_backups":             "自动备份历史（本节点落盘文件索引）",
+	"cluster_applied_sections": "从节点节应用记账（主端派生）",
+	"autoban_recidivism":       "自动封禁再犯计数（运行态）",
+	"mcp_sessions":             "MCP 会话（本节点连接状态）",
+	"mcp_tool_stats":           "MCP 工具调用统计（运行态计数）",
+	// 独立库：审计库与指标库各有保留期/归档策略，不随配置备份搬迁。
+	"audit_log":                    "审计库（独立数据库，随审计保留期管理）",
+	"audit_migration_state":        "审计迁移标记（独立数据库内部状态）",
+	"metrics_meta":                 "指标库元数据（独立数据库）",
+	"metrics_history":              "指标历史（独立数据库，随保留期管理）",
+	"metrics_daily_agg":            "指标日聚合（独立数据库，随保留期管理）",
+	"metrics_state":                "指标库状态（独立数据库）",
+	"metrics_counter_checkpoint":   "指标计数检查点（独立数据库）",
+	"lb_l4_conn_history":           "四层连接历史（指标库运行数据）",
+	"security_events":              "安全事件事实（指标库，随保留期管理）",
+	"security_event_rollup":        "安全事件分钟聚合（指标库）",
+	"security_event_ip_rollup":     "安全事件 IP 聚合（指标库）",
+	"security_event_rule_rollup":   "安全事件规则聚合（指标库）",
+	"security_event_target_rollup": "安全事件目标聚合（指标库）",
+}
+
 // configBackupDeleteOrder / configBackupInsertOrder 是导入核心的删除/插入顺序
 // （单一事实源；与导出清单 configBackupTables 的集合 parity 由
 // TestConfigBackupTableOrderParity 机械钉住——新增备份表漏进任一序会 live 行
@@ -5937,9 +5984,13 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(status, models.APIResponse{Code: status, Message: message})
 		return
 	}
-	detail := "导出为完整备份（含凭证与证书材料），请妥善保管"
+	// 披露口径：通知中心配置（通道/订阅/投递记录/凭据）不在备份面——跨实例
+	// 的 notify_settings 密文本就不可解，方向正确，但「完整备份」措辞必须带
+	// 排除项，否则用户按「全部恢复」预期理解（表分类守卫见
+	// configBackupRuntimeTables / TestConfigBackupTableClassificationCoversSchema）。
+	detail := "导出为完整备份（含凭证与证书材料；通知中心配置不随备份），请妥善保管"
 	if includesWafFiles {
-		detail = "导出为完整备份（lbbak，含规则库文件、凭证与证书材料），请妥善保管"
+		detail = "导出为完整备份（lbbak，含规则库文件、凭证与证书材料；通知中心配置不随备份），请妥善保管"
 	}
 	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(countsSummary, detail, services.AuditResultPart("success")))
 	writeLbbakResponse(c, payload)

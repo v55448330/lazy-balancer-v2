@@ -16,11 +16,11 @@ import (
 // InstallNotifyClusterForwardTransport 装配 notify 集群上报传输工厂（进程启动
 // 装配一次）。HTTP 主节点返回 nil（无需 TLS 配置）。
 func InstallNotifyClusterForwardTransport() {
-	notify.ClusterForwardTransportFactory = func(masterURL string) http.RoundTripper {
+	notify.SetClusterForwardTransportFactory(func(masterURL string) http.RoundTripper {
 		u, err := url.Parse(masterURL)
 		if err != nil || u.Scheme != "https" {
 			return nil
 		}
 		return newClusterTOFUTransport(db.DataDir(), db.DB, nil)
-	}
+	})
 }

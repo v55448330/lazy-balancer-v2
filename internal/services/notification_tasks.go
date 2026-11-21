@@ -26,7 +26,7 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		ID:          "notification-delivery",
 		Family:      "notification",
 		Name:        "通知投递",
-		Description: "常驻投递：扫描通知投递队列按用户通道发送（webhook/邮件/QQ/微信/MCP 推送），失败重试，通道健康探测与 MCP 会话清理",
+		Description: "常驻投递：扫描通知投递队列按用户通道发送（webhook/邮件/QQ/微信/MCP 推送），失败重试与 MCP 会话清理",
 		Category:    "通知",
 		Kind:        taskengine.KindDaemon,
 		RunsOn:      taskengine.RoleAny,
@@ -63,7 +63,9 @@ func registerNotificationTasks(te *taskengine.Engine) {
 
 	// 从节点日报统计上报（2026-11-22 主节点集中汇聚）：每日 00:05 把本节点
 	// 昨日统计块上报主节点（(date,node) upsert），主节点日报「各节点摘要」
-	// 由此渲染。仅从节点运行（RoleSlaveOnly）；主节点不注册执行面。
+	// 由此渲染。仅从节点运行（RoleSlaveOnly，引擎角色门拦停主节点）；本任务
+	// 在默认 StartLoop 清单内（角色门只拦执行，不设 loopEnabled——不列入清单
+	// 会让从节点侧永不调度，统计永远缺失）。
 	mustRegisterTask(te, taskengine.Descriptor{
 		ID:          "notification-node-stats-report",
 		Family:      "notification",
@@ -172,19 +174,42 @@ func registerNotificationTasks(te *taskengine.Engine) {
 // 槽推到次日，due 恒 false——定时日报永不投递（audit153 NOTIF153-01）。
 // 时区用全站配置时区（CurrentLocation，与投递侧 dailySlotDue 的 loc 同源）：
 // 容器 TZ≠配置时区时，槽与宽限必须按同一时区比较（NOTIF153-04）。
-// nextNodeStatsSlot 从节点统计上报槽（每日 00:05 配置时区，次日零点后立即
-// 上报昨日块——早于默认 09:00 日报槽，保证主节点渲染时数据已在).
+// nextNodeStatsSlot 从节点统计上报槽（NextSlotFn 唯一实现）。
+//
+// 槽语义与 nextDailyReportSlot 同源：引擎求值后立即判定 due=now.After(槽)，
+// 返回严格未来槽则永不触发；同时引擎在槽前 30s 前导窗内每 tick 重算槽，
+// 因此必须「宽限窗内返回已到期槽（≤now），否则返回下一个未来槽」。
+// 早先实现恒返回严格未来槽（今日 00:05 已过就推次日），due 恒假——从节点
+// 统计上报任务永不执行，主节点日报「各节点摘要」永远无数据。
+// 每日 00:05 配置时区，次日零点后立即上报昨日块——早于默认 09:00 日报槽，
+// 保证主节点渲染时数据已在。失败轮不推进槽，引擎 Scheduled 退避兜底会在
+// 宽限窗内重投同一槽（瞬时故障/重启窗口的自然补报，无需任务体自建重试）。
 func nextNodeStatsSlot(now time.Time) time.Time {
 	loc := CurrentLocation()
 	if loc == nil {
 		loc = time.Local
 	}
+	return nodeStatsSlotAt(now, loc)
+}
+
+// nodeStatsSlotGrace 统计上报槽的到期宽限：仅覆盖槽点后 1 分钟内的 tick 抖动
+// 与首档重试（引擎 Scheduled 失败退避 1s→5s→30s），窗口半开 [槽, 槽+1min)。
+// 与日报的 5min 宽限刻意不同：统计上报是「昨日块」的一次性交接，只要覆盖
+// 槽点附近的短重试窗即可；越过 1 分钟仍未成功就顺延到次日槽，避免与次日
+// 的上一日口径重叠投递。
+const nodeStatsSlotGrace = time.Minute
+
+// nodeStatsSlotAt 统计上报槽语义纯函数（配置时区 loc；测试直驱单源）。
+func nodeStatsSlotAt(now time.Time, loc *time.Location) time.Time {
 	n := now.In(loc)
 	slot := time.Date(n.Year(), n.Month(), n.Day(), 0, 5, 0, 0, loc)
 	if !slot.After(n) {
-		slot = slot.AddDate(0, 0, 1)
+		if n.Sub(slot) < nodeStatsSlotGrace {
+			return slot // 宽限内已到期：due 成立，本 tick 上报
+		}
+		return slot.AddDate(0, 0, 1) // 超宽限：下一未来槽（次日 00:05）
 	}
-	return slot
+	return slot // 当日槽尚未到期（未来槽，due 不成立）
 }
 
 func nextDailyReportSlot(now time.Time) time.Time {
@@ -204,29 +229,26 @@ func nextDailyReportSlot(now time.Time) time.Time {
 // dailyReportSlotAt 槽语义纯函数（配置时区 loc；测试直驱单源）。
 // sendTimes 为全部启用用户 send_time 全集——槽域=运行域：Run 体按各用户
 // send_time 分桶（notify.DeliverDailyForAll），逐个时刻都必须被排程触发一次。
+// 到期槽判定复用 notify.DailySlotCandidate（跨零点宽限窗与投递侧 dailySlotDue
+// 同源，NOTIF154-P3-01）；本函数只额外推算「下一个未来槽」。
 func dailyReportSlotAt(now time.Time, sendTimes []string, loc *time.Location) time.Time {
 	n := now.In(loc)
-	slots := make([]time.Time, 0, len(sendTimes))
+	valid := make([]string, 0, len(sendTimes))
 	for _, ts := range sendTimes {
-		t, err := time.ParseInLocation("15:04", ts, loc)
-		if err != nil {
+		if _, err := time.ParseInLocation("15:04", ts, loc); err != nil {
 			continue // 非法槽跳过（AllDailySendTimes 不会产出；防御配置脏值）
 		}
-		slots = append(slots, time.Date(n.Year(), n.Month(), n.Day(), t.Hour(), t.Minute(), 0, 0, loc))
+		valid = append(valid, ts)
 	}
-	if len(slots) == 0 {
-		slots = append(slots, time.Date(n.Year(), n.Month(), n.Day(), 9, 0, 0, 0, loc))
+	if len(valid) == 0 {
+		valid = append(valid, "09:00")
 	}
 	var recent, next time.Time // 宽限内最近的已到期槽 / 最早未来槽
-	for _, cand := range slots {
-		// 昨日同一时刻：23:58 一类槽的宽限窗跨越日界（00:03 时仍应触发昨日槽）。
-		prev := cand.AddDate(0, 0, -1)
-		if !prev.After(n) && n.Sub(prev) <= notify.DailySlotGrace && prev.After(recent) {
-			recent = prev
+	for _, ts := range valid {
+		if slot, ok := notify.DailySlotCandidate(now, ts, loc); ok && slot.After(recent) {
+			recent = slot
 		}
-		if !cand.After(n) && n.Sub(cand) <= notify.DailySlotGrace && cand.After(recent) {
-			recent = cand
-		}
+		cand := notify.DailySlotAt(now, ts, loc)
 		if tomorrow := cand.AddDate(0, 0, 1); next.IsZero() || tomorrow.Before(next) {
 			next = tomorrow // 当日槽全部过期且超宽限时的兜底（明日最早槽）
 		}

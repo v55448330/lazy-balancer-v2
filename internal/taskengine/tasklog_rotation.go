@@ -169,21 +169,35 @@ func rotateTaskLogBeforeWrite(path string, incoming int64, keep int, sizeLimit i
 }
 
 // rotateTaskLogFile 把 current 逐代下移到 .1（.1→.2 …），删除最旧代。
+//
+// 压缩代覆盖：外部 logrotate 会产出整文件压缩归档（x.log.N.gz / x.log.N.zst），
+// 与裸 .N 同代同规则处理——移位时保留压缩后缀，最旧代连同其压缩变体一并删除。
+// 只处理裸 .N 会让压缩代绕过 keep 约束永久残留（每次外部压缩轮转都多一份孤儿
+// 归档，永不回收）。
 func rotateTaskLogFile(path string, keep int) error {
 	if keep < 1 {
 		keep = 1
 	}
 	for i := keep; i >= 1; i-- {
-		if i == keep {
-			if err := os.Remove(fmt.Sprintf("%s.%d", path, i)); err != nil && !os.IsNotExist(err) {
+		generation := fmt.Sprintf("%s.%d", path, i)
+		variants := make([]string, 0, 1+len(rotationCompressionSuffixes))
+		variants = append(variants, generation)
+		for _, suffix := range rotationCompressionSuffixes {
+			variants = append(variants, generation+suffix)
+		}
+		for _, variant := range variants {
+			if i == keep {
+				// 最旧代（含压缩变体）淘汰——keep 约束必须覆盖压缩代。
+				if err := os.Remove(variant); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				continue
+			}
+			// 逐代下移：压缩后缀随代保留（x.log.1.gz → x.log.2.gz）。
+			next := fmt.Sprintf("%s.%d%s", path, i+1, strings.TrimPrefix(variant, generation))
+			if err := os.Rename(variant, next); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			continue
-		}
-		oldPath := fmt.Sprintf("%s.%d", path, i)
-		newPath := fmt.Sprintf("%s.%d", path, i+1)
-		if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
-			return err
 		}
 	}
 	return os.Rename(path, path+".1")

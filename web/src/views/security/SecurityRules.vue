@@ -2200,7 +2200,9 @@ onUnmounted(() => {
   position: relative; transition: border-color 0.2s;
 }
 .rule-condition-row:hover { border-color: #d1d5db; }
-.rule-condition-row .el-button--danger { margin-left: auto; align-self: flex-start; }
+/* 删除按钮与左侧输入框垂直对齐：link 按钮默认 height:auto（约 22px）与 small
+ * 输入框 24px 错位——显式 24px 高度+零垂直内边距，内容在框内居中。 */
+.rule-condition-row .el-button--danger { margin-left: auto; align-self: flex-start; height: 24px; padding: 0 2px; }
 
 /* 弹框头库专属色（DialogHeader tone-class 透传；:deep 穿透子组件——本页弹框未 append-to-body） */
 :deep(.dh-icon.lib-icon--crs) { background: #eff6ff; color: #3b82f6; }
@@ -2240,7 +2242,8 @@ onUnmounted(() => {
 .regex-test-result.regex-match { color: #10b981; }
 .regex-test-result.regex-nomatch { color: #ef4444; }
 .regex-test-result.regex-invalid { color: #f59e0b; }
-.table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+/* 工具栏：搜索框与操作按钮同行——显式垂直居中（默认 stretch 会把按钮拉高/错位） */
+.table-toolbar { display: flex; justify-content: flex-end; align-items: center; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .ip-list-toolbar { gap: 12px; }
 .entries-block { width: 100%; }

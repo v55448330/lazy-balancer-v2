@@ -281,3 +281,55 @@ func TestNotificationStats_partialCountsAsSuccess(t *testing.T) {
 		t.Fatalf("今日趋势 total=%v sent=%v, want 3/2（partial 计成功）", last["total"], last["sent"])
 	}
 }
+
+// NOTIF154-P3-03：从节点「规则测试/日报测试」必须显式拒绝（403 master_required）。
+// 从节点不存在 pending 消费方（投递 Daemon 仅主节点运行），放行=API 成功但
+// 消息永不投递的假成功。
+func TestNotificationTestEndpointsRejectSlave(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	r := newNotificationSemanticsRouter(h, 7, "user")
+	r.POST("/notification/daily/test", h.TestNotificationDaily)
+	// 主节点路径需要可用通道（规则测试入队前置：无启用通道=502）。
+	if _, err := db.DB.Exec(`INSERT INTO notification_channels (id, user_id, type, name, target, enabled) VALUES (121, 7, 'webhook', '运维群', '{"url":"http://127.0.0.1:1"}', 1)`); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+		t.Fatalf("切换从节点角色失败: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec(`UPDATE global_config SET is_master=1 WHERE id=1`) })
+
+	status, out := doNotifyRequest(t, r, http.MethodPost, "/notification/rules/"+certGroupID(t)+"/test", "")
+	if status != http.StatusForbidden {
+		t.Fatalf("从节点规则测试 status=%d body=%v, want 403", status, out)
+	}
+	if msg, _ := out["message"].(string); !strings.Contains(msg, "通知配置仅主节点生效") {
+		t.Fatalf("从节点规则测试提示=%q, want 通知配置仅主节点生效", msg)
+	}
+
+	status, out = doNotifyRequest(t, r, http.MethodPost, "/notification/daily/test", "")
+	if status != http.StatusForbidden {
+		t.Fatalf("从节点日报测试 status=%d body=%v, want 403", status, out)
+	}
+	if msg, _ := out["message"].(string); !strings.Contains(msg, "通知配置仅主节点生效") {
+		t.Fatalf("从节点日报测试提示=%q, want 通知配置仅主节点生效", msg)
+	}
+
+	// 不产生永不消费的 pending 投递行（假成功的实体面）。
+	var pending int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE status='pending' AND is_test=1`).Scan(&pending); err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("从节点被拒后仍落 pending 投递行 %d 条（假成功）", pending)
+	}
+
+	// 恢复主节点后放行（同一进程角色切换后门跟着走）。
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=1 WHERE id=1`); err != nil {
+		t.Fatalf("恢复主节点角色失败: %v", err)
+	}
+	status, out = doNotifyRequest(t, r, http.MethodPost, "/notification/rules/"+certGroupID(t)+"/test", "")
+	if status != http.StatusOK {
+		t.Fatalf("主节点规则测试 status=%d body=%v, want 200", status, out)
+	}
+}

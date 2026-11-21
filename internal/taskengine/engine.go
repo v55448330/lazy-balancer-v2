@@ -39,7 +39,7 @@ type Role string
 const (
 	RoleAny        Role = "any"
 	RoleMasterOnly Role = "master-only"
-	RoleSlaveOnly  Role = "slave-only" // 仅测试注册使用（U1 备注）
+	RoleSlaveOnly  Role = "slave-only" // 仅从节点运行（生产消费者：notification-node-stats-report；角色门拦执行，不设 loopEnabled）
 )
 
 // RunContext 交给任务体的执行上下文。

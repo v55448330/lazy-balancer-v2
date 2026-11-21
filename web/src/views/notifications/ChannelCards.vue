@@ -219,6 +219,9 @@ import { formatDate } from '@/utils/date'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { safeLocalStorageGet, safeLocalStorageSet } from '@/utils/safeWebStorage'
 import { useAuthStore } from '@/stores/auth'
+import {
+  buildChannelStyleConfig, channelStyleExtras, channelStyleFormFrom, emptyChannelStyleForm, parseStyleConfig,
+} from '@/utils/channelStyle'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import type { NotificationChannel, NotificationChannelType, NotificationChannelsResponse } from '@/types/notifications.ts'
@@ -414,35 +417,19 @@ const canSave = computed(() => {
 interface HeaderRow { name: string; value: string }
 // webhook 请求头预设（后端白名单同口径）：下拉选择+可创建 X-* 自定义头。
 const WEBHOOK_HEADER_PRESETS = ['Authorization', 'X-API-Key', 'Content-Type', 'Accept', 'User-Agent']
-const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', body_format: 'text', daily_format: '', method: 'POST' })
-const styleForm = ref(emptyStyle())
+const styleForm = ref(emptyChannelStyleForm())
+// 表单不认识的既有 style_config 键（daily_mode 等）——全量覆盖保存必须原样带回，
+// 否则保存一次就抹掉日报渲染模式（见 utils/channelStyle.ts 契约说明）。
+const styleExtras = ref<Record<string, unknown>>({})
 const headerRows = ref<HeaderRow[]>([])
 const addHeaderRow = (): void => { if (headerRows.value.length < 8) headerRows.value.push({ name: '', value: '' }) }
 const removeHeaderRow = (i: number): void => { headerRows.value.splice(i, 1) }
 const buildStyleConfig = (): Record<string, unknown> => {
-  const s = styleForm.value
-  const out: Record<string, unknown> = {}
-  const typ = drawerForm.value.type
-  if (typ === 'webhook') {
-    if (s.payload_template.trim()) out.payload_template = s.payload_template
-    if (s.method === 'GET') out.method = 'GET'
-    const headers: Record<string, string> = {}
-    for (const row of headerRows.value) {
-      if (row.name.trim() && row.value.trim()) headers[row.name.trim()] = row.value.trim()
-    }
-    if (Object.keys(headers).length) out.headers = headers
+  const headers: Record<string, string> = {}
+  for (const row of headerRows.value) {
+    if (row.name.trim() && row.value.trim()) headers[row.name.trim()] = row.value.trim()
   }
-  if (typ === 'email') {
-    if (s.subject_template.trim()) out.subject_template = s.subject_template
-    if (s.body_template.trim()) out.body_template = s.body_template
-    if (s.body_format === 'html') out.body_format = 'html'
-  }
-  if (typ === 'qq' || typ === 'wx_clawbot') {
-    if (s.content_template.trim()) out.content_template = s.content_template
-    if (typ === 'qq') out.msg_type = 'markdown'
-  }
-  if (s.daily_format) out.daily_format = s.daily_format
-  return out
+  return buildChannelStyleConfig(drawerForm.value.type, styleForm.value, headers, styleExtras.value)
 }
 
 const targetLabel = (typ: NotificationChannelType): string => {
@@ -801,7 +788,8 @@ const resetDrawer = (): void => {
   bindBotKey.value = ''
   wxAlreadyLoggedIn.value = false
   drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
-  styleForm.value = emptyStyle()
+  styleForm.value = emptyChannelStyleForm()
+  styleExtras.value = {}
   headerRows.value = []
   editTarget.value = null
 }
@@ -815,21 +803,18 @@ const openEdit = (ch: NotificationChannel): void => {
   editTarget.value = ch
   drawerForm.value = { type: ch.type, name: ch.name, targetValue: parseTargetValue(ch) }
   if (ch.type === 'wx_clawbot') void checkWxLoggedIn()
-  // 回填既有样式（style_config JSON → 表单；缺省键=默认形态）
-  const s = emptyStyle()
+  // 回填既有样式（style_config JSON → 表单；缺省键=默认形态；未知键进
+  // styleExtras 原样带回，保存不得抹掉）
+  const s = channelStyleFormFrom(ch.style_config)
   const rows: HeaderRow[] = []
-  try {
-    const parsed = JSON.parse(ch.style_config || '{}') as Record<string, unknown>
-    for (const k of Object.keys(s) as (keyof typeof s)[]) {
-      if (typeof parsed[k] === 'string') s[k] = parsed[k] as string
+  const parsedHeaders = parseStyleConfig(ch.style_config).headers
+  if (parsedHeaders && typeof parsedHeaders === 'object') {
+    for (const [hk, hv] of Object.entries(parsedHeaders as Record<string, unknown>)) {
+      if (typeof hv === 'string') rows.push({ name: hk, value: hv })
     }
-    if (parsed.headers && typeof parsed.headers === 'object') {
-      for (const [hk, hv] of Object.entries(parsed.headers as Record<string, unknown>)) {
-        if (typeof hv === 'string') rows.push({ name: hk, value: hv })
-      }
-    }
-  } catch { /* 坏 JSON 按默认形态 */ }
+  }
   styleForm.value = s
+  styleExtras.value = channelStyleExtras(ch.style_config)
   headerRows.value = rows
   drawerVisible.value = true
 }

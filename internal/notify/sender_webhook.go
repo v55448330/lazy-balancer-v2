@@ -1,10 +1,12 @@
 package notify
 
 // webhook 通道适配器：POST JSON（或 GET query payload）到用户配置的 URL。
-// 载荷固定六键：level/time/node/title/body/fields（RFC3339 时间；fields 为
-// 结构化附加字段对象）。method/headers 经 style_config 配置（保存侧白名单
-// 校验）。2xx=成功，其余状态码连同响应体片段返回错误（投递 Daemon 留痕）。
-// 10s 超时。Send 不 panic——target 解析失败/URL 缺失均错误返回。
+// 载荷固定七键：level/level_label/time/node/title/body/fields（RFC3339 时间；
+// fields 为结构化附加字段对象）。事件模板全量渲染（TemplateApplied）分支与
+// 默认分支同 schema，time 同样以发送时刻兜底。method/headers 经 style_config
+// 配置（保存侧白名单校验）。2xx=成功，其余状态码连同响应体片段返回错误
+// （投递 Daemon 留痕）。10s 超时。Send 不 panic——target 解析失败/URL 缺失均
+// 错误返回。
 
 import (
 	"bytes"
@@ -43,11 +45,15 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 	}
 	var payload []byte
 	if msg.TemplateApplied {
-		// 事件模板已全量渲染：载荷体={level,level_label,time,node,body(最终消息)}
+		// 事件模板已全量渲染：Body 即最终消息。载荷与默认分支同 schema
+		// （level/level_label/time/node/title/body/fields），time 用与默认分支
+		// 同源的零值兜底（NOTIF154-P2-02：此前只带 5 键且直格式化 msg.Time，
+		// 接收端恒拿到 0001-01-01 时间戳、title/fields 静默缺失）。
 		var err error
 		payload, err = json.Marshal(map[string]any{
 			"level": msg.Level, "level_label": levelLabelZh(msg.Level),
-			"time": msg.Time.UTC().Format(time.RFC3339), "node": msg.Node, "body": msg.Body,
+			"time": ts.Format(time.RFC3339), "node": msg.Node,
+			"title": msg.Title, "body": msg.Body, "fields": fields,
 		})
 		if err != nil {
 			return fmt.Errorf("载荷编码失败: %w", err)

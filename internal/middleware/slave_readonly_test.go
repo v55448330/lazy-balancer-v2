@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -195,7 +196,7 @@ func TestJWTLogout_revocation_usesUTCTextAcrossNegativeTimezoneQueryAndCleanup(t
 	if _, err := db.DB.Exec("INSERT INTO revoked_jti (jti_hash, expires_at) VALUES ('stale-jti','2000-01-01T00:00:00Z')"); err != nil {
 		t.Fatal(err)
 	}
-	cleanupErr := db.CleanupExpiredRevokedJTI(db.DB)
+	cleanupErr := db.CleanupExpiredRevokedJTI(context.Background(), db.DB)
 	var remaining int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM revoked_jti").Scan(&remaining); err != nil {
 		t.Fatal(err)

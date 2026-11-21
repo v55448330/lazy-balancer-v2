@@ -18,6 +18,7 @@ import (
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -299,15 +300,19 @@ func TestCAQueueManager_inactiveUntilDaemonStarts(t *testing.T) {
 	}
 }
 
-// 部署尝试封顶后保留可部署态（慢速重试），不得落 failed 终态把
-// 材料/磁盘分叉变成无自动通道的搁浅。
-func TestDeploymentFailed_atCapKeepsDeployableState(t *testing.T) {
+// 部署尝试封顶后落 failed 终态（停止自动重试）并发布用户可见通知；
+// 材料保留在库，手动重试可重新触发部署/重签。
+func TestDeploymentFailed_atCapGoesTerminalWithNotification(t *testing.T) {
 	_, database := newClusterTestService(t)
 	taskengine.SetLogDir(t.TempDir())
 	if _, err := database.Exec(`INSERT INTO cert_jobs (id, rule_id, domain, status, deployment_attempts)
 		VALUES (7, 'lb_deploy', 'deploy.example.test', 'downloaded', ?)`, maxCertificateDeploymentAttempts-1); err != nil {
 		t.Fatal(err)
 	}
+	oldPublisher := certJobOutcomeEventPublisher
+	var events []notify.Event
+	certJobOutcomeEventPublisher = func(evt notify.Event) { events = append(events, evt) }
+	t.Cleanup(func() { certJobOutcomeEventPublisher = oldPublisher })
 	notAfter := time.Now().Add(90 * 24 * time.Hour).UTC()
 	material := issuedCertificate{
 		ruleID:            "lb_deploy",
@@ -327,17 +332,20 @@ func TestDeploymentFailed_atCapKeepsDeployableState(t *testing.T) {
 		FROM cert_jobs WHERE id=7`).Scan(&status, &message, &attempts, &availableAfter); err != nil {
 		t.Fatal(err)
 	}
-	if status != "downloaded" {
-		t.Fatalf("status=%q after capped deployment failure, want downloaded (material retained, slow retry)", status)
+	if status != "failed" {
+		t.Fatalf("status=%q after capped deployment failure, want failed（终态出路）", status)
 	}
 	if attempts != maxCertificateDeploymentAttempts {
 		t.Fatalf("deployment_attempts=%d, want %d", attempts, maxCertificateDeploymentAttempts)
 	}
-	if !availableAfter.Valid || time.Until(availableAfter.Time) < 20*time.Minute {
-		t.Fatalf("deployment_available_after=%v, want slow retry (~30m) window", availableAfter)
+	if availableAfter.Valid {
+		t.Fatalf("deployment_available_after=%v, want NULL（终态不再自动重试）", availableAfter.Time)
 	}
-	if !strings.Contains(message, "慢速重试") {
-		t.Fatalf("message=%q, want slow-retry disclosure", message)
+	if !strings.Contains(message, "已停止自动重试") {
+		t.Fatalf("message=%q, want terminal disclosure", message)
+	}
+	if len(events) != 1 || events[0].Type != notify.EvtCertFailed {
+		t.Fatalf("events=%+v，want 单条 cert.failed 用户可见通知", events)
 	}
 }
 

@@ -3,6 +3,7 @@
 // (GFM+breaks) 下的结构输出与 DOMPurify 消毒。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 
 // DOMPurify 在 Node 下绑定 globalThis.window——渲染模块初始化即取 window，
@@ -41,6 +42,14 @@ test('XSS 面：事件属性与危险协议被 DOMPurify 消毒', () => {
   assert.ok(!/javascript:/.test(html), 'javascript: 协议必须被剥离')
 })
 
+test('消毒收紧：style 属性与 img 标签被剥离（UI 欺骗/追踪面）', () => {
+  const styled = mdToHtml('<div style="color:red;font-weight:700">伪造成功</div>')
+  assert.ok(!/style=/i.test(styled), '内联 style 必须剥离（可伪造状态配色）')
+  assert.ok(styled.includes('伪造成功'), '文本内容保留')
+  const img = mdToHtml('<img src="https://track.example/pixel.png" alt="x">\n\n![t](https://track.example/2.png)')
+  assert.ok(!/<img/i.test(img), 'img 标签必须剥离（远程图片=追踪面）')
+})
+
 test('回归：标题层级与代码 span', () => {
   const html = mdToHtml('# 一级\n## 二级\n### 三级\n\n行内 `code` 标记')
   assert.match(html, /<h1[^>]*>一级<\/h1>/)
@@ -61,6 +70,9 @@ test('日报多值变量表格化（与后端 mdMultiValueTable 同口径）', a
   assert.match(nodes ?? '', /\| slave-a \| 22014 \| 156 \| 402 \| — \|/)
   // 样例空格形态（× 前带空格）同样解析；坏行返回 null（预览回退原值）
   assert.match(dailyMultiValueMd('top_ips', '45.33.32.9 × 321') ?? '', /\| 45\.33\.32\.9 \| 321 \|/)
+  // 备注列同样转义管道符（不转义会把该行拆成错位单元格/破表）
+  const piped = dailyMultiValueMd('nodes_summary', 'slave-c：请求 10 · 拦截 1 · 独立IP 5 · 规则 a|b')
+  assert.match(piped ?? '', /\| 规则 a｜b \|/, '备注列管道符必须转义为全角')
   assert.equal(dailyMultiValueMd('nodes_summary', 'bad：数据损坏'), null)
   assert.equal(dailyMultiValueMd('requests', '1200'), null)
 })
@@ -78,4 +90,23 @@ test('多值表格块空行分隔（粘连会把下一表表头吞成数据行�
   const glued = `**A**\n${ips}\n**B**\n${paths}`
   const gluedHtml = mdToHtml(glued)
   assert.ok(/<td[^>]*>-{3,}<\/td>/.test(gluedHtml) || (gluedHtml.match(/<table>/g) || []).length < 2, '粘连形态必然破表（生成端必须空行分隔）')
+})
+
+// 跨栈共享夹具（web/tests/fixtures/daily-multivalue-md.json，同一文件被
+// internal/notify 的 Go 用例读取）：两侧各写一份 regex 断言曾让备注列转义、
+// 空格形态、坏行回退的判定分叉而双绿。夹具要求**逐字相等**（含全角转义与
+// 「—」缺省），单侧改格式立即红。
+test('多值表格跨栈等价：共享夹具逐字一致', async () => {
+  const { dailyMultiValueMd } = await import('../src/utils/mdPreview.ts')
+  const fixture = JSON.parse(
+    readFileSync(new URL('./fixtures/daily-multivalue-md.json', import.meta.url), 'utf8'),
+  ) as Array<{ key: string; value: string; expected: string | null }>
+  assert.ok(fixture.length >= 8, `夹具规模异常（${fixture.length}）`)
+  for (const [index, tc] of fixture.entries()) {
+    assert.equal(
+      dailyMultiValueMd(tc.key, tc.value),
+      tc.expected,
+      `夹具第 ${index + 1} 行（${tc.key} ${JSON.stringify(tc.value)}）与后端 mdMultiValueTable 口径不一致`,
+    )
+  }
 })

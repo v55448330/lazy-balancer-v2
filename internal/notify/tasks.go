@@ -1,7 +1,7 @@
 package notify
 
 // taskengine 四任务 Run 函数（注册点 services/notification_tasks.go）：
-//   notification-delivery        Daemon  投递+健康探测+MCP 会话清理
+//   notification-delivery        Daemon  投递+MCP 会话清理
 //   notification-daily-report    Scheduled 日报渲染→Publish
 //   qq-bot-connection            Daemon  QQ 官方 WebSocket 出站（仅主节点）
 //   wx-bot-connection            Daemon  微信 iLink 长连（仅主节点）

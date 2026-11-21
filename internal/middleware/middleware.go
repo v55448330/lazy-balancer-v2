@@ -1689,8 +1689,11 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 		}
 
 		// REST 调用采集（API 接入页接入统计 REST 列数据源；MCP 路径
-		// 排除——已有专属统计；JWT-only 请求不计入，与「密钥资产」口径一致）。
-		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
+		// 排除——已有专属统计；内部回环（MCP 工具转发到 REST 的请求）同样
+		// 排除：它是 MCP 调用的实现内 hops，计入会与 mcp_tool_stats 双记
+		// 且污染「外部 REST 接入」口径；JWT-only 请求不计入，与「密钥资产」
+		// 口径一致）。
+		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") && !trustedInternalMCP {
 			instrumentRESTAPICall(c, keyName)
 			return
 		}

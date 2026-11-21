@@ -230,6 +230,46 @@ func TestEmailSenderTargetValidation(t *testing.T) {
 	}
 }
 
+// NOTIF154-P2-01：事件模板已全量渲染（TemplateApplied）时，邮件主题模板
+// 必须走窄渲染器——只替换元信息占位符，「[告警] {{title}}」组合不得被整篇
+// markdown 正文顶替（此前 subject_template 复用正文渲染器，主题变成多行全文）。
+func TestEmailSubjectTemplate_templateAppliedNarrowRender(t *testing.T) {
+	newNotifySettingsDB(t)
+	srv := newFakeSMTPServer(t)
+	host, port, _ := net.SplitHostPort(srv.addr())
+	if err := SetSettings(map[string]string{
+		KeySMTPHost: host, KeySMTPPort: port, KeySMTPFrom: "lb@example.com",
+	}); err != nil {
+		t.Fatalf("写入 SMTP 设置失败: %v", err)
+	}
+	msg := Message{
+		EventType: "cfg.caddy_apply_failed", Level: "warn", Title: "Caddy 重载失败",
+		Body: "## 整篇正文第一行\n---\n**详情**", TemplateApplied: true,
+		Time: time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC), Node: "slave-a",
+	}
+	target := `{"email":"ops@example.com","subject_template":"[告警] {{title}}"}`
+	if err := sendToChannel(context.Background(), "email", target, msg); err != nil {
+		t.Fatalf("sendToChannel(email) 返回错误: %v", err)
+	}
+	_, _, data := srv.capture()
+	want := "Subject: " + mime.QEncoding.Encode("utf-8", "[告警] Caddy 重载失败")
+	if !strings.Contains(data, want) {
+		t.Fatalf("主题未按窄渲染器渲染（不得吞正文）:\n%s", data)
+	}
+	if strings.Contains(data, "整篇正文第一行") && strings.Index(data, "整篇正文第一行") < strings.Index(data, "Subject:") {
+		t.Fatalf("主题被整篇正文顶替:\n%s", data)
+	}
+	// 正文仍是事件模板产物（原文直发，markdown 不进 HTML 卡片）。
+	if !strings.Contains(data, "base64") && !strings.Contains(data, "整篇正文第一行") {
+		t.Fatalf("正文丢失:\n%s", data)
+	}
+
+	// 窄渲染器本身：{{body}} 不展开（保留字面量，便于用户自查），元信息占位符生效。
+	if got := renderSubjectTemplate("{{node}}/{{level}} {{body}}", msg, msg.Time); got != "slave-a/警告 {{body}}" {
+		t.Fatalf("窄渲染器输出=%q, want 元信息替换且 {{body}} 保留", got)
+	}
+}
+
 // emailHTMLBody 契约（2026-11-22 残留交互修复）：事件模板已全量渲染
 // （TemplateApplied）的正文是 markdown 文本——邮件不得再包 HTML 卡片
 // （卡片标题/徽章/元信息与模板自身布局视觉重复），也不得进 HTML 上下文
@@ -263,5 +303,18 @@ func TestEmailHTMLBody_templateAppliedPlainText(t *testing.T) {
 	}
 	if emailHTMLBody("", "", Message{EventType: EvtDailyReport, ContentFormat: "text"}) {
 		t.Fatal("日报 text 渲染必须 text/plain（fail-closed）")
+	}
+	// NOTIF154-P3-06：日报模板模式（有正文模板）Content-Type 纳入 body_format
+	// ——显式 html 必须 text/html（旧实现只看模块渲染格式，HTML 模板被当
+	// text/plain 发出）；显式 text 必须 text/plain。
+	if !emailHTMLBody("<p>{{requests}}</p>", "html", Message{EventType: EvtDailyReport, ContentFormat: "text"}) {
+		t.Fatal("日报 HTML 正文模板（body_format=html）必须按 text/html 发送")
+	}
+	if emailHTMLBody("<p>{{requests}}</p>", "text", Message{EventType: EvtDailyReport, ContentFormat: "html"}) {
+		t.Fatal("日报正文模板显式 text 必须 text/plain")
+	}
+	// 模块拼装模式（模板被抑制）忽略 body_format，仍跟随实际渲染格式。
+	if emailHTMLBody("<p>x</p>", "html", Message{EventType: EvtDailyReport, ContentFormat: "text", DailyModuleMode: true}) {
+		t.Fatal("日报模块拼装模式不得因遗留 body_format=html 进 HTML 上下文")
 	}
 }

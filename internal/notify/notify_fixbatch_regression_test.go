@@ -91,6 +91,12 @@ func newDailyTestDBs(t *testing.T) {
 			expires_at DATETIME, is_enabled INTEGER NOT NULL DEFAULT 1)`,
 		`CREATE TABLE mcp_tool_stats (date TEXT NOT NULL, tool TEXT NOT NULL, key_id INTEGER NOT NULL DEFAULT 0,
 			calls INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL,
+			mode VARCHAR(10) NOT NULL DEFAULT 'slave', ip_address VARCHAR(45) NOT NULL,
+			port INTEGER DEFAULT 8000, is_approved BOOLEAN DEFAULT FALSE, status VARCHAR(20) DEFAULT 'offline')`,
+		`CREATE TABLE cluster_node_daily_stats (date TEXT NOT NULL, node TEXT NOT NULL,
+			stats_json TEXT NOT NULL DEFAULT '{}', updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (date, node))`,
 	}
 	for _, q := range ddl {
 		if _, err := db.DB.Exec(q); err != nil {
@@ -146,7 +152,6 @@ func ensureBusStoppedForTest(t *testing.T) {
 // 新窗口（迟到事件被当首条重发）。此测试以 -race 捕获数据竞争（RED 证据）。
 func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 	resetBlockedStateForTest(t)
-	publish := func(Event) {}
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -157,7 +162,7 @@ func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				RecordBlockedEvent("r1", publish)
+				RecordBlockedEvent("r1")
 			}
 		}
 	}()
@@ -183,13 +188,15 @@ func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 // 旧实现的锁外首条判定在「flush 置 nil / 窗口轮换」竞态下会重发首条——本用例
 // 与 TestRecordBlockedEventNoUnlockedRead（需 -race 才有 RED 证据）互补：
 // 后者是压测，本用例是确定性的行为钉（NOTIF153-10）。
+// 发布器曾是形参（publish func(Event)）但从未被调用——本用例传 no-op 仍观察到
+// 真实发布；该死缝已删除，断言只能经包级总线状态（DroppedCount）建立。
 func TestRecordBlockedEventFirstOnlyPublishPerWindow(t *testing.T) {
 	resetBlockedStateForTest(t)
 	ensureBusStoppedForTest(t) // queue=nil：Publish 走丢弃计数，可观测「发布了几条」
 	before := DroppedCount()
-	RecordBlockedEvent("r1", func(Event) {})
-	RecordBlockedEvent("r1", func(Event) {})
-	RecordBlockedEvent("r2", func(Event) {})
+	RecordBlockedEvent("r1")
+	RecordBlockedEvent("r1")
+	RecordBlockedEvent("r2")
 	if got := DroppedCount() - before; got != 1 {
 		t.Fatalf("同窗口三次拦截发布 %d 条, want 1（仅首条立即告警）", got)
 	}
@@ -203,6 +210,70 @@ func TestRecordBlockedEventFirstOnlyPublishPerWindow(t *testing.T) {
 		t.Fatalf("空窗口 flush 发布了事件（累计 %d 条, want 2）", got)
 	}
 	resetBlockedStateForTest(t)
+}
+
+// NOTIF154-P3-01：cross-midnight 槽——23:58 槽的 5 分钟宽限窗跨零点，次日
+// 00:02 排程按昨日槽触发；投递侧 dailySlotDue 必须用同一槽（此前按今日
+// 23:58 判定为未到期 → 0 投递并在宽限窗内重复空跑）。
+func TestDailySlotCandidateCrossMidnight(t *testing.T) {
+	loc := testLocShanghai(t)
+	day := func(d, hh, mm int) time.Time { return time.Date(2026, 11, d, hh, mm, 0, 0, loc) }
+	if slot, ok := DailySlotCandidate(day(20, 0, 2), "23:58", loc); !ok || !slot.Equal(day(19, 23, 58)) {
+		t.Fatalf("00:02 的 23:58 槽 = %v/%v, want 昨日 23:58 且到期", slot, ok)
+	}
+	if slot, ok := DailySlotCandidate(day(20, 9, 4), "09:00", loc); !ok || !slot.Equal(day(20, 9, 0)) {
+		t.Fatalf("09:04 的 09:00 槽 = %v/%v, want 当日 09:00 且到期", slot, ok)
+	}
+	if _, ok := DailySlotCandidate(day(20, 9, 6), "09:00", loc); ok {
+		t.Fatal("超宽限 09:06 不得判定到期")
+	}
+	if _, ok := DailySlotCandidate(day(20, 23, 0), "23:58", loc); ok {
+		t.Fatal("槽前 23:00 不得判定到期")
+	}
+}
+
+// 端到端：00:02 的 23:58 槽必须真实投递一份日报，同槽重复触发不重复发。
+func TestDeliverDailyForAllCrossMidnightSlot(t *testing.T) {
+	withLocalLocation(t, testLocShanghai(t))
+	newDailyTestDBs(t)
+	mustExec(t, db.DB, `INSERT INTO notification_daily (user_id, config) VALUES
+		(21, '{"enabled":true,"send_time":"23:58"}')`)
+	ctx := withDailySlotScope(context.Background())
+	at := time.Date(2026, 11, 20, 0, 2, 0, 0, time.Local) // 19 日 23:58 槽宽限内
+	if _, err := DeliverDailyForAll(ctx, at); err != nil {
+		t.Fatalf("跨零点定时日报: %v", err)
+	}
+	if got := dailyRows(t, 21); got != 1 {
+		t.Fatalf("跨零点槽投递份数=%d, want 1（排程按昨日槽触发，投递侧必须同源）", got)
+	}
+	if _, err := DeliverDailyForAll(ctx, at); err != nil {
+		t.Fatalf("同槽重复触发: %v", err)
+	}
+	if got := dailyRows(t, 21); got != 1 {
+		t.Fatalf("同槽重复触发后份数=%d, want 1", got)
+	}
+}
+
+// SEC154-P3-01：聚合文案按窗口实际跨度生成——ticker 相位与首个事件无关，
+// 窗口可能只开启几秒，固定断言「5 分钟内」会夸大攻击持续时间。
+func TestBlockedAggregateBodyUsesActualWindowSpan(t *testing.T) {
+	short := &blockedWindowState{start: time.Now().Add(-2 * time.Second), count: 80,
+		topRule: map[string]int{"SQLi": 80}}
+	evt := blockedAggregateEvent(short)
+	if strings.Contains(evt.Body, "5 分钟") {
+		t.Fatalf("短窗口文案仍断言 5 分钟: %q", evt.Body)
+	}
+	if !strings.Contains(evt.Body, "秒内拦截 80 次") {
+		t.Fatalf("短窗口文案未含实际跨度: %q", evt.Body)
+	}
+	if evt.Fields["1"] == "5" {
+		t.Fatalf("Fields[1] 仍是固定 5 分钟: %v", evt.Fields)
+	}
+	full := &blockedWindowState{start: time.Now().Add(-blockedWindow), count: 80,
+		topRule: map[string]int{"SQLi": 80}}
+	if got := blockedAggregateEvent(full).Body; !strings.Contains(got, "5 分钟内拦截 80 次") {
+		t.Fatalf("满窗文案=%q, want 5 分钟", got)
+	}
 }
 
 func resetBlockedStateForTest(t *testing.T) {

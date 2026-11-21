@@ -665,6 +665,9 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 	h.recordCaddyApplySavedNotLive(applyErr)
 	recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
 	recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
+	// 退化提交（DB 已提交、运行配置未生效）与成功分支同口径发布事件：
+	// 事件属「已保存」事实，热路径同分支已发（notify 面漏报窗口）。
+	publishTxApplyNotify(f)
 	c.JSON(status, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_de8cc6aa", f.SuccessMsg, services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_de8cc6aa", Data: f.Data})
 }
 

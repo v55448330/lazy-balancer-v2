@@ -10,6 +10,7 @@ package handlers
 // 底层存储不变——聚合视图在读取时 JOIN，写入时拆解回原表。
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -344,6 +345,14 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 
 	switch {
 	case ruleID == "daily":
+		// 与独立日报端点同一白名单/格式口径（此前本端点直接落库：任意
+		// send_time/items 可覆盖真实日报配置）。
+		if req.SendTime != "" && !validateDailySendTime(c, req.SendTime) {
+			return
+		}
+		if !validateDailyItems(c, req.Items) {
+			return
+		}
 		// 更新日报配置
 		cfg, err := notify.GetDailyConfig(uid)
 		if err != nil {
@@ -396,6 +405,20 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_1d8f5b94", group), MessageKey: "k_1d8f5b94"})
 			return
 		}
+		// 级别白名单与订阅矩阵端点同源（validSubLevel）：此前原样落库，
+		// min_level:"urgent" 会让 levelRank=0 变成最宽松下限（静默放行全部级别）。
+		if req.MinLevel != nil && !validSubLevel(*req.MinLevel) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3ae60346"), MessageKey: "k_3ae60346"})
+			return
+		}
+		// 组写入包单事务：任一事件行失败不得留下半组订阅（此前逐条 Exec，
+		// 失败中止时前半组已落库，UI 与投递口径分叉）。
+		tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
+			return
+		}
+		defer tx.Rollback()
 		for _, ev := range eventIDs {
 			// inline 事件选择：未选=取消订阅（删行）；选中=确保订阅行存在。
 			wantOn := req.Enabled != nil && *req.Enabled
@@ -410,7 +433,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				if !selected {
 					// 取消选择=停用行（保留更新者/时间，不删行；无行时补建
 					// opt-out 行，否则默认订阅兜底让取消静默失效）。
-					if err := disableSubscriptionRow(db.DB, uid, ev, actor); err != nil {
+					if err := disableSubscriptionRow(tx, uid, ev, actor); err != nil {
 						c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("取消订阅失败", err)})
 						return
 					}
@@ -420,18 +443,24 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			} else if req.Enabled != nil && !*req.Enabled {
 				// 显式停用=停用行（保留更新者/时间，不删行；投递侧按 enabled=0
 				// 过滤；无行时同样补建，否则默认订阅继续投递）。
-				if err := disableSubscriptionRow(db.DB, uid, ev, actor); err != nil {
+				if err := disableSubscriptionRow(tx, uid, ev, actor); err != nil {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("取消订阅失败", err)})
 					return
 				}
 				continue
 			}
 			// 部分更新：先读既有行，缺省键沿用现值；无行且未要求启用=不动。
+			// 读错误必须区分 ErrNoRows（无行=按默认值建行）与真实故障：
+			// 此前一律当无行用默认值覆盖，DB 故障窄窗会清掉真实配置。
 			var curLevel, curTpl, curIDs, curTpls string
 			curEnabled := 0
-			err := db.DB.QueryRow(`SELECT COALESCE(min_level,''), COALESCE(body_template,''),
+			err := tx.QueryRow(`SELECT COALESCE(min_level,''), COALESCE(body_template,''),
 				COALESCE(channel_ids,''), COALESCE(channel_templates,''), COALESCE(enabled,1) FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev).Scan(&curLevel, &curTpl, &curIDs, &curTpls, &curEnabled)
 			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取订阅失败", err)})
+					return
+				}
 				if !wantOn {
 					continue // 未订阅且未要求启用：不建行
 				}
@@ -469,7 +498,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 					curTpls = ""
 				}
 			}
-			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates, enabled, updated_at, updated_by)
+			if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates, enabled, updated_at, updated_by)
 				VALUES (?,?,?,?,?,?,?,datetime('now'),?)
 				ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template,
 				channel_ids=excluded.channel_ids, channel_templates=excluded.channel_templates, enabled=excluded.enabled,
@@ -478,6 +507,10 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
 				return
 			}
+		}
+		if err := tx.Commit(); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
+			return
 		}
 
 	default:
@@ -499,10 +532,31 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
+// requireNotifyMaster 通知测试发送的主节点门（NOTIF154-P3-03）：从节点不存在
+// pending 消费方（投递 Daemon 仅主节点运行），放行=API 成功但消息永不投递的
+// 假成功。角色读脱离客户端生命周期（与 requireMasterNode 同口径：请求 ctx
+// 已取消不得误报成角色查询失败），查询失败响亮 500。
+func requireNotifyMaster(c *gin.Context) bool {
+	if db.DB == nil {
+		clusterError(c, http.StatusInternalServerError, "节点角色查询失败", nil)
+		return false
+	}
+	roleCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
+	isMaster, err := services.RoleOf(roleCtx, db.DB)
+	cancel()
+	return requireMasterResult(c, isMaster, err, masterGateOptions{
+		queryFailure: "节点角色查询失败",
+		forbidden:    "通知配置仅主节点生效，请在主节点操作",
+	})
+}
+
 // TestNotificationRule POST /notification/rules/:id/test——按规则选定通道+
 // 每通道模板渲染测试消息，落投递行（【测试】标记）走真实投递管线。
 // 管理员 ?user_id 代管视角同写侧。结果见投递记录（用户裁定：测试必须留痕）。
 func (h *Handlers) TestNotificationRule(c *gin.Context) {
+	if !requireNotifyMaster(c) {
+		return
+	}
 	uid := contextUserID(c)
 	if isAdminRequest(c) {
 		if q := c.Query("user_id"); q != "" {
@@ -545,6 +599,9 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 // TestNotificationDaily POST /notification/daily/test——当前用户日报测试发送
 // （每日摘要卡「测试发送」；与定时日报同管线，结果见投递记录）。
 func (h *Handlers) TestNotificationDaily(c *gin.Context) {
+	if !requireNotifyMaster(c) {
+		return
+	}
 	uid := contextUserID(c)
 	if err := notify.DeliverDailyForUser(uid, time.Now()); err != nil {
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
@@ -584,17 +641,29 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 	if scope != "" {
 		chQuery += ` AND user_id=?`
 	}
-	_ = db.DB.QueryRow(chQuery, scopeArgs...).Scan(&totalChannels)
-	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions`+scope, scopeArgs...).Scan(&totalRules)
+	if err := db.DB.QueryRow(chQuery, scopeArgs...).Scan(&totalChannels); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		return
+	}
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions`+scope, scopeArgs...).Scan(&totalRules); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		return
+	}
 	// 投递统计读主库（notification_deliveries 在主库，非指标库）；
 	// 成功口径=sent+partial（partial=部分通道成功）。
 	dlQuery := `SELECT COUNT(*) FROM notification_deliveries` + scope
-	_ = db.DB.QueryRow(dlQuery, scopeArgs...).Scan(&totalDeliveries)
+	if err := db.DB.QueryRow(dlQuery, scopeArgs...).Scan(&totalDeliveries); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		return
+	}
 	sentQuery := `SELECT COUNT(*) FROM notification_deliveries WHERE status IN ('sent','partial')`
 	if scope != "" {
 		sentQuery += ` AND user_id=?`
 	}
-	_ = db.DB.QueryRow(sentQuery, scopeArgs...).Scan(&sentDeliveries)
+	if err := db.DB.QueryRow(sentQuery, scopeArgs...).Scan(&sentDeliveries); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		return
+	}
 	rate := float64(0)
 	if totalDeliveries > 0 {
 		rate = float64(sentDeliveries) / float64(totalDeliveries)
@@ -611,15 +680,26 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 		tcQuery += ` AND user_id=?`
 	}
 	tcQuery += ` GROUP BY type ORDER BY type`
-	if tcRows, err := db.DB.Query(tcQuery, scopeArgs...); err == nil {
-		for tcRows.Next() {
-			var tc typeCount
-			if tcRows.Scan(&tc.Type, &tc.Count) == nil {
-				byType = append(byType, tc)
-			}
-		}
-		tcRows.Close()
+	tcRows, err := db.DB.Query(tcQuery, scopeArgs...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通道类型分布失败", err)})
+		return
 	}
+	for tcRows.Next() {
+		var tc typeCount
+		if err := tcRows.Scan(&tc.Type, &tc.Count); err != nil {
+			tcRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通道类型分布失败", err)})
+			return
+		}
+		byType = append(byType, tc)
+	}
+	if err := tcRows.Err(); err != nil {
+		tcRows.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通道类型分布失败", err)})
+		return
+	}
+	tcRows.Close()
 
 	// 用户列表（供筛选器）
 	type userBrief struct {
@@ -628,14 +708,22 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 	}
 	var users []userBrief
 	rows, err := db.DB.Query(`SELECT id, username FROM users ORDER BY id`)
-	if err == nil {
-		for rows.Next() {
-			var u userBrief
-			if rows.Scan(&u.ID, &u.Username) == nil {
-				users = append(users, u)
-			}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询用户列表失败", err)})
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var u userBrief
+		if err := rows.Scan(&u.ID, &u.Username); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询用户列表失败", err)})
+			return
 		}
-		rows.Close()
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询用户列表失败", err)})
+		return
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
@@ -668,8 +756,14 @@ func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
 		// 否则本地时区午夜窗口（如 UTC+8 00:00-08:00）会漏计当日投递。
 		day := time.Now().UTC().AddDate(0, 0, -i).Format("2006-01-02")
 		var total, sent int
-		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=?`, uid, day).Scan(&total)
-		_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=? AND status IN ('sent','partial')`, uid, day).Scan(&sent)
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=?`, uid, day).Scan(&total); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递趋势失败", err)})
+			return
+		}
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=? AND status IN ('sent','partial')`, uid, day).Scan(&sent); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递趋势失败", err)})
+			return
+		}
 		rate := float64(0)
 		if total > 0 {
 			rate = float64(sent) / float64(total)
@@ -708,23 +802,40 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 	byChannel := make([]chanStat, 0)
 	q := `SELECT channel_id, channel_type, COUNT(*), SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END)
 		FROM notification_delivery_channels WHERE ` + where + ` GROUP BY channel_id, channel_type ORDER BY COUNT(*) DESC`
-	if rows, err := db.DB.Query(q, args...); err == nil {
-		for rows.Next() {
-			var s chanStat
-			if rows.Scan(&s.ChannelID, &s.Type, &s.Total, &s.Sent) == nil {
-				if s.Total > 0 {
-					s.Rate = float64(s.Sent) / float64(s.Total)
-				}
-				s.Name = "通道 #" + strconv.FormatInt(s.ChannelID, 10)
-				var name string
-				if db.DB.QueryRow(`SELECT name FROM notification_channels WHERE id=?`, s.ChannelID).Scan(&name) == nil {
-					s.Name = name
-				}
-				byChannel = append(byChannel, s)
-			}
-		}
-		rows.Close()
+	rows, err := db.DB.Query(q, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		return
 	}
+	for rows.Next() {
+		var s chanStat
+		if err := rows.Scan(&s.ChannelID, &s.Type, &s.Total, &s.Sent); err != nil {
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			return
+		}
+		if s.Total > 0 {
+			s.Rate = float64(s.Sent) / float64(s.Total)
+		}
+		s.Name = "通道 #" + strconv.FormatInt(s.ChannelID, 10)
+		var name string
+		if err := db.DB.QueryRow(`SELECT name FROM notification_channels WHERE id=?`, s.ChannelID).Scan(&name); err == nil {
+			s.Name = name
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			// 行已删（通道 #id 兜底）之外一律 500：DB 故障静默兜底会把
+			// 「读不到名称」伪装成已删通道。
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			return
+		}
+		byChannel = append(byChannel, s)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		return
+	}
+	rows.Close()
 
 	type typeStat struct {
 		Type  string  `json:"type"`
@@ -735,18 +846,29 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 	byType := make([]typeStat, 0, 4)
 	q = `SELECT channel_type, COUNT(*), SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END)
 		FROM notification_delivery_channels WHERE ` + where + ` GROUP BY channel_type ORDER BY COUNT(*) DESC`
-	if rows, err := db.DB.Query(q, args...); err == nil {
-		for rows.Next() {
-			var s typeStat
-			if rows.Scan(&s.Type, &s.Total, &s.Sent) == nil {
-				if s.Total > 0 {
-					s.Rate = float64(s.Sent) / float64(s.Total)
-				}
-				byType = append(byType, s)
-			}
-		}
-		rows.Close()
+	rows, err = db.DB.Query(q, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		return
 	}
+	for rows.Next() {
+		var s typeStat
+		if err := rows.Scan(&s.Type, &s.Total, &s.Sent); err != nil {
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			return
+		}
+		if s.Total > 0 {
+			s.Rate = float64(s.Sent) / float64(s.Total)
+		}
+		byType = append(byType, s)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		return
+	}
+	rows.Close()
 
 	type eventStat struct {
 		EventType string `json:"event_type"`
@@ -760,19 +882,30 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 	}
 	q = `SELECT event_type, COUNT(*) FROM notification_delivery_channels WHERE ` + where +
 		` GROUP BY event_type ORDER BY COUNT(*) DESC LIMIT 10`
-	if rows, err := db.DB.Query(q, args...); err == nil {
-		for rows.Next() {
-			var s eventStat
-			if rows.Scan(&s.EventType, &s.Total) == nil {
-				s.Title = s.EventType
-				if t, ok := titles[s.EventType]; ok {
-					s.Title = t
-				}
-				byEvent = append(byEvent, s)
-			}
-		}
-		rows.Close()
+	rows, err = db.DB.Query(q, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		return
 	}
+	for rows.Next() {
+		var s eventStat
+		if err := rows.Scan(&s.EventType, &s.Total); err != nil {
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			return
+		}
+		s.Title = s.EventType
+		if t, ok := titles[s.EventType]; ok {
+			s.Title = t
+		}
+		byEvent = append(byEvent, s)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		return
+	}
+	rows.Close()
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"by_channel": byChannel,

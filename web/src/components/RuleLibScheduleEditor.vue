@@ -106,9 +106,16 @@ const emitSave = () => {
 .schedule-editor__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .schedule-editor__title { font-size: 13px; font-weight: 600; color: #1f2937; }
 .schedule-editor__hint { font-size: 12px; color: #909399; }
-.schedule-editor__controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 星期多选随选中项换行增高（7 天全选=两行）：时间选择框必须拉伸到同一行高
+ * 并内部垂直居中，否则停在 32px 与左侧错位（2026-11-22 用户裁定）。保存按钮
+ * 保持自身高度、只在行内垂直居中，不被拉伸变形。 */
+.schedule-editor__controls { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
 .schedule-editor__days { flex: 1 1 220px; min-width: 180px; }
-.schedule-editor__time { width: 110px; }
+/* height:auto 必须显式覆盖 el-input 的固定 height（否则 align-self:stretch
+ * 对显式高度的 flex item 无效，时间框仍是 32px）。 */
+.schedule-editor__time { width: 110px; align-self: stretch; height: auto; }
+.schedule-editor__time :deep(.el-input__wrapper) { height: 100%; min-height: 32px; }
+.schedule-editor__controls > .el-button { align-self: center; }
 .schedule-editor__tip { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.6; }
 .schedule-editor__tip--error { color: var(--el-color-danger); }
 </style>

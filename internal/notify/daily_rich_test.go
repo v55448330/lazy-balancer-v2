@@ -121,6 +121,54 @@ func TestRenderDailyMarkdown_multiValueFallbackOnBadLine(t *testing.T) {
 	}
 }
 
+// NOTIF154-P3-02：空值项目四格式真正省略（不渲染「各节点摘要」空行）。
+// 单机默认配置下 nodes_summary 恒空——旧实现每份日报都带一行空标签。
+func TestRenderDailyOmitsEmptyValuesAllFormats(t *testing.T) {
+	values := map[string]string{
+		"requests":       "1200",
+		"cluster_status": "正常（主节点）",
+		"nodes_summary":  "", // 单机：无从节点
+		"uptime":         "3 天",
+	}
+	items := []string{"cluster_status", "nodes_summary", "uptime", "requests"}
+	cases := []struct {
+		format string
+		marker string // 空值标签/键不得出现的形态
+	}{
+		{"html", "各节点摘要"},
+		{"markdown", "各节点摘要"},
+		{"text", "各节点摘要"},
+		{"json", `"nodes_summary"`},
+	}
+	for _, c := range cases {
+		got := renderDailyFromValues("2026-11-21", values, items, c.format)
+		if strings.Contains(got, c.marker) {
+			t.Fatalf("format=%s 空值 nodes_summary 仍渲染 %q:\n%s", c.format, c.marker, got)
+		}
+	}
+	// 有值时照常渲染（省略规则只针对空值，不能吞掉正常数据）。
+	values["nodes_summary"] = "slave-a：请求 44 · 拦截 1 · 独立IP 3"
+	if got := renderDailyFromValues("2026-11-21", values, items, "markdown"); !strings.Contains(got, "各节点摘要") {
+		t.Fatalf("有值 nodes_summary 被误省略:\n%s", got)
+	}
+}
+
+// NOTIF154-P3-05：多值表格 fail-safe 回退分支也必须留块间空行——坏行项
+// （回退列表）与良行项（表格）相邻时，下一块标签/表头不得被上一块吞并。
+func TestRenderDailyMarkdown_fallbackBlockSeparated(t *testing.T) {
+	values := map[string]string{
+		"top_ips":   "1.2.3.4 ×9\nbogus-line-without-count",
+		"top_paths": "/login ×200\n/api ×150",
+	}
+	got := renderDailyFromValues("2026-11-21", values, []string{"top_ips", "top_paths"}, "markdown")
+	if !strings.Contains(got, "- bogus-line-without-count\n\n**TOP 攻击路径**") {
+		t.Fatalf("回退列表与下一块之间缺空行（标签会被吞）:\n%s", got)
+	}
+	if !strings.Contains(got, "| /login | 200 |") {
+		t.Fatalf("良行项表格缺失:\n%s", got)
+	}
+}
+
 // 自定义模板（QQ markdown）的多值日报变量同样出语义表格（2026-11-22 用户
 // 裁定：模板里 {{top_ips}}/{{cert_expiring}}/{{nodes_summary}} 不能是裸行——
 // 与内置模板同族设计）。模板提供上下文标签，变量只展开表格本体。

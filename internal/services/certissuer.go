@@ -349,23 +349,25 @@ func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate,
 		previousAttempt = material.deploymentAttempt
 	}
 	attempt := previousAttempt + 1
-	// 封顶后不落 failed 终态。写文件/reload 连续失败时材料已在库、
-	// expires_at 已前进；failed 会把任务从全部自动通道摘除（部署重试只收
-	// downloaded/cleanup_*、启动恢复对 JobIsTerminal 直接 continue、文件对账
-	// 只重建 issued/downloaded），而续期扫描按已前进的 expires_at 跳过 →
-	// 旧证书到期后 TLS 长时间中断（DB 报新证有效）。保留可部署态并放慢为
-	// 30 分钟慢速重试：磁盘/权限/重载恢复后自动收敛，材料不丢、不重签。
+	// 达上限（maxCertificateDeploymentAttempts）落 failed 终态并发布
+	// cert.failed（默认订阅/critical）——此前的「30 分钟永续慢速重试」没有
+	// 用户可见出口：材料留在库、磁盘/重载故障恢复后才会自动收敛，长期故障
+	// 下用户完全无感且任务永不稳定。终态化把决定权交回用户：任务卡片手动
+	// 重试可重新触发部署/重签（证书材料保留在库，不丢）。
+	// 未达上限：保持可部署态 + 退避窗口自动重试（材料不丢、不重签）。
 	const blockedDeploymentRetryDelay = 30 * time.Minute
 	delay := certificateDeploymentBackoff(attempt)
 	capped := attempt >= maxCertificateDeploymentAttempts
 	if capped {
 		delay = blockedDeploymentRetryDelay
 	}
+	targetStatus := "downloaded"
 	storedMessage := fmt.Sprintf("部署失败 [attempt=%d/%d]: %s", displayDeploymentAttempt(attempt), maxCertificateDeploymentAttempts, message)
 	if capped {
+		targetStatus = "failed"
 		// 先截断 base 再追加说明（appendJobMessageNote 单源）：base 过长时
-		// 「先追加后截断」会把慢速重试说明整段截掉，终态语义丢失。
-		storedMessage = appendJobMessageNote(storedMessage, fmt.Sprintf("；证书材料已保留，转入 %d 分钟慢速重试（磁盘/重载恢复后自动收敛）", int(blockedDeploymentRetryDelay.Minutes())))
+		// 「先追加后截断」会把终态说明整段截掉，语义丢失。
+		storedMessage = appendJobMessageNote(storedMessage, "；证书材料已保留，已停止自动重试（请在证书任务中手动重试）")
 	} else {
 		storedMessage = truncateJobMessage(storedMessage)
 	}
@@ -375,9 +377,15 @@ func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate,
 	// 补扫 hasCertMaterial=0 跳过,永久不可达只能重签烧 CA 配额。
 	// 已持久化场景(材料来自库读)同值重写,幂等无害。
 	fields := map[string]any{
-		"message":                    storedMessage,
-		"deployment_attempts":        attempt,
-		"deployment_available_after": availableAfter,
+		"message":             storedMessage,
+		"deployment_attempts": attempt,
+	}
+	if capped {
+		// 终态不保留部署窗口：补扫/恢复只收 downloaded/cleanup_*，窗口对
+		// failed 行无消费者（保留会让 UI 误示「还会自动重试」）。
+		fields["deployment_available_after"] = nil
+	} else {
+		fields["deployment_available_after"] = availableAfter
 	}
 	if material.certPEM != "" {
 		fields["cert_pem"] = material.certPEM
@@ -385,23 +393,26 @@ func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate,
 		fields["expires_at"] = CanonicalDatetimeValue(material.notAfter)
 		fields["ca_provider_id"] = material.providerID
 	}
-	updateErr := deploymentFailureWriteback(db.DB, jobID, from, "downloaded", fields)
+	updateErr := deploymentFailureWriteback(db.DB, jobID, from, targetStatus, fields)
 	// 部署失败必须落 certjob-*.log（此前部署链零 WriteCertJobLog，
 	// 磁盘日志只剩签发阶段，排障需反查 DB）。ERROR 行业务行恒写；状态回写失败
 	// （CAS 冲突/DB 故障）补 WARN 行，且不改变部署失败语义与签发结果。
 	WriteCertJobLog(jobID, "ERROR", "deployment_failed", storedMessage)
 	if updateErr != nil {
-		Logf("warn", "cert job %d deployment status writeback failed (status=downloaded, attempt=%d): %v", jobID, attempt, updateErr)
+		Logf("warn", "cert job %d deployment status writeback failed (status=%s, attempt=%d): %v", jobID, targetStatus, attempt, updateErr)
 		WriteCertJobLog(jobID, "WARN", "deployment_status_update_failed", fmt.Sprintf("部署失败状态回写失败 [attempt=%d/%d]: %v", displayDeploymentAttempt(attempt), maxCertificateDeploymentAttempts, updateErr))
-		// 状态回写失败不得让窗口列停在 NULL：补扫只收非 NULL 窗口，独立簿记
-		// UPDATE（无状态 CAS）让周期通道仍然可达。
-		advanceCertificateDeploymentWindow(jobID, attempt, storedMessage, availableAfter)
+		if !capped {
+			// 状态回写失败不得让窗口列停在 NULL：补扫只收非 NULL 窗口，独立
+			// 簿记 UPDATE（无状态 CAS）让周期通道仍然可达。终态化失败不推进
+			// 窗口（failed 无消费者），由下方重试登记/重启恢复重试终态写。
+			advanceCertificateDeploymentWindow(jobID, attempt, storedMessage, availableAfter)
+		}
 		RecordAuditLog("system", "部署失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("status_writeback_failed")), "")
 	}
-	// 内存重试调度与 DB 状态解耦：状态回写失败也必须登记 timer——回调会重读
-	// 行状态，行已被并发胜者推进到 issued 时 SELECT 不到而自然 no-op，不会
-	// 重复部署；反之只有 WARN 不留 timer 时该行再无任何周期通道。
-	if s.deploymentRetry != nil {
+	// 内存重试调度与 DB 状态解耦：行仍处于可部署态时（未达上限，或达上限但
+	// 终态回写失败）必须登记 timer——回调会重读行状态，行已被并发胜者推进到
+	// issued/failed 时 SELECT 不到而自然 no-op，不会重复部署。
+	if s.deploymentRetry != nil && (!capped || updateErr != nil) {
 		material.deploymentAttempt = attempt
 		// 异步再调度。此处常在部署回调 goroutine 内被同步调用——
 		// 若同步进入 scheduleDeploymentRetry，会命中 的在途回调
@@ -419,10 +430,11 @@ func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate,
 			}
 		}()
 	}
-	if updateErr == nil && attempt == maxCertificateDeploymentAttempts {
-		// 封顶只留一条审计（后续每 30 分钟慢速重试不再刷屏）；结果码说明
-		// 任务未终态、材料保留。
-		RecordAuditLog("system", "部署失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("slow_retry")), "")
+	if capped && updateErr == nil {
+		// 终态化仅一次（此后 from 集合不再包含 failed，后续回调自然 no-op）：
+		// 审计 + 用户可见通知（cert.failed 默认订阅，critical）。
+		RecordAuditLog("system", "部署失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
+		notifyCertJobOutcome(jobID, "failed", storedMessage)
 	}
 	return &certificateDeploymentError{err: errors.Join(err, updateErr)}
 }

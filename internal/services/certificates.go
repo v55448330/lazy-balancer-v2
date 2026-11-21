@@ -16,6 +16,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -2932,6 +2933,12 @@ func scanRenewalCandidates(ctx context.Context, rows *sql.Rows, days int, warnPr
 		canonicalJob, jobErr := CanonicalACMEDomains(j.Domain)
 		if ruleErr != nil || jobErr != nil || canonicalRule != canonicalJob {
 			continue
+		}
+		// 证书临期预警（cert.expiry_warning）：候选集已按「续期窗口 + 抖动」
+		// 预筛，逐行发布并按证书去重（每证书每日一次）。挂在续期扫描而非
+		// 独立任务：预警对象与自动续签候选同源，避免两套窗口口径漂移。
+		if j.ExpiresAt.Valid {
+			notify.PublishCertExpiryWarning(j.ID, j.Domain, j.ExpiresAt.Time, now)
 		}
 		selection, selected := selectedByRule[j.RuleID]
 		if selectionFailed[j.RuleID] {

@@ -330,7 +330,7 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	for _, row := range accepted {
 		attr := attributions[row.RuleID]
 		if row.Kind == "rate_reject" {
-			notify.RecordBlockedEvent(attr.ruleName, notify.Publish)
+			notify.RecordBlockedEvent(attr.ruleName)
 		}
 		if label := services.AutobanCCTriggerReasonLabel(row.Reason); label != "" {
 			notify.PublishCCTriggered(row.ClientIP, label)

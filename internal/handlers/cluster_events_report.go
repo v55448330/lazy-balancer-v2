@@ -1,13 +1,15 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
@@ -22,7 +24,9 @@ import (
 // clusterEventPublish 入总线缝（测试捕获事件断言节点名钉扎；生产=notify.Publish）。
 var clusterEventPublish = notify.Publish
 
-// clusterEventDedup 上报批次幂等去重窗口（spool 重传可能重复送达）。
+// clusterEventDedup 上报批次幂等去重窗口（spool 重传/live 重试可能重复送达）。
+// 进程内窗口（512 批次 FIFO）：进程重启后窗口重置，主节点侧无法跨重启去重——
+// 该边界在 apidocs 端点说明中如实标注，消费方不得据此假定严格 exactly-once。
 var clusterEventDedup = struct {
 	mu    sync.Mutex
 	seen  map[string]struct{}
@@ -33,7 +37,7 @@ var clusterEventDedup = struct {
 // clusterEventDedupRecord 记录批次并返回是否首次（true=处理，false=重复丢弃）。
 func clusterEventDedupRecord(batchID string) bool {
 	if batchID == "" {
-		return true // 非批次上报（即时单条）恒处理
+		return true // 无批次键的旧客户端：无法去重，恒处理
 	}
 	clusterEventDedup.mu.Lock()
 	defer clusterEventDedup.mu.Unlock()
@@ -50,8 +54,24 @@ func clusterEventDedupRecord(batchID string) bool {
 	return true
 }
 
+// parseReportEventTime 解析上报事件的原始发生时刻（RFC3339Nano/RFC3339）；
+// 空串/畸形返回零值（Publish 侧回退当前时刻，不因坏时间戳丢事件）。
+func parseReportEventTime(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 // HandleClusterEventReport 机器接口：从节点事件上报。
 func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportBodyLimitBytes)
 	var req notify.ClusterEventReport
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Events) == 0 {
 		// 直写豁免：集群机器接口，消费方为从节点重试逻辑（无用户语言面）。
@@ -63,35 +83,48 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "单批事件数超限（≤100）"})
 		return
 	}
+	// 与同族机器端点（节点上报）同一 requireMaster 门——降级主节点残留 nodes
+	// 行时旧从节点事件会被错挂到已降级主节点并入本地总线，而非转发现主节点。
+	if !h.requireMaster(c) {
+		return
+	}
+	nodeID := c.GetInt("cluster_node_id")
+	_, reporterLabel, err := h.clusterService.NodeIdentity(c.Request.Context(), nodeID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// 直写豁免：集群机器接口（同上）。
+			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "上报者节点未登记"})
+			return
+		}
+		clusterError(c, http.StatusInternalServerError, "读取上报者节点失败", err)
+		return
+	}
+	// 去重登记放在角色/身份门之后：非主节点或未登记节点的重试不得消耗
+	// 批次键（否则恢复主节点角色后同批次被误判重复而静默丢弃）。
 	if !clusterEventDedupRecord(req.BatchID) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"deduped": true}})
 		return
 	}
-	// 上报者身份→节点名（令牌认证中间件已验签；这里把载荷 Node 与节点行名
-	// 比对——不一致以节点行为准（防伪造他节点名）。取 nodes 表按认证节点。
-	nodeIDVal, exists := c.Get("cluster_node_id")
-	reporterLabel := ""
-	if exists {
-		if nodeID, ok := nodeIDVal.(int); ok {
-			var name, ip string
-			var port int
-			_ = db.DB.QueryRow(`SELECT COALESCE(name,''), COALESCE(ip_address,''), COALESCE(port,0) FROM nodes WHERE id=?`, nodeID).Scan(&name, &ip, &port)
-			reporterLabel = notify.SlaveNodeLabel(name, ip, port)
-		}
-	}
-	if reporterLabel == "" {
-		// 中间件未注入节点 id（形态变更兜底）：信任载荷名但标记（降级面）
-		reporterLabel = "从节点 " + strings.TrimSpace(req.Node)
+	// 事件起源节点（防回荡）：客户端显式上报的 origin 优先，缺省回退上报者
+	// 节点名；Hop=已转发跳数（>=1 的从节点侧 Publish 不再外发，互指收敛）。
+	origin := strings.TrimSpace(req.Origin)
+	if origin == "" {
+		origin = strings.TrimSpace(req.Node)
 	}
 	accepted := 0
 	for _, one := range req.Events {
-		// 目录门+节点名钉扎：载荷 Node 不可伪造他节点（以认证节点行为准）
+		// 目录门+节点名钉扎：载荷 Node 不可伪造他节点（以认证节点行为准）。
 		evt := notify.Event{
 			Type:   one.Type,
 			Title:  one.Title,
 			Body:   one.Body,
 			Fields: one.Fields,
 			Node:   reporterLabel,
+			Origin: origin,
+			Hop:    req.Hop,
+			// 原始发生时刻（客户端时钟）：spool 重放不得把 created_at 改成重放
+			// 时刻（排序/过期口径后移）。解析失败=零值，Publish 回退当前时刻。
+			Time: parseReportEventTime(one.Time),
 		}
 		if one.Level != "" {
 			evt.Level = notify.Level(one.Level)

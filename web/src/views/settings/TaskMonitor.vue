@@ -173,8 +173,8 @@
                  唤醒——开关上加 tooltip 说明自动唤醒语义（页内既有 tooltip 范式） -->
             <!-- 角色不适用（从节点上的 master-only 族）：调度开关在本节点
                  不可用——显性标注原因，避免把「永不投递」误读为开关故障 -->
-            <el-tooltip v-if="row.role_applicable === false" :content="t('app.settings.taskMonitor.schedule.masterOnlyTip')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-tag size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.schedule.masterOnlyTag') }}</el-tag>
+            <el-tooltip v-if="roleScopeOf(row as TaskInfo) !== 'any'" :content="roleScopeTip(row as TaskInfo)" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+              <el-tag size="small" type="info" effect="plain">{{ roleScopeTag(row as TaskInfo) }}</el-tag>
             </el-tooltip>
             <el-tooltip v-else-if="row.id === 'cert-waiting-ca'" :content="scheduleStoppedTip(row as TaskInfo) || t('app.settings.taskMonitor.schedule.certWakeHint')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <el-switch :model-value="!!row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
@@ -282,12 +282,13 @@
         <el-descriptions :column="2" border size="small" class="tm-detail-descs">
           <el-descriptions-item :label="t('app.settings.taskMonitor.detail.cadence')">{{ cadenceText(detailTask.cadence) }}</el-descriptions-item>
           <el-descriptions-item :label="t('app.settings.taskMonitor.detail.roleApplicability')">
-            <el-tag v-if="detailTask.role_applicable === false" size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.detail.masterOnlyRun') }}</el-tag>
-            <el-tag v-else size="small" type="success" effect="plain">{{ t('app.settings.taskMonitor.detail.nodeRunnable') }}</el-tag>
+            <!-- 三态（applies / 仅主节点 / 仅从节点 / 角色未判定）：方向由本节点
+                 角色补全，主节点上的 slave-only 任务不得标成「仅主节点运行」。 -->
+            <el-tag size="small" :type="roleScopeOf(detailTask) === 'any' ? 'success' : 'info'" effect="plain">{{ roleScopeLabel(detailTask) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item :label="t('app.settings.taskMonitor.detail.scheduleSwitch')">
             <el-tooltip :content="t('app.settings.taskMonitor.detail.scheduleSwitchTip')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-tag v-if="detailTask.role_applicable === false" size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.schedule.masterOnlyEffect') }}</el-tag>
+              <el-tag v-if="roleScopeOf(detailTask) !== 'any'" size="small" type="info" effect="plain">{{ roleScopeEffect(detailTask) }}</el-tag>
               <el-tag v-else-if="detailTask.kind !== 'oneshot'" size="small" :type="detailTask.loop_on ? 'success' : 'warning'" effect="plain">{{ detailTask.loop_on ? t('app.settings.taskMonitor.schedule.on') : t('app.settings.taskMonitor.schedule.off') }}</el-tag>
               <el-tag v-else size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.schedule.notSchedulable') }}</el-tag>
             </el-tooltip>
@@ -375,6 +376,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, PieChart as PieChartIcon, DataLine, List, Monitor, Lock, Box, Timer } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
+import { taskRoleScope, type NodeRole, type TaskRoleScope } from '@/utils/taskRole'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { formatDate } from '@/utils/date'
@@ -400,7 +402,7 @@ interface TaskInfo {
   last_run?: TaskRunInfo; next_run_at?: string; runs_24h: number; success_24h: number; fail_24h: number
   loop_on?: boolean; started_at?: string; business_driven?: boolean // 常驻族：循环启停态/引擎启动时刻
   schedule_stopped_reason?: string // 引擎自行停调来源（fail-streak=自动轮连续失败未推进排程槽）
-  role_applicable?: boolean // 本节点角色是否允许该任务运行（false=仅主节点，从节点视图标注）
+  role_applicable?: boolean // 本节点角色是否允许该任务运行（false=仅另一角色节点运行；方向由本节点角色补全——utils/taskRole）
   retry_cooldown_seconds?: number | null // 证书行剩余重试冷却（秒，0=可运行；null=永久不可重试；其它行为 0）
   cert_job_ca_cooldown_active?: boolean // 后端判定：行处于 CA 退避窗口（区别于仅通用冷却——后者触发放行）
 }
@@ -427,6 +429,44 @@ const refreshing = ref(false)
 // 违反 ——全站 14 页唯一偏离者）
 const readOnly = computed(() => authStore.readOnlyReason !== null)
 const canOperate = computed(() => isAdmin.value && !readOnly.value)
+
+// 任务角色适用范围（三态）：后端只下发 role_applicable 布尔（本节点是否允许
+// 运行），方向由当前节点角色补全——主节点上 false=仅从节点任务，从节点上
+// false=仅主节点任务。角色未判定时不猜方向（避免「仅主节点」标反）。
+const nodeRole = computed<NodeRole>(() => {
+  const mode = authStore.nodeMode
+  return mode === 'master' || mode === 'slave' ? mode : 'unknown'
+})
+const roleScopeOf = (row: TaskInfo): TaskRoleScope => taskRoleScope(row.role_applicable, nodeRole.value)
+const roleScopeLabel = (row: TaskInfo): string => {
+  switch (roleScopeOf(row)) {
+    case 'master-only': return t('app.settings.taskMonitor.detail.masterOnlyRun')
+    case 'slave-only': return t('app.settings.taskMonitor.detail.slaveOnlyRun')
+    case 'unknown': return t('app.settings.taskMonitor.detail.roleUnknownRun')
+    default: return t('app.settings.taskMonitor.detail.nodeRunnable')
+  }
+}
+const roleScopeTag = (row: TaskInfo): string => {
+  switch (roleScopeOf(row)) {
+    case 'master-only': return t('app.settings.taskMonitor.schedule.masterOnlyTag')
+    case 'slave-only': return t('app.settings.taskMonitor.schedule.slaveOnlyTag')
+    default: return t('app.settings.taskMonitor.schedule.roleUnknownTag')
+  }
+}
+const roleScopeTip = (row: TaskInfo): string => {
+  switch (roleScopeOf(row)) {
+    case 'master-only': return t('app.settings.taskMonitor.schedule.masterOnlyTip')
+    case 'slave-only': return t('app.settings.taskMonitor.schedule.slaveOnlyTip')
+    default: return t('app.settings.taskMonitor.schedule.roleUnknownTip')
+  }
+}
+const roleScopeEffect = (row: TaskInfo): string => {
+  switch (roleScopeOf(row)) {
+    case 'master-only': return t('app.settings.taskMonitor.schedule.masterOnlyEffect')
+    case 'slave-only': return t('app.settings.taskMonitor.schedule.slaveOnlyEffect')
+    default: return t('app.settings.taskMonitor.schedule.roleUnknownEffect')
+  }
+}
 
 // 200 但缺 data 是契约违约，不得静默渲染成「0 任务 / 空图表」——与
 // CertJobs.vue 同口径抛 TypeError，才能进入 usePollingErrorState 的契约退避与

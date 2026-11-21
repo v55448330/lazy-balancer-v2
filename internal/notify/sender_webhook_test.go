@@ -102,6 +102,50 @@ func TestWebhookSenderZeroTimeAndNilFields(t *testing.T) {
 	}
 }
 
+// NOTIF154-P2-02：事件模板已全量渲染（TemplateApplied）时载荷必须与默认分支
+// 同 schema（level/level_label/time/node/title/body/fields），且零值 Time 同样
+// 以发送时刻兜底——此前该分支直格式化 msg.Time 且只带 5 键，接收端拿到
+// 0001-01-01 时间戳、title/fields 缺失。
+func TestWebhookSenderTemplateAppliedPayloadSchema(t *testing.T) {
+	var payload map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Errorf("载荷非合法 JSON: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	msg := Message{
+		EventType: "cfg.caddy_apply_failed", Level: "warn",
+		Title: "Caddy 重载失败", Body: "## 整篇正文\n第二行", Node: "slave-a",
+		Fields:          map[string]string{"1": "detail"},
+		TemplateApplied: true, // Time 零值：与默认分支同源兜底
+	}
+	before := time.Now()
+	if err := (webhookSender{}).Send(context.Background(), `{"url":"`+srv.URL+`"}`, msg); err != nil {
+		t.Fatalf("发送失败: %v", err)
+	}
+	if payload["title"] != "Caddy 重载失败" {
+		t.Fatalf("模板旁路载荷缺 title: %v", payload)
+	}
+	if payload["body"] != msg.Body || payload["node"] != "slave-a" {
+		t.Fatalf("载荷 body/node 分叉: %v", payload)
+	}
+	fields, ok := payload["fields"].(map[string]any)
+	if !ok || fields["1"] != "detail" {
+		t.Fatalf("模板旁路载荷缺 fields: %v", payload["fields"])
+	}
+	ts, err := time.Parse(time.RFC3339, payload["time"].(string))
+	if err != nil {
+		t.Fatalf("time 非合法 RFC3339: %v", payload["time"])
+	}
+	if ts.Before(before.Add(-time.Second)) || ts.After(time.Now().Add(time.Second)) {
+		t.Fatalf("零值 Time 未以发送时刻兜底: %s", payload["time"])
+	}
+}
+
 func TestWebhookSenderNon2xxFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

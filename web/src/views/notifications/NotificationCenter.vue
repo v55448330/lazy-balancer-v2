@@ -192,7 +192,7 @@
                    勾=整组入 items，取消=整组移除；存储仍是 items[]（渲染契约不变）。 -->
               <div class="daily-ch-select">
                 <el-checkbox-group :model-value="dailyModuleChecked" size="small" class="notif-pick-group daily-items" @update:model-value="toggleDailyModule">
-                  <el-checkbox v-for="mod in dailyModules" :key="mod.id" :value="mod.id" border size="small">{{ mod.emoji }} {{ mod.label }}</el-checkbox>
+                  <el-checkbox v-for="mod in dailyModules" :key="mod.id" :value="mod.id" border size="small">{{ mod.emoji }} {{ moduleLabel(mod) }}</el-checkbox>
                 </el-checkbox-group>
                 <div class="form-tip-line">{{ t('app.notification.daily.modulesHint') }}</div>
               </div>
@@ -420,6 +420,9 @@
           <el-radio-button v-for="f in dailyPreviewFormatOptions" :key="f.value" :value="f.value">{{ f.label }}</el-radio-button>
         </el-radio-group>
       </div>
+      <!-- 预览口径说明：端点只吃 items+format（内置模板渲染）；模板模式通道的
+           实际投递以通道模板为准——不说明会被误读为「投递就是这样」。 -->
+      <div class="form-tip-line daily-preview-note">{{ t('app.notification.daily.previewBuiltinNote') }}</div>
       <div class="daily-preview-body">
         <iframe v-if="dailyPreviewFmt === 'html'" class="daily-html-preview" sandbox="" :srcdoc="dailyPreviewText" :title="t('app.notification.daily.previewTitle')" />
         <div v-else-if="dailyPreviewFmt === 'markdown'" v-loading="dailyPreviewLoading" class="tpl-md-preview" v-html="dailyPreviewHtml"></div>
@@ -433,8 +436,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { watchDebounced } from '@vueuse/core'
 import { ArrowDown, Calendar, Bell, ChatDotRound, CircleCheckFilled, DataAnalysis, Odometer, TrendCharts } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EChartsOption } from 'echarts'
@@ -451,6 +455,12 @@ import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
 import { mdToHtml, dailyMultiValueMd } from '@/utils/mdPreview'
+import { defaultEventTpl } from '@/utils/eventDefaultTemplates'
+import {
+  channelBodyTplKey, effectiveDailyMode, parseStyleConfig, planDailyChannelStyle,
+  type DailyRenderMode,
+} from '@/utils/channelStyle'
+import { dailySampleValues } from '@/utils/dailySamples'
 import { formatDate } from '@/utils/date'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
@@ -698,6 +708,12 @@ const dailyFormatLabel = (v: string): string => {
   const m = (tm('app.notification.dailyFormats') || {}) as Record<string, string>
   return hasOwn(m, v) ? m[v] : v
 }
+// 大模块显示名：已知 mod.id 走 daily.modules 词条（en 界面不再直出后端中文
+// label）；未知/新增模块回落后端 label（向前兼容）。
+const moduleLabel = (mod: { id: string; label: string }): string => {
+  const labels = (tm('app.notification.daily.modules') || {}) as Record<string, string>
+  return hasOwn(labels, mod.id) ? labels[mod.id] : mod.label
+}
 const dailyFormatOptions = computed(() => ['auto', 'markdown', 'text', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) })))
 
 // ===== 模板弹框（事件规则 + 日报每通道共享） =====
@@ -755,13 +771,16 @@ const onTplFormatChange = (v: string): void => {
   if (tplMode.value === 'daily') void saveDailyFormat(dailyRule.value, tplActiveChannel.value?.type || '', v)
   else setTplFormat(v)
 }
-// 提示行统一结构：占位符说明恒在；类型提示 + 模式提示次序一致
+// 提示行统一结构：占位符说明恒在；类型提示 + 模式提示次序一致。
+// daily 模式按渲染模式切换措辞：内置模板下模板不生效——旧文案「保存后该通道
+// 改用自定义模板渲染」与新开关自相矛盾（用户以为保存即生效）。
 const tplHints = computed<string[]>(() => {
   const typ = tplActiveChannel.value?.type || ''
   const hints = [t('app.notification.rules.tplPhHint')]
   if (typ === 'email') hints.push(t('app.notification.rules.tplSubjectHint'))
   if (typ === 'qq') hints.push(t('app.notification.rules.tplQqMdHint'))
   if (tplMode.value === 'rule') hints.push(t('app.notification.rules.templateHint'))
+  else if (tplDailyMode.value === 'modules') hints.push(t('app.notification.daily.templateInactiveHint'))
   else if (isBotChannel(typ)) hints.push(t('app.notification.daily.contentTemplateHint'))
   else if (typ === 'webhook') hints.push(t('app.notification.daily.webhookTplHint'))
   else hints.push(t('app.notification.daily.emailTplHint'))
@@ -803,7 +822,6 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     signature: '此邮件由 {{brand}} 通知中心自动发送 · {{time}}',
     fieldHeader: '项目', valueHeader: '内容',
     level: '级别', event: '事件', node: '节点', time: '时间', date: '日期',
-    eventName: '事件名称', nodeName: '所属节点', occurredAt: '发生时间', notifyCenter: '通知中心', levelB: '级别',
     dailyHeader: '📊 {{brand}} 日报', dailyHeaderFull: '📊 {{brand}} 每日报告', dataPeriod: '数据周期', generatedAt: '生成于',
     secOverview: '🌐 全局概览', secSecurity: '🛡 安全风险', secCert: '🔒 证书状态',
     secCluster: '🖥 服务状态', secIntegrations: '🔌 接入与任务', secAuth: '👤 用户认证',
@@ -823,7 +841,6 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     signature: 'Sent automatically by {{brand}} Notification Center · {{time}}',
     fieldHeader: 'Field', valueHeader: 'Value',
     level: 'Level', event: 'Event', node: 'Node', time: 'Time', date: 'Date',
-    eventName: 'Event', nodeName: 'Node', occurredAt: 'Occurred at', notifyCenter: 'Notification Center', levelB: 'Level',
     dailyHeader: '📊 {{brand}} Daily Report', dailyHeaderFull: '📊 {{brand}} Daily Report', dataPeriod: 'Data period', generatedAt: 'Generated at',
     secOverview: '🌐 Overview', secSecurity: '🛡 Security', secCert: '🔒 Certificates',
     secCluster: '🖥 Service Status', secIntegrations: '🔌 Integrations & Tasks', secAuth: '👤 User Authentication',
@@ -876,55 +893,17 @@ const defaultTplFor = (typ: string, lang: TplLang): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
     [[L.event, '{{event_title}}'], [L.node, '{{node}}'], [L.time, '{{time}}']],
     L.signature)
-  // QQ 事件预置（2026-11-22 定稿样稿逐字）：## 标题 / --- / **正文** / --- /
-  // * 加粗标签列表（级别去 ⚠️、冒号后留一空格）/ --- / 品牌引用页脚，无空行。
-  if (typ === 'qq') return [
-    `## 🔔 {{title}}`,
-    '---',
-    `**{{body}}**`,
-    '---',
-    `* **${L.levelB}**${L.colon} {{level}}`,
-    `* **${L.eventName}**${L.colon}{{event_title}}`,
-    `* **${L.nodeName}**${L.colon}{{node}}`,
-    `* **${L.occurredAt}**${L.colon}{{time}}`,
-    '---',
-    `> {{brand}} ${L.notifyCenter}`,
-  ].join('\n')
-  return [
-    '【{{title}}】（{{level}}）',
-    '────────────',
-    '{{body}}',
-    '────────────',
-    `${L.event}${L.colon}{{event_title}}`,
-    `${L.node}${L.colon}{{node}}`,
-    `${L.event}${L.colon}{{event_title}}`,
-    `${L.node}${L.colon}{{node}}`,
-    `${L.time}${L.colon}{{time}}`,
-    '—— {{brand}}',
-  ].join('\n')
+  // 事件缺省模板（QQ markdown / 微信纯文本）与后端 notify.defaultEventTemplate
+  // 同源：zh 逐字等价（跨栈夹具两端共读），en 为本地化版式——单源在
+  // utils/eventDefaultTemplates，不在本文件自写字符串（曾漂移）。
+  return defaultEventTpl(typ, lang)
 }
 const resetTplToDefault = (): void => {
   const ch = tplActiveChannel.value
   if (!ch) return
   tplText.value = tplMode.value === 'daily' ? defaultChannelTplFor(ch.type, tplLang.value) : defaultTplFor(ch.type, tplLang.value)
 }
-// 日报预览样例值（daily 模式预览；键集=契约日报 ID 全集+date，
-// top_ips/top_paths/cert_expiring 为多行文本列表样例）
-const dailySampleValues = {
-  date: '2026-11-18',
-  requests: '128340', allowed: '120111', logged: '7026', distinct_ips: '3204',
-  bandwidth: '1.2 GB', peak_qps: '340',
-  blocked: '1203', attack_top: 'SQLi × 321',
-  top_ips: '45.33.32.9 × 321\n1.2.3.4 × 120',
-  top_paths: '/login × 200\n/api × 150',
-  cc_triggered: '3', autoban: '17',
-  cert_status: 'OK', cert_expiring: 'a.com · 2026-11-25\nb.com · 2026-11-28',
-  cluster_status: '3/3', nodes_summary: 'slave-a：请求 22014 · 拦截 156 · 独立IP 402\nslave-b：请求 9821 · 拦截 12 · 独立IP 210', uptime: '32 天',
-  threat_db: 'CRS 4.0 · IP库 2026-11', app_version: 'v2.4.4',
-  api_calls: '1200', mcp_calls: '300',
-  task_status: '成功 12 / 失败 1', backup_status: '成功 7 / 失败 0',
-  login_status: '成功 40 / 失败 3 / MFA失败 1',
-}
+// 日报预览样例值见 utils/dailySamples（键集跨栈对表 DailyItemIDs）
 const previewText = computed(() => {
   let text = tplText.value
     .replace(/\{\{event_title\}\}/g, t('app.notification.rules.previewSampleTitle'))
@@ -936,7 +915,7 @@ const previewText = computed(() => {
     .replace(/\{\{time\}\}/g, '2026-11-18 09:00')
     .replace(/\{\{brand\}\}/g, 'Lazy Balancer')
   if (tplMode.value === 'daily' && tplActiveChannel.value?.type !== 'webhook') {
-    for (const [k, v] of Object.entries(dailySampleValues)) {
+    for (const [k, v] of dailySampleValues) {
       // QQ（markdown）多值变量展开语义表格（与实际投递同口径）；其余格式回退原始多行值
       const md = tplEditorLang.value === 'markdown' ? dailyMultiValueMd(k, v) : null
       // 表格前后留空行（与后端展开同口径）：粘连时解析器把相邻标签/表头吞成上一表数据行
@@ -1211,7 +1190,7 @@ const testDaily = async (): Promise<void> => {
 // ===== 日报模板（每通道格式/内容模板；基本配置已前移到摘要卡内联） =====
 const dailyFullChannels = ref<NotificationChannel[]>([])
 const dailyTplDrafts = ref<Record<number, string>>({})
-const savingTplChannelId = ref<number | null>(null)
+const savingDailyTpl = ref(false)
 
 // 机器人协议固定：QQ=Markdown、微信=纯文本（格式不可选，仅决定编辑高亮与预览样式）
 const isBotChannel = (typ: string): boolean => typ === 'qq' || typ === 'wx_clawbot'
@@ -1392,17 +1371,11 @@ const refreshDialogState = async (): Promise<void> => {
 // 日报渲染模式（显式二选一开关，2026-11-22 裁定）：'modules'=模块拼装（已存
 // 模板保留但不生效），'template'=自定义模板独占。初值=通道 style_config
 // daily_mode 显式值，缺省按存量推断（有正文模板键=template，与后端
-// DailyModuleModeEffective 同口径）。
-type DailyRenderMode = 'modules' | 'template'
+// DailyModuleModeEffective 同口径，单源 utils/channelStyle）。
 const dailyModes = ref<Record<string, DailyRenderMode>>({})
 const styleDailyModeFor = (ch: RuleChannel): DailyRenderMode => {
   const full = dailyFullChannels.value.find(c => c.id === ch.id)
-  let style: Record<string, unknown> = {}
-  try { style = JSON.parse(full?.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-  const explicit = style.daily_mode
-  if (explicit === 'modules' || explicit === 'template') return explicit
-  const tpl = style[channelBodyTplKey(ch.type)]
-  return typeof tpl === 'string' && tpl.trim() !== '' ? 'template' : 'modules'
+  return effectiveDailyMode(full?.style_config, ch.type)
 }
 const seedDailyModes = (): void => {
   const modes: Record<string, DailyRenderMode> = {}
@@ -1419,9 +1392,7 @@ const seedDailyTplDrafts = (): void => {
   const drafts: Record<number, string> = {}
   for (const ch of channelOptions.value) {
     const full = dailyFullChannels.value.find(c => c.id === ch.id)
-    let style: Record<string, unknown> = {}
-    try { style = JSON.parse(full?.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-    const tpl = style[channelBodyTplKey(ch.type)]
+    const tpl = parseStyleConfig(full?.style_config)[channelBodyTplKey(ch.type)]
     const saved = typeof tpl === 'string' ? tpl : ''
     drafts[ch.id] = saved || defaultChannelTplFor(ch.type, tplLang.value)
   }
@@ -1444,40 +1415,6 @@ const openDailyTpl = async (): Promise<void> => {
   tplDialogVisible.value = true
 }
 
-// 通道正文模板键位：机器人=content_template（事件+日报变量）、webhook=payload_template
-// （JSON 载荷）、email=body_template（正文；标题在通道传输配置）。
-const channelBodyTplKey = (typ: string): string => typ === 'webhook' ? 'payload_template' : typ === 'email' ? 'body_template' : 'content_template'
-
-// 正文模板保存：PUT 通道 style_config 为全量覆盖语义——回读既有键仅替换
-// 正文模板键（空模板=移除该键回退默认形态）；保存写库需确认。返回是否成功。
-const saveChannelBodyTemplate = async (ch: RuleChannel): Promise<boolean> => {
-  const full = dailyFullChannels.value.find(c => c.id === ch.id)
-  if (!full || savingTplChannelId.value !== null) return false
-  const draft = (dailyTplDrafts.value[ch.id] ?? '').trim()
-  if (isBotChannel(ch.type) && draft.length > 2000) { ElMessage.error(t('app.notification.daily.templateTooLong')); return false }
-  if (ch.type === 'email' && draft.length > 4000) { ElMessage.error(t('app.notification.daily.bodyTemplateTooLong')); return false }
-  try {
-    await ElMessageBox.confirm(t('app.notification.daily.saveTplConfirm', { name: ch.name }), t('app.notification.rules.confirmTitle'), { type: 'warning' })
-  } catch { return false }
-  savingTplChannelId.value = ch.id
-  try {
-    let style: Record<string, unknown> = {}
-    try { style = JSON.parse(full.style_config || '{}') as Record<string, unknown> } catch { style = {} }
-    const key = channelBodyTplKey(ch.type)
-    if (draft) style[key] = draft
-    else delete style[key]
-    // 渲染模式显式落库：模块拼装=模板键保留但不生效（后端按 daily_mode 决策）
-    style.daily_mode = dailyModes.value[String(ch.id)] ?? 'modules'
-    await request.put(`/notification/channels/${ch.id}`, { style_config: style })
-    full.style_config = JSON.stringify(style)
-    mfaAwareSuccess(t('app.notification.daily.templateSaved'))
-    return true
-  } catch (e) {
-    if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
-    return false
-  } finally { savingTplChannelId.value = null }
-}
-
 // 语言切换：载入该语言默认预设进全部通道编辑器（未保存编辑随之重置；保存即正文语言）
 const onTplLangChange = (v: string | number | boolean | undefined): void => {
   tplLang.value = v === 'en' ? 'en' : 'zh'
@@ -1492,19 +1429,59 @@ const onTplLangChange = (v: string | number | boolean | undefined): void => {
     tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
   }
 }
-// 通道模式保存：草稿回写日报草稿库后落通道配置；成功关闭弹框
-const saveChannelTplFromDialog = async (): Promise<void> => {
-  const ch = tplActiveChannel.value
-  if (!ch) return
-  dailyTplDrafts.value = { ...dailyTplDrafts.value, [ch.id]: tplTexts.value[String(ch.id)] ?? '' }
-  if (await saveChannelBodyTemplate(ch)) tplDialogVisible.value = false
+// daily 模式保存：遍历弹框内全部 tab 通道（rule 模式 saveTemplate 同口径的
+// 全量保存），逐通道算差异后只提交真正变化的通道——原实现只落当前 tab，
+// 其余 tab 的编辑与模式选择静默丢失。未编辑/与任一语言预置相同=不落库
+// （预置升级继续生效）。所有 PUT 成功（后端确认）后才提示并关闭弹框。
+const saveDailyTplFromDialog = async (): Promise<void> => {
+  if (savingDailyTpl.value) return
+  const plans: { ch: RuleChannel; style: Record<string, unknown> }[] = []
+  for (const ch of tplTabChannels.value) {
+    const full = dailyFullChannels.value.find(c => c.id === ch.id)
+    if (!full) continue
+    const draft = tplTexts.value[String(ch.id)] ?? ''
+    if (isBotChannel(ch.type) && draft.trim().length > 2000) { ElMessage.error(t('app.notification.daily.templateTooLong')); return }
+    if (ch.type === 'email' && draft.trim().length > 4000) { ElMessage.error(t('app.notification.daily.bodyTemplateTooLong')); return }
+    const plan = planDailyChannelStyle({
+      raw: full.style_config,
+      type: ch.type,
+      draft,
+      presets: [defaultChannelTplFor(ch.type, 'zh'), defaultChannelTplFor(ch.type, 'en')],
+      mode: dailyModes.value[String(ch.id)] ?? 'modules',
+    })
+    if (plan.changed) plans.push({ ch, style: plan.style })
+  }
+  if (!plans.length) { ElMessage.info(t('app.notification.daily.templateNoChanges')); return }
+  try {
+    await ElMessageBox.confirm(
+      t('app.notification.daily.saveTplConfirmAll', { count: plans.length }),
+      t('app.notification.rules.confirmTitle'), { type: 'warning' })
+  } catch { return }
+  savingDailyTpl.value = true
+  let saved = 0
+  try {
+    for (const { ch, style } of plans) {
+      await request.put(`/notification/channels/${ch.id}`, { style_config: style })
+      const full = dailyFullChannels.value.find(c => c.id === ch.id)
+      if (full) full.style_config = JSON.stringify(style)
+      dailyTplDrafts.value = { ...dailyTplDrafts.value, [ch.id]: (tplTexts.value[String(ch.id)] ?? '').trim() }
+      saved++
+    }
+    // 后端已确认全部 PUT：此时才提示成功并关闭（失败分支不呈现任何"已保存"）
+    mfaAwareSuccess(t('app.notification.daily.templateSavedAll', { count: saved }))
+    tplDialogVisible.value = false
+  } catch (e) {
+    if (saved > 0) ElMessage.warning(t('app.notification.daily.templateSavePartial', { saved, total: plans.length }))
+    else if (!(e instanceof ApiRequestError)) ElMessage.error(e instanceof Error ? e.message : t('common.app.api.requestFailed'))
+    // 部分保存/失败：弹框保持打开（未落库 tab 的编辑不得被关闭丢弃）
+  } finally { savingDailyTpl.value = false }
 }
 
 // 弹框底部保存入口（版式统一：两模式同按钮/同确认；仅写库数据源不同）
-const tplSaving = computed(() => tplMode.value === 'rule' ? savingTpl.value : savingTplChannelId.value !== null)
+const tplSaving = computed(() => tplMode.value === 'rule' ? savingTpl.value : savingDailyTpl.value)
 const saveTplDialog = (): void => {
   if (tplMode.value === 'rule') void saveTemplate()
-  else void saveChannelTplFromDialog()
+  else void saveDailyTplFromDialog()
 }
 
 const editTemplate = async (rule: Rule): Promise<void> => {
@@ -1573,8 +1550,14 @@ const testRule = async (rule: Rule): Promise<void> => {
 const dailyPreviewVisible = ref(false)
 const dailyPreviewText = ref('')
 const dailyPreviewFmt = ref('markdown')
-const tplPreviewHtml = computed(() => mdToHtml(previewText.value))
-const dailyPreviewHtml = computed(() => mdToHtml(dailyPreviewText.value))
+// 预览 Markdown 渲染防抖（与 useDebouncedHighlight 同思路）：模板编辑器每次
+// 键入都会触发 marked+DOMPurify 全文解析，同步 computed 下大模板（HTML 卡片/
+// 六段表格）在键入期反复整篇重解析造成卡顿。首帧立即渲染，其后按 160ms 停顿 /
+// 500ms 封顶落一次——预览是阅读面，短暂延迟不损失可读性。
+const tplPreviewHtml = shallowRef(mdToHtml(previewText.value))
+watchDebounced(previewText, (raw: string) => { tplPreviewHtml.value = mdToHtml(raw) }, { debounce: 160, maxWait: 500 })
+const dailyPreviewHtml = shallowRef(mdToHtml(dailyPreviewText.value))
+watchDebounced(dailyPreviewText, (raw: string) => { dailyPreviewHtml.value = mdToHtml(raw) }, { debounce: 160, maxWait: 500 })
 const dailyPreviewSource = ref('')
 const dailyPreviewLoading = ref(false)
 const dailyPreviewFmtLocked = ref(false) // 机器人预览格式随协议固定（隐藏切换器）
@@ -1665,8 +1648,6 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-channel-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
 .tpl-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.tpl-section-head .tpl-section-label { margin-bottom: 0; }
-.tpl-section-label { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
 .tpl-format-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .tpl-format-label { flex: none; font-size: 12px; color: #6b7280; }
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -1704,18 +1685,19 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-md-preview :deep(code) { background: var(--el-fill-color); padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .tpl-md-preview :deep(pre) { background: var(--el-fill-color); padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
 .tpl-md-preview :deep(pre code) { background: none; padding: 0; font-size: 12px; }
-.tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
-.rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
+/* HTML 预览 iframe（固定高度+不超 46vh；.daily-preview-body 内统一覆盖为撑满
+   容器）。模板弹框 300px、日报预览弹框 340px——单规则各持最终生效值。 */
+.tpl-html-preview { width: 100%; height: 300px; max-height: 46vh; border: 1px solid #e5e7eb; background: #fff; }
+.daily-html-preview { width: 100%; height: 340px; max-height: 46vh; border: 1px solid #e5e7eb; background: #fff; }
+/* 弹框体限高（scoped 形态；append-to-body 的实际生效规则见下方全局块同名类） */
+.rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
 .daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
 /* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
 .tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
 .tpl-preview-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; border-bottom: none; }
 .tpl-preview-collapse :deep(.el-collapse-item__wrap) { border-bottom: none; }
 .tpl-preview-collapse :deep(.el-collapse-item__content) { padding-bottom: 0; }
-.tpl-preview-mode { margin-bottom: 8px; }
 .scope-hint { font-size: 12px; color: #9ca3af; }
-.tpl-html-preview { width: 100%; height: 300px; border: 1px solid #e5e7eb; background: #fff; }
-.rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
 .daily-card { margin-bottom: 16px; }
 .daily-icon { color: #8b5cf6; }
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
@@ -1731,7 +1713,6 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .daily-warn-slot .info-note-bar { margin: 0; }
 /* 日报预览弹窗 */
 .daily-preview-toolbar { margin-bottom: 10px; }
-.daily-html-preview { width: 100%; height: 340px; border: 1px solid #e5e7eb; background: #fff; }
 /* 模板长度计数：右对齐贴编辑器；超限红字+info-note-bar 明示（保存侧同口径拦截） */
 .tpl-length-row { display: flex; justify-content: flex-end; margin-top: 4px; }
 .tpl-length-row .form-hint { margin-top: 0; font-variant-numeric: tabular-nums; }
@@ -1745,7 +1726,7 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-pick-group { display: flex; flex-wrap: wrap; gap: 8px; }
 .notif-pick-group .el-checkbox { margin-right: 0; margin-bottom: 0; }
 .notif-pick-group .el-checkbox.is-bordered { height: auto; min-height: 24px; padding: 2px 10px; margin: 0; }
-.notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { white-space: normal; line-height: 1.35; word-break: break-word; }
+.notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; white-space: normal; line-height: 1.35; word-break: break-word; }
 .notif-pick-panel { display: flex; flex-direction: column; gap: 12px; max-height: 380px; overflow-y: auto; padding-top: 2px; }
 .notif-pick-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
 .nd-pick-popper.el-popover { padding: 18px 16px 14px; box-sizing: border-box; }
@@ -1753,9 +1734,8 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-pick-group.notif-pick-sections { display: flex; flex-direction: column; gap: 14px; }
 .notif-level-section { display: flex; flex-direction: column; gap: 8px; }
 .notif-level-section + .notif-level-section { border-top: 1px dashed #eef2f7; padding-top: 12px; }
-.notif-level-head { font-size: 12px; font-weight: 600; color: #6b7280; line-height: 1.4; margin-bottom: 2px; }
+.notif-level-head { position: relative; padding-left: 12px; font-size: 12px; font-weight: 600; color: #6b7280; line-height: 1.4; margin-bottom: 2px; }
 .notif-level-items { display: flex; flex-wrap: wrap; gap: 8px; }
-.notif-level-head { position: relative; padding-left: 12px; }
 .notif-level-head::before { content: ''; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; background: var(--el-color-primary, #409eff); }
 .notif-level-section.is-critical .notif-level-head::before { background: var(--el-color-danger, #f56c6c); }
 .notif-level-section.is-warn .notif-level-head::before { background: var(--el-color-warning, #e6a23c); }
@@ -1763,10 +1743,10 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .rule-edit-dialog .el-dialog__body { max-height: calc(100vh - 300px); overflow-y: auto; overflow-x: hidden; }
 .daily-preview-dialog .el-dialog__body { max-height: calc(100vh - 280px); overflow-y: auto; overflow-x: hidden; }
 .daily-preview-body { height: 420px; max-height: 46vh; overflow-y: auto; overflow-x: hidden; border: 1px solid #eef2f7; }
+.daily-preview-note { margin: 8px 10px; }
 .daily-preview-body iframe { display: block; width: 100%; height: 100%; border: 0; }
 .daily-preview-body .daily-html-preview, .daily-preview-body .tpl-preview, .daily-preview-body .tpl-md-preview { height: 100%; max-height: none; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
-.notif-pick-group .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }
 .daily-items .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
 .daily-items .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }
 .notif-pick-group .el-checkbox.is-bordered.is-disabled { border-color: #e4e7ed; }

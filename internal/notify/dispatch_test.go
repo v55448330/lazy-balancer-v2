@@ -113,6 +113,22 @@ CREATE TABLE notification_delivery_channels (
 	error TEXT DEFAULT '',
 	duration_ms INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL
+);
+CREATE TABLE nodes (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name VARCHAR(100) NOT NULL,
+	mode VARCHAR(10) NOT NULL DEFAULT 'slave',
+	ip_address VARCHAR(45) NOT NULL,
+	port INTEGER DEFAULT 8000,
+	is_approved BOOLEAN DEFAULT FALSE,
+	status VARCHAR(20) DEFAULT 'offline'
+);
+CREATE TABLE cluster_node_daily_stats (
+	date TEXT NOT NULL,
+	node TEXT NOT NULL,
+	stats_json TEXT NOT NULL DEFAULT '{}',
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (date, node)
 );`)
 	if err != nil {
 		t.Fatal(err)

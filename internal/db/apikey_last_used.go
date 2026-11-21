@@ -69,8 +69,8 @@ func restoreDirtyAPIKeys(ids []int) {
 // 写入侧为 RFC3339 T 分隔（models.RevokedTokenTimeFormat），
 // datetime('now') 产出空格分隔——TEXT 逐字符比较下当日过期行永不满足
 // <=（'T' > ' '），延迟约 24h 才清理。strftime 对齐写入格式。
-func CleanupExpiredRevokedJTI(database *sql.DB) error {
-	_, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at<=strftime('%Y-%m-%dT%H:%M:%SZ','now')")
+func CleanupExpiredRevokedJTI(ctx context.Context, database *sql.DB) error {
+	_, err := database.ExecContext(ctx, "DELETE FROM revoked_jti WHERE expires_at<=strftime('%Y-%m-%dT%H:%M:%SZ','now')")
 	return err
 }
 
@@ -82,7 +82,7 @@ func CleanupAPIKeyAuxTables(ctx context.Context) error {
 	if database == nil {
 		return nil
 	}
-	if err := CleanupExpiredRevokedJTI(database); err != nil {
+	if err := CleanupExpiredRevokedJTI(ctx, database); err != nil {
 		return fmt.Errorf("cleanup revoked JWT IDs: %w", err)
 	}
 	if err := cleanupExpiredRegistrationSecrets(ctx, database); err != nil {

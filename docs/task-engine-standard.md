@@ -170,7 +170,7 @@ type Descriptor struct {
 | crawlerbot-update | `security_crawler_sources.next_update` 最早值（UTC） | `CrawlerUpdateManager.RunUpdate` 直达 |
 | auto-backup | `nextAutoBackupSlot()`（last_run 感知——漏跑追补/已跑步进） | `runAutoBackupScheduled` |
 | notification-daily-report | 每日 09:00 本地时间（错过跨点下一 tick 立即补发一次） | 渲染昨日摘要→Publish(daily_report)（发送全走投递 Daemon）；**RunsOn=MasterOnly**（通道/订阅/日报配置只在主节点） |
-| notification-node-stats-report | 每日 00:05 本地时间（次日零点后上报昨日块，早于默认日报槽） | 从节点采集本节点昨日统计块→POST 主节点 `/cluster/node-stats/report`（(date,node) upsert）；**RunsOn=SlaveOnly**，主节点日报「各节点摘要」数据源 |
+| notification-node-stats-report | 每日 00:05 本地时间（次日零点后上报昨日块，早于默认日报槽）；槽宽限 `[00:05, 00:06)`（覆盖 tick 抖动与首档失败重试，失败轮不推进槽由引擎退避重投） | 从节点采集本节点昨日统计块→POST 主节点 `/cluster/node-stats/report`（(date,node) upsert）；**RunsOn=SlaveOnly 且在默认 StartLoop 清单**（主节点由角色门拦停），主节点日报「各节点摘要」数据源 |
 
 到期检查全部移出 Run 体——引擎保证在排程槽调用，Run 只执行业务。
 
@@ -418,7 +418,20 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 | `Engine.Stats24h` | 任务视图走 `Engine.RunOverview` 批量聚合（同 SQL 单源） |
 | `Engine.Trigger` | 同步驱动测试；生产走异步入口 |
 | `Engine.IsRunning` | 诊断投影（`Run 存活 或 loopEnabled∧roleAllows`），**不得**用作「是否正在执行」判据——该语义用 `IsTaskInFlight` |
-| `RoleSlaveOnly` | 仅测试注册使用（生产 27 任务全集只有 RoleAny/RoleMasterOnly） |
+
+**角色门三值语义（生产同用，非测试专用）**：`RunsOn` 是执行面的唯一角色闸门，
+不设 `loopEnabled`——`StartLoop` 恒按默认清单置 `loopEnabled=true`，是否真正
+执行由 `roleAllows` 判定（主节点角色门拦 `RoleSlaveOnly`，从节点拦
+`RoleMasterOnly`，`RoleAny` 恒通过）。三值均有生产消费者：
+
+| RunsOn | 语义 | 生产消费者（示例） |
+|---|---|---|
+| `RoleAny` | 两角色均调度 | cluster-sync、通知投递 etc. |
+| `RoleMasterOnly` | 仅主节点调度（从节点空闲，调度开关仍为开） | notification-daily-report、qq/wx-bot-connection |
+| `RoleSlaveOnly` | 仅从节点调度（主节点空闲） | notification-node-stats-report（每日 00:05 上报昨日统计块） |
+
+新增 `RoleSlaveOnly` 任务同样必须进默认 `StartLoop` 清单（§6.2-2）——角色门只
+拦执行，不构成豁免；把它列进「默认关闭/测试豁免」会让从节点侧永不调度。
 
 ### 6.4 范围外形态登记（判据，不是豁免）
 

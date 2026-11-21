@@ -20,7 +20,7 @@ import (
 )
 
 // deliveryWakeCh 投递循环唤醒信号（非阻塞投递；循环未运行时信号弃置，
-// 15s tick 兜底）。
+// 10s tick 兜底）。
 var deliveryWakeCh = make(chan struct{}, 1)
 
 // ResendDelivery 把投递行重置回 pending 并唤醒投递循环。

@@ -70,10 +70,10 @@ func TestDeploymentFailedTruncatesMessage(t *testing.T) {
 	}
 }
 
-// 封顶形态的长错误详情：慢速重试说明必须完整保留（先按「上限-说明长度」
+// 封顶形态的长错误详情：终态说明必须完整保留（先按「上限-说明长度」
 // 预算截断 base 再追加）——「先追加后截断」会把终态说明整段截掉，UI 看不出
-// 任务已转入慢速重试。
-func TestDeploymentFailedTruncatesMessage_keepsSlowRetryNoteAtCap(t *testing.T) {
+// 任务已停止自动重试。
+func TestDeploymentFailedTruncatesMessage_keepsTerminalNoteAtCap(t *testing.T) {
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
 	// 计数器预置到上限前一次：本次失败即封顶（attempt=10/10）。
 	if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_attempts=? WHERE id=?", maxCertificateDeploymentAttempts-1, jobID); err != nil {
@@ -96,7 +96,7 @@ func TestDeploymentFailedTruncatesMessage_keepsSlowRetryNoteAtCap(t *testing.T) 
 	if len(message) > maxJobMessageBytes || !utf8.ValidString(message) {
 		t.Fatalf("cert_jobs.message len=%d valid=%v, want <=%d valid UTF-8", len(message), utf8.ValidString(message), maxJobMessageBytes)
 	}
-	if !strings.Contains(message, "慢速重试（磁盘/重载恢复后自动收敛）") {
-		t.Fatalf("封顶 message 丢失慢速重试说明（先追加后截断漂移）: %.120s...", message)
+	if !strings.Contains(message, "已停止自动重试（请在证书任务中手动重试）") {
+		t.Fatalf("封顶 message 丢失终态说明（先追加后截断漂移）: %.120s...", message)
 	}
 }

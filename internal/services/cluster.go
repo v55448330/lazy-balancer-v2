@@ -961,6 +961,9 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	promoted = true
 	// 角色生效面的进程内失效半边（与 BecomeSlave/对账器共用同一入口）。
 	s.applyRoleSideEffects()
+	// 升主清理从节点遗留的转发 spool：这些事件原本要交给旧主节点，升主后
+	// 收件面已失效（继续重传只会打到自身/旧地址）。
+	notify.DiscardClusterForwardSpool("升主")
 	// 角色翻转通知（提升事务已提交=翻转事实；标签=本机主机名）。
 	notify.Publish(notify.Event{Type: notify.EvtClusterRoleChanged,
 		Fields: map[string]string{"1": notify.LocalNodeName(), "2": "主节点"}})

@@ -47,7 +47,13 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	}
 	subject := msg.Title
 	if cfg.SubjectTemplate != "" {
-		subject = renderStyleTemplate(cfg.SubjectTemplate, msg, ts)
+		if msg.TemplateApplied {
+			// 事件模板已全量渲染：Body 是整篇正文，主题只能走窄渲染器
+			// （否则「[告警] {{title}}」被整篇 markdown 顶替，NOTIF154-P2-01）。
+			subject = renderSubjectTemplate(cfg.SubjectTemplate, msg, ts)
+		} else {
+			subject = renderStyleTemplate(cfg.SubjectTemplate, msg, ts)
+		}
 	}
 	body := msg.Body
 	if cfg.BodyTemplate != "" && !msg.TemplateApplied && !msg.dailyTemplatesSuppressed() {
@@ -75,6 +81,19 @@ func emailHTMLBody(bodyTemplate, bodyFormat string, msg Message) bool {
 		return false
 	}
 	if msg.EventType == EvtDailyReport {
+		// 模板模式（通道正文模板生效）：Content-Type 纳入 body_format——用户
+		// 显式声明 HTML 模板时必须 text/html（旧实现只看模块渲染格式，
+		// HTML 模板可能以 text/plain 发出，NOTIF154-P3-06）；显式 text 反向
+		// 收紧。模块拼装模式（模板被抑制）忽略 body_format，仍跟随实际渲染
+		// 格式 ContentFormat（未知按纯文本 fail-closed）。
+		if bodyTemplate != "" && !msg.dailyTemplatesSuppressed() {
+			if bodyFormat == "html" {
+				return true
+			}
+			if bodyFormat == "text" {
+				return false
+			}
+		}
 		return msg.ContentFormat == "html"
 	}
 	if bodyTemplate != "" {

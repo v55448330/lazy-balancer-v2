@@ -144,3 +144,67 @@ func TestTaskLogSizeFallbackUsesDBDefault(t *testing.T) {
 		t.Fatalf("任务日志尺寸回退=%d, want %d（须引用 db.DefaultTaskLogSizeMB）", got, want)
 	}
 }
+
+// 尺寸轮转必须覆盖外部 logrotate 产出的整文件压缩代（x.log.N.gz / .N.zst）：
+// 只移位裸 .N 会让压缩代绕过 keep 约束永久残留——每次外部压缩轮转都多一份
+// 孤儿归档，最旧的整个字节量级（task_log_size_mb）永不回收。
+func TestRotateTaskLogFileCoversCompressedGenerations(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "task.log")
+	writeFile := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("task.log", "current")
+	writeFile("task.log.1.gz", "gen1-gz")
+	writeFile("task.log.2.zst", "gen2-zst")
+
+	if err := rotateTaskLogFile(active, 2); err != nil {
+		t.Fatalf("轮转: %v", err)
+	}
+
+	if _, err := os.Stat(active + ".2.zst"); !os.IsNotExist(err) {
+		t.Fatalf("最旧压缩代 .2.zst 未被删除（keep=2 必须约束压缩代）: err=%v", err)
+	}
+	if _, err := os.Stat(active + ".1.gz"); !os.IsNotExist(err) {
+		t.Fatalf(".1.gz 未移位成 .2.gz（压缩后缀必须随代保留）: err=%v", err)
+	}
+	body, err := os.ReadFile(active + ".2.gz")
+	if err != nil {
+		t.Fatalf(".1.gz 未移位成 .2.gz: %v", err)
+	}
+	if string(body) != "gen1-gz" {
+		t.Fatalf(".2.gz 内容=%q, want gen1-gz（移位不得丢内容）", body)
+	}
+	if body, err := os.ReadFile(active + ".1"); err != nil || string(body) != "current" {
+		t.Fatalf("活动文件未移位成 .1（内容=%q, err=%v）", body, err)
+	}
+}
+
+// keep=1：所有历史代（含压缩变体）都必须被淘汰，活动文件独占 .1。
+func TestRotateTaskLogFileDropsCompressedGenerationsAtKeepOne(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "task.log")
+	for name, body := range map[string]string{
+		"task.log":       "current",
+		"task.log.1.gz":  "stale-gz",
+		"task.log.1.zst": "stale-zst",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rotateTaskLogFile(active, 1); err != nil {
+		t.Fatalf("轮转: %v", err)
+	}
+	for _, stale := range []string{active + ".1.gz", active + ".1.zst"} {
+		if _, err := os.Stat(stale); !os.IsNotExist(err) {
+			t.Fatalf("keep=1 未淘汰压缩代 %s: err=%v", filepath.Base(stale), err)
+		}
+	}
+	if body, err := os.ReadFile(active + ".1"); err != nil || string(body) != "current" {
+		t.Fatalf(".1 内容=%q, err=%v, want current", body, err)
+	}
+}

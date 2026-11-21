@@ -228,6 +228,8 @@ func reconcileTaskEngineRoleFor(te *taskengine.Engine) {
 	// 任务对齐 + 规则库首槽重装）；切从恢复拉取调度。
 	if roleMaster {
 		rebuildCrawlerSnapshotAfterPromote()
+		// 升主清理从节点遗留的转发 spool（与 Promote 同口径：旧主节点收件面失效）。
+		notify.DiscardClusterForwardSpool("角色对账升主")
 		applyPromoteTaskSideEffects()
 		return
 	}
@@ -1010,9 +1012,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	//   metrics-history-cleanup 属运行期族，在其装配处启动）
 	// - 常驻共 10 个，本清单启动 3 个（系统启动即运行；关闭调度=启动也不运行；
 	//   其余 7 个运行期常驻在 registerRuntimeLifecycleTasks 启动）
-	// - 定时 4 个启动排程（threat/crs/ip2region/auto-backup——EnabledFn/
-	//   NextSlotFn 内含开关判断；crawlerbot-update 不在本清单，调度由
-	//   SyncBusinessTaskDrivers 按业务开关对齐）
+	// - 定时 5 个启动排程（threat/crs/ip2region/auto-backup——EnabledFn/
+	//   NextSlotFn 内含开关判断；notification-node-stats-report——RunsOn=
+	//   SlaveOnly，主节点由角色门拦停，从节点必须默认开启上报；crawlerbot-update
+	//   不在本清单，调度由 SyncBusinessTaskDrivers 按业务开关对齐）
 	// 默认启动前先读偏好——显式停止的 daemon 必须在任何
 	// StartLoop 副作用（启动记录/首轮执行）之前跳过；否则先启动再 StopLoop
 	// 会留下假启动记录并可能实际跑一轮。
@@ -1043,6 +1046,8 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		// 通知中心（2026-11-18）：投递常驻/日报定时/QQ+微信长连出站
 		"notification-delivery", "notification-daily-report",
 		"qq-bot-connection", "wx-bot-connection", "notification-apikey-expiry",
+		// 从节点统计上报（RunsOn=SlaveOnly：主节点 roleAllows 拦停，从节点默认开启）
+		"notification-node-stats-report",
 	} {
 		if enabled, found := taskLoopPrefs[id]; found && !enabled {
 			continue

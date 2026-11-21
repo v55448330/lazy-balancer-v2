@@ -32,8 +32,10 @@ var (
 )
 
 // RecordBlockedEvent 安全事件摄取拦截分支调用：计数+首条立即告警+窗口 flush。
-// ruleName 为命中规则名（TOP 统计维度）。
-func RecordBlockedEvent(ruleName string, publish func(Event)) {
+// ruleName 为命中规则名（TOP 统计维度）。发布恒走包级 Publish（无发布器注入
+// 缝）——曾有的 publish 形参从未被使用，却让调用侧/测试误以为可以注入隔离的
+// 发布器（传 no-op 仍会真实发布）。需要隔离断言时以包级总线状态为准。
+func RecordBlockedEvent(ruleName string) {
 	blockedInitWheel.Do(func() {
 		blockedFlushCh = make(chan struct{})
 		go blockedFlushLoop()
@@ -85,6 +87,14 @@ func flushBlockedWindow() {
 	if w == nil || w.count == 0 {
 		return
 	}
+	Publish(blockedAggregateEvent(w))
+}
+
+// blockedAggregateEvent 汇总事件（纯函数，便于钉测文案）。窗口跨度用实际
+// time.Since(w.start)：全局 ticker 的相位与首个事件无关（窗口可能在 tick 前
+// 几秒才开启），固定写「5 分钟内」会把几秒的爆发夸大成 5 分钟持续攻击
+// （SEC154-P3-01）。
+func blockedAggregateEvent(w *blockedWindowState) Event {
 	level := LevelInfo
 	warnAt, criticalAt := BlockedThresholds()
 	if w.count >= criticalAt {
@@ -100,12 +110,30 @@ func flushBlockedWindow() {
 		}
 		topStr += fmt.Sprintf("%s×%d", r.name, r.count)
 	}
-	Publish(Event{
+	span := blockedSpanLabel(time.Since(w.start))
+	return Event{
 		Type: EvtBlockedAggregate, Level: level,
 		Title:  "拦截聚合",
-		Body:   fmt.Sprintf("%d 分钟内拦截 %d 次（TOP 规则：%s）", int(blockedWindow.Minutes()), w.count, topStr),
-		Fields: map[string]string{"1": fmt.Sprint(int(blockedWindow.Minutes())), "2": fmt.Sprint(w.count), "3": topStr},
-	})
+		Body:   fmt.Sprintf("%s内拦截 %d 次（TOP 规则：%s）", span, w.count, topStr),
+		Fields: map[string]string{"1": span, "2": fmt.Sprint(w.count), "3": topStr},
+	}
+}
+
+// blockedSpanLabel 聚合窗口实际跨度的可读文案（<1 分钟按秒，其余按分钟；
+// 非整分钟保留 1 位小数）。
+func blockedSpanLabel(span time.Duration) string {
+	if span < time.Minute {
+		s := int(span.Round(time.Second) / time.Second)
+		if s < 1 {
+			s = 1
+		}
+		return fmt.Sprintf("%d 秒", s)
+	}
+	rounded := span.Round(10 * time.Second)
+	if rounded%time.Minute == 0 {
+		return fmt.Sprintf("%d 分钟", int(rounded/time.Minute))
+	}
+	return fmt.Sprintf("%.1f 分钟", rounded.Minutes())
 }
 
 type ruleCount struct {

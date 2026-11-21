@@ -7,8 +7,10 @@
 // 但 QQ 把独立 --- 行按分隔线渲染（用户模板以 --- 分节）——解析前给分隔线
 // 行补空行隔断，保持与通道侧一致的分节语义。
 // 消毒：v-html 注入面（模板文本+样例值）经 DOMPurify 白名单过滤，事件
-// 属性与 javascript: 协议一律剥离。浏览器直用 window；Node 测试环境由
-// 测试先立 jsdom 窗口（见 tests/mdPreview.spec.ts 顺序约束注释）。
+// 属性与 javascript: 协议一律剥离；另禁 style 属性（内联 CSS 可做 UI 欺骗，
+// 如伪造「成功/失败」配色）与 img（远程图片是追踪面，预览只需文字与表格）。
+// 浏览器直用 window；Node 测试环境由测试先立 jsdom 窗口（见
+// tests/mdPreview.spec.ts 顺序约束注释）。
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -17,7 +19,7 @@ marked.setOptions({ gfm: true, breaks: true })
 export const mdToHtml = (md: string): string => {
   const normalized = md.replace(/^(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, m => `\n${m}`)
   const raw = marked.parse(normalized) as string
-  return DOMPurify.sanitize(raw) as string
+  return DOMPurify.sanitize(raw, { FORBID_ATTR: ['style'], FORBID_TAGS: ['img'] }) as string
 }
 
 
@@ -34,7 +36,7 @@ export const dailyMultiValueMd = (key: string, value: string): string | null => 
       const m = nodesSummaryRe.exec(ln)
       if (!m) return null
       const rest = m[5].trim()
-      rows.push([cell(m[1]), m[2], m[3], m[4], rest === '' ? '—' : rest.replace(/^·\s*/, '')])
+      rows.push([cell(m[1]), m[2], m[3], m[4], rest === '' ? '—' : cell(rest.replace(/^·\s*/, ''))])
     }
     return ['| 节点 | 请求 | 拦截 | 独立IP | 备注 |', '| --- | ---: | ---: | ---: | --- |',
       ...rows.map(r => `| ${r.join(' | ')} |`)].join('\n')

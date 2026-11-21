@@ -70,6 +70,9 @@ test('通道卡 REST 契约：卡片网格+测试/启停/删除+样式编辑', (
   assert.match(text, /class="ch-icon/, '卡片必须有类型彩色图标')
   // 消息样式编辑（style_config 全量覆盖；键白名单与后端一致）
   assert.match(text, /style_config: buildStyleConfig\(\)/, '编辑保存必须提交样式')
+  // 全量覆盖语义下未知键（daily_mode 等）必须原样带回：表单重建不得抹掉
+  assert.match(text, /channelStyleExtras\(ch\.style_config\)/, '未知键必须在打开编辑时进 extras')
+  assert.match(text, /buildChannelStyleConfig\(drawerForm\.value\.type, styleForm\.value, headers, styleExtras\.value\)/, '保存体必须合并 extras（daily_mode 不被抹掉）')
   assert.match(text, /ElMessageBox\.confirm/, '删除必须走站内确认框（非 window.confirm）')
 })
 
@@ -258,7 +261,19 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.match(nc, /t\('app\.notification\.daily\.renderMode'\)/, '渲染模式行必须在弹窗')
   assert.match(nc, /value="modules"/, '模块拼装选项必须在位')
   assert.match(nc, /value="template"/, '自定义模板选项必须在位')
-  assert.match(nc, /style\.daily_mode = dailyModes\.value\[String\(ch\.id\)\] \?\? 'modules'/, '保存必须落 daily_mode（缺省 modules）')
+  // 保存链路：逐通道算计划（模式来自弹框选择，缺省 modules），只提交有差异的
+  // 通道；全部 PUT 成功后才提示成功（后端确认后提示词）。
+  const saveBlock = nc.slice(nc.indexOf('const saveDailyTplFromDialog'), nc.indexOf('const tplSaving'))
+  assert.match(saveBlock, /mode: dailyModes\.value\[String\(ch\.id\)\] \?\? 'modules'/, '保存必须落 daily_mode（缺省 modules）')
+  assert.match(saveBlock, /for \(const ch of tplTabChannels\.value\)/, '多 tab 全量保存=遍历全部通道（rule 模式同口径）')
+  assert.match(saveBlock, /if \(plan\.changed\) plans\.push/, '只提交真正变化的通道')
+  assert.match(saveBlock, /await request\.put\(`\/notification\/channels\/\$\{ch\.id\}`, \{ style_config: style \}\)/, 'style_config 全量覆盖（plan 已带回未知键）')
+  assert.ok(saveBlock.indexOf('mfaAwareSuccess') > saveBlock.indexOf('await request.put'), '成功提示必须在后端确认（PUT 完成）之后')
+  assert.match(saveBlock, /full\.style_config = JSON\.stringify\(style\)/, '保存成功后本地状态必须回写（重开弹框/后续计划读到新样式）')
+  assert.doesNotMatch(nc, /savingTplChannelId/, '单 tab 保存态已退役')
+  assert.match(nc, /templateInactiveHint/, '内置模板模式提示词必须与开关一致')
+  assert.match(nc, /previewBuiltinNote/, '日报预览必须说明内置模板口径')
+  assert.match(nc, /const moduleLabel = \(mod: \{ id: string; label: string \}\)/, '模块名必须经词条映射（缺键回落后端 label）')
   assert.match(nc, /:readonly="tplMode === 'daily' && tplDailyMode === 'modules'"/, '模块拼装模式编辑器必须只读')
   assert.match(nc, /modeModulesPreviewHint/, '模块拼装预览提示必须在位')
   assert.match(nc, /seedDailyModes/, '弹窗打开必须按存量/显式值播种渲染模式')
@@ -291,4 +306,49 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   // v-html 子元素无组件 data-v 属性——scoped 后代选择器（.tpl-md-preview <el>）永不匹配，
   // 样式静默失效（2026-11-22 三轮「预览无变化」根因）。后代样式必须 :deep。
   assert.ok(!/\.tpl-md-preview (h[1-6]|p|ul|ol|li|table|th|td|blockquote|code|pre|hr|a|em|strong|tbody)[^{]*\{/.test(nc), '预览 v-html 后代样式必须 :deep（scoped 直写永不匹配）')
+})
+
+// 全源码接线钉（TQ154-P3-01 补齐）：此前 spec 只按主题分块抽断言，REST 端点
+// 与渲染管线存在「漏钉」区（趋势/总览/日报测试/日报预览/规则写端点只在函数名
+// 断言里被间接覆盖，端点改名/路径漂移无人发现）。本用例把 NotificationCenter
+// 的**全部** request.* 消费面与预览渲染管线逐条钉住，新增断点必须同步登记。
+test('通知中心全源码接线：REST 端点全量 + 预览防抖 + 模板单源', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  // 概览三维/趋势/总览：三条只读端点
+  assert.match(nc, /request\.get<[^>]*>\('\/notification\/delivery-stats'/, '投递分布端点')
+  assert.match(nc, /request\.get<[^>]*>\('\/notification\/delivery-trend'/, '投递趋势端点')
+  assert.match(nc, /request\.get<[^>]*>\('\/notification\/admin\/overview'/, '全平台总览端点')
+  // 规则/通道读写：列表 + 每规则 POST（ruleWriteUrl）+ 通道 PUT
+  assert.match(nc, /const rulesUrl = isAdmin\.value && rulesUserId\.value > 0 \? `\/notification\/rules\?user_id=\$\{rulesUserId\.value\}` : '\/notification\/rules'/, '规则端点与用户筛选参数')
+  assert.match(nc, /const ruleWriteUrl = \(ruleId: string\): string =>/, '规则写端点单源（含用户筛选参数）')
+  assert.match(nc, /request\.post\(ruleWriteUrl\(/, '规则部分更新必须走 ruleWriteUrl')
+  // 日报测试/预览
+  assert.match(nc, /request\.post\('\/notification\/daily\/test'/, '日报测试发送端点')
+  assert.match(nc, /request\.post<[^>]*>\('\/notification\/daily\/preview'/, '日报预览端点')
+  // 通道样式保存（每日摘要弹框的多 tab 保存路径）
+  assert.match(nc, /request\.put\(`\/notification\/channels\/\$\{ch\.id\}`, \{ style_config: style \}\)/, '通道样式保存端点')
+  // 预览渲染管线：marked+DOMPurify 全文解析必须防抖（同步 computed 会逐键重解析）
+  assert.match(nc, /const tplPreviewHtml = shallowRef\(mdToHtml\(previewText\.value\)\)/, '模板预览首帧立即渲染')
+  assert.match(nc, /watchDebounced\(previewText, \(raw: string\) => \{ tplPreviewHtml\.value = mdToHtml\(raw\) \}/, '模板预览必须防抖')
+  assert.match(nc, /watchDebounced\(dailyPreviewText, \(raw: string\) => \{ dailyPreviewHtml\.value = mdToHtml\(raw\) \}/, '日报预览必须防抖')
+  assert.ok(!/const tplPreviewHtml = computed\(/.test(nc), '预览渲染不得回退同步 computed')
+  // 事件缺省模板单源：SFC 不自写字符串（zh 逐字等价由跨栈夹具 + utils 钉）
+  assert.match(nc, /return defaultEventTpl\(typ, lang\)/, '事件缺省模板必须委托 utils/eventDefaultTemplates')
+  assert.ok(!nc.includes('levelB'), '事件标签词已收敛到事件模板单源（SFC 残留即双源）')
+})
+
+// 样式块去重与死类清理（PRES154-P3-01/02）：同一选择器重复声明曾让后出现的
+// 值静默覆盖前一处（预览高度 360→300、弹框体 240→100dvh），无人知道最终值。
+test('通知中心样式块：同选择器单声明 + 死类清零', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  const declCount = (selector: RegExp): number => (nc.match(selector) || []).length
+  assert.equal(declCount(/\.tpl-html-preview \{/g), 1, '.tpl-html-preview 只允许一条声明')
+  assert.equal(declCount(/\.daily-html-preview \{/g), 1, '.daily-html-preview 只允许一条声明')
+  assert.equal(declCount(/\.rule-edit-dialog :deep\(\.el-dialog__body\) \{/g), 1, '模板弹框体只允许一条 scoped 声明')
+  assert.equal(declCount(/\.daily-preview-dialog :deep\(\.el-dialog__body\) \{/g), 1, '日报预览弹框体只允许一条 scoped 声明')
+  assert.equal(declCount(/\.notif-level-head \{/g), 1, '级别段标题只允许一条声明')
+  assert.equal(declCount(/\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__label \{/g), 1, 'bordered 标签只允许一条声明')
+  // 死类：模板从未使用（tpl-section-head 仍在用，仅其子标签类残留）
+  assert.ok(!/tpl-section-label/.test(nc), '死类 .tpl-section-label 必须清零')
+  assert.ok(!/tpl-preview-mode/.test(nc), '死类 .tpl-preview-mode 必须清零')
 })

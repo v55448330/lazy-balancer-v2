@@ -1,66 +1,78 @@
 package handlers
 
 import (
-	"encoding/json"
+	"database/sql"
+	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
+	"lazy-balancer-v2/internal/services"
 )
 
-// clusterNodeStatsRetentionDays 节点统计保留天数（主节点本地表，日报只读当日）。
-const clusterNodeStatsRetentionDays = 30
-
 // HandleClusterNodeStatsReport 机器接口：从节点日报统计上报（2026-11-22
-// 主节点集中汇聚）。节点名以认证中间件注入的 nodes.name 为准（防伪造），
-// (date,node) 主键 upsert——同日重报覆盖（槽点重试被批准自愈）。
+// 主节点集中汇聚）。节点身份以认证中间件注入的 nodes.id 为准（防伪造）；
+// 归属键=「从节点 name(ip:port)」（与事件侧 SlaveNodeLabel 同形）——
+// 裸 nodes.name 无 UNIQUE，同名节点会互相覆盖。同日重报 upsert 覆盖
+// （槽点重试被批准自愈）。
 func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportBodyLimitBytes)
 	var stats notify.ClusterNodeStats
 	if err := c.ShouldBindJSON(&stats); err != nil {
 		// 直写豁免：集群机器接口，消费方为从节点重试逻辑（无用户语言面）。
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "统计载荷无效"})
 		return
 	}
-	if _, err := time.Parse("2006-01-02", stats.Date); err != nil {
+	date, err := time.Parse("2006-01-02", stats.Date)
+	if err != nil {
 		// 直写豁免：集群机器接口（同上）。
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "统计日期格式无效（YYYY-MM-DD）"})
 		return
 	}
-	nodeName := ""
-	nodeLabel := ""
-	if v, ok := c.Get("cluster_node_id"); ok {
-		if nodeID, ok := v.(int); ok {
-			var ip string
-			var port int
-			_ = db.DB.QueryRow(`SELECT COALESCE(name,''), COALESCE(ip_address,''), COALESCE(port,0) FROM nodes WHERE id=?`, nodeID).Scan(&nodeName, &ip, &port)
-			nodeLabel = notify.SlaveNodeLabel(nodeName, ip, port)
-		}
-	}
-	if nodeName == "" {
-		// 直写豁免：集群机器接口（同上）。
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "上报者节点未登记"})
+	// 降级主节点残留 nodes 行时旧从节点照常上报会让统计错挂主节点簿记；
+	// 与同族机器端点（节点上报）同一 requireMaster 门。
+	if !h.requireMaster(c) {
 		return
 	}
-	raw, err := json.Marshal(stats)
+	// 统计窗口 [今日-2, 今日]（配置时区）：槽点上报昨日块，留两日迟到重试
+	// 余量；未来日期与更早日期直接 400——否则未来行永不被保留窗口清理
+	//（只删旧行），成为永久脏数据。
+	if !clusterNodeStatsDateInWindow(date) {
+		// 直写豁免：集群机器接口（同上）。
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "统计日期超出允许窗口（今日-2 至今日）"})
+		return
+	}
+	nodeID := c.GetInt("cluster_node_id")
+	nodeName, _, err := h.clusterService.RecordNodeDailyStats(c.Request.Context(), nodeID, stats)
 	if err != nil {
-		// 直写豁免：集群机器接口（同上）。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计序列化失败"})
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// 直写豁免：集群机器接口（同上）。
+			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "上报者节点未登记"})
+		case errors.Is(err, services.ErrNotMasterNode):
+			clusterMasterForbidden(c, err)
+		default:
+			clusterError(c, http.StatusInternalServerError, "统计落库失败", err)
+		}
 		return
 	}
-	if _, err := db.DB.Exec(`INSERT INTO cluster_node_daily_stats (date,node,stats_json,updated_at) VALUES (?,?,?,datetime('now'))
-		ON CONFLICT(date,node) DO UPDATE SET stats_json=excluded.stats_json, updated_at=excluded.updated_at`,
-		stats.Date, nodeName, string(raw)); err != nil {
-		// 直写豁免：集群机器接口（同上）。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计落库失败"})
-		return
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"node": nodeName, "date": stats.Date}})
+}
+
+// clusterReportBodyLimitBytes 两上报端点的请求体上限。
+const clusterReportBodyLimitBytes int64 = 128 << 10
+
+// clusterNodeStatsDateInWindow 校验上报日期落在 [今日-2, 今日]（配置时区）。
+func clusterNodeStatsDateInWindow(date time.Time) bool {
+	loc := services.CurrentLocation()
+	if loc == nil {
+		loc = time.Local
 	}
-	// 保留窗口裁剪（每次上报顺带清理，幂等）
-	_, _ = db.DB.Exec(`DELETE FROM cluster_node_daily_stats WHERE date < date('now',?)`,
-		"-"+strconv.Itoa(clusterNodeStatsRetentionDays)+" days")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"node": nodeLabel, "date": stats.Date}})
+	now := time.Now().In(loc)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	day := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	return !day.Before(today.AddDate(0, 0, -2)) && !day.After(today)
 }

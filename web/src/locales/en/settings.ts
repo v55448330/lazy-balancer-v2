@@ -531,12 +531,18 @@ export default {
         "schedule": {
           "masterOnlyTip": "Master only: standby nodes do not schedule this task; its schedule switch is available on the master only",
           "masterOnlyTag": "Master only",
+          "slaveOnlyTip": "Slave only: the master does not schedule this task; its schedule switch is available on slave nodes only",
+          "slaveOnlyTag": "Slave only",
+          "roleUnknownTag": "Role unknown",
+          "roleUnknownTip": "This node's role is not determined yet: the schedule switch is hidden to avoid misreading",
           "certWakeHint": "Wakes automatically when a certificate job is queued",
           "businessDriven": "Controlled by automatic updates on the business page",
           "toggle": "Stop/resume scheduling",
           "stoppedTag": "Descheduled",
           "oneshotTip": "Trigger-type tasks cannot be scheduled — they run only on manual/code triggers",
           "masterOnlyEffect": "Effective on master only",
+          "slaveOnlyEffect": "Effective on slave only",
+          "roleUnknownEffect": "Role not determined",
           "notSchedulable": "Not schedulable",
           "on": "On",
           "off": "Off"
@@ -549,6 +555,8 @@ export default {
           "cadence": "Cadence",
           "roleApplicability": "Role applicability",
           "masterOnlyRun": "Runs on master only (not scheduled here)",
+          "slaveOnlyRun": "Runs on slave only (not scheduled here)",
+          "roleUnknownRun": "Role not determined (not scheduled here)",
           "nodeRunnable": "Can run on this node",
           "scheduleSwitch": "Schedule switch",
           "scheduleSwitchTip": "Engine dispatch switch (same source as the \"Schedule\" column)",
@@ -770,7 +778,7 @@ export default {
           "import": "Import",
           "restart": "Restart service",
           "restartBtn": "Restart",
-          "backupNote": "Backups include all config, rules, users, keys and certificate jobs (with credentials and private keys — store encrypted); importing overwrites the current config, master node only"
+          "backupNote": "Backups include all config, rules, users, keys and certificate jobs (with credentials and private keys — store encrypted); notification-center configuration (channels/subscriptions/credentials) is NOT included; importing overwrites the current config, master node only"
         },
         "update": {
           "title": "New version available",
@@ -827,7 +835,7 @@ export default {
           "subtitle": "Choose the config sections to export",
           "noneBtn": "Select none",
           "allBtn": "Select all",
-          "packageNote": "Exports a .lbbak backup package (with \"Security protections\" checked it includes CRS/IP2Region rule-set files; with \"Node topology\" it includes standby lists, site coordinates and node token hashes); contains credentials and certificate material — store encrypted",
+          "packageNote": "Exports a .lbbak backup package (with \"Security protections\" checked it includes CRS/IP2Region rule-set files; with \"Node topology\" it includes standby lists, site coordinates and node token hashes); contains credentials and certificate material — store encrypted; notification-center configuration (channels/subscriptions/credentials) is NOT included",
           "confirmExport": "Confirm export",
           "confirmExportN": "Confirm export ({count}/{total})",
           "done": "Configuration backup exported"

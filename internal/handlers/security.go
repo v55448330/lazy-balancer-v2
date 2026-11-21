@@ -1274,6 +1274,11 @@ func (h *Handlers) ApplyDefaultPolicies(c *gin.Context) {
 	applyErr := h.caddyService.GenerateAndApplyConfigForceInLock() // 已持 caddyOpMu——InLock 变体防重入死锁
 	h.recordCaddyApplyResult(applyErr)
 	if applyErr != nil {
+		// DB 已提交（默认策略行已落库）、运行配置未生效——与 finishTxApply
+		// 退化提交分支同口径：事件随「已保存」事实发布（此前只发成功分支）。
+		for _, evt := range defaultApplyNotifyEvents(c.GetString("username"), items, req.Reset) {
+			notifyPublish(evt)
+		}
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_7d87740a", services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_7d87740a", Data: items})
 		return
 	}

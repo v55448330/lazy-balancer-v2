@@ -37,6 +37,7 @@ func TestHandlers_nilConfigReturnsZeroValueResponses(t *testing.T) {
 		{name: "connections list", method: http.MethodGet, path: "/connections", handler: h.GetConnectionsList},
 		{name: "caddy status", method: http.MethodGet, path: "/caddy/status", handler: h.GetCaddyStatus},
 		{name: "caddy config", method: http.MethodGet, path: "/caddy/config", handler: h.GetCaddyConfig},
+		{name: "human verify stats", method: http.MethodGet, path: "/security/human/stats", handler: h.GetHumanVerifyStats},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

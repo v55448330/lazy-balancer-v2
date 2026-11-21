@@ -8,6 +8,7 @@ package handlers
 // 破坏复用），非「修复前必然红」的回归——共享客户端收敛的是客户端单源形态。
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -46,5 +47,34 @@ func TestHumanAdminProxy_reusesConnectionAcrossPolls(t *testing.T) {
 	}
 	if got := conns.Load(); got != 1 {
 		t.Fatalf("3 次轮询新建 TCP 连接=%d, want 1（共享客户端连接池复用）", got)
+	}
+}
+
+// 上游非 200（旧二进制无该端点/Caddy admin 故障）保持容错契约：返回零值
+// 200（面板总览不阻塞），但后端必须留痕（见 human_stats.go warn 日志）。
+func TestGetHumanVerifyStats_non200ReturnsZeroValue(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(admin.Close)
+
+	gin.SetMode(gin.TestMode)
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: admin.URL}}
+	router := gin.New()
+	router.GET("/security/human/stats", h.GetHumanVerifyStats)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/security/human/stats", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 零值", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if got, _ := envelope.Data["challenges"].(float64); got != 0 {
+		t.Fatalf("challenges=%v，want 0（非 200 按零值降级）", envelope.Data["challenges"])
 	}
 }

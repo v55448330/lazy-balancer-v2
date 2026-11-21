@@ -1,0 +1,57 @@
+[
+  {
+    "key": "top_ips",
+    "value": "45.33.32.9 ×321\n1.2.3.4 ×120",
+    "expected": "| 攻击源 IP | 次数 |\n| --- | ---: |\n| 45.33.32.9 | 321 |\n| 1.2.3.4 | 120 |"
+  },
+  {
+    "key": "top_ips",
+    "value": "45.33.32.9 × 321",
+    "expected": "| 攻击源 IP | 次数 |\n| --- | ---: |\n| 45.33.32.9 | 321 |"
+  },
+  {
+    "key": "top_ips",
+    "value": "a|b ×5",
+    "expected": "| 攻击源 IP | 次数 |\n| --- | ---: |\n| a｜b | 5 |"
+  },
+  {
+    "key": "top_paths",
+    "value": "/login ×200\n/api ×150",
+    "expected": "| 攻击路径 | 次数 |\n| --- | ---: |\n| /login | 200 |\n| /api | 150 |"
+  },
+  {
+    "key": "cert_expiring",
+    "value": "a.com · 2026-11-25\nb.com · 2026-11-28",
+    "expected": "| 域名 | 到期日 |\n| --- | ---: |\n| a.com | 2026-11-25 |\n| b.com | 2026-11-28 |"
+  },
+  {
+    "key": "nodes_summary",
+    "value": "slave-a：请求 22014 · 拦截 156 · 独立IP 402",
+    "expected": "| 节点 | 请求 | 拦截 | 独立IP | 备注 |\n| --- | ---: | ---: | ---: | --- |\n| slave-a | 22014 | 156 | 402 | — |"
+  },
+  {
+    "key": "nodes_summary",
+    "value": "slave-b：请求 9821 · 拦截 12 · 独立IP 210 · TOP 规则 SQLi",
+    "expected": "| 节点 | 请求 | 拦截 | 独立IP | 备注 |\n| --- | ---: | ---: | ---: | --- |\n| slave-b | 9821 | 12 | 210 | TOP 规则 SQLi |"
+  },
+  {
+    "key": "nodes_summary",
+    "value": "n1：请求 1 · 拦截 2 · 独立IP 3 · a|b",
+    "expected": "| 节点 | 请求 | 拦截 | 独立IP | 备注 |\n| --- | ---: | ---: | ---: | --- |\n| n1 | 1 | 2 | 3 | a｜b |"
+  },
+  {
+    "key": "top_ips",
+    "value": "bad-line",
+    "expected": null
+  },
+  {
+    "key": "nodes_summary",
+    "value": "bad：数据损坏",
+    "expected": null
+  },
+  {
+    "key": "requests",
+    "value": "1200",
+    "expected": null
+  }
+]

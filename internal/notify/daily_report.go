@@ -282,12 +282,13 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 	return rendered, nil
 }
 
-// dailySlotDue 定时路径判定：该用户当日 send_time 槽已到期且在宽限窗内，
-// 且本槽尚未投递过（同槽重入/重复 tick 不重复发）。send_time 非法按 09:00
-// 兜底（与 GetDailyConfig 默认槽一致；AllDailySendTimes 会跳过非法槽）。
+// dailySlotDue 定时路径判定：该用户 send_time 槽已到期且在宽限窗内，
+// 且本槽尚未投递过（同槽重入/重复 tick 不重复发）。槽语义与排程侧
+// （services.dailyReportSlotAt）共用 DailySlotCandidate 单源——23:5x 槽的
+// 宽限窗跨零点时，排程按昨日槽触发，投递侧也必须认昨日槽（NOTIF154-P3-01）。
 func dailySlotDue(userID int64, cfg DailyConfig, now time.Time, loc *time.Location) bool {
-	slot := dailySlotAt(now, cfg.SendTime, loc)
-	if now.Before(slot) || now.Sub(slot) > DailySlotGrace {
+	slot, ok := DailySlotCandidate(now, cfg.SendTime, loc)
+	if !ok {
 		return false
 	}
 	var n int
@@ -299,6 +300,35 @@ func dailySlotDue(userID int64, cfg DailyConfig, now time.Time, loc *time.Locati
 		return true
 	}
 	return n == 0
+}
+
+// DailySlotCandidate 用户 send_time 在 now 时刻的「到期槽」与是否到期：
+// 槽 ≤ now 且落在 DailySlotGrace 宽限内，含昨日同一时刻（宽限窗跨零点）。
+// 排程侧（services.dailyReportSlotAt）与投递侧（dailySlotDue）共用本单源，
+// 两处判定不允许各自实现（23:58 槽在次日 00:02 排程触发而投递侧按今日
+// 23:58 判未到期 → 0 投递 + 宽限窗内重复空跑，NOTIF154-P3-01）。
+func DailySlotCandidate(now time.Time, sendTime string, loc *time.Location) (time.Time, bool) {
+	if loc == nil {
+		loc = time.Local
+	}
+	today := dailySlotAt(now, sendTime, loc)
+	// 昨日同刻先查：跨零点宽限窗内最多只有一个候选在窗内。
+	if prev := today.AddDate(0, 0, -1); !prev.After(now) && now.Sub(prev) <= DailySlotGrace {
+		return prev, true
+	}
+	if !today.After(now) && now.Sub(today) <= DailySlotGrace {
+		return today, true
+	}
+	return time.Time{}, false
+}
+
+// DailySlotAt 当日 send_time 槽时刻（配置时区；非法 send_time 按 09:00
+// 兜底，与 DailySlotCandidate 同源）。排程侧推算「下一个未来槽」用。
+func DailySlotAt(now time.Time, sendTime string, loc *time.Location) time.Time {
+	if loc == nil {
+		loc = time.Local
+	}
+	return dailySlotAt(now, sendTime, loc)
 }
 
 // dailySlotAt 当日 send_time 槽时刻（配置时区）。
@@ -477,31 +507,49 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='failed'`, u0, u1).Scan(&d.BackupFailed)
 	// 用户认证：昨日（日期标签同源）登录成功/失败/MFA 失败（Publish 累加）。
 	d.LoginOK, d.LoginFailed, d.MFAFailed = readAuthCounters(d.Date)
-	// 集群从节点昨日统计（2026-11-22 主节点集中汇聚；声明了集群且上报过的
-	// 节点逐行列出，未上报标「未上报」——数据缺失可见，不静默).
+	// 集群从节点昨日统计（2026-11-22 主节点集中汇聚；已批准从节点逐行列出，
+	// 当日未上报的标「未上报」——数据缺失可见，不静默).
 	d.NodesSummary = collectNodesSummary(ctx, d.Date)
 	return d, nil
 }
 
 // collectNodesSummary 主节点本地表聚合各从节点昨日统计摘要（多行文本）。
-// 无节点行（单机/未声明集群）返回空串=该行整项在渲染层省略。
+// nodes 表左连当日统计：已批准从节点逐行列出，当日未上报的标「未上报」
+// （数据缺失可见，不静默）；单机/未声明集群（无已批准从节点行）返回空串=
+// 该行整项在渲染层省略。孤儿统计行（节点已删除/未批准）不渲染——nodes 是
+// 集群声明的唯一事实源。查询失败返回可见降级文案并留痕，不伪装成「无节点」。
 func collectNodesSummary(ctx context.Context, date string) string {
 	if db.DB == nil {
 		return ""
 	}
-	rows, err := db.DB.QueryContext(ctx, `SELECT node, stats_json FROM cluster_node_daily_stats WHERE date=? ORDER BY node`, date)
+	rows, err := db.DB.QueryContext(ctx, `SELECT n.name, s.stats_json
+		FROM nodes n
+		LEFT JOIN cluster_node_daily_stats s ON s.node = n.name AND s.date = ?
+		WHERE COALESCE(n.mode,'slave')='slave' AND COALESCE(n.is_approved,0)=1
+		ORDER BY n.name`, date)
 	if err != nil {
-		return ""
+		taskLogWarn(ctx, "daily", "各节点统计查询失败（date=%s）: %v", date, err)
+		return "节点统计读取失败（详见任务日志）"
 	}
 	defer rows.Close()
 	var lines []string
+	seen := map[string]bool{}
 	for rows.Next() {
-		var node, raw string
+		var node string
+		var raw sql.NullString
 		if err := rows.Scan(&node, &raw); err != nil {
 			continue
 		}
+		if seen[node] {
+			continue // 节点名无 UNIQUE 约束；同名行只报一次
+		}
+		seen[node] = true
+		if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+			lines = append(lines, node+"：未上报")
+			continue
+		}
 		var st ClusterNodeStats
-		if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		if err := json.Unmarshal([]byte(raw.String), &st); err != nil {
 			lines = append(lines, fmt.Sprintf("%s：数据损坏", node))
 			continue
 		}
@@ -516,6 +564,10 @@ func collectNodesSummary(ctx context.Context, date string) string {
 			line += fmt.Sprintf(" · 自动封禁 %d", st.Autobans)
 		}
 		lines = append(lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		taskLogWarn(ctx, "daily", "各节点统计读取中断（date=%s）: %v", date, err)
+		return "节点统计读取失败（详见任务日志）"
 	}
 	if len(lines) == 0 {
 		return ""
@@ -727,7 +779,10 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 	case "json":
 		obj := map[string]any{"date": date, "brand": brand, "generated_at": now}
 		for _, it := range DailyItemIDs {
-			if enabled[it] {
+			// 空值整项省略（与 html/markdown/text 的 secRows 同口径）：
+			// nodes_summary 单机恒空、top_ips 无攻击时为空——渲染空键会让
+			// 接收端误以为「有该项目但值为空」。
+			if enabled[it] && val(it) != "" {
 				obj[it] = val(it)
 			}
 		}
@@ -790,11 +845,14 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 						// 用户实测攻击路径表头变数据行）。
 						fmt.Fprintf(&lists, "**%s**\n\n%s\n", r[0], md)
 					} else {
-						// 解析失败（未知形态/数据损坏行）：整项回退加粗标签+列表
-						fmt.Fprintf(&lists, "**%s**\n", r[0])
+						// 解析失败（未知形态/数据损坏行）：整项回退加粗标签+列表。
+						// 块间空行与表格分支同口径——粘连时下一块标签会被
+						// markdown 解析器吞成上一块的列表项/表行（NOTIF154-P3-05）。
+						fmt.Fprintf(&lists, "**%s**\n\n", r[0])
 						for _, ln := range strings.Split(r[1], "\n") {
 							fmt.Fprintf(&lists, "- %s\n", ln)
 						}
+						lists.WriteString("\n")
 					}
 				} else {
 					fmt.Fprintf(&tbl, "| %s | %s |\n", r[0], r[1])
@@ -896,13 +954,20 @@ func mdMultiValueTable(item, label, value string) (string, bool) {
 // nodesSummaryLine 节点摘要行契约：`节点：请求 N · 拦截 N · 独立IP N[ · 附加]`
 var nodesSummaryLine = regexp.MustCompile(`^([^：]+)：请求 (\d+) · 拦截 (\d+) · 独立IP (\d+)(.*)$`)
 
-// secRows 节内启用项目→[label,value] 行（空节省略）。
+// secRows 节内启用项目→[label,value] 行（空节省略）。空值项目整项省略：
+// 单机默认配置的 nodes_summary、无攻击时的 top_ips 等不得渲染空行
+// （NOTIF154-P3-02：注释一直承诺渲染层省略，实现此前仍出空标签行）。
 func secRows(items []string, enabled map[string]bool, label, val func(string) string) [][3]string {
 	var rows [][3]string
 	for _, it := range items {
-		if enabled[it] {
-			rows = append(rows, [3]string{label(it), val(it), it})
+		if !enabled[it] {
+			continue
 		}
+		v := val(it)
+		if v == "" {
+			continue
+		}
+		rows = append(rows, [3]string{label(it), v, it})
 	}
 	return rows
 }

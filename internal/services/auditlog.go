@@ -366,11 +366,11 @@ func FormatAuditAction(path string) (action, resource, detail string) {
 	// PUT/DELETE/测试 :id 路由一并吞进来，破坏 exactly-once）。
 	switch path {
 	case "/api/v1/notification/channels":
-		return "创建", "通知通道", path
+		return "创建", "通知通道", "创建通知通道"
 	case "/api/v1/notification/daily/test":
-		return "测试", "通知日报", path
+		return "测试", "通知日报", "测试发送通知日报"
 	case "/api/v1/notification/settings/smtp-test":
-		return "测试", "通知设置", path
+		return "测试", "通知设置", "测试发送 SMTP 通知"
 	}
 	switch {
 	// /api/v1/config 为 Explicit（handler 记录，HasExplicitAuditEvent
@@ -379,12 +379,14 @@ func FormatAuditAction(path string) (action, resource, detail string) {
 	// 注意勿为 reload 补映射：Generic + handler 记录 + 非空映射 = 单次动作双条
 	//（缺陷形态，TestAuditGenericRoutesExactlyOnce 钉住）。
 
+	// 详情写具体事件语义（而非 path）：操作日志的「详情」列展示给用户，
+	// `/api/v1/caddy/restart` 这类 URL 对排障无信息量。
 	case strings.Contains(path, "/caddy/start"):
-		return "启动", "Caddy服务", path
+		return "启动", "Caddy服务", "启动 Caddy 服务"
 	case strings.Contains(path, "/caddy/stop"):
-		return "停止", "Caddy服务", path
+		return "停止", "Caddy服务", "停止 Caddy 服务"
 	case strings.Contains(path, "/caddy/restart"):
-		return "重启", "Caddy服务", path
+		return "重启", "Caddy服务", "重启 Caddy 服务"
 	}
 
 	return "", "", ""

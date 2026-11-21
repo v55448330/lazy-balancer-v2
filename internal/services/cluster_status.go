@@ -18,6 +18,9 @@ import (
 	"time"
 )
 
+// clusterNodeStatsRetentionDays 节点统计保留天数（主节点本地表，日报只读当日）。
+const clusterNodeStatsRetentionDays = 30
+
 // nodeHealthWarn 是节点列表 health_json 解析失败的限频状态
 // Nodes() 每次节点列表请求都会碰到同一坏行，前端轮询（秒级/十秒级）下同一条
 // warn 会持续刷屏。与同包 snapshotRowIsolation / throttled*Logf 家族同口径：
@@ -608,6 +611,64 @@ func (s *ClusterService) ReportNode(ctx context.Context, nodeID int, report mode
 	}
 	s.storeSectionReport(nodeID, report.SectionHashes, report.SectionHashesUnavailable)
 	return nil
+}
+
+// NodeIdentity 读取认证节点的展示名与唯一标签（name + ip:port）。标签与事件
+// 侧 notify.SlaveNodeLabel 同形，作为 cluster_node_daily_stats 的归属键：
+// nodes.name 无 UNIQUE（注册按 ip:port 去重），裸名会让同名节点互相覆盖。
+// 调用方不得另用全局库句柄回查（多库注入形态下会取到另一库的同 ID 节点）。
+// 节点不存在时返回 sql.ErrNoRows（handler 映射 403「上报者节点未登记」）。
+func (s *ClusterService) NodeIdentity(ctx context.Context, nodeID int) (name, label string, err error) {
+	var ip string
+	var port int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(name,''), COALESCE(ip_address,''), COALESCE(port,0) FROM nodes WHERE id=?`, nodeID).Scan(&name, &ip, &port); err != nil {
+		return "", "", fmt.Errorf("读取上报节点身份: %w", err)
+	}
+	return name, notify.SlaveNodeLabel(name, ip, port), nil
+}
+
+// RecordNodeDailyStats 落主节点本地从节点日报统计（(date,node) upsert）。
+// 键=NodeIdentity 的 label（name(ip:port)）；旧行以裸 nodes.name 为键，
+// 写入时把该节点当日历史行迁移到新键（UPDATE OR IGNORE + DELETE 旧行，
+// 目标键已存在时丢弃歧义旧行）——存量数据不再阻塞新的唯一归属键。
+// 写语句带 SQL 级主节点条件：handler 角色门与写之间无共享锁，降级窗口内
+// 命中 0 行按 ErrNotMasterNode 上报（与 ReportNode 同族）。
+func (s *ClusterService) RecordNodeDailyStats(ctx context.Context, nodeID int, stats notify.ClusterNodeStats) (name, label string, err error) {
+	name, label, err = s.NodeIdentity(ctx, nodeID)
+	if err != nil {
+		return "", "", err
+	}
+	raw, err := json.Marshal(stats)
+	if err != nil {
+		return "", "", fmt.Errorf("编码节点统计: %w", err)
+	}
+	if name != "" && name != label {
+		// 旧键迁移：UPDATE OR IGNORE 在目标行已存在时不覆盖；随后无论迁移
+		// 是否命中都删除旧键行，避免同名节点继续共享一行的归属歧义。
+		if _, err := s.db.ExecContext(ctx, `UPDATE OR IGNORE cluster_node_daily_stats SET node=? WHERE date=? AND node=?`, label, stats.Date, name); err != nil {
+			return "", "", fmt.Errorf("迁移节点统计旧键: %w", err)
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM cluster_node_daily_stats WHERE date=? AND node=?`, stats.Date, name); err != nil {
+			return "", "", fmt.Errorf("清理节点统计旧键: %w", err)
+		}
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO cluster_node_daily_stats (date,node,stats_json,updated_at)
+		SELECT ?,?,?,datetime('now') WHERE `+masterRoleConditionSQL+`
+		ON CONFLICT(date,node) DO UPDATE SET stats_json=excluded.stats_json, updated_at=excluded.updated_at`,
+		stats.Date, label, string(raw))
+	if err != nil {
+		return "", "", fmt.Errorf("写入节点统计: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return "", "", fmt.Errorf("读取节点统计写入结果: %w", err)
+	}
+	if rows != 1 {
+		return "", "", s.masterScopeMissError(ctx, errors.New("节点统计写入未命中"))
+	}
+	// 保留窗口裁剪（每次上报顺带清理，幂等；窗口外日期已被日期校验拒绝）。
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM cluster_node_daily_stats WHERE date < date('now',?)`, "-"+strconv.Itoa(clusterNodeStatsRetentionDays)+" days")
+	return name, label, nil
 }
 
 // resolveNodeAccessURL 推导节点访问地址的单源实现：显式

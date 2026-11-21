@@ -3,17 +3,24 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/atomicfile"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/netutil"
 )
 
 // ── 集群事件转发（用户裁定 2026-11-22：主节点集中汇聚模式）──
@@ -25,10 +32,12 @@ import (
 
 // ClusterEventReport 从节点→主节点的事件上报载荷。
 type ClusterEventReport struct {
-	Node    string            `json:"node"`     // 上报节点名（nodes.name，主端回显校验）
-	Events  []ClusterEventOne `json:"events"`   // 本批事件（正常路径单条，spool 重传可批量）
-	Spooled bool              `json:"spooled"`  // true=spool 重传批次（主端仅记日志）
-	BatchID string            `json:"batch_id"` // spool 批次标识（幂等去重键）
+	Node    string            `json:"node"`             // 上报节点名（nodes.name，主端回显校验）
+	Events  []ClusterEventOne `json:"events"`           // 本批事件（正常路径单条，spool 重传可批量）
+	Spooled bool              `json:"spooled"`          // true=spool 重传批次（主端仅记日志）
+	BatchID string            `json:"batch_id"`         // spool 批次标识（幂等去重键）
+	Origin  string            `json:"origin,omitempty"` // 事件起源节点名（回到起源节点即丢弃——互指防回荡）
+	Hop     int               `json:"hop,omitempty"`    // 已经历的转发跳数（>=1 的接收方不得再转发）
 }
 
 // ClusterEventOne 单条上报事件（Event 的可序列化投影）。
@@ -38,13 +47,16 @@ type ClusterEventOne struct {
 	Title  string            `json:"title,omitempty"` // 空=目录标题
 	Body   string            `json:"body,omitempty"`  // 空=目录模板渲染
 	Node   string            `json:"node,omitempty"`
+	Time   string            `json:"time,omitempty"` // 原始发生时刻（RFC3339Nano；主端优先采用落行）
 	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // clusterForwarder spool 目录缓存（角色探测经注入查询直读，无缓存——
 // 从节点事件量级低（分钟级），每事件一次轻量 SELECT 可接受，缓存反而引入
-// 角色翻转窗口的转发误判）。
+// 角色翻转窗口的转发误判）。spoolDir 读改写经 mu 保护（spool 写入
+// goroutine、spool 重传循环与角色翻转清理点会并发访问）。
 type clusterForwarder struct {
+	mu       sync.Mutex
 	spoolDir string
 }
 
@@ -55,45 +67,177 @@ const clusterForwardSpoolDirName = "notify-forward-spool"
 
 // clusterForwardRoleDetector 角色探测（global_config 直读；notify 包已依赖 db，
 // 无循环依赖）。nodeName 取本机主机名（主端回显时以 nodes.name 认证身份为准）。
-var clusterForwardRoleDetector = func() (isMaster bool, masterURL, token, nodeName string, err error) {
-	if db.DB == nil {
-		return true, "", "", "", nil // 库未装配=按主节点处理（零转发）
+// 经 mu 读写：转发 worker goroutine 与调用方/测试装配并发访问。
+var (
+	clusterForwardRoleMu       sync.RWMutex
+	clusterForwardRoleDetector = func() (isMaster bool, masterURL, token, nodeName string, err error) {
+		if db.DB == nil {
+			return true, "", "", "", nil // 库未装配=按主节点处理（零转发）
+		}
+		var isMasterInt int
+		if err := db.DB.QueryRow(`SELECT COALESCE(is_master,1), COALESCE(master_url,''), COALESCE(cluster_token,'') FROM global_config WHERE id=1`).Scan(&isMasterInt, &masterURL, &token); err != nil {
+			return true, "", "", "", err // 探测失败=保守按主节点（不转发）
+		}
+		return isMasterInt != 0, masterURL, token, LocalNodeName(), nil
 	}
-	var isMasterInt int
-	if err := db.DB.QueryRow(`SELECT COALESCE(is_master,1), COALESCE(master_url,''), COALESCE(cluster_token,'') FROM global_config WHERE id=1`).Scan(&isMasterInt, &masterURL, &token); err != nil {
-		return true, "", "", "", err // 探测失败=保守按主节点（不转发）
-	}
-	return isMasterInt != 0, masterURL, token, LocalNodeName(), nil
+)
+
+// clusterForwardRole 取当前角色探测结果（锁内取函数快照，锁外执行）。
+func clusterForwardRole() (isMaster bool, masterURL, token, nodeName string, err error) {
+	clusterForwardRoleMu.RLock()
+	fn := clusterForwardRoleDetector
+	clusterForwardRoleMu.RUnlock()
+	return fn()
 }
 
-// shouldForwardClusterEvent 从节点判定（带缓存）+ 事件级过滤：
-// 仅转发目录内事件（带外键不入上报面）。
+// clusterForwardRoleDetectorSnapshot 当前探测函数（testseam：用例复原用）。
+func clusterForwardRoleDetectorSnapshot() func() (bool, string, string, string, error) {
+	clusterForwardRoleMu.RLock()
+	defer clusterForwardRoleMu.RUnlock()
+	return clusterForwardRoleDetector
+}
+
+// setClusterForwardRoleDetectorForTest 替换角色探测（testseam：用例注入假角色）。
+func setClusterForwardRoleDetectorForTest(fn func() (bool, string, string, string, error)) {
+	clusterForwardRoleMu.Lock()
+	clusterForwardRoleDetector = fn
+	clusterForwardRoleMu.Unlock()
+}
+
+// shouldForwardClusterEvent 从节点判定（每次直读角色，无缓存——见
+// clusterForwarder 注释）+ 事件级过滤：仅转发目录内事件（带外键不入上报面）。
 func shouldForwardClusterEvent(evt Event) bool {
 	if _, ok := catalogByID(evt.Type); !ok {
 		return false // 目录外事件不上报（与本地投递同门）
 	}
-	isMaster, _, _, _, err := clusterForwardRoleDetector()
+	isMaster, _, _, _, err := clusterForwardRole()
 	if err != nil || isMaster {
 		return false // 探测失败=保守按主节点（不转发，本地正常处理）
 	}
 	return true
 }
 
-// forwardEventToMaster 即时推送主路径（事件驱动，非轮询）。
-// 失败返回 error 由调用方决定 spool。
+// ── 转发队列：异步、有界、单 worker ──
+// 从节点 Publish 绝不阻塞事件源（安全事件摄取/登录路径不得被主节点网络超时
+// 卡住）：事件入有界队列，单 worker 串行转发（保序）；队列满直接落 spool
+// （既不丢事件，也不阻塞调用方）。
+const clusterForwardQueueSize = 256 // 有界队列（溢出落盘，非丢弃）
+
+// clusterForwardJob 队列条目。done 仅测试排空同步用（生产恒 nil）：worker
+// 串行处理，关闭 done 即代表此前入队的事件都已落定。
+type clusterForwardJob struct {
+	evt  Event
+	done chan struct{}
+}
+
+var (
+	clusterForwardOnce sync.Once
+	clusterForwardMu   sync.RWMutex
+	clusterForwardCh   chan clusterForwardJob
+)
+
+// clusterForwardQueue 返回转发队列（首次调用即起单 worker）。
+func clusterForwardQueue() chan clusterForwardJob {
+	clusterForwardOnce.Do(func() {
+		ch := make(chan clusterForwardJob, clusterForwardQueueSize)
+		clusterForwardMu.Lock()
+		clusterForwardCh = ch
+		clusterForwardMu.Unlock()
+		go clusterForwardLoop(ch)
+	})
+	clusterForwardMu.RLock()
+	defer clusterForwardMu.RUnlock()
+	return clusterForwardCh
+}
+
+// clusterForwardLoop 单 worker：串行转发，失败即落 spool（进程关停时由
+// Stop 把队列剩余事件一并落盘，下次启动重传）。
+func clusterForwardLoop(ch chan clusterForwardJob) {
+	for job := range ch {
+		if job.done != nil {
+			close(job.done)
+			continue
+		}
+		if err := forwardEventToMaster(job.evt); err != nil {
+			spoolClusterEvent(job.evt)
+		}
+	}
+}
+
+// drainClusterForwardQueueOnStop 关停兜底：把队列内剩余待转发事件全部落 spool
+// （worker 正在处理的单条由它自己收尾）。未起 worker 时零动作。
+func drainClusterForwardQueueOnStop() {
+	clusterForwardMu.RLock()
+	ch := clusterForwardCh
+	clusterForwardMu.RUnlock()
+	if ch == nil {
+		return
+	}
+	for {
+		select {
+		case job := <-ch:
+			if job.done != nil {
+				close(job.done)
+				continue
+			}
+			spoolClusterEvent(job.evt)
+		default:
+			return
+		}
+	}
+}
+
+// enqueueClusterForward 入队（满则落盘）。Origin/Hop 在入队时定稿，spool 重传
+// 与即时转发携带同一防回荡标记。
+func enqueueClusterForward(evt Event) {
+	if evt.Origin == "" {
+		evt.Origin = LocalNodeName()
+	}
+	if evt.Hop == 0 {
+		evt.Hop = 1
+	}
+	if evt.BatchID == "" {
+		evt.BatchID = clusterForwardBatchID(evt)
+	}
+	ch := clusterForwardQueue()
+	select {
+	case ch <- clusterForwardJob{evt: evt}:
+	default:
+		spoolClusterEvent(evt) // 队列满：落盘重传（不阻塞事件源、不丢事件）
+	}
+}
+
+// forwardEventToMaster 即时推送主路径（由转发 worker 调用，非事件源 goroutine）。
+// 失败返回 error 由 worker 落 spool。
 func forwardEventToMaster(evt Event) error {
-	isMaster, masterURL, token, nodeName, _ := clusterForwardRoleDetector()
+	isMaster, masterURL, token, nodeName, _ := clusterForwardRole()
 	if isMaster || masterURL == "" || token == "" {
 		return fmt.Errorf("转发条件不成立（master=%v url=%q）", isMaster, masterURL)
 	}
+	origin, hop := evt.Origin, evt.Hop
+	if origin == "" {
+		origin = nodeName
+	}
+	if hop == 0 {
+		hop = 1
+	}
+	batchID := evt.BatchID
+	if batchID == "" {
+		batchID = clusterForwardBatchID(evt)
+	}
 	report := ClusterEventReport{
-		Node:   nodeName,
-		Events: []ClusterEventOne{eventToReportOne(evt, nodeName)},
+		Node:    nodeName,
+		Events:  []ClusterEventOne{eventToReportOne(evt, nodeName)},
+		BatchID: batchID,
+		Origin:  origin,
+		Hop:     hop,
 	}
 	return postClusterEventReport(masterURL, token, report)
 }
 
-// eventToReportOne Event→上报投影（Fields 原样携带，正文兜底 Body）。
+// eventToReportOne Event→上报投影（Fields 原样携带，正文兜底 Body，原始发生
+// 时刻以 RFC3339Nano 携带——主端优先采用它落投递行，避免 spool 重放把
+// created_at 改成重放时刻）。
 func eventToReportOne(evt Event, nodeName string) ClusterEventOne {
 	one := ClusterEventOne{
 		Type:   evt.Type,
@@ -101,6 +245,9 @@ func eventToReportOne(evt Event, nodeName string) ClusterEventOne {
 		Title:  evt.Title,
 		Body:   evt.Body,
 		Fields: evt.Fields,
+	}
+	if !evt.Time.IsZero() {
+		one.Time = evt.Time.UTC().Format(time.RFC3339Nano)
 	}
 	if evt.Node != "" {
 		one.Node = evt.Node
@@ -110,8 +257,129 @@ func eventToReportOne(evt Event, nodeName string) ClusterEventOne {
 	return one
 }
 
-// postClusterEventReport 上报 POST（3s 超时，与 detach 通知同口径；
-// http→https 同主机重定向重放一次，集群同步同契约）。
+// clusterForwardBatchID 事件客户端幂等键（内容寻址）：同一事件的 live 上报与
+// spool 重传得到同键，主节点按 batch_id 去重可抗「已处理但响应丢失」的重复
+// 投递（去重窗口本身在主节点进程内，见 handlers.HandleClusterEventReport）。
+func clusterForwardBatchID(evt Event) string {
+	h := sha256.New()
+	fields := make([]string, 0, len(evt.Fields))
+	for k := range evt.Fields {
+		fields = append(fields, k)
+	}
+	sort.Strings(fields)
+	parts := []string{evt.Type, string(evt.Level), strconv.FormatInt(evt.Time.UnixNano(), 10), evt.Node, evt.Title, evt.Body}
+	for _, k := range fields {
+		parts = append(parts, k, evt.Fields[k])
+	}
+	for _, part := range parts {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return "ev-" + hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// ── 上报 HTTP 客户端：按 masterURL 复用 + 3xx 判失败 + 同主机 https 升级重放 ──
+
+var (
+	clusterForwardFactoryMu sync.RWMutex
+	clusterForwardFactory   func(masterURL string) http.RoundTripper
+	clusterForwardClients   sync.Map // masterURL -> *http.Client
+)
+
+// SetClusterForwardTransportFactory 装配上报 HTTP 传输工厂（进程启动一次；
+// 生产=services 的 TOFU pin 传输）。工厂变更即失效客户端缓存——晚装配窗口
+// 不得让默认传输被永久缓存。
+func SetClusterForwardTransportFactory(fn func(masterURL string) http.RoundTripper) {
+	clusterForwardFactoryMu.Lock()
+	clusterForwardFactory = fn
+	clusterForwardFactoryMu.Unlock()
+	resetClusterForwardClientCache()
+}
+
+func clusterForwardTransport(masterURL string) http.RoundTripper {
+	clusterForwardFactoryMu.RLock()
+	fn := clusterForwardFactory
+	clusterForwardFactoryMu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(masterURL)
+}
+
+// resetClusterForwardClientCache 失效全部缓存客户端（工厂变更/测试隔离）。
+func resetClusterForwardClientCache() {
+	clusterForwardClients.Range(func(key, _ any) bool {
+		clusterForwardClients.Delete(key)
+		return true
+	})
+}
+
+// clusterForwardClient 按主节点地址复用的 HTTP 客户端：每条上报新建 Transport
+// 会让事件级 TLS 握手零复用。请求级超时由 ctx 单源控制（client.Timeout=0）。
+// CheckRedirect=ErrUseLastResponse：3xx 由 doClusterForwardRequest 处理（标准库
+// 先行跟随会把 POST 改写成 GET）。并发首建可能多建一个客户端，LoadOrStore
+// 保证只有一个生效。
+func clusterForwardClient(masterURL string) *http.Client {
+	if v, ok := clusterForwardClients.Load(masterURL); ok {
+		return v.(*http.Client)
+	}
+	client := &http.Client{
+		Transport:     clusterForwardTransport(masterURL),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	actual, _ := clusterForwardClients.LoadOrStore(masterURL, client)
+	return actual.(*http.Client)
+}
+
+// doClusterForwardRequest 发一次上报请求：同主机 http→https 升级重定向按原
+// 方法重放一次（凭证不出原主机，与 services.DoWithSameHostTLSUpgradeRedirect
+// 同契约）。3xx 一律不是成功态——调用方按 >=300 判失败并落 spool 重试。
+func doClusterForwardRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if !netutil.IsTLSUpgradeRedirect(resp.StatusCode) {
+		return resp, nil
+	}
+	location := resp.Header.Get("Location")
+	target, perr := url.Parse(location)
+	// 仅同主机名（端口可变）+ https + 可重放请求才重放；其余原样返回（3xx
+	// 由调用方判失败）。主机名比较不区分大小写（与 services 同契约）。
+	if location == "" || perr != nil || target.Scheme != "https" ||
+		!strings.EqualFold(target.Hostname(), req.URL.Hostname()) || req.GetBody == nil {
+		return resp, nil
+	}
+	resp.Body.Close()
+	retry := req.Clone(req.Context())
+	// Location 只带主机时继承原 path/query（反代/管理面 HTTPS 升级的常见形态）。
+	if target.Path == "" {
+		target.Path = req.URL.Path
+		target.RawPath = req.URL.RawPath
+	}
+	if target.RawQuery == "" {
+		target.RawQuery = req.URL.RawQuery
+	}
+	target.User = nil // Location 注入的 userinfo 不得外发
+	retry.URL = target
+	body, berr := req.GetBody()
+	if berr != nil {
+		return nil, fmt.Errorf("重放 https 升级请求: %w", berr)
+	}
+	retry.Body = body
+	return client.Do(retry)
+}
+
+// checkClusterReportStatus 上报响应判成功：仅 2xx 成功（3xx 不再被当成功——
+// 主节点启用 HTTPS 后 302 静默丢事件并删 spool）。
+func checkClusterReportStatus(what string, code int) error {
+	if code >= http.StatusOK && code < http.StatusMultipleChoices {
+		return nil
+	}
+	return fmt.Errorf("%s被拒: %d", what, code)
+}
+
+// postClusterEventReport 上报 POST（3s 超时，与 detach 通知同口径）。
 func postClusterEventReport(masterURL, token string, report ClusterEventReport) error {
 	payload, err := json.Marshal(report)
 	if err != nil {
@@ -126,38 +394,17 @@ func postClusterEventReport(masterURL, token string, report ClusterEventReport) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Cluster-Token", token)
-	client := &http.Client{Timeout: 3 * time.Second}
-	if ClusterForwardTransportFactory != nil {
-		if tr := ClusterForwardTransportFactory(masterURL); tr != nil {
-			client.Transport = tr
-			defer func() {
-				if t, ok := tr.(*http.Transport); ok {
-					t.CloseIdleConnections()
-				}
-			}()
-		}
-	}
-	defer client.CloseIdleConnections()
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
+	resp, err := doClusterForwardRequest(clusterForwardClient(masterURL), req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("主节点上报被拒: %d", resp.StatusCode)
-	}
-	return nil
+	return checkClusterReportStatus("主节点上报", resp.StatusCode)
 }
 
 // ── spool：故障兜底（2s 轮询重传，正常路径零轮询）──
 
 const clusterForwardSpoolMaxFiles = 1000 // 上限防御（超限丢最老，事件通知非审计面）
-
-// ClusterForwardTransportFactory 上报 HTTP 传输工厂（services 装配——与快照
-// 同步同一 TOFU pin 体系，自签主节点证书按指纹校验；nil=默认传输，适用于
-// 公网可信证书或 HTTP）。返回 nil 表示该地址不需要特殊 TLS 配置。
-var ClusterForwardTransportFactory func(masterURL string) http.RoundTripper
 
 // spoolClusterEvent 主节点不可达时落盘（文件名=纳秒时序，批次单事件）。
 func spoolClusterEvent(evt Event) {
@@ -165,25 +412,44 @@ func spoolClusterEvent(evt Event) {
 	if dir == "" {
 		return
 	}
+	nodeName := clusterForwardNodeName()
+	origin, hop := evt.Origin, evt.Hop
+	if origin == "" {
+		origin = nodeName
+	}
+	if hop == 0 {
+		hop = 1
+	}
+	batchID := evt.BatchID
+	if batchID == "" {
+		batchID = clusterForwardBatchID(evt)
+	}
 	report := ClusterEventReport{
-		Node:    clusterForwardNodeName(),
+		Node:    nodeName,
 		Events:  []ClusterEventOne{eventToReportOne(evt, "")},
 		Spooled: true,
-		BatchID: fmt.Sprintf("spool-%d", time.Now().UnixNano()),
+		BatchID: batchID,
+		Origin:  origin,
+		Hop:     hop,
 	}
 	raw, err := json.Marshal(report)
 	if err != nil {
+		log.Printf("WARN: 集群事件 spool 序列化失败（事件 %s 丢弃）: %v", evt.Type, err)
 		return
 	}
 	path := filepath.Join(dir, fmt.Sprintf("pending-%d.json", time.Now().UnixNano()))
-	// 原子写（直写落盘快照门禁：临时文件+rename，重传侧永不读到半截 JSON）
-	_ = atomicfile.WriteAtomic(path, raw, 0o600)
+	// 原子写（直写落盘快照门禁：临时文件+rename，重传侧永不读到半截 JSON）。
+	// 失败必须留痕：写失败等于主节点不可达期间的重试面静默消失。
+	if err := atomicfile.WriteAtomic(path, raw, 0o600); err != nil {
+		log.Printf("WARN: 集群事件 spool 落盘失败（事件 %s 丢弃）: %v", evt.Type, err)
+		return
+	}
 	trimClusterForwardSpool(dir)
 }
 
 // clusterForwardNodeName spool 侧节点名（角色查询失败时回退主机名）。
 func clusterForwardNodeName() string {
-	_, _, _, name, err := clusterForwardRoleDetector()
+	_, _, _, name, err := clusterForwardRole()
 	if err != nil || name == "" {
 		return LocalNodeName()
 	}
@@ -191,7 +457,10 @@ func clusterForwardNodeName() string {
 }
 
 // clusterForwardSpoolDir spool 目录（data 目录派生；未初始化返回空=不落盘）。
+// 首次解析结果缓存；读改写受 mu 保护（spool 写入/重传/角色翻转清理并发）。
 func clusterForwardSpoolDir() string {
+	clusterFwd.mu.Lock()
+	defer clusterFwd.mu.Unlock()
 	if clusterFwd.spoolDir != "" {
 		return clusterFwd.spoolDir
 	}
@@ -205,6 +474,47 @@ func clusterForwardSpoolDir() string {
 	}
 	clusterFwd.spoolDir = dir
 	return dir
+}
+
+// clusterForwardSpoolDirSnapshot 当前缓存值（测试隔离用）。
+func clusterForwardSpoolDirSnapshot() string {
+	clusterFwd.mu.Lock()
+	defer clusterFwd.mu.Unlock()
+	return clusterFwd.spoolDir
+}
+
+// setClusterForwardSpoolDirForTest 覆写 spool 目录缓存（testseam：spool 目录
+// 生产恒由 data 目录派生，测试需绕开 db.DataDir 依赖）。
+func setClusterForwardSpoolDirForTest(dir string) {
+	clusterFwd.mu.Lock()
+	defer clusterFwd.mu.Unlock()
+	clusterFwd.spoolDir = dir
+}
+
+// DiscardClusterForwardSpool 丢弃全部待转发 spool（升主/角色对账升主时调用）：
+// 这些事件原本要交给旧主节点，升主后收件面已失效——继续重传只会打到自身或
+// 旧地址（事件通知非审计面，丢弃并留痕）。
+func DiscardClusterForwardSpool(reason string) {
+	dir := clusterForwardSpoolDir()
+	if dir == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		log.Printf("INFO: 角色切换（%s）：丢弃 %d 个待转发事件 spool（旧主节点收件面已失效）", reason, removed)
+	}
 }
 
 // trimClusterForwardSpool 上限裁剪（最老先丢）。
@@ -251,14 +561,15 @@ func DrainClusterForwardSpool(ctx context.Context) {
 			log.Printf("WARN: 集群事件 spool 文件损坏已丢弃: %s", e.Name())
 			continue
 		}
-		_, masterURL, token, nodeName, derr := clusterForwardRoleDetector()
+		_, masterURL, token, nodeName, derr := clusterForwardRole()
 		if derr != nil || masterURL == "" || token == "" {
-			return // 角色未就绪/已升主——下轮再看（升主后 spool 清理见角色翻转钩子）
+			return // 角色未就绪/已升主——下轮再看（升主时由 DiscardClusterForwardSpool 清理）
 		}
 		if report.Node == "" {
 			report.Node = nodeName
 		}
 		if err := postClusterEventReport(masterURL, token, report); err != nil {
+			log.Printf("INFO: 集群事件 spool 重传暂缓（主节点仍不可达，下轮重试）: %v", err)
 			return // 主节点仍不可达——保留下轮重试
 		}
 		_ = os.Remove(path)
@@ -297,7 +608,7 @@ func CollectNodeStats(ctx context.Context, now time.Time) (ClusterNodeStats, err
 // ReportNodeStatsToMaster 从节点上报昨日统计块（槽点单次，非轮询；
 // 失败仅留痕——次日重报覆盖，日报侧缺失标「未上报」）。
 func ReportNodeStatsToMaster(ctx context.Context, stats ClusterNodeStats) error {
-	_, masterURL, token, _, err := clusterForwardRoleDetector()
+	_, masterURL, token, _, err := clusterForwardRole()
 	if err != nil {
 		return err
 	}
@@ -317,32 +628,10 @@ func ReportNodeStatsToMaster(ctx context.Context, stats ClusterNodeStats) error 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Cluster-Token", token)
-	client := &http.Client{Timeout: 5 * time.Second}
-	if ClusterForwardTransportFactory != nil {
-		if tr := ClusterForwardTransportFactory(masterURL); tr != nil {
-			client.Transport = tr
-			defer func() {
-				if t, ok := tr.(*http.Transport); ok {
-					t.CloseIdleConnections()
-				}
-			}()
-		}
-	}
-	defer client.CloseIdleConnections()
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
+	resp, err := doClusterForwardRequest(clusterForwardClient(masterURL), req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("主节点统计上报被拒: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-// NodeDailyStatRow 主节点存储行（读回渲染用）。
-type NodeDailyStatRow struct {
-	Node  string
-	Stats ClusterNodeStats
+	return checkClusterReportStatus("主节点统计上报", resp.StatusCode)
 }

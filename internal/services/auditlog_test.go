@@ -79,6 +79,31 @@ func TestRecordAuditLogWritesToIndependentDatabase(t *testing.T) {
 	}
 }
 
+// Generic 路由的审计详情必须写事件语义，不得回显 API path（操作日志「详情」列
+// 面向用户；`/api/v1/caddy/restart` 之类对排障无信息量）。
+func TestFormatAuditAction_detailIsSemanticNotPath(t *testing.T) {
+	cases := map[string]string{
+		"/api/v1/notification/channels":           "创建通知通道",
+		"/api/v1/notification/daily/test":         "测试发送通知日报",
+		"/api/v1/notification/settings/smtp-test": "测试发送 SMTP 通知",
+		"/api/v1/caddy/start":                     "启动 Caddy 服务",
+		"/api/v1/caddy/stop":                      "停止 Caddy 服务",
+		"/api/v1/caddy/restart":                   "重启 Caddy 服务",
+	}
+	for path, wantDetail := range cases {
+		action, _, detail := FormatAuditAction(path)
+		if action == "" {
+			t.Fatalf("%s 映射为空（该路由将零审计）", path)
+		}
+		if detail != wantDetail {
+			t.Fatalf("%s detail=%q, want %q（不得回显 path）", path, detail, wantDetail)
+		}
+		if detail == path {
+			t.Fatalf("%s detail 仍是 API path", path)
+		}
+	}
+}
+
 func TestFormatAuditActionAuthAndNodeRegistration(t *testing.T) {
 	// 原断言 /nodes/register 映射——该路由实际注册为 /cluster/register，
 	// 映射从未可达（死映射）；/auth/login 为 Explicit（handler 记录 登录成功/失败）。

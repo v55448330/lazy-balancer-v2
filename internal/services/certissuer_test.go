@@ -22,6 +22,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
 
 	xacme "golang.org/x/crypto/acme"
@@ -1012,7 +1013,7 @@ func TestRetryCertificateDeployment_missingExpiryRejectsMalformedPEM(t *testing.
 	}
 }
 
-func TestCertIssuer_deploymentFailed_backs_off_then_slowRetriesAtMaxAttempts(t *testing.T) {
+func TestCertIssuer_deploymentFailed_backsOffThenTerminalAtMaxAttempts(t *testing.T) {
 	// Given
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
 	// 退避次数从 DB 重算：其它用例遗留的异步 deploymentRetry 若在同一库上回写
@@ -1034,18 +1035,21 @@ func TestCertIssuer_deploymentFailed_backs_off_then_slowRetriesAtMaxAttempts(t *
 		retries <- retryCall{material: material, delay: delay}
 		return nil
 	}
+	oldPublisher := certJobOutcomeEventPublisher
+	var events []notify.Event
+	certJobOutcomeEventPublisher = func(evt notify.Event) { events = append(events, evt) }
+	t.Cleanup(func() { certJobOutcomeEventPublisher = oldPublisher })
 
 	// When：连续打满退避上限，attempt 从 DB 重算（deploymentFailed 同步维护）。
 	for range maxCertificateDeploymentAttempts {
 		_ = issuer.deploymentFailed(jobID, issuedCertificate{ruleID: ruleID, providerID: 1}, "reload failed", errors.New("reload failed"))
 	}
 
-	// Then：每次失败都再调度——前 9 次按 1s→256s 退避，第 10 次封顶后转
-	// 30 分钟慢速重试（不落 failed，材料保留、磁盘恢复后自动收敛）。
+	// Then：前 9 次按 1s→256s 退避再调度；第 10 次达上限落 failed 终态且
+	// 不再登记慢速重试（永续循环无用户可见出口），并发布 cert.failed 通知。
 	wantDelays := []time.Duration{
 		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
 		32 * time.Second, 64 * time.Second, 128 * time.Second, 256 * time.Second,
-		30 * time.Minute,
 	}
 	var delays []time.Duration
 	var lastMaterial issuedCertificate
@@ -1066,22 +1070,32 @@ func TestCertIssuer_deploymentFailed_backs_off_then_slowRetriesAtMaxAttempts(t *
 	if lastMaterial.ruleID != ruleID {
 		t.Fatalf("retry material ruleID=%q, want %q", lastMaterial.ruleID, ruleID)
 	}
-	// channel 应已收空（无多余再调度）。
+	// channel 应已收空（达上限后不得再调度）。
 	select {
 	case extra := <-retries:
-		t.Fatalf("unexpected extra retry: %+v", extra)
+		t.Fatalf("unexpected extra retry after cap: %+v", extra)
 	default:
 	}
 	var status, message string
 	var attempts int
-	if err := db.DB.QueryRow("SELECT status, COALESCE(message,''), deployment_attempts FROM cert_jobs WHERE id=?", jobID).Scan(&status, &message, &attempts); err != nil {
+	var available sql.NullTime
+	if err := db.DB.QueryRow("SELECT status, COALESCE(message,''), deployment_attempts, deployment_available_after FROM cert_jobs WHERE id=?", jobID).Scan(&status, &message, &attempts, &available); err != nil {
 		t.Fatalf("read deployment retry status: %v", err)
 	}
-	if status != "downloaded" || attempts != maxCertificateDeploymentAttempts {
-		t.Fatalf("deployment retry status=%q attempts=%d, want downloaded (slow retry) and %d", status, attempts, maxCertificateDeploymentAttempts)
+	if status != "failed" || attempts != maxCertificateDeploymentAttempts {
+		t.Fatalf("deployment retry status=%q attempts=%d, want failed terminal and %d", status, attempts, maxCertificateDeploymentAttempts)
 	}
-	if !strings.Contains(message, "慢速重试") {
-		t.Fatalf("message=%q at cap, want slow-retry disclosure", message)
+	if !strings.Contains(message, "已停止自动重试") {
+		t.Fatalf("message=%q at cap, want terminal disclosure", message)
+	}
+	if available.Valid {
+		t.Fatalf("deployment_available_after=%v，want NULL（终态不再自动重试）", available.Time)
+	}
+	if len(events) != 1 || events[0].Type != notify.EvtCertFailed {
+		t.Fatalf("events=%+v，want 单条 cert.failed（达上限用户可见通知）", events)
+	}
+	if events[0].Fields["2"] != message {
+		t.Fatalf("通知正文=%q，want 终态 message 透传", events[0].Fields["2"])
 	}
 }
 
@@ -1183,10 +1197,10 @@ func TestRetryCertificateDeployment_accepts_cleanup_dns_status(t *testing.T) {
 	}
 }
 
-func TestRetryCertificateDeployment_cleanup_dns_job_slowRetriesAtMaxAttempts(t *testing.T) {
+func TestRetryCertificateDeployment_cleanup_dns_job_terminalAtMaxAttempts(t *testing.T) {
 	retryPEM, retryKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
-	// Given：长时间停留在 cleanup_dns 的任务，部署反复失败——封顶后保留可部署态
-	// （落 failed 会把材料/磁盘分叉变成无自动通道的搁浅）
+	// Given：长时间停留在 cleanup_dns 的任务，部署反复失败——封顶后落 failed
+	// 终态（永续慢速重试无用户可见出口；材料保留，可手动重试）
 	jobID, _ := seedCertificateJob(t, "cleanup_dns")
 	useTemporaryCertDir(t)
 	const providerID = 999
@@ -1209,11 +1223,11 @@ func TestRetryCertificateDeployment_cleanup_dns_job_slowRetriesAtMaxAttempts(t *
 	if err := db.DB.QueryRow("SELECT status, deployment_attempts, deployment_available_after FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts, &available); err != nil {
 		t.Fatalf("read capped cleanup_dns job: %v", err)
 	}
-	if status != "downloaded" || attempts != maxCertificateDeploymentAttempts {
-		t.Fatalf("job status=%q attempts=%d, want downloaded (slow retry) with %d attempts", status, attempts, maxCertificateDeploymentAttempts)
+	if status != "failed" || attempts != maxCertificateDeploymentAttempts {
+		t.Fatalf("job status=%q attempts=%d, want failed terminal with %d attempts", status, attempts, maxCertificateDeploymentAttempts)
 	}
-	if !available.Valid || time.Until(available.Time) < 20*time.Minute {
-		t.Fatalf("deployment_available_after=%v, want ~30m slow-retry window", available)
+	if available.Valid {
+		t.Fatalf("deployment_available_after=%v，want NULL（终态不再自动重试）", available.Time)
 	}
 }
 
@@ -1512,9 +1526,9 @@ func TestDeploymentFailed_writesCertJobLogWithAttemptAndReason(t *testing.T) {
 	}
 }
 
-// 封顶形态：第 10 次部署失败保留可部署态（慢速重试），日志行
-// 同样带 attempt=10/10 与慢速重试说明。
-func TestDeploymentFailed_entersSlowRetryAtMaxAttempts(t *testing.T) {
+// 封顶形态：第 10 次部署失败落 failed 终态（停止自动重试），日志行
+// 同样带 attempt=10/10 与终态说明。
+func TestDeploymentFailed_entersTerminalAtMaxAttempts(t *testing.T) {
 	useCertJobLogTestEnv(t, 1<<20)
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
 	if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_attempts=9 WHERE id=?", jobID); err != nil {
@@ -1536,19 +1550,19 @@ func TestDeploymentFailed_entersSlowRetryAtMaxAttempts(t *testing.T) {
 	if !strings.Contains(string(data), "attempt=10/10") {
 		t.Fatalf("cert job log missing capped attempt=10/10:\n%s", data)
 	}
-	if !strings.Contains(string(data), "慢速重试") {
-		t.Fatalf("cert job log missing slow-retry disclosure:\n%s", data)
+	if !strings.Contains(string(data), "已停止自动重试") {
+		t.Fatalf("cert job log missing terminal disclosure:\n%s", data)
 	}
 	var status string
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
 		t.Fatalf("read job status: %v", err)
 	}
-	if status != "downloaded" {
-		t.Fatalf("job status=%q, want downloaded (material retained for slow retry)", status)
+	if status != "failed" {
+		t.Fatalf("job status=%q, want failed (terminal; material retained for manual retry)", status)
 	}
 }
 
-// 封顶后的慢速重试会继续累加计数器（真实值落库，重试链依赖它），但展示值
+// 封顶后的终态化仍保留真实累加计数（落库计数保留真实值），但展示值
 // 必须钳制在上限内——`[attempt=57/10]` 会让用户以为「超出配额却仍在重试」。
 func TestDeploymentFailed_capsDisplayedAttemptWhileCounterKeepsGrowing(t *testing.T) {
 	useCertJobLogTestEnv(t, 1<<20)
@@ -1589,8 +1603,8 @@ func TestDeploymentFailed_capsDisplayedAttemptWhileCounterKeepsGrowing(t *testin
 	if strings.Contains(message, "attempt=57/10") || !strings.Contains(message, "attempt=10/10") {
 		t.Fatalf("job message=%q, want capped attempt ratio", message)
 	}
-	if !strings.Contains(message, "慢速重试") {
-		t.Fatalf("job message=%q, want slow-retry disclosure", message)
+	if !strings.Contains(message, "已停止自动重试") {
+		t.Fatalf("job message=%q, want terminal disclosure", message)
 	}
 }
 

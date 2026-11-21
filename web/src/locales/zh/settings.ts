@@ -531,12 +531,18 @@ export default {
         "schedule": {
           "masterOnlyTip": "仅主节点生效：从节点不调度此任务，调度开关仅在主节点可用",
           "masterOnlyTag": "仅主节点",
+          "slaveOnlyTip": "仅从节点生效：主节点不调度此任务，调度开关仅在从节点可用",
+          "slaveOnlyTag": "仅从节点",
+          "roleUnknownTag": "角色未判定",
+          "roleUnknownTip": "本节点角色尚未判定：暂不展示调度开关，避免误读",
           "certWakeHint": "有证书任务入队时自动唤醒",
           "businessDriven": "由对应业务页自动更新控制",
           "toggle": "停止/恢复调度",
           "stoppedTag": "已停调",
           "oneshotTip": "触发类任务不可调度——仅手动/代码触发执行",
           "masterOnlyEffect": "仅主节点生效",
+          "slaveOnlyEffect": "仅从节点生效",
+          "roleUnknownEffect": "角色未判定",
           "notSchedulable": "不可调度",
           "on": "开启",
           "off": "关闭"
@@ -549,6 +555,8 @@ export default {
           "cadence": "运行节奏",
           "roleApplicability": "角色适用性",
           "masterOnlyRun": "仅主节点运行（本节点不调度）",
+          "slaveOnlyRun": "仅从节点运行（本节点不调度）",
+          "roleUnknownRun": "角色未判定（本节点暂不调度）",
           "nodeRunnable": "本节点可运行",
           "scheduleSwitch": "调度开关",
           "scheduleSwitchTip": "引擎调度投递开关（列表「调度」列同源）",
@@ -770,7 +778,7 @@ export default {
           "import": "导入",
           "restart": "重启服务",
           "restartBtn": "重启",
-          "backupNote": "备份包含全部配置、规则、用户、密钥与证书任务（含凭证与私钥，请加密保管）；导入将覆盖当前配置，仅主节点可用"
+          "backupNote": "备份包含全部配置、规则、用户、密钥与证书任务（含凭证与私钥，请加密保管）；通知中心配置（通道/订阅/凭据）不随备份；导入将覆盖当前配置，仅主节点可用"
         },
         "update": {
           "title": "发现新版本",
@@ -827,7 +835,7 @@ export default {
           "subtitle": "选择要导出的配置分类",
           "noneBtn": "全不选",
           "allBtn": "全选",
-          "packageNote": "导出为 .lbbak 备份包（勾选「安全防护」时含 CRS/IP2Region 规则库文件；勾选「节点拓扑」时含从节点列表与站点坐标，含节点令牌哈希）；包含凭证与证书材料，请加密保管",
+          "packageNote": "导出为 .lbbak 备份包（勾选「安全防护」时含 CRS/IP2Region 规则库文件；勾选「节点拓扑」时含从节点列表与站点坐标，含节点令牌哈希）；包含凭证与证书材料，请加密保管；通知中心配置（通道/订阅/凭据）不随备份导出",
           "confirmExport": "确认导出",
           "confirmExportN": "确认导出（{count}/{total}）",
           "done": "配置备份已导出"

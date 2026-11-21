@@ -2,7 +2,7 @@ package notify
 
 // 投递 Daemon 主循环（taskengine notification-delivery Run 体）。
 // 每个 tick：①扫描 pending 批次→按用户启用通道展开→逐通道发送（重试 1 次）
-// ②通道健康探测（webhook/clawbot 端点 ping）③MCP 会话超时清理。
+// ②MCP 会话超时清理。（无通道健康探测：本循环不含 ping 端点逻辑。）
 
 import (
 	"context"
@@ -23,7 +23,7 @@ const (
 // RunDeliveryLoop 投递主循环（rc.Ctx 取消=引擎停止/角色门停）。
 func RunDeliveryLoop(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
 	ctx = withTaskID(ctx, "notification-delivery")
-	taskLogf(ctx, "delivery", "通知投递任务启动（pending 扫描+失败重试+通道健康探测）")
+	taskLogf(ctx, "delivery", "通知投递任务启动（pending 扫描+失败重试+MCP 会话清理）")
 	requeueStalePending()
 	t := time.NewTicker(deliveryTickInterval) //scope-exempt: daemon-run-body-loop
 	defer t.Stop()

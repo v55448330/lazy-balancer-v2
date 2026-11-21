@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -42,11 +43,23 @@ func (h *Handlers) GetHumanVerifyStats(c *gin.Context) {
 		EventsShutdownLost  int64      `json:"events_shutdown_lost"`
 	}
 	out := stats{}
+	// 未装配 cfg 的嵌入/测试形态：与 metricsOverviewOrZero / 指标系列端点
+	// 同口径返回零值 200，不得裸解引用配置 panic（gin Recovery 500）。
+	if h == nil || h.cfg == nil || h.cfg.CaddyAdminURL == "" {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: out})
+		return
+	}
 	resp, err := humanAdminClient.Get(h.cfg.CaddyAdminURL + "/lb/human/stats")
-	if err == nil {
+	if err != nil {
+		// 降级容错（旧二进制/端点缺失/超时返回全零不报错）但必须留痕：
+		// 与 metrics 采集失败口径一致，底层错误只进日志，响应面固定零值。
+		services.Logf("warn", "人机验证统计拉取失败（返回全零）: %v", err)
+	} else {
 		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
+		if resp.StatusCode != http.StatusOK {
+			services.Logf("warn", "人机验证统计端点返回 %d（返回全零）", resp.StatusCode)
+		} else if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+			services.Logf("warn", "人机验证统计响应解析失败（返回全零）: %v", err)
 		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: out})

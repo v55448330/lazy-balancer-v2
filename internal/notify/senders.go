@@ -12,9 +12,10 @@ import (
 )
 
 // Message 已渲染的通知消息（标题+正文+级别）。
-// Time/Node/Fields 为通道载荷透传位：投递行当前未落这三列（deliveries 表
-// 无对应列），webhook 侧 Time 零值以发送时刻兜底、Node/Fields 空值原样呈现；
-// 后续投递行扩列后由投递 Daemon 透传即可，Sender 侧无需再改。
+// Time/Node/Fields 为通道载荷透传位：投递行已落 node 列（pendingDeliveries
+// 回读后由 deliverOne 透传 Node）；Time 未落列——webhook 载荷以发送时刻兜底
+// 零值；Fields 仅日报由载荷 values 注入（模板 {{requests}} 等变量源），其他
+// 事件为空。
 type Message struct {
 	EventType string
 	Level     string
