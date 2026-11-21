@@ -94,6 +94,9 @@ const onScroll = (e: Event) => {
   line-height: inherit;
   white-space: inherit;
   tab-size: inherit;
+  /* prism-okaidia 的 text-shadow:0 1px 让高亮字形整体下移 1px——与透明
+     textarea 的 caret/选择矩形恒差 1px（用户实测残余错位感的来源）。 */
+  text-shadow: none;
 }
 .code-editor-input {
   position: absolute;
