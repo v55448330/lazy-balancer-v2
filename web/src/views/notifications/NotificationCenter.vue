@@ -787,6 +787,7 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     signature: '此邮件由 {{brand}} 通知中心自动发送 · {{time}}',
     fieldHeader: '项目', valueHeader: '内容',
     level: '级别', event: '事件', node: '节点', time: '时间', date: '日期',
+    eventName: '事件名称', nodeName: '所属节点', occurredAt: '发生时间', notifyCenter: '通知中心',
     dailyHeader: '📊 {{brand}} 日报', generatedAt: '生成于',
     secOverview: '🌐 全局概览', secSecurity: '🛡 安全风险', secCert: '🔒 证书状态',
     secCluster: '🖥 服务状态', secIntegrations: '🔌 接入与任务', secAuth: '👤 用户认证',
@@ -858,19 +859,18 @@ const defaultTplFor = (typ: string, lang: TplLang): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
     [[L.event, '{{event_title}}'], [L.node, '{{node}}'], [L.time, '{{time}}']],
     L.signature)
-  // QQ 事件预置（2026-11-22 第五轮终版）：标题独立、正文引用凸显、
-  // 分隔线隔开来源区、署名只留品牌。
+  // QQ 事件预置（2026-11-22 用户样稿）：## 标题 → 正文加粗引用 →
+  // - 列表来源区（事件名称/所属节点/发生时间）→ 品牌引用页脚。
   if (typ === 'qq') return [
     `## 🔔 {{title}}`,
     '',
-    '> {{body}}',
+    `> **{{body}}** · {{level}}`,
     '',
-    '────────────',
-    `${L.event}${L.colon}{{event_title}}`,
-    `${L.node}${L.colon}{{node}}`,
-    `${L.time}${L.colon}{{time}} · {{level}}`,
+    `- ${L.eventName}${L.colon}{{event_title}}`,
+    `- ${L.nodeName}${L.colon}{{node}}`,
+    `- ${L.occurredAt}${L.colon}{{time}}`,
     '',
-    '—— {{brand}}',
+    `> {{brand}} ${L.notifyCenter}`,
   ].join('\n')
   return [
     '【{{title}}】（{{level}}）',

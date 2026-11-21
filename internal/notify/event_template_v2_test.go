@@ -37,18 +37,24 @@ func TestDefaultEventTemplateQQ_compactLayout(t *testing.T) {
 	if !strings.Contains(tpl, "## ") {
 		t.Fatalf("QQ 模板须保留 ## markdown 标题（富文本不被收敛成纯文本）: %q", tpl)
 	}
-	if !strings.Contains(tpl, "> {{body}}") {
-		t.Fatalf("QQ 模板正文须用 > 引用分组（markdown 元素）: %q", tpl)
+	if !strings.Contains(tpl, "> **{{body}}**") {
+		t.Fatalf("QQ 模板正文须用 > 加粗引用（markdown 元素）: %q", tpl)
 	}
-	// 终版（第五轮追加）：标题独立（级别入来源区）、正文/来源区分隔线、署名只留品牌
+	// 样稿版（第五轮终版，用户提供的样式）：正文加粗引用为视觉主体、
+	// - 列表来源区（事件名称/所属节点/发生时间）、品牌引用页脚（无时间）。
 	if strings.Contains(tpl, "{{title}} · {{level}}") || strings.Contains(tpl, "🔔 {{title}} ·") {
 		t.Fatalf("标题不得混排级别（正文主角凸显）: %q", tpl)
 	}
-	if !strings.Contains(tpl, "────────────") {
-		t.Fatalf("正文区与来源区须有分隔线: %q", tpl)
+	if !strings.Contains(tpl, "> **{{body}}**") {
+		t.Fatalf("正文须加粗引用（视觉主体）: %q", tpl)
 	}
-	if !strings.HasSuffix(tpl, "—— {{brand}}") {
-		t.Fatalf("署名只留品牌（时间已在来源区，去重）: %q", tpl)
+	for _, want := range []string{"- 事件名称：", "- 所属节点：", "- 发生时间："} {
+		if !strings.Contains(tpl, want) {
+			t.Fatalf("来源区缺列表行 %s: %q", want, tpl)
+		}
+	}
+	if !strings.HasSuffix(tpl, "{{brand}} 通知中心") {
+		t.Fatalf("页脚须为品牌引用（无时间重复）: %q", tpl)
 	}
 	for _, ph := range []string{"{{title}}", "{{level}}", "{{body}}", "{{event_title}}", "{{node}}", "{{time}}", "{{brand}}"} {
 		if !strings.Contains(tpl, ph) {

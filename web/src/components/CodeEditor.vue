@@ -84,6 +84,17 @@ const onScroll = (e: Event) => {
   pointer-events: none;
   background: #1e293b;
 }
+/* prism-okaidia 主题对 code[class*=language-] 强设 font-family: Consolas 与
+   line-height: 1.5（组件层是 SF Mono/Menlo 与 1.6）——高亮层与透明 textarea
+   度量分叉，光标/选择/点击位置随行数纵向漂移。强制内层 code 全量继承编辑器
+   度量（同源对齐的唯一保证）。 */
+.code-editor-highlight :deep(code) {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: inherit;
+  tab-size: inherit;
+}
 .code-editor-input {
   position: absolute;
   inset: 0;

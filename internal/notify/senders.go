@@ -33,10 +33,12 @@ type Message struct {
 // testNotificationMessage 通道「测试」按钮共用的测试消息。
 func testNotificationMessage() Message {
 	return Message{
-		Level: string(LevelInfo),
-		Time:  time.Now(),
-		Title: "通知中心测试消息",
-		Body:  "这是一条来自通知中心的测试消息；收到即表示该通道配置有效。",
+		Level:     string(LevelInfo),
+		Time:      time.Now(),
+		Node:      MasterNodeLabel(),
+		EventType: EvtNotifyChannelRecovered, // 占位真实事件键：{{event_title}} 等占位符有值可渲染
+		Title:     "通知中心测试消息",
+		Body:      "这是一条来自通知中心的测试消息；收到即表示该通道配置有效。",
 	}
 }
 
