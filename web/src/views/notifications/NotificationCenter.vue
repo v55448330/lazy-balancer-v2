@@ -1053,9 +1053,10 @@ const savingDaily = ref(false)
 const newRuleDraft = (rule: Rule): RuleDraft => ({
   events: [...(rule.events ?? [])],
   channel_ids: baselineChannelIds(rule.channel_ids),
-  // 最低级别列已下线：草稿固定 info（=不按级别过滤），保存即清除历史级别门槛，
-  // 确保所选事件全部投递（避免旧 warn/critical 配置造成静默过滤）。
-  min_level: 'info',
+  // 最低级别列已下线：草稿种子必须读行值（仅空值回落 info）——固定 info 会把
+  // 存量 warn/critical 门槛在「改别的字段顺手保存」时静默改写（脏写），而用户
+  // 从未编辑过该字段。取消重建（cancelAllRuleDrafts）同源本函数。
+  min_level: rule.min_level || 'info',
 })
 const newDailyDraft = (rule: Rule): DailyDraft => ({
   items: [...(rule.items ?? [])],

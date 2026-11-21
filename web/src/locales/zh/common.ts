@@ -147,6 +147,7 @@ export default {
     recoveryQueued: '恢复排队',
     requeued: '重新排队',
     reissued: '重新签发',
+    reissueStopped: '停止重签',
     issueTriggered: '触发签发',
     deployFailed: '部署失败',
     recovered: '恢复',

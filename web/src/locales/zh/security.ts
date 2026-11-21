@@ -1200,6 +1200,7 @@ export default {
      "goLists": "打开 IP 名单",
      "doneToast": "默认策略创建完成",
      "failedItemsTip": "本次有 {count} 项未创建成功；重试时已创建项会自动复用：",
+     "statusUnknownTip": "本次操作失败且未返回结果项，无法确认各项默认策略的当前状态；请重试",
      "retry": "重试",
      "loadFailed": "默认策略目录加载失败",
      "applyFailed": "默认策略创建失败（已创建项可重跑恢复）"

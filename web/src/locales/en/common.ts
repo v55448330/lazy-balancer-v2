@@ -147,6 +147,7 @@ export default {
     recoveryQueued: 'Recovery queued',
     requeued: 'Re-queued',
     reissued: 'Reissued',
+    reissueStopped: 'Reissue stopped',
     issueTriggered: 'Issue triggered',
     deployFailed: 'Deploy failed',
     recovered: 'Recovered',

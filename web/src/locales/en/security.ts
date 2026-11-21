@@ -1200,6 +1200,7 @@ export default {
      "goLists": "open IP lists",
      "doneToast": "Default policies created",
      "failedItemsTip": "{count} item(s) were not created; existing items are reused on retry:",
+     "statusUnknownTip": "This run failed without returning results, so the current state of each default policy is unknown. Please retry.",
      "retry": "Retry",
      "loadFailed": "Failed to load default policy catalog",
      "applyFailed": "Failed to apply default policies (created items recover on retry)"

@@ -11,11 +11,30 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, section } from './_helpers.ts'
+import { code, member, repoCode, section } from './_helpers.ts'
 
 const CHANNEL_CARDS = code('src/views/notifications/ChannelCards.vue')
 const CENTER = code('src/views/notifications/NotificationCenter.vue')
 const TASK_MONITOR = code('src/views/settings/TaskMonitor.vue')
+
+/**
+ * 通知任务族：事实源=internal/services/notification_tasks.go 的 Descriptor
+ * （Family=="notification"）Name；词条键从 TaskMonitor 的 TASK_NAME_KEYS 映射取，
+ * 缺映射即红（硬编码期望表会随后端新增任务静默脱节）。
+ */
+const notificationTasks = (): { names: string[]; keys: string[] } => {
+  const go = repoCode('internal/services/notification_tasks.go')
+  const blocks = go.split('mustRegisterTask(te, taskengine.Descriptor{').slice(1)
+  const names = blocks
+    .filter((block) => /Family:\s*"notification"/.test(block))
+    .map((block) => block.match(/\bName:\s*"([^"]+)"/)?.[1])
+    .filter((name): name is string => !!name)
+  const table = section(TASK_MONITOR, 'const TASK_NAME_KEYS: Record<string, string> = {', '\n}')
+  const byName = new Map([...table.matchAll(/'([^']+)':\s*'([^']+)'/g)].map((m) => [m[1], m[2]] as const))
+  const missing = names.filter((name) => !byName.has(name))
+  assert.deepEqual(missing, [], `TaskMonitor.TASK_NAME_KEYS 缺通知任务映射: ${missing.join('、')}`)
+  return { names, keys: names.map((name) => byName.get(name) ?? '') }
+}
 
 test('通道卡保存：editTarget 在首个 await 前捕获，并按捕获目标类型触发自动测试', () => {
   const fn = member(CHANNEL_CARDS, 'const saveDrawer = async')
@@ -49,19 +68,18 @@ test('事件规则保存：空勾选合法（不拦截），非空确认文案�
   assert.match(fn, /events: d\.events, channel_ids: d\.channel_ids, min_level: d\.min_level/)
 })
 
-test('任务监控：通知任务族 6 项映射后端注册名 → 词条键', () => {
-  const table = section(TASK_MONITOR, 'const TASK_NAME_KEYS: Record<string, string> = {', '\n}')
-  const expected: Array<[string, string]> = [
-    ['通知投递', 'notificationDelivery'],
-    ['通知日报', 'notificationDailyReport'],
-    ['QQ 机器人连接', 'qqBotConnection'],
-    ['微信机器人连接', 'wxBotConnection'],
-    ['通知投递保留清理', 'notificationDeliveryRetention'],
-    ['API 密钥临期预警', 'apikeyExpiryWarning'],
-  ]
-  for (const [name, key] of expected) {
-    assert.ok(table.includes(`'${name}': '${key}'`), `任务族映射缺 ${name}`)
-  }
+test('任务监控：通知任务族映射后端注册名（Go Descriptor 扫描对表，缺/多均红）', () => {
+  const { names, keys } = notificationTasks()
+  assert.ok(names.length >= 6, `Go 通知任务族解析异常（${names.length}）——扫描器失效`)
+  assert.deepEqual(keys, notificationTasks().keys, '重复调用必须稳定')
+  assert.equal(new Set(keys).size, keys.length, '通知任务族词条键不得重复')
+  for (const key of keys) assert.match(key, /^[a-z][A-Za-z0-9]*$/, `词条键必须是驼峰标识符（${key}）`)
+})
+
+test('事件规则草稿：min_level 种子读行值（存量 warn/critical 不因保存被改写）', () => {
+  const fn = member(CENTER, 'const newRuleDraft =')
+  assert.match(fn, /min_level:\s*rule\.min_level\s*\|\|\s*'info'/, '种子必须读行值，仅空值回落 info')
+  assert.doesNotMatch(fn, /min_level:\s*'info'\s*,/, '固定 info 会静默清除存量级别门槛（脏写）')
 })
 
 test('任务监控：通知分类可翻译且排入分类序（不落 9 号兜底）', () => {
@@ -72,10 +90,7 @@ test('任务监控：通知分类可翻译且排入分类序（不落 9 号兜�
 })
 
 test('任务监控：6 项显示名与描述 zh/en 成对（不回落后端中文原文）', () => {
-  const keys = [
-    'notificationDelivery', 'notificationDailyReport', 'qqBotConnection',
-    'wxBotConnection', 'notificationDeliveryRetention', 'apikeyExpiryWarning',
-  ]
+  const { keys } = notificationTasks()
   for (const locale of ['zh', 'en']) {
     const names = code(`src/locales/${locale}/misc.ts`)
     const descs = code(`src/locales/${locale}/common.ts`)

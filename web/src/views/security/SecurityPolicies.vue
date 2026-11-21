@@ -1066,6 +1066,7 @@
         <DialogHeader :icon="MagicStick" :title="t('app.security.policies.defaults.title')" :subtitle="t('app.security.policies.defaults.subtitle')" tone="primary" />
       </template>
       <div class="defaults-dialog-body">
+        <div v-if="!defaultsCatalog && defaultsLoadFailed" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.defaults.loadFailed') }}</span></div>
         <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.defaults.previewTip') }}</span></div>
         <div v-if="defaultsDisabledCount > 0" class="info-note-bar defaults-disabled-tip"><span class="info-note-desc">{{ t('app.security.policies.defaults.disabledTip', { count: defaultsDisabledCount }) }}</span></div>
         <template v-for="section in defaultsSections" :key="section.key">
@@ -1104,7 +1105,8 @@
           </div>
         </template>
         <div v-if="defaultsPhase === 'done'" class="info-note-bar defaults-done-tip">
-          <span v-if="defaultsApplyFailed" class="info-note-desc">{{ t('app.security.policies.defaults.failedItemsTip', { count: defaultsFailedNames.length }) }}</span>
+          <span v-if="defaultsApplyFailed && defaultsFailedNames.length" class="info-note-desc">{{ t('app.security.policies.defaults.failedItemsTip', { count: defaultsFailedNames.length }) }}</span>
+          <span v-else-if="defaultsApplyFailed" class="info-note-desc">{{ t('app.security.policies.defaults.statusUnknownTip') }}</span>
           <span v-else class="info-note-desc">
             {{ t('app.security.policies.defaults.doneBindTip') }}
             <AccessibleLink type="primary" size="small" @click="goToPoliciesList">{{ t('app.security.policies.defaults.goRules') }}</AccessibleLink>
@@ -1117,7 +1119,11 @@
         </div>
       </div>
       <template #footer>
-        <template v-if="defaultsPhase !== 'done'">
+        <template v-if="!defaultsCatalog && defaultsLoadFailed">
+          <el-button :disabled="defaultsLoading" @click="defaultsVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
+          <el-button type="primary" :loading="defaultsLoading" @click="loadDefaultsCatalog">{{ t('app.security.policies.defaults.retry') }}</el-button>
+        </template>
+        <template v-else-if="defaultsPhase !== 'done'">
           <el-button :disabled="defaultsRunning" @click="defaultsVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
           <el-button type="primary" :loading="defaultsRunning" :disabled="!defaultsCatalog" @click="runApplyDefaults">{{ t(defaultsAllExist ? 'app.security.policies.defaults.reCreate' : 'app.security.policies.defaults.start') }}</el-button>
         </template>
@@ -1139,6 +1145,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
+import { defaultsFlowOpening, defaultsFlowSettled, defaultsFlowStarting, failedDefaultNames } from '@/utils/defaultPolicyApply'
 import { isCaddyApplyDegraded, mergeBulkResults } from '@/utils/bulkApplyResult'
 import { isValidCidr } from '@/utils/ipAddress'
 import { popperViewportSafe } from '@/utils/popper'
@@ -1191,6 +1198,9 @@ const defaultsItems = ref<DefaultApplyItem[]>([])
 // 「全部成功」——单事务失败整体回滚且失败信封不带已建项，故失败面呈现
 // 「状态未知」而非穷举名单（见 utils/defaultPolicyApply.failedDefaultNames）。
 const defaultsApplyFailed = ref(false)
+// 目录加载态：失败时弹框内必须能重拉（重试按钮），不能只有打开那一次 GET。
+const defaultsLoadFailed = ref(false)
+const defaultsLoading = ref(false)
 const defaultsExpanded = ref(new Set<string>())
 const toggleDefaultsRow = (key: string): void => {
   const next = new Set(defaultsExpanded.value)
@@ -1212,16 +1222,10 @@ const defaultsAppliedStatus = computed(() => {
 })
 const rowStatus = (kind: string, name: string, catalogStatus: string): string =>
   defaultsAppliedStatus.value.get(kind + name) ?? catalogStatus
-// 失败项=目录里有、结果项里没有的条目（后端错误响应只带回已建项；缺项即未建成）。
-const defaultsFailedNames = computed<string[]>(() => {
-  const cat = defaultsCatalog.value
-  if (!cat) return []
-  const applied = defaultsAppliedStatus.value
-  const names: string[] = []
-  for (const l of cat.lists) if (!applied.has('list' + l.name)) names.push(l.name)
-  for (const p of cat.policies) if (!applied.has('policy' + p.name)) names.push(p.name)
-  return names
-})
+// 失败项=目录里有、结果项里没有的条目（kind+name 复合键，utils 纯函数单源）。
+// 无结果集（单事务回滚/请求失败）时返回空——此时状态未知，不做全目录差集。
+const defaultsFailedNames = computed<string[]>(() =>
+  failedDefaultNames(defaultsCatalog.value, defaultsItems.value))
 const defaultsSections = computed<DefaultsSection[]>(() => {
   if (!defaultsCatalog.value) return []
   const sections: DefaultsSection[] = []
@@ -1276,21 +1280,31 @@ const defaultsDisabledCount = computed(() => {
 })
 const refName = (ref: string): string =>
   defaultsCatalog.value?.lists.find((l) => l.key === ref)?.name ?? ref
-const openDefaultsDialog = async (): Promise<void> => {
-  defaultsPhase.value = 'preview'
-  defaultsItems.value = []
-  defaultsApplyFailed.value = false
-  // 先清快照再拉取：打开瞬间不得渲染上一次的目录（状态可能已过期——
-  // 别处刚创建/禁用同名策略，旧快照会把行标签显示成已过时的「未创建」）。
-  defaultsCatalog.value = null
-  defaultsVisible.value = true
+const loadDefaultsCatalog = async (): Promise<void> => {
+  defaultsLoading.value = true
   try {
     const res = await request.get<APIResponse<DefaultCatalog>>('/security/policies/default-catalog')
     defaultsCatalog.value = res.data ?? null
+    defaultsLoadFailed.value = defaultsCatalog.value === null
   } catch {
     defaultsCatalog.value = null
+    defaultsLoadFailed.value = true
     ElMessage.error(t('app.security.policies.defaults.loadFailed'))
+  } finally {
+    defaultsLoading.value = false
   }
+}
+const openDefaultsDialog = async (): Promise<void> => {
+  const flow = defaultsFlowOpening()
+  defaultsPhase.value = flow.phase
+  defaultsApplyFailed.value = flow.failed
+  defaultsItems.value = []
+  // 先清快照再拉取：打开瞬间不得渲染上一次的目录（状态可能已过期——
+  // 别处刚创建/禁用同名策略，旧快照会把行标签显示成已过时的「未创建」）。
+  defaultsCatalog.value = null
+  defaultsLoadFailed.value = false
+  defaultsVisible.value = true
+  await loadDefaultsCatalog()
 }
 const runApplyDefaults = async (): Promise<void> => {
   // §14 操作确认：批量创建/重建为状态变更操作，取消不执行；全部已存在时走
@@ -1309,12 +1323,15 @@ const runApplyDefaults = async (): Promise<void> => {
   } catch {
     return
   }
-  defaultsPhase.value = 'running'
-  defaultsApplyFailed.value = false
+  const starting = defaultsFlowStarting()
+  defaultsPhase.value = starting.phase
+  defaultsApplyFailed.value = starting.failed
   try {
     const res = await request.post<APIResponse<DefaultApplyItem[]>>('/security/policies/apply-defaults', { reset })
     defaultsItems.value = res.data ?? []
-    defaultsPhase.value = 'done'
+    const settled = defaultsFlowSettled(true)
+    defaultsPhase.value = settled.phase
+    defaultsApplyFailed.value = settled.failed
     // 退化 200（k_7d87740a：DB 已提交但重载 Caddy 失败）必须走 showSaveResult
     // 的常驻警告——原实现恒 ElMessage.success，重载失败被伪装成成功、用户
     // 无从得知策略尚未生效。普通成功仍走 MFA 感知提示。
@@ -1325,21 +1342,21 @@ const runApplyDefaults = async (): Promise<void> => {
       const cat = await request.get<APIResponse<DefaultCatalog>>('/security/policies/default-catalog')
       defaultsCatalog.value = cat.data ?? defaultsCatalog.value
     } catch { /* 目录刷新失败不覆盖结果态——apply 状态仍已覆盖行标签 */ }
-  } catch (e) {
-    defaultsApplyFailed.value = true
-    // 部分成功：后端 500/失败信封的 data 带回已建项——展示进度后停在完成态
-    // （重跑走 exists/rebuilt 恢复）。ApiRequestError 暴露的是 data（完整信封
-    // {code,message,data}），不暴露 payload：原读 payload.data 恒 undefined，
-    // 部分进度整段丢失。
-    const partial = e instanceof ApiRequestError
-      ? (e.data as { data?: DefaultApplyItem[] } | undefined)?.data
-      : undefined
-    if (Array.isArray(partial)) defaultsItems.value = partial
+  } catch {
+    // 单事务整体回滚：失败面没有已建项（后端错误信封的 Data 恒空），不伪造
+    // 部分进度——结果集保持为空，失败名单回落「状态未知」文案。
+    const settled = defaultsFlowSettled(false)
+    defaultsPhase.value = settled.phase
+    defaultsApplyFailed.value = settled.failed
     ElMessage.error(t('app.security.policies.defaults.applyFailed'))
   } finally {
     // 兜底：任何未走到 done 的路径都必须退出 running（失败即完成态，可关框、
     // 可重试）。否则 running 会永久锁死弹框（show-close / escape / 取消全被禁）。
-    if (defaultsPhase.value === 'running') defaultsPhase.value = 'done'
+    if (defaultsPhase.value === 'running') {
+      const settled = defaultsFlowSettled(false)
+      defaultsPhase.value = settled.phase
+      defaultsApplyFailed.value = settled.failed
+    }
   }
 }
 // 指引链接：同款深链 window.open（goToBlockPagesPage 同范式）

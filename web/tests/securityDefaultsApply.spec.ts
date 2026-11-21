@@ -1,10 +1,11 @@
 // 默认策略弹框（POST /security/policies/apply-defaults）接线钉：
 //  1) 退化 200 判定键集必须覆盖 k_7d87740a（DB 已提交但重载 Caddy 失败）；
 //  2) 成功/退化一律经 showSaveResult（不得再恒 success 掩盖重载失败）；
-//  3) 失败分支读 ApiRequestError.data（完整信封），不得读不存在的 payload；
+//  3) 失败分支不得伪造部分进度（单事务整体回滚，失败信封无已建项）；结果集
+//     为空时失败名单回落「状态未知」文案（audit153 FE153-02）；
 //  4) 任何未走到 done 的路径经 finally 退出 running（否则弹框永久锁死）；
-//  5) 打开先清目录快照再拉取（不留上一轮旧状态）；
-//  6) 失败项点名 + 重试按钮；catalog status=disabled 行标签走 warning。
+//  5) 打开先清目录快照再拉取（不留上一轮旧状态）；目录加载失败弹框内可重拉；
+//  6) 失败项点名（仅在有结果集时）+ 重试按钮；catalog status=disabled 行标签走 warning。
 //
 // 运行：cd web && npm test
 
@@ -30,37 +31,38 @@ test('apply 结果经 showSaveResult 呈现：退化走常驻警告，不再恒 
   assert.doesNotMatch(fn, /ElMessage\.success/, '恒 success 会把「重载失败」伪装成成功')
 })
 
-test('失败分支读 ApiRequestError.data 信封，不读不存在的 payload', () => {
+test('失败分支不伪造部分进度（事务整体回滚：失败信封无已建项）', () => {
   const fn = section(SRC, 'const runApplyDefaults = async', '\n}')
-  assert.match(fn, /e instanceof ApiRequestError/)
-  assert.match(fn, /\(e\.data as \{ data\?: DefaultApplyItem\[\] \} \| undefined\)\?\.data/, '部分进度在信封 data.data')
-  assert.doesNotMatch(fn, /payload/, 'ApiRequestError 暴露 data，不暴露 payload（原读取恒 undefined）')
+  assert.doesNotMatch(fn, /e\.data/, '失败信封 Data 恒空（单事务回滚）——读它恒 undefined（死代码）')
+  assert.doesNotMatch(fn, /partial/, '不得保留「部分成功」错觉变量')
+  assert.match(fn, /defaultsFlowSettled\(false\)/, '失败必须走纯函数落定（done+failed）')
 })
 
 test('失败即完成态：finally 兜底退出 running（弹框可关、可重试）', () => {
   const fn = section(SRC, 'const runApplyDefaults = async', '\n}')
   const finallyBlock = section(fn, 'finally {', '\n  }')
   assert.match(finallyBlock, /defaultsPhase\.value === 'running'/)
-  assert.match(finallyBlock, /defaultsPhase\.value = 'done'/)
-  // 失败标记在成功路径起始复位、失败路径置位
-  assert.match(fn, /defaultsApplyFailed\.value = false/)
-  assert.match(fn, /defaultsApplyFailed\.value = true/)
+  assert.match(finallyBlock, /defaultsFlowSettled\(false\)/, '兜底路径按失败落定（done+failed）')
+  // 失败标记经纯函数重置/置位（起始清、失败置）
+  assert.match(fn, /defaultsFlowStarting\(\)/)
+  assert.match(fn, /defaultsFlowSettled\(true\)/)
 })
 
-test('打开弹框先清目录快照再拉取（不残留上一轮状态）', () => {
-  const fn = section(SRC, 'const openDefaultsDialog = async', '\n}')
-  const clearAt = fn.indexOf('defaultsCatalog.value = null')
-  const fetchAt = fn.indexOf("request.get<APIResponse<DefaultCatalog>>('/security/policies/default-catalog')")
-  assert.ok(clearAt > 0, '打开时必须清空 defaultsCatalog')
-  assert.ok(fetchAt > clearAt, '清空必须发生在新一轮拉取之前')
-  assert.match(fn, /defaultsApplyFailed\.value = false/)
+test('打开弹框先清目录快照再拉取（不残留上一轮状态）；目录失败可重拉', () => {
+  const open = section(SRC, 'const openDefaultsDialog = async', '\n}')
+  assert.match(open, /defaultsCatalog\.value = null/, '打开时必须清空 defaultsCatalog')
+  assert.match(open, /await loadDefaultsCatalog\(\)/, '清空后经单源加载函数拉取')
+  const load = section(SRC, 'const loadDefaultsCatalog = async', '\n}')
+  assert.match(load, /request\.get<APIResponse<DefaultCatalog>>\('\/security\/policies\/default-catalog'\)/)
+  assert.match(load, /defaultsLoadFailed\.value = true/)
+  assert.match(load, /defaultsLoading\.value = false/)
 })
 
-test('失败项点名 + 重试按钮：目录里有而结果缺失的条目显性列出', () => {
-  assert.match(SRC, /const defaultsFailedNames = computed<string\[\]>\(\(\) =>/, '失败项=目录有、结果无')
-  assert.match(SRC, /applied\.has\('list' \+ l\.name\)/)
-  assert.match(SRC, /applied\.has\('policy' \+ p\.name\)/)
+test('失败项点名（有结果集时）+ 重试按钮；无结果集回落状态未知文案', () => {
+  assert.match(SRC, /const defaultsFailedNames = computed<string\[\]>\(\(\) =>\s*\n\s*failedDefaultNames\(/, '失败项差集走 utils 纯函数单源')
+  assert.doesNotMatch(SRC, /applied\.has\('list' \+ l\.name\)/, '差集实现不得回落到 SFC 内联')
   assert.match(SRC, /t\('app\.security\.policies\.defaults\.failedItemsTip', \{ count: defaultsFailedNames\.length \}\)/)
+  assert.match(SRC, /t\('app\.security\.policies\.defaults\.statusUnknownTip'\)/, '无结果集必须提示状态未知，不穷举名单')
   assert.match(SRC, /v-for="n in defaultsFailedNames"/, '失败项必须逐条展示')
   assert.match(SRC, /t\('app\.security\.policies\.defaults\.retry'\)/, '必须有重试按钮文案')
 })
