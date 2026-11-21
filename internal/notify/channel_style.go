@@ -65,6 +65,11 @@ func MergeStyleIntoTarget(targetJSON, styleJSON string) string {
 // renderStyleTemplate 占位符替换（{{title}}/{{body}}/{{level}}/{{event}}/
 // {{time}}/{{node}}；未知占位符原样保留——用户可见可自查）。
 func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
+	// TemplateApplied：Body 即最终消息，任何样式模板（邮件 body_template 等
+	// 经此入口的调用方）不得再包裹。
+	if msg.TemplateApplied {
+		return msg.Body
+	}
 	if !strings.Contains(tpl, "{{") {
 		return tpl
 	}
@@ -178,6 +183,11 @@ func defaultEventTemplate(typ string) string {
 // renderBotMessage 机器人消息渲染：自定义模板优先；缺省且非日报=通道默认精美
 // 模板；日报/无模板回退 formatBotText（标题+正文+署名）。
 func renderBotMessage(tpl string, msg Message, ts time.Time, typ string) string {
+	// 事件模板已全量渲染（用户模板含标题/列表/页脚）——通道模板（含默认
+	// 预置）再套一层会产生双标题/双正文；原样发送。
+	if msg.TemplateApplied {
+		return msg.Body
+	}
 	if strings.TrimSpace(tpl) == "" && msg.EventType != EvtDailyReport {
 		tpl = defaultEventTemplate(typ)
 	}

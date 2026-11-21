@@ -42,7 +42,17 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 		fields = map[string]string{}
 	}
 	var payload []byte
-	if cfg.PayloadTemplate != "" {
+	if msg.TemplateApplied {
+		// 事件模板已全量渲染：载荷体={level,level_label,time,node,body(最终消息)}
+		var err error
+		payload, err = json.Marshal(map[string]any{
+			"level": msg.Level, "level_label": levelLabelZh(msg.Level),
+			"time": msg.Time.UTC().Format(time.RFC3339), "node": msg.Node, "body": msg.Body,
+		})
+		if err != nil {
+			return fmt.Errorf("载荷编码失败: %w", err)
+		}
+	} else if cfg.PayloadTemplate != "" {
 		// 用户 JSON 模板（占位符 {{title}}/{{body}}/{{level}}/{{event}}/
 		// {{time}}/{{node}}；保存时已校验占位符替换后可解析）
 		payload = []byte(renderStyleTemplateJSON(cfg.PayloadTemplate, msg, ts))

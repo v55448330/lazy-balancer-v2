@@ -1,3 +1,4 @@
+import '@/utils/prism-manual'
 import Prism from 'prismjs'
 import 'prismjs/themes/prism-okaidia.css'
 // 仅保留有消费方的语法：markup（拦截页 HTML/邮件模板）/css/apacheconf（CRS 规则预览）/

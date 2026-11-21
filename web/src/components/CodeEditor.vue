@@ -83,6 +83,19 @@ const onScroll = (e: Event) => {
 .code-editor-highlight {
   pointer-events: none;
   background: #1e293b;
+  /* 全局 border-box 只覆盖 input/textarea（main.css），pre 默认 content-box：
+     height:100%+padding 会让高亮层视口比 textarea 高 32px、最大 scrollTop 小
+     32px——textarea 滚到底时 scrollTop 同步被钳位，高亮层少滚 32px，文字相对
+     光标下移（只在滚动区间末端触发=「滚到底才错位」根因）。对齐 textarea 的
+     border-box 盒模型，两侧滚动几何一致。 */
+  box-sizing: border-box;
+  /* 不自绘滚动条（overflow:hidden 仍可程序滚动）：杜绝 pre/textarea 滚动条
+     宽度分叉；右侧/底部各加 16px 冗余，覆盖 textarea 经典滚动条（≤17px）
+     占据的滚动范围，保证 pre 的最大 scrollTop/scrollLeft 恒 ≥ textarea，
+     scrollTop 同步永不钳位。 */
+  overflow: hidden;
+  padding-right: 32px;
+  padding-bottom: 32px;
 }
 /* prism-okaidia 主题对 code[class*=language-] 强设 font-family: Consolas 与
    line-height: 1.5（组件层是 SF Mono/Menlo 与 1.6）——高亮层与透明 textarea

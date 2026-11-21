@@ -146,6 +146,8 @@ func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []de
 		}
 		if eventTpl != "" && msg.EventType != EvtDailyReport {
 			chMsg.Body = renderStyleTemplate(eventTpl, msg, time.Now())
+			// 全量布局已渲染：通道样式模板不得再套（双渲染根因修复）。
+			chMsg.TemplateApplied = true
 		}
 		// 传 chMsg 保留事件模板渲染结果（非日报原样透传 chMsg.Body）；
 		// 此前传 msg 会把事件模板渲染覆盖回目录原始正文（事件模板不生效根因）。

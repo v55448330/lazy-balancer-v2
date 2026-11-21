@@ -61,3 +61,24 @@ func TestDefaultEventTemplateWX_carriesNode(t *testing.T) {
 		t.Fatalf("微信默认模板缺 {{node}}（正文后缀已移除）: %q", tpl)
 	}
 }
+
+// TemplateApplied 旁路（2026-11-22 第六轮：用户实测事件模板+通道模板双渲染，
+// 标题/正文各两份、外层 ** 字面量泄漏）：事件级模板渲染完成的 Body 是最终
+// 消息全量——通道样式模板（content/body/payload_template）不得再套一层。
+func TestTemplateApplied_bypassesChannelStyleTemplates(t *testing.T) {
+	rendered := "### 🔔 标题\n---\n**正文**\n---\n* 级别：⚠️ 警告\n\n> 品牌通知中心"
+	msg := Message{EventType: "cfg.caddy_apply_failed", Level: "warn", Title: "标题", Body: rendered, TemplateApplied: true}
+	// 机器人：通道 content_template 存在也必须旁路，原样发送
+	if got := renderBotMessage("## 外层 {{title}}\n> **{{body}}**", msg, time.Unix(0, 0), "qq"); got != rendered {
+		t.Fatalf("TemplateApplied 后机器人不得再套通道模板:\n got %q\nwant %q", got, rendered)
+	}
+	// 邮件 body_template 旁路：正文即最终消息
+	if got := renderStyleTemplate("<h1>{{title}}</h1><p>{{body}}</p>", msg, time.Unix(0, 0)); got != rendered {
+		t.Fatalf("TemplateApplied 后邮件不得再套通道模板:\n got %q\nwant %q", got, rendered)
+	}
+	// 未标注（默认链）行为不变：模板仍正常渲染
+	msg2 := Message{EventType: "cfg.caddy_apply_failed", Level: "warn", Title: "标题", Body: "正文"}
+	if got := renderStyleTemplate("X {{title}} Y", msg2, time.Unix(0, 0)); got != "X 标题 Y" {
+		t.Fatalf("默认链模板渲染回归: %q", got)
+	}
+}

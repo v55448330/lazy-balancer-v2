@@ -28,6 +28,11 @@ type Message struct {
 	// 邮件通道据此决定 Content-Type——只有 html 渲染可按 text/html 发送
 	// （NOTIF153-02：markdown/text 的未转义内容不得进 HTML 上下文）。
 	ContentFormat string
+	// TemplateApplied 事件级/事件×通道模板已在派发侧完成**全量布局渲染**——
+	// Body 即最终消息，通道样式模板（机器人 content_template/邮件 body_template/
+	// webhook payload_template）不得再套一层（2026-11-22 用户实测双渲染：
+	// 标题/正文各两份+外层 ** 字面量泄漏）。默认链（无事件模板）不置位。
+	TemplateApplied bool
 }
 
 // testNotificationMessage 通道「测试」按钮共用的测试消息。
