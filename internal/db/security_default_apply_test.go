@@ -805,3 +805,129 @@ func TestApplyDefaultSecurityPolicies_legacyRowHealedInTx(t *testing.T) {
 		t.Fatalf("rows=%d marked=%d want 1/1（不得重复创建）", total, marked)
 	}
 }
+
+// LNK153-P2-01：非 reset 时「用户禁用」先于「引用已脏」判定——disabled 的
+// 默认策略即使引用断了也不重建不改写（仅 reset 恢复）；目录同序（disabled
+// 压过 dirty），两处口径必须一致，否则 apply 与预览态自相矛盾。
+func TestApplyDefaultSecurityPolicies_disabledDirtyPolicyNotRebuilt(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	applyDefaultPoliciesFixture(t)
+	if _, err := ApplyDefaultSecurityPolicies(0); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	var id, listID int64
+	if err := database.QueryRow(`SELECT id FROM security_policies WHERE name='信任名单' AND is_default_policy=1`).Scan(&id); err != nil {
+		t.Fatalf("read policy: %v", err)
+	}
+	if err := database.QueryRow(`SELECT id FROM security_ip_lists WHERE name='信任名单地址列表'`).Scan(&listID); err != nil {
+		t.Fatalf("read list: %v", err)
+	}
+	if _, err := database.Exec(`UPDATE security_policies SET enabled=0, description='用户改过' WHERE id=?`, id); err != nil {
+		t.Fatalf("disable policy: %v", err)
+	}
+	// 脏引用：删被引用的地址列表（apply 会重建列表，但不得因此改写策略）
+	if _, err := database.Exec(`DELETE FROM security_ip_lists WHERE id=?`, listID); err != nil {
+		t.Fatalf("delete list: %v", err)
+	}
+	if status := findPolicyStatus(mustDefaultCatalog(t), "信任名单"); status != "disabled" {
+		t.Fatalf("catalog status=%q want disabled（disabled 优先于 dirty）", status)
+	}
+	items, err := ApplyDefaultSecurityPolicies(0)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var gotID, gotEnabled int64
+	var gotDesc string
+	if err := database.QueryRow(`SELECT id, enabled, description FROM security_policies WHERE name='信任名单' AND is_default_policy=1`).Scan(&gotID, &gotEnabled, &gotDesc); err != nil {
+		t.Fatalf("re-read policy: %v", err)
+	}
+	if gotID != id || gotEnabled != 0 || gotDesc != "用户改过" {
+		t.Fatalf("apply 重建/改写了禁用策略: id=%d enabled=%d desc=%q", gotID, gotEnabled, gotDesc)
+	}
+	found := false
+	for _, it := range items {
+		if it.Kind == "policy" && it.Name == "信任名单" {
+			found = true
+			if it.Status != "disabled" {
+				t.Fatalf("apply item status=%q want disabled（脏引用不得触发重建）", it.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("apply 结果缺少 信任名单 项")
+	}
+	// 仅 reset 恢复：重建行启用且引用重建后的列表 id
+	if _, err := ApplyDefaultSecurityPoliciesReset(0); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	var newID, newEnabled int64
+	var refs string
+	if err := database.QueryRow(`SELECT id, enabled, ip_whitelist_refs FROM security_policies WHERE name='信任名单' AND is_default_policy=1`).Scan(&newID, &newEnabled, &refs); err != nil {
+		t.Fatalf("re-read after reset: %v", err)
+	}
+	var newListID int64
+	if err := database.QueryRow(`SELECT id FROM security_ip_lists WHERE name='信任名单地址列表'`).Scan(&newListID); err != nil {
+		t.Fatalf("re-read list: %v", err)
+	}
+	if newID == id || newEnabled != 1 || refs != "["+jsonInt(newListID)+"]" {
+		t.Fatalf("reset 未恢复: id=%d enabled=%d refs=%s want 新 id/1/[%d]", newID, newEnabled, refs, newListID)
+	}
+}
+
+// DEFPOL153-002：reset 删除覆盖全部同名默认行（不只选中的单个 id），绑定从
+// 全部命中行迁移——历史重复默认行（旧版本重复创建）随重置收敛为一行。
+func TestApplyDefaultSecurityPolicies_resetCollapsesDuplicateDefaultRows(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	applyDefaultPoliciesFixture(t)
+	for _, desc := range []string{"[默认规则] 重复行甲", "[默认规则] 重复行乙"} {
+		if _, err := database.Exec(`INSERT INTO security_policies (name,description,mode,policy_type,enabled,is_default_policy)
+			VALUES ('地域拦截',?,'off','stage1',1,1)`, desc); err != nil {
+			t.Fatalf("seed duplicate default row %q: %v", desc, err)
+		}
+	}
+	for rule, desc := range map[string]string{"lb_dup_a": "[默认规则] 重复行甲", "lb_dup_b": "[默认规则] 重复行乙"} {
+		if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id)
+			SELECT ?, id FROM security_policies WHERE description=?`, rule, desc); err != nil {
+			t.Fatalf("seed binding %s: %v", rule, err)
+		}
+	}
+	items, err := ApplyDefaultSecurityPoliciesReset(0)
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	var total int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_policies WHERE name='地域拦截' AND COALESCE(is_default_policy,0)=1`).Scan(&total); err != nil {
+		t.Fatalf("count 地域拦截: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("reset 后同名默认行=%d want 1（全部命中行必须被删）", total)
+	}
+	var newID int64
+	if err := database.QueryRow(`SELECT id FROM security_policies WHERE name='地域拦截' AND COALESCE(is_default_policy,0)=1`).Scan(&newID); err != nil {
+		t.Fatalf("read rebuilt policy: %v", err)
+	}
+	for _, rule := range []string{"lb_dup_a", "lb_dup_b"} {
+		var n int
+		if err := database.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?`, rule, newID).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("绑定 %s 未迁移到新 id（n=%d err=%v）", rule, n, err)
+		}
+	}
+	var stale int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE policy_id IN (SELECT id FROM security_policies WHERE name='地域拦截') AND policy_id!=?`, newID).Scan(&stale); err != nil {
+		t.Fatalf("count stale bindings: %v", err)
+	}
+	if stale != 0 {
+		t.Fatalf("残留指向旧重复行的绑定=%d want 0", stale)
+	}
+	for _, it := range items {
+		if it.Kind == "policy" && it.Name == "地域拦截" && it.Status != "rebuilt" {
+			t.Fatalf("reset item status=%q want rebuilt", it.Status)
+		}
+	}
+}

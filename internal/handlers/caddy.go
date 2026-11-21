@@ -1827,7 +1827,6 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
 		// 失败同样是可用性事实（此前只在成功时发事件——启停通知永远「成功」）。
-		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": "失败"}})
 		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": caddyLifecycleFailureResult(err)}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
@@ -1837,7 +1836,7 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	// caddyApplyNoteLocked: caller already holds caddyOpMu (applyCaddyConfigE
 	// would re-lock the non-reentrant mutex and deadlock).
 	if note := h.caddyApplyNoteLocked(); note != "" {
-		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": "失败（配置应用未生效）"}})
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": caddyLifecycleApplyFailureResult(note)}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已启动", note)})
 		return
 	}
@@ -1855,7 +1854,7 @@ func (h *Handlers) StopCaddy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
-		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "停止", "3": "失败"}})
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "停止", "3": caddyLifecycleFailureResult(err)}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
@@ -1871,18 +1870,18 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
-		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "失败"}})
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": caddyLifecycleFailureResult(err)}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
-		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "失败"}})
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": caddyLifecycleFailureResult(err)}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// Same as StartCaddy: caller holds caddyOpMu, use the locked variant.
 	if note := h.caddyApplyNoteLocked(); note != "" {
-		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "失败（配置应用未生效）"}})
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": caddyLifecycleApplyFailureResult(note)}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已重启", note)})
 		return
 	}

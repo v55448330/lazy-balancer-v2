@@ -400,3 +400,25 @@ func TestNotificationDailyReportTrigger_adminOnlyAndAudit(t *testing.T) {
 		t.Fatalf("非管理员触发 status=%d body=%v, want 403 k_4b8e3591", status, out)
 	}
 }
+
+// SMTP 测试端点：请求体格式错误必须 400（此前 `_ = ShouldBindJSON` 吞错，
+// 坏载荷被当成「无草稿、测已保存配置」继续真实外发/握手——EVTCERT153-10）。
+func TestTestSMTPSettings_malformedBodyIs400(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	adminRouter := newNotificationTestRouter(h, 1, "admin")
+
+	req := httptest.NewRequest(http.MethodPost, "/notification/settings/smtp-test", strings.NewReader(`{"host":`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	adminRouter.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("坏请求体 status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if out["message_key"] != "k_76de02a0" {
+		t.Fatalf("坏请求体 body=%v, want message_key k_76de02a0", out)
+	}
+}

@@ -1401,7 +1401,8 @@ var newColumnsRegistry = map[string]string{
 	// 默认策略身份列（2026-11-21 audit152 SECH-152-03）：1=面板「默认策略」
 	// 创建/重建的行。apply/catalog/reset 按「名 + 本列」匹配——用户自建同名
 	// 策略不再被复用/删除/冒充 exists；reset 只删本列=1 行。存量行由
-	// backfillDefaultPolicyMarkers 按「种子名 + [默认规则] 描述前缀」回填。
+	// BackfillDefaultPolicyMarkers 按「种子名 + [默认规则] 描述前缀 +
+	// policy_type 与种子一致」回填。
 	"security_policies.is_default_policy": "INTEGER NOT NULL DEFAULT 0",
 	// global_config.cc_* 五列为零消费退役列（CC 阈值/开关已迁策略级
 	// security_policies.cc_*）：见 deadColumnDrops 同批登记。
@@ -7021,7 +7022,7 @@ func markLegacyDefaultPoliciesTx(tx *sql.Tx) error {
 }
 
 // defaultPolicySeedDescPrefix 是默认策略种子的描述前缀（身份标记，见
-// backfillDefaultPolicyMarkers 与 seeds 的 desc 字段）。
+// BackfillDefaultPolicyMarkers 与 seeds 的 desc 字段）。
 const defaultPolicySeedDescPrefix = "[默认规则]"
 
 // ApplyDefaultSecurityPolicies 逐项创建/复用/重建默认地址列表与策略。
@@ -7049,6 +7050,7 @@ func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem
 		// 它们当用户同名行重复创建。
 		if err := markLegacyDefaultPoliciesTx(tx); err != nil {
 			return err
+		}
 		// 1) 用户地址列表：按名复用，缺失创建（空条目）。列表侧维持按名匹配
 		// （风险低：reset 从不动列表；同名=同一意图，策略引用语义不变）。
 		listIDs := make(map[string]int64, len(defaultIPListSeeds))

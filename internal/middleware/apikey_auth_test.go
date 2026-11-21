@@ -316,4 +316,38 @@ func TestAPIKeyAuthRejectsDisabledKey(t *testing.T) {
 	}
 }
 
+// 采集回写走 defer：处理器 panic 沿 gin 恢复链展开时，本次调用记录也按
+// 当前状态码回写（否则永久停在占位 200）。本用例不经 Recovery 中间件，
+// panic 向上传播——defer 仍须执行。
+func TestInstrumentRESTAPICall_writesBackStatusOnPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	path := fmt.Sprintf("/api/v1/probe-panic-%d", time.Now().UnixNano())
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
 		instrumentRESTAPICall(c, "probe-key")
+	})
+	router.GET(path, func(c *gin.Context) {
+		c.Status(http.StatusTeapot)
+		panic("boom")
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("panic 必须向上传播（本用例未装 Recovery）")
+			}
+		}()
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}()
+
+	for _, call := range services.GetRESTCallOverview().RecentCalls {
+		if call.Path != path {
+			continue
+		}
+		if call.Status != http.StatusTeapot {
+			t.Fatalf("panic 请求回写状态=%d, want %d（defer 未执行/状态丢失）", call.Status, http.StatusTeapot)
+		}
+		return
+	}
+	t.Fatalf("panic 请求的记录未出现在最近调用面（defer 回写缺失）: path=%s", path)
+}

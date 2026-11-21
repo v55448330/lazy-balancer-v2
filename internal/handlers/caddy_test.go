@@ -1318,3 +1318,35 @@ func TestPreviewConfigUpdate_serverFaultIsNotReportedAsBadRequest(t *testing.T) 
 		t.Fatalf("5xx 响应不得携带底层错误文本: %s", preview.Body.String())
 	}
 }
+
+// 启停失败事件第三参=「失败：<原因摘要>」：err 原文按 60 字节截断并回退
+// UTF-8 边界（事件正文不得携带无界 exec/admin 细节），短原因原样透传。
+func TestCaddyLifecycleFailureResult_truncatesReason(t *testing.T) {
+	short := caddyLifecycleFailureResult(errors.New("admin 不可达"))
+	if short != "失败：admin 不可达" {
+		t.Fatalf("result=%q, want 失败：admin 不可达", short)
+	}
+	longBody := strings.Repeat("界", caddyLifecycleFailureReasonBytes) // 每字符 3 字节，必超限
+	got := caddyLifecycleFailureResult(errors.New(longBody))
+	const prefix = "失败："
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("result 前缀=%q, want %q", got, prefix)
+	}
+	reason := strings.TrimPrefix(got, prefix)
+	if len(reason) > caddyLifecycleFailureReasonBytes {
+		t.Fatalf("reason len=%d, want ≤%d", len(reason), caddyLifecycleFailureReasonBytes)
+	}
+	if !utf8.ValidString(reason) || strings.Trim(reason, "界") != "" {
+		t.Fatalf("reason=%q 必须按 UTF-8 边界截断（不得留半截字符）", reason)
+	}
+	if got := caddyLifecycleFailureResult(nil); got != "失败" {
+		t.Fatalf("nil err result=%q, want 失败", got)
+	}
+	apply := caddyLifecycleApplyFailureResult(strings.Repeat("应", 40))
+	if !strings.HasPrefix(apply, "失败（配置应用未生效）：") {
+		t.Fatalf("apply-failure result=%q, want 保留既有短语+原因摘要", apply)
+	}
+	if len(strings.TrimPrefix(apply, "失败（配置应用未生效）：")) > caddyLifecycleFailureReasonBytes {
+		t.Fatalf("apply-failure 原因摘要超限: %q", apply)
+	}
+}
