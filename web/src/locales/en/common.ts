@@ -98,6 +98,7 @@ export default {
     signedOut: 'Signed out',
     authDenied: 'Auth denied',
     reset: 'Reset',
+    resetFailed: 'Reset failed',
     passwordReset: 'Password reset',
     rebound: 'Re-bound',
     generated: 'Generated',

@@ -4223,7 +4223,7 @@ func systemIPListSeeds() []systemIPListSeed {
 		seeds = append(seeds, systemIPListSeed{Name: sl.Name, Description: sl.Description, Category: "恶意 IP"})
 	}
 	seeds = append(seeds, systemIPListSeed{
-		Name:        "自动封禁名单",
+		Name:        AutobanPresetListName,
 		Description: "自动封禁命中 IP（自动封禁任务维护；可手动追加或删除条目）",
 		Category:    "自动封禁",
 	})
@@ -4769,6 +4769,11 @@ func migrateSecurityPoliciesNullable() error {
 		if hasCol("cc_queue_wait_sec") {
 			ccWaitSel = "COALESCE(cc_queue_wait_sec,0)"
 		}
+		// 默认策略身份列同属补列通道：直接调本迁移的 legacy 库可能尚未补列。
+		defaultPolicySel := "0"
+		if hasCol("is_default_policy") {
+			defaultPolicySel = "COALESCE(is_default_policy,0)"
+		}
 		// rebuild 必须与「fresh CREATE + newColumns 稳态」同形状并搬运其数据
 		//（含人机/CC 十列——它们只经补列通道到达，fresh DDL 不携带）——
 		// 陈旧 DDL 会把同一 runMigrations 早前 newColumns 刚加的列丢掉
@@ -4816,26 +4821,27 @@ func migrateSecurityPoliciesNullable() error {
 			cc_session_anomaly INTEGER NOT NULL DEFAULT 0,
 			cc_session_ua_threshold INTEGER NOT NULL DEFAULT %d,
 			cc_trigger_action TEXT NOT NULL DEFAULT 'challenge',
-			cc_queue_wait_sec INTEGER NOT NULL DEFAULT 0
+			cc_queue_wait_sec INTEGER NOT NULL DEFAULT 0,
+			is_default_policy INTEGER NOT NULL DEFAULT 0
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,block_response_mode,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
 			log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,geoip_crawler_exempt,geoip_crawler_engines,
 			human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,
-			cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold,cc_trigger_action,cc_queue_wait_sec)
+			cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold,cc_trigger_action,cc_queue_wait_sec,is_default_policy)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,COALESCE(block_response_mode,'auto'),enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
 			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0),COALESCE(geoip_crawler_exempt,0),COALESCE(geoip_crawler_engines,'[]'),
 			COALESCE(human_verify_mode,'off'),COALESCE(human_verify_type,'%s'),COALESCE(human_verify_ttl,%d),COALESCE(human_exempt_paths,'[]'),
-			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,%d),COALESCE(cc_rps_window,%d),COALESCE(cc_4xx_ratio,%d),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,%d),%s,%s
+			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,%d),COALESCE(cc_rps_window,%d),COALESCE(cc_4xx_ratio,%d),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,%d),%s,%s,%s
 		FROM security_policies;
 		DROP TABLE security_policies;
 		ALTER TABLE security_policies_new RENAME TO security_policies;`, DefaultAnomalyThreshold,
 			DefaultHumanVerifyType, DefaultHumanVerifyTTL, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, DefaultCCSessionUAThreshold,
 			DefaultHumanVerifyType, DefaultHumanVerifyTTL, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, DefaultCCSessionUAThreshold,
-			ccActionSel, ccWaitSel)); err != nil {
+			ccActionSel, ccWaitSel, defaultPolicySel)); err != nil {
 			return fmt.Errorf("rebuild security_policies table: %w", err)
 		}
 		return nil
@@ -6320,12 +6326,17 @@ func backfillHumanEventPolicyAttribution() error {
 		if !ok {
 			attr = attribution{}
 			if item.ruleID != "" {
+				// 归属口径与实时直写（handlers.handleIngestHuman 的
+				// lookupHumanEventAttribution）单源：stage2 ∪ mixed——只认
+				// stage2 会让升级库中 mixed 策略的历史人机事件永久
+				// policy_id=0（触发详情「无策略归属」）。stage2 优先、mixed
+				// 兜底（渲染层按内容特征选属主，不看 policy_type）。
 				_ = DB.QueryRow(`SELECT COALESCE(r.name,''), CASE WHEN p.id IS NOT NULL THEN b.policy_id ELSE 0 END, CASE WHEN p.id IS NOT NULL THEN p.name ELSE '' END
 					FROM lb_rules r
 					LEFT JOIN security_policy_bindings b ON b.rule_caddy_id=r.caddy_id
-					LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type='stage2'
+					LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type IN ('stage2','mixed')
 					WHERE r.caddy_id=?
-					ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 ELSE 1 END, b.rank, b.policy_id
+					ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 WHEN p.policy_type='mixed' THEN 1 ELSE 2 END, b.rank, b.policy_id
 					LIMIT 1`, item.ruleID).Scan(&attr.ruleName, &attr.policyID, &attr.policyName)
 			}
 			cache[item.ruleID] = attr
@@ -6705,7 +6716,7 @@ type DefaultApplyItem struct {
 	Kind   string `json:"kind"` // "list" | "policy"
 	Name   string `json:"name"`
 	Stage  string `json:"stage,omitempty"`
-	Status string `json:"status"` // created | exists | rebuilt
+	Status string `json:"status"` // created | exists | rebuilt | disabled
 	ID     int64  `json:"id"`
 }
 
@@ -6722,7 +6733,7 @@ type DefaultCatalogPolicy struct {
 	Desc           string   `json:"desc"`
 	PolicyType     string   `json:"policy_type"`
 	Content        string   `json:"content"` // 策略内容一行（展开详情）
-	Status         string   `json:"status"`  // missing | exists | dirty
+	Status         string   `json:"status"`  // missing | exists | dirty | disabled
 	ListRefs       []string `json:"list_refs"`
 	SystemListRefs []string `json:"system_list_refs"`
 }
@@ -6748,6 +6759,8 @@ type defaultPolicySeed struct {
 	logReqBody           int
 	humanMode, humanType string
 	ccEnabled            int
+	ccSessionAnomaly     int
+	ccSessionUAThreshold int
 	blockPageID          int
 }
 
@@ -6766,7 +6779,8 @@ var defaultPolicySeeds = []defaultPolicySeed{
 		name: "威胁情报拦截", content: "命中威胁名单 IP 即拒绝（403）", desc: "[默认规则] 拒绝内置威胁情报名单（中科大/FireHOL/ET 失陷主机）中的已知恶意 IP；威胁库可经规则集页面更新",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny",
-		ipACLRefKeys: []string{"sys:中科大恶意 IP 名单（USTC）", "sys:FireHOL Level 1 综合黑名单", "sys:Emerging Threats 失陷主机名单"},
+		// sys: 引用取内置威胁名单单源（threatlists.go），禁止第二份字面量。
+		ipACLRefKeys: ThreatSystemListRefKeys(),
 	},
 	{
 		name: "手动黑名单", content: "命中名单 IP/网段即拒绝（403）", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段；地址可经安全事件页 IP 快捷弹框快速添加/移除",
@@ -6776,7 +6790,7 @@ var defaultPolicySeeds = []defaultPolicySeed{
 	{
 		name: "自动封禁联动", content: "命中自动封禁名单即拒绝（403）", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截；需在安全事件页手动开启自动封禁功能后生效",
 		ptype: "stage1", mode: "off",
-		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"sys:自动封禁名单"},
+		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{SystemListRefKey(AutobanPresetListName)},
 	},
 	{
 		name: "地域拦截", content: "海外区域流量拒绝，其他放行", desc: "[默认规则] 拦截所选海外区域（其他放行）；IP 库可经规则集页面更新",
@@ -6787,30 +6801,41 @@ var defaultPolicySeeds = []defaultPolicySeed{
 		name: "基础 CC 防护", content: "突刺/4xx/多 UA 任一命中触发滑块挑战，通过后放行", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
 		ptype: "stage2", mode: "off",
 		humanMode: "auto", humanType: "slider", ccEnabled: 1,
+		// 文案宣称「多 UA」触发：会话异常检测必须随种子启用（audit152
+		// SVC-152-03——此前只开 cc_detect_enabled，多 UA 维度实际未生效）。
+		ccSessionAnomaly: 1, ccSessionUAThreshold: DefaultCCSessionUAThreshold,
 		blockPageID: 9005, // services.builtinHumanVerifyPageID（滑块页，包私有故字面量）
 	},
 	{
-		name: "WAF 请求防护", content: "CRS 请求方向 16 组规则阻断，记录请求体", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
+		name: "WAF 请求防护", content: "CRS 请求方向 15 组规则阻断，记录请求体", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
 		ptype: "stage3", mode: "blocking",
-		crsGroups: `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44","49"]`, logReqBody: 1,
+		// 基础设施组 49（请求评估）/59（响应评估）由渲染与写侧强制包含/剥离，
+		// 种子不得再宣称（audit152 SVC-152-02）。
+		crsGroups: `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44"]`, logReqBody: 1,
 	},
 	{
-		name: "WAF 响应检测", content: "CRS 响应方向 9 组规则阻断，检查响应体", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
+		name: "WAF 响应检测", content: "CRS 响应方向 8 组规则阻断，检查响应体", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
 		ptype: "stage3", mode: "blocking",
-		crsGroups: `["50","51","52","53","54","55","56","59","80"]`, wafCheckResp: 1,
+		crsGroups: `["50","51","52","53","54","55","56","80"]`, wafCheckResp: 1,
 	},
 }
 
 // GetDefaultSecurityCatalog 返回默认策略目录（预览弹框数据源）。
-// Status 为实时库态：列表按名+system=0；策略 missing/exists/dirty
-// （dirty=引用的列表已删，apply 时会删除重建）。
-func GetDefaultSecurityCatalog() DefaultSecurityCatalog {
+// Status 为实时库态：列表按名+system=0；策略按名+is_default_policy=1，
+// missing/exists/dirty/disabled（dirty=引用的列表已删，apply 会删除重建；
+// disabled=默认策略被用户禁用，apply 不改写，重置可恢复）。
+// 存在性探测只把 sql.ErrNoRows 当「缺席」，其余库错误上抛——读故障不得被
+// 静默呈现成「未创建」。
+func GetDefaultSecurityCatalog() (DefaultSecurityCatalog, error) {
 	cat := DefaultSecurityCatalog{}
 	for _, l := range defaultIPListSeeds {
 		item := l
 		item.Status = "missing"
-		var one int
-		if err := DB.QueryRow(`SELECT 1 FROM security_ip_lists WHERE name=? AND system=0`, l.Name).Scan(&one); err == nil {
+		found, err := rowExists(DB, `SELECT 1 FROM security_ip_lists WHERE name=? AND system=0`, l.Name)
+		if err != nil {
+			return DefaultSecurityCatalog{}, fmt.Errorf("inspect default IP list %q: %w", l.Name, err)
+		}
+		if found {
 			item.Status = "exists"
 		}
 		cat.Lists = append(cat.Lists, item)
@@ -6822,21 +6847,37 @@ func GetDefaultSecurityCatalog() DefaultSecurityCatalog {
 		cp.ListRefs = append(cp.ListRefs, sd.ipWLRefKeys...)
 		cp.ListRefs = append(cp.ListRefs, sd.ipACLRefKeys...)
 		var pid int64
-		if err := DB.QueryRow(`SELECT id FROM security_policies WHERE name=?`, sd.name).Scan(&pid); err == nil {
+		var enabled int
+		err := DB.QueryRow(`SELECT id, COALESCE(enabled,1) FROM security_policies WHERE name=? AND is_default_policy=1`, sd.name).Scan(&pid, &enabled)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// missing（同名用户自建行不匹配）
+		case err != nil:
+			return DefaultSecurityCatalog{}, fmt.Errorf("inspect default policy %q: %w", sd.name, err)
+		default:
 			cp.Status = "exists"
-			if !policyRefsValid(pid) {
+			if enabled == 0 {
+				// 用户禁用的默认策略：apply 不改写（保留用户意图），重置可恢复。
+				cp.Status = "disabled"
+			} else if valid, verr := policyRefsValid(DB, pid); verr != nil {
+				return DefaultSecurityCatalog{}, fmt.Errorf("validate default policy %q refs: %w", sd.name, verr)
+			} else if !valid {
 				cp.Status = "dirty"
 			}
 		}
-		for _, r := range sd.ipACLRefKeys {
-			if len(r) > 4 && r[:4] == "sys:" {
-				cp.SystemListRefs = append(cp.SystemListRefs, r[4:])
+		// 系统名单引用面：信任名单/ACL 两个 refs 列都可能携带 sys: 键
+		// （此前只扫 ipACLRefKeys，未来 sys: 进白名单列会漏展示）。
+		for _, refs := range [][]string{sd.ipWLRefKeys, sd.ipACLRefKeys} {
+			for _, r := range refs {
+				if name, ok := parseSystemListRef(r); ok {
+					cp.SystemListRefs = append(cp.SystemListRefs, name)
+				}
 			}
 		}
 		// 纯系统引用不进 ListRefs（预览只展示用户可建列表）
 		userOnly := make([]string, 0, len(cp.ListRefs))
 		for _, r := range cp.ListRefs {
-			if len(r) > 4 && r[:4] == "sys:" {
+			if _, ok := parseSystemListRef(r); ok {
 				continue
 			}
 			userOnly = append(userOnly, r)
@@ -6844,154 +6885,312 @@ func GetDefaultSecurityCatalog() DefaultSecurityCatalog {
 		cp.ListRefs = userOnly
 		cat.Policies = append(cat.Policies, cp)
 	}
-	return cat
+	return cat, nil
+}
+
+// parseSystemListRef 解析策略 refs 的 "sys:<名单名>" 系统名单引用键。
+func parseSystemListRef(ref string) (string, bool) {
+	if !strings.HasPrefix(ref, systemListRefPrefix) {
+		return "", false
+	}
+	name := strings.TrimPrefix(ref, systemListRefPrefix)
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+// tableQuerier 是只读探测的最小查询面（*sql.DB 与 *sql.Tx 共用）。
+type tableQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// rowExists 只读存在性探测：sql.ErrNoRows=缺席，其余错误上抛。
+func rowExists(q tableQuerier, query string, args ...any) (bool, error) {
+	var one int
+	if err := q.QueryRow(query, args...).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // policyRefsValid 校验策略两个 refs JSON 数组里的列表 id 全部存在。
-func policyRefsValid(policyID int64) bool {
+// 空串/空白 refs 视为合法空集（与渲染端 parseIPListRefsChecked 的
+// TrimSpace→空集 同口径，2026-11-21 audit152 LNK-def-152-009）；畸形 JSON
+// 判非法（数据问题而非库故障）；行缺失判非法；库故障上抛。
+func policyRefsValid(q tableQuerier, policyID int64) (bool, error) {
 	var wlRefs, aclRefs string
-	if err := DB.QueryRow(`SELECT COALESCE(ip_whitelist_refs,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?`, policyID).Scan(&wlRefs, &aclRefs); err != nil {
-		return false
+	err := q.QueryRow(`SELECT COALESCE(ip_whitelist_refs,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?`, policyID).Scan(&wlRefs, &aclRefs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
 	}
 	for _, raw := range []string{wlRefs, aclRefs} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
 		var ids []int64
 		if err := json.Unmarshal([]byte(raw), &ids); err != nil {
-			return false
+			return false, nil
 		}
 		for _, id := range ids {
-			var one int
-			if err := DB.QueryRow(`SELECT 1 FROM security_ip_lists WHERE id=?`, id).Scan(&one); err != nil {
-				return false
+			if id <= 0 {
+				return false, nil
+			}
+			exists, err := rowExists(q, `SELECT 1 FROM security_ip_lists WHERE id=?`, id)
+			if err != nil {
+				return false, err
+			}
+			if !exists {
+				return false, nil
 			}
 		}
 	}
-	return true
+	return true, nil
 }
 
+// backfillDefaultPolicyMarkers 幂等补标 is_default_policy：种子名 + 种子描述
+// 前缀「[默认规则]」的存量行视为默认策略（列引入前的 apply 产物与旧备份
+// 恢复行）。用户自建同名行不带该前缀、不补标——防误伤优先，false-negative
+// （描述被用户改掉的真默认行）只会让 apply 多建一条默认行，绝不会删除用户行。
+// 只读探测零命中即返回（收敛库启动零写）。
+func backfillDefaultPolicyMarkers() error {
+	pending, err := countLegacyDefaultPolicyRows(DB)
+	if err != nil {
+		return err
+	}
+	if pending == 0 {
+		return nil
+	}
+	if _, err := DB.Exec(legacyDefaultPolicyMarkSQL(), legacyDefaultPolicyMarkArgs()...); err != nil {
+		return err
+	}
+	log.Printf("启动迁移：默认策略身份补标 %d 行（is_default_policy）", pending)
+	return nil
+}
+
+// countLegacyDefaultPolicyRows 统计待补标行（只读探测，收敛库零命中）。
+func countLegacyDefaultPolicyRows(q tableQuerier) (int, error) {
+	var pending int
+	err := q.QueryRow(`SELECT COUNT(*) FROM security_policies WHERE `+legacyDefaultPolicyWhere(), legacyDefaultPolicyMarkArgs()...).Scan(&pending)
+	return pending, err
+}
+
+// legacyDefaultPolicyWhere 是补标谓词：种子名 + 种子描述前缀（参数顺序=
+// 前缀两次（substr 长度与比较值）+ 种子名单）。
+func legacyDefaultPolicyWhere() string {
+	names := make([]string, 0, len(defaultPolicySeeds))
+	for _, sd := range defaultPolicySeeds {
+		names = append(names, sd.name)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
+	return `is_default_policy=0 AND substr(COALESCE(description,''),1,length(?))=? AND name IN (` + placeholders + `)`
+}
+
+func legacyDefaultPolicyMarkArgs() []any {
+	args := []any{defaultPolicySeedDescPrefix, defaultPolicySeedDescPrefix}
+	for _, sd := range defaultPolicySeeds {
+		args = append(args, sd.name)
+	}
+	return args
+}
+
+func legacyDefaultPolicyMarkSQL() string {
+	return `UPDATE security_policies SET is_default_policy=1 WHERE ` + legacyDefaultPolicyWhere()
+}
+
+// markLegacyDefaultPoliciesTx 在 apply 事务内先补标：备份恢复（旧备份不带
+// is_default_policy）后立即点「默认策略」时，真默认行尚未被启动迁移标记——
+// 不补标会把它们当用户行并重复创建同名策略。与启动补标同一谓词单源。
+func markLegacyDefaultPoliciesTx(tx *sql.Tx) error {
+	if _, err := tx.Exec(legacyDefaultPolicyMarkSQL(), legacyDefaultPolicyMarkArgs()...); err != nil {
+		return fmt.Errorf("mark legacy default policies: %w", err)
+	}
+	return nil
+}
+
+// defaultPolicySeedDescPrefix 是默认策略种子的描述前缀（身份标记，见
+// backfillDefaultPolicyMarkers 与 seeds 的 desc 字段）。
+const defaultPolicySeedDescPrefix = "[默认规则]"
+
 // ApplyDefaultSecurityPolicies 逐项创建/复用/重建默认地址列表与策略。
-// 每项独立提交：中途失败时已建项成为下次运行的 exists/rebuilt 输入
-// （用户裁定的脏数据恢复路径——先删除后重建）。
-func ApplyDefaultSecurityPolicies() ([]DefaultApplyItem, error) {
-	return applyDefaultSecurityPolicies(false)
+// 单事务贯穿列表+策略+绑定迁移+悬空清理（audit152 LNK-def-152-003）：中途
+// 失败整体回滚，不留下半批默认行；并发调用由写锁互斥（handler 侧另持
+// caddyOpMu 串行化用户请求）。actorID 落 updated_by。
+func ApplyDefaultSecurityPolicies(actorID int64) ([]DefaultApplyItem, error) {
+	return applyDefaultSecurityPolicies(actorID, false)
 }
 
 // ApplyDefaultSecurityPoliciesReset 重新创建（用户裁定 2026-11-21）：全部默认
-// 策略删除重建（恢复默认字段值，绑定迁移到新 id，status=rebuilt）；地址列表
-// 不动（保留用户条目）。用于「全部已存在」时的重置默认策略入口。
-func ApplyDefaultSecurityPoliciesReset() ([]DefaultApplyItem, error) {
-	return applyDefaultSecurityPolicies(true)
+// 策略（is_default_policy=1）删除重建（恢复默认字段值，绑定迁移到新 id，
+// status=rebuilt）；地址列表不动（保留用户条目），用户自建同名策略不动。
+// 用于「全部已存在」时的重置默认策略入口。
+func ApplyDefaultSecurityPoliciesReset(actorID int64) ([]DefaultApplyItem, error) {
+	return applyDefaultSecurityPolicies(actorID, true)
 }
 
-func applyDefaultSecurityPolicies(reset bool) ([]DefaultApplyItem, error) {
-	items := make([]DefaultApplyItem, 0, 10)
-	// 1) 用户地址列表：按名复用，缺失创建（空条目）
-	listIDs := make(map[string]int64, len(defaultIPListSeeds))
-	for _, l := range defaultIPListSeeds {
-		var id int64
-		status := "exists"
-		if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=0`, l.Name).Scan(&id); err != nil {
-			res, ierr := DB.Exec(`INSERT INTO security_ip_lists (name,description,category,entries,system,created_at,updated_at) VALUES (?,?,?,?,0,datetime('now'),datetime('now'))`,
-				l.Name, l.Desc, l.Category, `[]`)
-			if ierr != nil {
-				return items, fmt.Errorf("create list %q: %w", l.Name, ierr)
-			}
-			id, _ = res.LastInsertId()
-			status = "created"
+func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem, error) {
+	items := make([]DefaultApplyItem, 0, len(defaultIPListSeeds)+len(defaultPolicySeeds))
+	err := withWriteTx("apply default security policies", func(tx *sql.Tx) error {
+		items = items[:0]
+		// 旧备份恢复等形态：真默认行尚未带身份标记——同事务补标，避免把
+		// 它们当用户同名行重复创建。
+		if err := markLegacyDefaultPoliciesTx(tx); err != nil {
+			return err
 		}
-		listIDs[l.Key] = id
-		items = append(items, DefaultApplyItem{Kind: "list", Name: l.Name, Status: status, ID: id})
-	}
-	// 2) 策略
-	for _, sd := range defaultPolicySeeds {
-		var wlIDs, aclIDs []int64
-		for _, key := range sd.ipWLRefKeys {
-			if id, ok := listIDs[key]; ok {
-				wlIDs = append(wlIDs, id)
+		// 1) 用户地址列表：按名复用，缺失创建（空条目）。列表侧维持按名匹配
+		// （风险低：reset 从不动列表；同名=同一意图，策略引用语义不变）。
+		listIDs := make(map[string]int64, len(defaultIPListSeeds))
+		for _, l := range defaultIPListSeeds {
+			var id int64
+			status := "exists"
+			err := tx.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=0`, l.Name).Scan(&id)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				res, ierr := tx.Exec(`INSERT INTO security_ip_lists (name,description,category,entries,system,created_at,updated_at) VALUES (?,?,?,?,0,datetime('now'),datetime('now'))`,
+					l.Name, l.Desc, l.Category, `[]`)
+				if ierr != nil {
+					return fmt.Errorf("create list %q: %w", l.Name, ierr)
+				}
+				id, _ = res.LastInsertId()
+				status = "created"
+			case err != nil:
+				return fmt.Errorf("inspect list %q: %w", l.Name, err)
 			}
+			listIDs[l.Key] = id
+			items = append(items, DefaultApplyItem{Kind: "list", Name: l.Name, Status: status, ID: id})
 		}
-		for _, ref := range sd.ipACLRefKeys {
-			if len(ref) > 4 && ref[:4] == "sys:" {
-				var id int64
-				if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1`, ref[4:]).Scan(&id); err == nil {
+		// 2) 策略
+		for _, sd := range defaultPolicySeeds {
+			var wlIDs, aclIDs []int64
+			for _, key := range sd.ipWLRefKeys {
+				if id, ok := listIDs[key]; ok {
+					wlIDs = append(wlIDs, id)
+				}
+			}
+			for _, ref := range sd.ipACLRefKeys {
+				if sysName, ok := parseSystemListRef(ref); ok {
+					var id int64
+					err := tx.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1`, sysName).Scan(&id)
+					switch {
+					case errors.Is(err, sql.ErrNoRows):
+						// 系统名单缺失（威胁源未初始化）不阻塞创建，引用留空
+					case err != nil:
+						return fmt.Errorf("inspect system list %q: %w", sysName, err)
+					default:
+						aclIDs = append(aclIDs, id)
+					}
+					continue
+				}
+				if id, ok := listIDs[ref]; ok {
 					aclIDs = append(aclIDs, id)
 				}
-				continue // 系统名单缺失（威胁源未初始化）不阻塞创建，引用留空
 			}
-			if id, ok := listIDs[ref]; ok {
-				aclIDs = append(aclIDs, id)
-			}
-		}
-		wlJSON, _ := json.Marshal(wlIDs)
-		aclJSON, _ := json.Marshal(aclIDs)
+			wlJSON, _ := json.Marshal(wlIDs)
+			aclJSON, _ := json.Marshal(aclIDs)
 
-		var existingID int64
-		status := "created"
-		// 重建前捕获旧绑定（rule_caddy_id, rank）——重建后重指到新 id，否则
-		// 绑定悬空、渲染层静默跳过该策略（2026-11-21 用户实测安全链不生成）。
-		type boundRule struct {
-			ruleCaddyID string
-			rank        int64
-		}
-		var oldBindings []boundRule
-		err := DB.QueryRow(`SELECT id FROM security_policies WHERE name=?`, sd.name).Scan(&existingID)
-		rebuild := false
-		switch {
-		case err == nil && policyRefsValid(existingID) && !reset:
-			status = "exists"
-		case err == nil:
-			rows, qerr := DB.Query(`SELECT rule_caddy_id, COALESCE(rank,0) FROM security_policy_bindings WHERE policy_id=?`, existingID)
-			if qerr != nil {
-				return items, fmt.Errorf("read bindings of %q: %w", sd.name, qerr)
+			var existingID int64
+			var existingEnabled int
+			status := "created"
+			// 重建前捕获旧绑定（rule_caddy_id, rank）——重建后重指到新 id，否则
+			// 绑定悬空、渲染层静默跳过该策略（2026-11-21 用户实测安全链不生成）。
+			type boundRule struct {
+				ruleCaddyID string
+				rank        int64
 			}
-			for rows.Next() {
-				var br boundRule
-				if e := rows.Scan(&br.ruleCaddyID, &br.rank); e != nil {
-					rows.Close()
-					return items, fmt.Errorf("scan binding of %q: %w", sd.name, e)
+			var oldBindings []boundRule
+			rebuild := false
+			// 身份匹配 = 名 + is_default_policy=1：用户自建同名行不匹配。
+			err := tx.QueryRow(`SELECT id, COALESCE(enabled,1) FROM security_policies WHERE name=? AND is_default_policy=1`, sd.name).Scan(&existingID, &existingEnabled)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				// create
+			case err != nil:
+				return fmt.Errorf("inspect default policy %q: %w", sd.name, err)
+			default:
+				valid, verr := policyRefsValid(tx, existingID)
+				if verr != nil {
+					return fmt.Errorf("validate refs of %q: %w", sd.name, verr)
 				}
-				oldBindings = append(oldBindings, br)
+				switch {
+				case reset || !valid:
+					rows, qerr := tx.Query(`SELECT rule_caddy_id, COALESCE(rank,0) FROM security_policy_bindings WHERE policy_id=?`, existingID)
+					if qerr != nil {
+						return fmt.Errorf("read bindings of %q: %w", sd.name, qerr)
+					}
+					for rows.Next() {
+						var br boundRule
+						if e := rows.Scan(&br.ruleCaddyID, &br.rank); e != nil {
+							rows.Close()
+							return fmt.Errorf("scan binding of %q: %w", sd.name, e)
+						}
+						oldBindings = append(oldBindings, br)
+					}
+					if e := rows.Err(); e != nil {
+						rows.Close()
+						return fmt.Errorf("iterate bindings of %q: %w", sd.name, e)
+					}
+					rows.Close()
+					if _, derr := tx.Exec(`DELETE FROM security_policies WHERE id=?`, existingID); derr != nil {
+						return fmt.Errorf("clean dirty policy %q: %w", sd.name, derr)
+					}
+					status = "rebuilt"
+					rebuild = true
+				case existingEnabled == 0:
+					// 用户禁用的默认策略：保留原貌（不改写用户意图）；
+					// 重置路径（reset）已在上分支重建恢复。
+					status = "disabled"
+				default:
+					status = "exists"
+				}
 			}
-			rows.Close()
-			if _, derr := DB.Exec(`DELETE FROM security_policies WHERE id=?`, existingID); derr != nil {
-				return items, fmt.Errorf("clean dirty policy %q: %w", sd.name, derr)
-			}
-			status = "rebuilt"
-			rebuild = true
-		}
-		if status != "exists" {
-			res, ierr := DB.Exec(`INSERT INTO security_policies
-				(name, description, mode, policy_type, enabled,
-				 ip_whitelist_enabled, ip_whitelist_refs,
-				 ip_acl_enabled, ip_acl_mode, ip_acl_list_refs,
-				 geoip_mode, geoip_countries,
-				 crs_rule_groups, waf_check_response, log_request_body,
-				 human_verify_mode, human_verify_type, human_verify_ttl,
-				 cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, block_page_id)
-				VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				sd.name, sd.desc, sd.mode, sd.ptype,
-				sd.ipWLEnabled, string(wlJSON),
-				sd.ipACLEnabled, orString(sd.ipACLMode, "deny"), string(aclJSON),
-				orString(sd.geoipMode, "off"), orString(sd.geoipCountries, "[]"),
-				orString(sd.crsGroups, "[]"), sd.wafCheckResp, sd.logReqBody,
-				orString(sd.humanMode, "off"), orString(sd.humanType, DefaultHumanVerifyType), DefaultHumanVerifyTTL,
-				sd.ccEnabled, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, sd.blockPageID)
-			if ierr != nil {
-				return items, fmt.Errorf("create policy %q: %w", sd.name, ierr)
-			}
-			existingID, _ = res.LastInsertId()
-			if rebuild {
-				for _, br := range oldBindings {
-					if _, berr := DB.Exec(`INSERT OR REPLACE INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES (?,?,?)`, br.ruleCaddyID, existingID, br.rank); berr != nil {
-						return items, fmt.Errorf("migrate binding %s→%q: %w", br.ruleCaddyID, sd.name, berr)
+			if status != "exists" && status != "disabled" {
+				res, ierr := tx.Exec(`INSERT INTO security_policies
+					(name, description, mode, policy_type, enabled, is_default_policy, updated_by,
+					 ip_whitelist_enabled, ip_whitelist_refs,
+					 ip_acl_enabled, ip_acl_mode, ip_acl_list_refs,
+					 geoip_mode, geoip_countries,
+					 crs_rule_groups, waf_check_response, log_request_body,
+					 human_verify_mode, human_verify_type, human_verify_ttl,
+					 cc_detect_enabled, cc_session_anomaly, cc_session_ua_threshold,
+					 cc_rps_limit, cc_rps_window, cc_4xx_ratio, block_page_id)
+					VALUES (?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+					sd.name, sd.desc, sd.mode, sd.ptype, actorID,
+					sd.ipWLEnabled, string(wlJSON),
+					sd.ipACLEnabled, orString(sd.ipACLMode, "deny"), string(aclJSON),
+					orString(sd.geoipMode, "off"), orString(sd.geoipCountries, "[]"),
+					orString(sd.crsGroups, "[]"), sd.wafCheckResp, sd.logReqBody,
+					orString(sd.humanMode, "off"), orString(sd.humanType, DefaultHumanVerifyType), DefaultHumanVerifyTTL,
+					sd.ccEnabled, sd.ccSessionAnomaly, sd.ccSessionUAThreshold,
+					DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, sd.blockPageID)
+				if ierr != nil {
+					return fmt.Errorf("create policy %q: %w", sd.name, ierr)
+				}
+				existingID, _ = res.LastInsertId()
+				if rebuild {
+					for _, br := range oldBindings {
+						if _, berr := tx.Exec(`INSERT OR REPLACE INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES (?,?,?)`, br.ruleCaddyID, existingID, br.rank); berr != nil {
+							return fmt.Errorf("migrate binding %s→%q: %w", br.ruleCaddyID, sd.name, berr)
+						}
 					}
 				}
 			}
+			items = append(items, DefaultApplyItem{Kind: "policy", Name: sd.name, Stage: sd.ptype, Status: status, ID: existingID})
 		}
-		items = append(items, DefaultApplyItem{Kind: "policy", Name: sd.name, Stage: sd.ptype, Status: status, ID: existingID})
-	}
-	// 悬空绑定清理（指向已删除策略的历史行——含本批重建残留与更早的孤儿）
-	if _, derr := DB.Exec(`DELETE FROM security_policy_bindings WHERE policy_id NOT IN (SELECT id FROM security_policies)`); derr != nil {
-		return items, fmt.Errorf("clean dangling bindings: %w", derr)
+		// 悬空绑定清理（指向已删除策略的历史行——含本批重建残留与更早的孤儿）
+		if _, derr := tx.Exec(`DELETE FROM security_policy_bindings WHERE policy_id NOT IN (SELECT id FROM security_policies)`); derr != nil {
+			return fmt.Errorf("clean dangling bindings: %w", derr)
+		}
+		return nil
+	})
+	if err != nil {
+		// 单事务回滚：部分成功不可能，返回空进度避免误导「已建 N 项」。
+		return nil, err
 	}
 	return items, nil
 }

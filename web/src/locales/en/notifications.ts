@@ -67,7 +67,6 @@ export default {
         peak_qps: 'Peak requests/window',
         blocked: 'Blocked count',
         attack_top: 'Top attack rules',
-        top_ip: 'Top attack source',
         top_ips: 'Top attack IPs',
         top_paths: 'Top attack paths',
         cc_triggered: 'CC triggers',

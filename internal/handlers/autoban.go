@@ -265,9 +265,10 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 }
 
 // ResetAutobanRecidivism DELETE /security/autoban/recidivism：重置全部累犯
-// 历史（清空 autoban_recidivism，下次达阈值按首次档起算）。无条件清空、
-// 幂等（重复调用保持空表并返回成功，与 unbind 同族）；只清历史记账，
-// 已生效封禁条目保持至到期。主节点门（从端写会被快照覆盖，与
+// 历史（清空 autoban_recidivism + 窗口计数桶/观察建议，下次达阈值按首次档
+// 起算——只清历史行时窗口内旧计数会在下一轮 tick 立刻重封，重置语义被撤销）。
+// 无条件清空、幂等（重复调用保持空表并返回成功，与 unbind 同族）；不动名单
+// 条目，已生效封禁条目保持至到期。主节点门（从端写会被快照覆盖，与
 // UpdateAutobanConfig 同口径）；导入窗口拒绝写（累犯表在 security 节
 // 全量替换清单内）。
 func (h *Handlers) ResetAutobanRecidivism(c *gin.Context) {
@@ -281,7 +282,7 @@ func (h *Handlers) ResetAutobanRecidivism(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("重置自动封禁累犯记录失败", err)})
 		return
 	}
-	recordAudit(c, "重置", "累犯记录", "清空全部自动封禁累犯升级历史（下次达阈值按首次档起算；已生效封禁条目不受影响）")
+	recordAudit(c, "重置", "累犯记录", "清空全部自动封禁累犯升级历史与窗口计数（下次达阈值按首次档起算；已生效封禁条目不受影响）")
 	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "重置了累犯前科"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }

@@ -98,6 +98,7 @@ export default {
     signedOut: '登出',
     authDenied: '认证拒绝',
     reset: '重置',
+    resetFailed: '重置失败',
     passwordReset: '重置密码',
     rebound: '重新绑定',
     generated: '生成',

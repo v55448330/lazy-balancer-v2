@@ -2708,10 +2708,10 @@ func enrichAutobanRecidivismRows(records []AutobanRecidivismRecord) {
 	nowText := now.Format(autobanTimeLayout)
 	var v4Args []any
 	var placeholders []string
-	hasV6 := false
+	var v6Identities []string
 	for identity := range byIdentity {
 		if strings.Contains(identity, ":") {
-			hasV6 = true
+			v6Identities = append(v6Identities, identity)
 			continue
 		}
 		placeholders = append(placeholders, "?")
@@ -2735,30 +2735,49 @@ func enrichAutobanRecidivismRows(records []AutobanRecidivismRecord) {
 			rows.Close()
 		}
 	}
-	if !hasV6 {
-		return
+	// IPv6：身份恒为 /64 网络地址（autobanIdentityKey 归一），按该身份的前缀
+	// 模式逐身份查询——旧实现把窗口内**全部** IPv6 行取回 Go 逐行聚合（无
+	// LIMIT），忙 IPv6 站点打开累犯弹框即秒级全窗口扫描。两种文本形态覆盖
+	// /64 全集（见 autobanIPv6IdentityPatterns）；均为前缀模式、参数绑定，
+	// 可由 idx_security_events_ip_time 做范围扫描。
+	for _, identity := range v6Identities {
+		patterns := autobanIPv6IdentityPatterns(identity)
+		var hits int
+		var last string
+		if err := metrics.QueryRow(`SELECT COUNT(*), COALESCE(MAX(event_time),'') FROM security_events
+			WHERE event_time >= ? AND event_time <= ? AND (client_ip LIKE ? OR client_ip LIKE ?)`,
+			windowStart, nowText, patterns[0], patterns[1]).Scan(&hits, &last); err != nil || hits == 0 {
+			continue
+		}
+		idx := byIdentity[identity]
+		records[idx].Hits24h = hits
+		records[idx].LastEventAt = autobanRecidivismEventTime(last)
 	}
-	rows, err := metrics.Query(`SELECT client_ip, event_time FROM security_events
-		WHERE event_time >= ? AND event_time <= ? AND client_ip LIKE '%:%'`, windowStart, nowText)
+}
+
+// autobanIPv6IdentityPatterns 返回 /64 身份在 client_ip 文本列上的两种前缀
+// LIKE 模式（含尾部 %，参数绑定使用）：
+//   - 网络规范串前缀（如 "2001:db8:1:2::"）覆盖以压缩形态书写的同段地址；
+//   - 前四个 hextet 全展开前缀（如 "2001:db8:1:2:"）覆盖第 5 个 hextet 非零、
+//     因而不以压缩网络串开头的同段地址（"2001:db8:1:2:aaaa::1"）。
+//
+// 两者都不以通配符开头，SQLite 可对 idx_security_events_ip_time 做前缀范围
+// 扫描。不可解析身份按原串前缀兜底（保持旧口径，不误聚合别的段）。
+func autobanIPv6IdentityPatterns(identity string) [2]string {
+	addr, err := netip.ParseAddr(identity)
+	if err != nil || !addr.Is6() || addr.Is4In6() {
+		return [2]string{identity + "%", identity + "%"}
+	}
+	prefix, err := addr.Prefix(64)
 	if err != nil {
-		return
+		return [2]string{identity + "%", identity + "%"}
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var ip, eventTime string
-		if rows.Scan(&ip, &eventTime) != nil {
-			continue
-		}
-		idx, ok := byIdentity[autobanIdentityKey(ip)]
-		if !ok {
-			continue
-		}
-		records[idx].Hits24h++
-		eventTime = autobanRecidivismEventTime(eventTime)
-		if eventTime > records[idx].LastEventAt {
-			records[idx].LastEventAt = eventTime
-		}
-	}
+	b := prefix.Addr().As16()
+	hextet := func(i int) uint16 { return uint16(b[i])<<8 | uint16(b[i+1]) }
+	// %x 对 uint16 不补前导零，与 Go net.IP.String() 的规范文本（RFC 5952：
+	// 小写、无前导零）逐字一致——对 []byte 用 %x 会输出 4 位零填充形态。
+	expanded := fmt.Sprintf("%x:%x:%x:%x:", hextet(0), hextet(2), hextet(4), hextet(6))
+	return [2]string{prefix.Addr().String() + "%", expanded + "%"}
 }
 
 // autobanRecidivismEventTime 把 security_events.event_time 归一为 DB 墙钟布局：
@@ -2841,13 +2860,20 @@ func DeleteAutobanRecidivismGuarded(ctx context.Context, identity string) (strin
 // ResetAutobanRecidivism 清空全部累犯历史（重置计数——下次达阈值按首次档
 // 重新起算）。只清历史记账，不动名单条目：已生效封禁保持至到期。
 // DELETE 触发器 bump cluster_version，从端下一同步周期整表收敛。
+//
+// 同时清空窗口计数桶与观察建议：与单条移除（AutobanForgetIPs）同口径——
+// 只删历史行时，窗口内旧计数仍 ≥ 阈值，下一轮 tick 会把刚重置的身份按
+// 「首次档」立即重封，用户可见的「重置后按首次档起算」被旧计数撤销。
 func ResetAutobanRecidivism() error {
 	d := db.GetDB()
 	if d == nil {
 		return errors.New("database unavailable")
 	}
-	_, err := d.Exec(`DELETE FROM autoban_recidivism`)
-	return err
+	if _, err := d.Exec(`DELETE FROM autoban_recidivism`); err != nil {
+		return err
+	}
+	ResetAutobanCounters()
+	return nil
 }
 
 // autobanAuditEventCount 把一条「自动封禁」审计行折算成封禁事件数：汇总行

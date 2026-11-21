@@ -330,6 +330,7 @@ func TestAutobanStatus_banEffectiveTruthTable(t *testing.T) {
 		refsField   string
 		bind        bool
 		ruleEnabled bool
+		protocol    string // 空=http（规则/上游协议）
 		upstreams   []bool // 每条上游的 enabled（空=无上游）
 		want        bool
 	}{
@@ -346,6 +347,11 @@ func TestAutobanStatus_banEffectiveTruthTable(t *testing.T) {
 		{name: "no upstream", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, upstreams: nil, want: false},
 		{name: "only disabled upstream", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, upstreams: []bool{false}, want: false},
 		{name: "mixed upstreams with one enabled", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, upstreams: []bool{false, true}, want: true},
+		// L4（TCP 规则）同样执行 deny：l4_security_render 把 deny 模式 ACL 并集写成
+		// 名单文件匹配器（命中断连），零启用上游同样整条跳过——绑定 TCP 规则的
+		// deny 策略必须算作封禁生效（此前判据只看 HTTP 规则，误报不生效）。
+		{name: "tcp rule bound deny policy executes L4 deny", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, protocol: "tcp", upstreams: []bool{true}, want: true},
+		{name: "tcp rule zero enabled upstream is skipped", entries: `[{"value":"198.51.100.8"}]`, aclEnabled: true, aclMode: "deny", refsField: "ip_acl_list_refs", bind: true, ruleEnabled: true, protocol: "tcp", upstreams: []bool{false}, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -363,11 +369,15 @@ func TestAutobanStatus_banEffectiveTruthTable(t *testing.T) {
 				t.Fatal(err)
 			}
 			policyID, _ := res.LastInsertId()
-			if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_ban_effective','ban-effective','http','ban-effective.test',8080,?)`, tc.ruleEnabled); err != nil {
+			protocol := tc.protocol
+			if protocol == "" {
+				protocol = "http"
+			}
+			if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_ban_effective','ban-effective',?,'ban-effective.test',8080,?)`, protocol, tc.ruleEnabled); err != nil {
 				t.Fatal(err)
 			}
 			for _, upstreamEnabled := range tc.upstreams {
-				if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_ban_effective','127.0.0.1',9000,1,?,'http')`, upstreamEnabled); err != nil {
+				if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_ban_effective','127.0.0.1',9000,1,?,?)`, upstreamEnabled, protocol); err != nil {
 					t.Fatal(err)
 				}
 			}

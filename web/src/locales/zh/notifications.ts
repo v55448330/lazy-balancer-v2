@@ -73,7 +73,6 @@ export default {
         peak_qps: '峰值请求/窗',
         blocked: '拦截次数',
         attack_top: '攻击 TOP 规则',
-        top_ip: 'TOP 攻击源',
         top_ips: 'TOP 攻击源 IP',
         top_paths: 'TOP 攻击路径',
         cc_triggered: 'CC 触发次数',

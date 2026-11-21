@@ -46,6 +46,9 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 		Items    []string          `json:"items"`
 		Formats  map[string]string `json:"formats"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -81,6 +84,9 @@ func (h *Handlers) PreviewNotificationDaily(c *gin.Context) {
 	var req struct {
 		Items  []string `json:"items"`
 		Format string   `json:"format"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
