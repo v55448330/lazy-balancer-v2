@@ -44,7 +44,7 @@ func TestBeginConfigImportCarriesCallerAction(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
 
-	session, err := h.beginConfigImport(context.Background(), "还原")
+	session, err := h.beginConfigImport(nil, context.Background(), "还原")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestBeginConfigImportCarriesCallerAction(t *testing.T) {
 	session.close()
 
 	// 缺省动作词兜底为「导入」，不得写出「失败」这种无主语文案。
-	defaulted, err := h.beginConfigImport(context.Background(), "")
+	defaulted, err := h.beginConfigImport(nil, context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

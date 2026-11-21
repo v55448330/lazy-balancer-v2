@@ -197,6 +197,8 @@ func captureHandlerGlobalSeams() map[string]any {
 		"securityOverviewMutatedRebuildHookForTest": handlerGlobalPointer(securityOverviewMutatedRebuildHookForTest),
 		// 事务补发缝。
 		"rollbackLeakedTx": handlerGlobalPointer(rollbackLeakedTx),
+		// 安全写收尾事件发布缝（热路径/默认策略批量 apply 的事件发布入口）。
+		"notifyPublish": handlerGlobalPointer(notifyPublish),
 		// 归属地富化查询缝。
 		"enrichIPLocationLookup": handlerGlobalPointer(enrichIPLocationLookup),
 		// 认证缝。

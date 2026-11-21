@@ -1535,6 +1535,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	}
 	if h.tryIPListHotPathApply(c, tx, listID, true, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "变更了条目", "3": listName}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）移除 IP %s（现共 %d 条）", listName, id, req.Value, len(kept)),
 		SuccessMsg:  apimsg.T(c, "k_90c73fde"), MessageKey: "k_90c73fde",
 		Data: gin.H{"removed": true},
@@ -1561,6 +1562,14 @@ func commitIPListTx(tx *sql.Tx) error {
 		return txCommitForTest(tx)
 	}
 	return tx.Commit()
+}
+
+// publishTxApplyNotify 发布收尾事件（f.Notify 为空则跳过）。热路径与全量
+// 链同口径：只有事务真正提交（成功/退化提交）后发布，渲染拒绝/提交失败不发。
+func publishTxApplyNotify(f txApplyFinish) {
+	if f.Notify != nil {
+		notifyPublish(*f.Notify)
+	}
 }
 
 // tryIPListHotPathApply 名单-only 变更的投影热路径（2026-10-15 用户裁定）。
@@ -1638,6 +1647,8 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			h.recordCaddyApplySavedNotLive(applyErr)
 			recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
 			recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
+			// 退化提交（DB 已提交）与 finishTxApply 成功分支同口径发布事件。
+			publishTxApplyNotify(f)
 			services.Logf("warn", "IP 名单热路径：%s（#%d）投影已重写，证书物化触发的强制重载失败: %v", f.Resource, listID, applyErr)
 			status := f.SuccessStatus
 			if status == 0 {
@@ -1660,6 +1671,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 		h.recordCaddyApplyResult(nil)
 		recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
 		recordAudit(c, "重载", "Caddy服务", services.FormatAuditDetail("IP 名单热路径证书物化，强制重载收敛", services.AuditResultPart("success")))
+		publishTxApplyNotify(f)
 		services.Logf("info", "IP 名单热路径：%s（#%d）投影文件已重写；本轮渲染物化了证书文件，已强制重载收敛", f.Resource, listID)
 		status := f.SuccessStatus
 		if status == 0 {
@@ -1684,6 +1696,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 	}
 	h.recordCaddyApplyResult(nil) // 比对证实运行配置=已提交 DB 视图，清除既往失败标记
 	recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
+	publishTxApplyNotify(f)
 	services.Logf("info", "IP 名单热路径：%s（#%d）投影文件已重写，零 Caddy 重载（匹配器 ≤1s 热感知生效）", f.Resource, listID)
 	status := f.SuccessStatus
 	if status == 0 {

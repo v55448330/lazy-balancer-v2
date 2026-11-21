@@ -7,6 +7,7 @@ import "fmt"
 // 「AuditResultPart 字面量实参集合 ⊆ 映射键集」——新增结果码漏映射即测试红）。
 // 未收录码在 AuditResultText 中原样返回（保留英文兜底），但落库前应补映射。
 var auditResultTextMap = map[string]string{
+	"tx_rolled_back":      "单事务已回滚，零写入",
 	"success":             "成功",
 	"failed":              "失败",
 	"failure":             "失败",

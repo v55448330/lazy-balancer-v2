@@ -10,7 +10,7 @@ import (
 func TestConfigImportPostApplyWorkSurvivesRequestCancellation(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	session, err := h.beginConfigImport(ctx, "导入")
+	session, err := h.beginConfigImport(nil, ctx, "导入")
 	if err != nil {
 		t.Fatalf("begin import: %v", err)
 	}

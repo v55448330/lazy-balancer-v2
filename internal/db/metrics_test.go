@@ -218,7 +218,7 @@ func TestInitialize_omitsMetricsRetentionColumnAndAddsCompositeIndexes(t *testin
 
 func TestInitMetricsSchema_duplicateTransactionIDsDedupedAndIndexCreated(t *testing.T) {
 	// Given 真实存量 metrics 库：唯一索引尚未建立，且已有重复/空 transaction_id
-	//（重复行带区分性 client_ip，用于断言保留最早行）。
+	//（重复行带区分性 client_ip，用于断言保留最后插入行）。
 	metrics, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "metrics-duplicates.db"))
 	if err != nil {
 		t.Fatalf("open metrics database: %v", err)
@@ -241,7 +241,7 @@ func TestInitMetricsSchema_duplicateTransactionIDsDedupedAndIndexCreated(t *test
 	// When 升级再次初始化 schema。
 	err = initMetricsSchema(metrics)
 
-	// Then 重复历史行不得拖垮启动；启动期去重（保留每事务最早行）后唯一索引
+	// Then 重复历史行不得拖垮启动；启动期去重（保留每事务最后插入行）后唯一索引
 	// 照常建立——不再靠跳过索引放行（跳过会让 offset 重建/
 	// 轮转补采把重复事件重新入库并重复喂 autoban/rollup）。
 	if err != nil {
@@ -264,8 +264,8 @@ func TestInitMetricsSchema_duplicateTransactionIDsDedupedAndIndexCreated(t *test
 	if err := metrics.QueryRow(`SELECT client_ip FROM security_events WHERE transaction_id='duplicate-transaction'`).Scan(&keptIP); err != nil {
 		t.Fatalf("exactly one duplicate-transaction row must survive: %v", err)
 	}
-	if keptIP != "10.0.0.1" {
-		t.Fatalf("dedupe kept client_ip=%q, want earliest row 10.0.0.1", keptIP)
+	if keptIP != "10.0.0.2" {
+		t.Fatalf("dedupe kept client_ip=%q, want last inserted row 10.0.0.2", keptIP)
 	}
 	if !strings.Contains(logBuf.String(), "duplicate-transaction") || !strings.Contains(logBuf.String(), "去重") {
 		t.Fatalf("dedupe must WARN with the duplicated ID, log=%q", logBuf.String())

@@ -1483,14 +1483,113 @@ func backfillIssuedCertExpiry(ctx context.Context) (int, error) {
 	return filled, nil
 }
 
-// CertReconcileOnce 状态对账（缺失证书文件/孤儿任务清理/缺失任务补建）。
+// reconcileUncoveredIssuedCertJobs 收敛「已签发但材料不覆盖当前域名」的停滞行。
+//
+// 形态：任务行 issued 且 cert_pem 在库，但证书 SAN 不覆盖任务/规则域名（签发
+// 期间域名被改写、或 CA 返回了错误域名集合）。这类行没有任何自动通道：
+//   - 续期扫描按 expires_at 预筛——材料自身的有效期可能还很长，整轮不选中；
+//   - 部署链以「材料不覆盖」拒绝（confirmCertificateDeployment 的覆盖断言），
+//     行停在 issued + 错材料，Caddy 握手选择失败。
+//
+// 处置：转 queued 重新签发（视同待续期），由 stranded 补扫/队列接管。与
+// requeueLostMaterialCertJob「材料不可用→回到签发」同取向；队列未就绪时
+// 不动作（用户停止签发=有意形态，恢复后下一周期收敛）。逐行写前过
+// certReconcileWriteGate（从节点零写）。读/迭代失败上抛（fail-visible，
+// 与 sweepOrphanedCertJobs 同口径）。
+func reconcileUncoveredIssuedCertJobs(ctx context.Context) (int, error) {
+	qm := GetCAQueueManager()
+	rows, err := db.DB.QueryContext(ctx, `
+		SELECT j.id, j.rule_id, COALESCE(j.domain,''), COALESCE(j.ca_provider_id,0),
+		       COALESCE(r.domain,''), COALESCE(j.cert_pem,'')
+		FROM cert_jobs j
+		JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status='issued' AND COALESCE(j.cert_pem,'')<>''
+		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
+	`)
+	if err != nil {
+		Logf("error", "cert reconcile: query issued jobs for SAN coverage failed: %v", err)
+		return 0, fmt.Errorf("查询待复核 SAN 覆盖的证书任务: %w", err)
+	}
+	type uncoveredCandidate struct {
+		id           int
+		ruleID       string
+		jobDomain    string
+		caProviderID int
+		ruleDomain   string
+		certPEM      string
+	}
+	var candidates []uncoveredCandidate
+	for rows.Next() {
+		var candidate uncoveredCandidate
+		if err := rows.Scan(&candidate.id, &candidate.ruleID, &candidate.jobDomain, &candidate.caProviderID, &candidate.ruleDomain, &candidate.certPEM); err != nil {
+			rows.Close()
+			Logf("error", "cert reconcile: scan issued job failed: %v", err)
+			return 0, fmt.Errorf("读取待复核 SAN 覆盖的证书任务行: %w", err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		Logf("error", "cert reconcile: iterate issued jobs failed: %v", err)
+		return 0, fmt.Errorf("遍历待复核 SAN 覆盖的证书任务: %w", err)
+	}
+	rows.Close()
+	requeued := 0
+	var sweepErr error
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return requeued, errors.Join(sweepErr, fmt.Errorf("SAN 覆盖复核被中止: %w", err))
+		}
+		// 域名对不上=孤儿（不是「不覆盖」），交给 sweepOrphanedCertJobs 的
+		// 禁用通道，避免把旧域任务重签成下一份错材料。
+		if !certJobRuleApplicable(true, candidate.ruleDomain, candidate.jobDomain) {
+			continue
+		}
+		leaf, parseErr := parseCertificateLeaf(candidate.certPEM)
+		if parseErr != nil && leaf == nil {
+			Logf("warn", "证书任务 %d：已签发材料无法解析（%v），按不覆盖处理重新签发", candidate.id, parseErr)
+		}
+		if leaf != nil && leafCoversRuleDomains(leaf, candidate.ruleDomain) {
+			continue
+		}
+		if qm == nil || qm.IsJobActive(candidate.id) {
+			continue
+		}
+		if gateErr := certReconcileWriteGate(ctx); gateErr != nil {
+			Logf("warn", "cert reconcile: SAN 不覆盖重签前写门拦截（job=%d）: %v", candidate.id, gateErr)
+			return requeued, errors.Join(sweepErr, gateErr)
+		}
+		_, changed, enqueueErr := qm.EnqueueIfActive(candidate.caProviderID, candidate.id, candidate.ruleID, candidate.jobDomain, func() (int, bool, error) {
+			// 域守卫单源：复核与迁移之间规则可能改域/停用。
+			return requeueCertJobGuarded(candidate.id, []string{"issued"}, candidate.jobDomain, map[string]any{
+				"message":            "已签发证书不覆盖当前域名，重新排队签发",
+				"renewal_attempts":   0,
+				"ca_available_after": nil,
+				"last_error_code":    nil,
+			})
+		})
+		if enqueueErr != nil {
+			sweepErr = errors.Join(sweepErr, fmt.Errorf("重签不覆盖域名的任务 %d: %w", candidate.id, enqueueErr))
+			Logf("error", "cert reconcile: requeue uncovered job %d failed: %v", candidate.id, enqueueErr)
+			continue
+		}
+		if !changed {
+			continue
+		}
+		requeued++
+		RecordAuditLog("system", "重新签发", "证书任务", FormatAuditDetail(AuditJobPart(candidate.id), AuditRulePart(candidate.ruleID), AuditSourcePart("san_mismatch")), "")
+	}
+	return requeued, sweepErr
+}
+
+// CertReconcileOnce 状态对账（缺失证书文件/孤儿任务清理/缺失任务补建/SAN 不覆盖重签）。
 // 对账读失败必须上抛（Run 返回 error → task_runs 失败终态），且失败轮
 // 摘要不得写「完成」——此前查询失败只 Logf + 摘要仍报「状态对账完成 0」，
 // 任务监控呈现假健康。服务缺失不适用（本函数无服务依赖）。
 //
-// ctx 由引擎 RunContext 驱动（降级/停机/导入排空即取消），四个写点（证书文件
-// 重建/到期回填/孤儿清理/任务补建）各自在写前经 certReconcileWriteGate 复核
-// ——长轮次内节点降级不得继续写库。
+// ctx 由引擎 RunContext 驱动（降级/停机/导入排空即取消），各写点（证书文件
+// 重建/到期回填/孤儿清理/任务补建/SAN 覆盖重签）各自在写前经
+// certReconcileWriteGate 复核——长轮次内节点降级不得继续写库。
 func CertReconcileOnce(ctx context.Context) error {
 	if !certScanDatabaseReady() {
 		TaskLogf("cert-reconcile", "skipped", "数据库未就绪：本轮状态对账已跳过（装配完成后由周期节拍重试）")

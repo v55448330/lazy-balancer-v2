@@ -36,6 +36,9 @@ var certMaterialPredicateExemptions = map[string]map[string]string{
 	filepath.Join("..", "db", "db.go"): {
 		"legacyHTTPSHasCertPredicate": "migrateLegacyHTTPSProtocol 的有证预判（cert_pem/key_pem 非空 + status 非 disabled）：与单源条件集合等价，唯一差异是不带 TRIM（见本表注释）；import 环使 db 无法引用 services",
 	},
+	"certificates.go": {
+		"reconcileUncoveredIssuedCertJobs": "SAN 覆盖复核候选谓词（status='issued' AND cert_pem 非空 AND 规则启用/ACME 域三条件）：与 CertJobMaterialPredicateSQL 的条件集合不同域（复核 issued 行而非候选回收），且 SQL 侧仅需 cert 列非空（key 不参与 SAN 判定）——形状非等价，无法复用单源",
+	},
 }
 
 func TestCertJobMaterialPredicate_hasNoInlineCopies(t *testing.T) {

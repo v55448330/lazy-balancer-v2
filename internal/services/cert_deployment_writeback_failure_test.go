@@ -250,7 +250,8 @@ func TestCertIssuer_deployIssuedCertificate_classifiesPersistConflict(t *testing
 			scheduled <- id
 			return nil
 		}
-		material := issuedCertificate{ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key", notAfter: time.Now().Add(90 * 24 * time.Hour)}
+		realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
+		material := issuedCertificate{ruleID: ruleID, certPEM: realPEM, keyPEM: realKey, notAfter: time.Now().Add(90 * 24 * time.Hour)}
 
 		err := issuer.deployIssuedCertificate(context.Background(), jobID, material)
 
@@ -291,7 +292,8 @@ func TestCertIssuer_deployIssuedCertificate_classifiesPersistConflict(t *testing
 			scheduled <- id
 			return nil
 		}
-		material := issuedCertificate{ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key", notAfter: time.Now().Add(90 * 24 * time.Hour)}
+		realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
+		material := issuedCertificate{ruleID: ruleID, certPEM: realPEM, keyPEM: realKey, notAfter: time.Now().Add(90 * 24 * time.Hour)}
 
 		err := issuer.deployIssuedCertificate(context.Background(), jobID, material)
 
@@ -307,7 +309,7 @@ func TestCertIssuer_deployIssuedCertificate_classifiesPersistConflict(t *testing
 		if err := db.DB.QueryRow("SELECT status, COALESCE(cert_pem,''), deployment_available_after FROM cert_jobs WHERE id=?", jobID).Scan(&status, &certPEM, &availableAfter); err != nil {
 			t.Fatalf("read job: %v", err)
 		}
-		if status != "downloaded" || certPEM != "new-cert" || !availableAfter.Valid {
+		if status != "downloaded" || certPEM != realPEM || !availableAfter.Valid {
 			t.Fatalf("job=(%q,%q,window=%v), want downloaded + 材料落库 + 窗口推进", status, certPEM, availableAfter)
 		}
 	})

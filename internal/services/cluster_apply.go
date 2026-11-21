@@ -1395,7 +1395,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			}
 			policyJSON[column] = text
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold,cc_trigger_action,cc_queue_wait_sec,block_response_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold,cc_trigger_action,cc_queue_wait_sec,block_response_mode,is_default_policy) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
 			p["ip_acl_mode"], policyJSON["ip_acl_list"], p["ip_acl_enabled"],
 			policyJSON["ip_whitelist"], policyWhitelistEnabled(p), policyJSON["ip_blacklist"],
@@ -1404,7 +1404,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			policyJSON["geoip_countries"], p["geoip_mode"], p["geoip_crawler_exempt"], policyJSON["geoip_crawler_engines"], p["waf_check_response"], p["log_request_body"],
 			policyJSON["ip_acl_list_refs"], policyJSON["ip_whitelist_refs"], InferSnapshotPolicyType(p), snapshotTrustDetection(p),
 			p["human_verify_mode"], p["human_verify_type"], p["human_verify_ttl"], policyJSON["human_exempt_paths"],
-			p["cc_detect_enabled"], p["cc_rps_limit"], p["cc_rps_window"], p["cc_4xx_ratio"], p["cc_session_anomaly"], p["cc_session_ua_threshold"], p["cc_trigger_action"], p["cc_queue_wait_sec"], p["block_response_mode"]); err != nil {
+			p["cc_detect_enabled"], p["cc_rps_limit"], p["cc_rps_window"], p["cc_4xx_ratio"], p["cc_session_anomaly"], p["cc_session_ua_threshold"], p["cc_trigger_action"], p["cc_queue_wait_sec"], p["block_response_mode"], policyIsDefault(p)); err != nil {
 			return fmt.Errorf("写入 security_policy: %w", err)
 		}
 	}
@@ -2493,4 +2493,12 @@ func toFloat64(v interface{}) float64 {
 	default:
 		return 0
 	}
+}
+
+// policyIsDefault 集群装回的 is_default_policy 值（缺列/缺键回退 0）。
+func policyIsDefault(p map[string]any) any {
+	if v, ok := p["is_default_policy"]; ok {
+		return v
+	}
+	return 0
 }

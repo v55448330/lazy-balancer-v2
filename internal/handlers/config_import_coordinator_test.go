@@ -118,7 +118,7 @@ func TestBeginConfigImport_serializesConcurrentSessions(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := h.beginConfigImport(context.Background(), "导入")
+	first, err := h.beginConfigImport(nil, context.Background(), "导入")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestBeginConfigImport_serializesConcurrentSessions(t *testing.T) {
 	t.Cleanup(func() { configImportBeginAttemptHook = oldAttemptHook })
 	secondDone := make(chan result, 1)
 	go func() {
-		session, err := h.beginConfigImport(context.Background(), "导入")
+		session, err := h.beginConfigImport(nil, context.Background(), "导入")
 		secondDone <- result{session: session, err: err}
 	}()
 	// 第二个会话已确证在首个 close 前到达会话锁入口；无需猜测 100ms 是否
@@ -282,7 +282,7 @@ func TestBeginConfigImport_taskDrainTimeoutAbortsBeforeTransaction(t *testing.T)
 		t.Fatal("阻塞任务未进入")
 	}
 
-	session, err := h.beginConfigImport(context.Background(), "导入")
+	session, err := h.beginConfigImport(nil, context.Background(), "导入")
 	close(release)
 	select {
 	case <-done:
@@ -333,7 +333,7 @@ func TestBeginConfigImport_preservesStoppedCAQueue(t *testing.T) {
 	}
 
 	// When：执行导入 begin/close（含 PauseAndDrain 与恢复收尾）。
-	session, err := h.beginConfigImport(context.Background(), "导入")
+	session, err := h.beginConfigImport(nil, context.Background(), "导入")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestBeginConfigImport_certQueueDrainTimeoutAudits(t *testing.T) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(oldOutput) })
 
-	session, err := h.beginConfigImport(context.Background(), "还原")
+	session, err := h.beginConfigImport(nil, context.Background(), "还原")
 	if session != nil {
 		session.close()
 	}
@@ -406,7 +406,7 @@ func TestBeginConfigImport_ruleReadFailureAudits(t *testing.T) {
 	importRuleIDsForBegin = func(context.Context) ([]string, error) { return nil, errors.New("injected read failure") }
 	t.Cleanup(func() { importRuleIDsForBegin = oldRead })
 
-	session, err := h.beginConfigImport(context.Background(), "导入")
+	session, err := h.beginConfigImport(nil, context.Background(), "导入")
 	if session != nil {
 		session.close()
 	}
@@ -432,7 +432,7 @@ func TestBeginConfigImport_ruleReadFailureAudits(t *testing.T) {
 
 	// 失败收尾必须恢复调度与串行锁：下一次 begin 能正常建立会话。
 	importRuleIDsForBegin = oldRead
-	retry, retryErr := h.beginConfigImport(context.Background(), "导入")
+	retry, retryErr := h.beginConfigImport(nil, context.Background(), "导入")
 	if retryErr != nil {
 		t.Fatalf("失败收尾后调度/锁未释放: %v", retryErr)
 	}
@@ -450,7 +450,7 @@ func TestBeginConfigImport_beginTxFailureAudits(t *testing.T) {
 	importBeginTx = func(context.Context) (*sql.Tx, error) { return nil, errors.New("injected tx failure") }
 	t.Cleanup(func() { importBeginTx = oldBegin })
 
-	session, err := h.beginConfigImport(context.Background(), "还原")
+	session, err := h.beginConfigImport(nil, context.Background(), "还原")
 	if session != nil {
 		session.close()
 	}
@@ -475,7 +475,7 @@ func TestBeginConfigImport_beginTxFailureAudits(t *testing.T) {
 	}
 
 	importBeginTx = oldBegin
-	retry, retryErr := h.beginConfigImport(context.Background(), "还原")
+	retry, retryErr := h.beginConfigImport(nil, context.Background(), "还原")
 	if retryErr != nil {
 		t.Fatalf("失败收尾后调度/锁未释放: %v", retryErr)
 	}
@@ -558,7 +558,7 @@ func TestConfigImportAbort_restoresCommittedLKGWhenRuntimeRestoreFails(t *testin
 	}
 	lkgPath := filepath.Join(t.TempDir(), "last-good.json")
 	h.caddyService.SetLastGoodPath(lkgPath)
-	session, err := h.beginConfigImport(context.Background(), "导入")
+	session, err := h.beginConfigImport(nil, context.Background(), "导入")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +633,7 @@ func TestConfigImportBusy_tracksRealSessionLifecycle(t *testing.T) {
 	if configImportBusy() {
 		t.Fatal("前置失败：窗口应在初始关闭态")
 	}
-	session, err := h.beginConfigImport(context.Background(), "导入")
+	session, err := h.beginConfigImport(nil, context.Background(), "导入")
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}

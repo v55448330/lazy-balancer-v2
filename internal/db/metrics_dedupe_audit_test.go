@@ -37,7 +37,7 @@ func TestInitMetricsSchema_duplicateEventsLeaveSystemAudit(t *testing.T) {
 	if entry.action != "启动迁移" || entry.resource != "安全事件" {
 		t.Fatalf("audit identity=%q/%q, want 启动迁移/安全事件", entry.action, entry.resource)
 	}
-	for _, want := range []string{"删除 2 行", "duplicate-transaction", "second-duplicate", "最早"} {
+	for _, want := range []string{"删除 2 行", "duplicate-transaction", "second-duplicate", "最后插入行"} {
 		if !strings.Contains(entry.detail, want) {
 			t.Fatalf("audit detail=%q, missing %q", entry.detail, want)
 		}

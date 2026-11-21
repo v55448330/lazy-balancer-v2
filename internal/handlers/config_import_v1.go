@@ -858,7 +858,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	disabledConflicts := disableConvertedRuleConflicts(validRules)
 	ctx := c.Request.Context()
-	session, err := h.beginConfigImport(ctx, "导入")
+	session, err := h.beginConfigImport(c, ctx, "导入")
 	if err != nil {
 		respondImportBeginError(c, err)
 		return

@@ -24,6 +24,7 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '登出': 'signedOut',
   '认证拒绝': 'authDenied',
   '重置': 'reset',
+  '重置失败': 'resetFailed',
   '重置密码': 'passwordReset',
   '重新绑定': 'rebound',
   '生成': 'generated',

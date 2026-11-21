@@ -101,7 +101,8 @@ func TestAutobanRecidivism_getEmptySerializesAsArray(t *testing.T) {
 
 // Given 累犯表有行 + 自动封禁名单有生效条目。
 // When DELETE /security/autoban/recidivism。
-// Then 200；表清空；审计「重置」留痕；封禁条目不受影响（重置只清历史记账）。
+// Then 200；表清空；审计「重置」留痕；封禁条目不受影响（重置只清历史记账与
+// 窗口计数，名单条目保持）。
 func TestAutobanRecidivism_resetClearsHistoryAndAudits(t *testing.T) {
 	router := newAutobanRecidivismRouter(t)
 	seedRecidivismTestRows(t)

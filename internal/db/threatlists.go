@@ -55,6 +55,30 @@ var threatSystemLists = []ThreatSystemList{
 	{"et_compromised", "Emerging Threats 失陷主机名单", "Emerging Threats Compromised IPs（失陷主机）——威胁情报库更新任务维护，只读"},
 }
 
+// AutobanPresetListName 自动封禁预置名单行名（system=1 行）。db 不能反向
+// 依赖 services，故此处为 db 侧单源；services.AutobanPresetListName 与之
+// 同形（备份/迁移/策略种子统一经本常量引用，禁止再写字面量）。
+const AutobanPresetListName = "自动封禁名单"
+
+// systemListRefPrefix 是策略 refs 引用内置系统名单的键前缀
+// （"sys:<security_ip_lists.name>"）。
+const systemListRefPrefix = "sys:"
+
+// SystemListRefKey 构造策略 refs 的系统名单引用键。
+func SystemListRefKey(name string) string { return systemListRefPrefix + name }
+
+// ThreatSystemListRefKeys 返回内置威胁名单的 refs 键（"sys:"+可见名），
+// 顺序与 ThreatSystemLists 一致——默认策略种子经本函数取引用，消除名单名
+// 字面量双源（audit152 SVC-152-07）。
+func ThreatSystemListRefKeys() []string {
+	lists := ThreatSystemLists()
+	keys := make([]string, len(lists))
+	for i, sl := range lists {
+		keys[i] = SystemListRefKey(sl.Name)
+	}
+	return keys
+}
+
 // ThreatSystemLists 返回三源内置名单种子的副本（防调用方篡改全局）。
 func ThreatSystemLists() []ThreatSystemList {
 	return slices.Clone(threatSystemLists)

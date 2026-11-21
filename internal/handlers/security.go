@@ -682,7 +682,8 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var isDefault, isBuiltin bool
-	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(is_default,0), COALESCE(is_builtin,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault, &isBuiltin); err != nil {
+	var pageName string
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(is_default,0), COALESCE(is_builtin,0), COALESCE(name,'') FROM security_block_pages WHERE id=?", id).Scan(&isDefault, &isBuiltin, &pageName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_2cfe04cf"), MessageKey: "k_2cfe04cf"})
 		} else {
@@ -733,7 +734,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "拦截页面", AuditAction: "删除",
-		Notify:      &notify.Event{Type: notify.EvtBlockPageChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": fmt.Sprintf("#%s", id)}},
+		Notify:      &notify.Event{Type: notify.EvtBlockPageChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": displayNameOrID(pageName, id)}},
 		AuditDetail: fmt.Sprintf("页面 #%s", id),
 		SuccessMsg:  "拦截页面已删除", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
@@ -1148,38 +1149,136 @@ func countApplyStatus(items []db.DefaultApplyItem, status string) int {
 	return n
 }
 
+// notifyPublish 是安全域写收尾事件发布的测试缝（生产=notify.Publish）。
+// 与 txCommitForTest 同格：测试替换后恢复，禁止生产路径绕过。
+var notifyPublish = notify.Publish
+
 // GetDefaultPolicyCatalog 默认策略目录（「默认策略」弹框预览数据，只读）。
 func (h *Handlers) GetDefaultPolicyCatalog(c *gin.Context) {
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: db.GetDefaultSecurityCatalog()})
+	cat, err := db.GetDefaultSecurityCatalog()
+	if err != nil {
+		// 存在性探测/refs 校验的库故障不得被呈现成「未创建」——上抛 500。
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取默认策略目录失败", err), Data: nil})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cat})
+}
+
+// defaultApplyNotifyEvents 按 apply 结果构造通知事件（事件与文案单源，
+// 供 handler 发布与测试断言）：策略侧发 EvtPolicyChanged（动作=创建/重置 +
+// 汇总计数），列表侧发 EvtIPListChanged（动作=创建了默认名单 + 名单名）。
+// 全 exists/disabled（零实际变更）不发事件。
+func defaultApplyNotifyEvents(username string, items []db.DefaultApplyItem, reset bool) []notify.Event {
+	var createdPolicies, rebuiltPolicies int
+	var createdListNames []string
+	for _, it := range items {
+		switch it.Kind {
+		case "policy":
+			switch it.Status {
+			case "created":
+				createdPolicies++
+			case "rebuilt":
+				rebuiltPolicies++
+			}
+		case "list":
+			if it.Status == "created" {
+				createdListNames = append(createdListNames, it.Name)
+			}
+		}
+	}
+	events := make([]notify.Event, 0, 2)
+	if createdPolicies+rebuiltPolicies > 0 {
+		action := "创建了默认策略"
+		if reset {
+			action = "重置了默认策略"
+		}
+		events = append(events, notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{
+			"1": username,
+			"2": action,
+			"3": fmt.Sprintf("新建 %d 项 / 重建 %d 项", createdPolicies, rebuiltPolicies),
+		}})
+	}
+	if len(createdListNames) > 0 {
+		events = append(events, notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{
+			"1": username,
+			"2": "创建了默认名单",
+			"3": strings.Join(createdListNames, "、"),
+		}})
+	}
+	return events
 }
 
 // ApplyDefaultPolicies 逐项创建/复用/重建默认地址列表与策略（用户裁定
-// 2026-11-20 第五轮：启动不再自动播种，面板按钮驱动；脏引用删除重建）。
+// 2026-11-20 第五轮：启动不再自动播种，面板按钮驱动；脏引用删除重建；
+// reset=全部默认策略删除重建）。
+//
+// 写路径纪律（audit152）：
+//   - 导入窗口内 409 fast-fail（全量替代表会被导入覆盖/阻塞）；
+//   - 请求体走统一大小门，空 body 兼容、畸形 JSON 400（不得静默丢弃 reset）；
+//   - 全程持 caddyOpMu（与 finishTxApply 同序：库写与 Caddy 应用串行，
+//     apply 内部另有单事务——并发双击不产生重复默认行）；
+//   - 成功后按结果发布 EvtPolicyChanged/EvtIPListChanged。
 func (h *Handlers) ApplyDefaultPolicies(c *gin.Context) {
+	if rejectWriteDuringImport(c, "执行安全策略写操作") {
+		return
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	var req struct {
 		Reset bool `json:"reset"`
 	}
-	_ = c.ShouldBindJSON(&req) // 空 body 兼容（存量调用方/测试不发 body）
+	// 空 body 兼容（存量调用方/测试不发 body）：EOF 不是畸形；其余解析错误
+	// 400（此前 _ = ShouldBindJSON 把畸形 body 的 reset 静默丢弃，用户点
+	// 「重置」却跑了普通 apply）。
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
+		return
+	}
+	auditVerb := "默认策略批量创建"
+	if req.Reset {
+		auditVerb = "默认策略重置"
+	}
+	// 与 finishTxApply 同序：先锁（导入持有本锁、写路径全程串行），再库写+
+	// Caddy 应用；禁止调用 applyCaddyConfigE（其内部重取同锁会自死锁）。
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	var items []db.DefaultApplyItem
 	var err error
+	actorID := contextUserID(c)
 	if req.Reset {
-		items, err = db.ApplyDefaultSecurityPoliciesReset()
+		items, err = db.ApplyDefaultSecurityPoliciesReset(actorID)
 	} else {
-		items, err = db.ApplyDefaultSecurityPolicies()
+		items, err = db.ApplyDefaultSecurityPolicies(actorID)
 	}
 	if err != nil {
-		// 部分成功也返回已建项：前端展示进度，重跑走 exists/rebuilt 恢复
-		recordAudit(c, "创建", "安全策略", services.FormatAuditDetail("默认策略批量创建：失败", services.AuditResultPart(fmt.Sprintf("已建 %d 项", len(items)))))
+		// 单事务整体回滚：失败时没有可展示的部分进度。（操作标签字面量直写——
+		// audit_vocabulary 守卫禁动态表达式。）
+		if req.Reset {
+			recordAudit(c, "重置失败", "安全策略", services.FormatAuditDetail(auditVerb+"：失败", services.AuditResultPart("tx_rolled_back")))
+		} else {
+			recordAudit(c, "创建失败", "安全策略", services.FormatAuditDetail(auditVerb+"：失败", services.AuditResultPart("tx_rolled_back")))
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("创建默认策略失败", err), Data: items})
 		return
 	}
-	recordAudit(c, "创建", "安全策略", fmt.Sprintf("默认策略批量创建：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
-		countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt")))
+	if req.Reset {
+		recordAudit(c, "重置", "安全策略", fmt.Sprintf("%s：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
+			auditVerb, countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt")))
+	} else {
+		recordAudit(c, "创建", "安全策略", fmt.Sprintf("%s：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
+			auditVerb, countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt")))
+	}
 	// 新建/重建的策略可能已被立即绑定（含既有绑定指向同名新行）——必须重渲染
 	// 配置，否则 Caddy 侧无安全链（创建成功≠生效）。
-	if applyErr := h.applyCaddyConfigE(); applyErr != nil {
+	applyErr := h.caddyService.GenerateAndApplyConfigForceInLock() // 已持 caddyOpMu——InLock 变体防重入死锁
+	h.recordCaddyApplyResult(applyErr)
+	if applyErr != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_7d87740a", services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_7d87740a", Data: items})
 		return
+	}
+	for _, evt := range defaultApplyNotifyEvents(c.GetString("username"), items, req.Reset) {
+		notifyPublish(evt)
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: items})
 }
@@ -2643,9 +2742,11 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("清理策略绑定失败", err)})
 		return
 	}
+	var policyDisplayName string
+	_ = db.DB.QueryRow(`SELECT COALESCE(name,'') FROM security_policies WHERE id=?`, id).Scan(&policyDisplayName)
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "删除",
-		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": fmt.Sprintf("#%s", id)}},
+		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": displayNameOrID(policyDisplayName, id)}},
 		AuditDetail: fmt.Sprintf("策略 #%s", id),
 		SuccessMsg:  "安全策略已删除", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
@@ -3348,18 +3449,22 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			if err != nil {
 				return "", err
 			}
-			if n, err := res.RowsAffected(); err == nil {
-				boundChanged += int(n)
+			n, err := res.RowsAffected()
+			if err != nil {
+				return "", err
 			}
+			boundChanged += int(n)
 			return "", nil
 		}
 		res, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleCaddyID, policyID)
 		if err != nil {
 			return "", err
 		}
-		if n, err := res.RowsAffected(); err == nil {
-			unboundChanged += int(n)
+		n, err := res.RowsAffected()
+		if err != nil {
+			return "", err
 		}
+		unboundChanged += int(n)
 		return "", nil
 	}
 	for _, ruleCaddyID := range bindIDs {
@@ -7244,4 +7349,12 @@ func mapStrPtr(p *string, normalize func(string) string) *string {
 	}
 	v := normalize(*p)
 	return &v
+}
+
+// displayNameOrID 删除类事件参数：优先可读名，空名回退 #id（审计面同口径）。
+func displayNameOrID(name, id string) string {
+	if strings.TrimSpace(name) != "" {
+		return name
+	}
+	return "#" + id
 }

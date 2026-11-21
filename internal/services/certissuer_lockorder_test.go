@@ -28,8 +28,9 @@ func TestDeployIssuedCertificate_holdsCaddyOpLockBeforeDeployLock(t *testing.T) 
 		<-releaseReloader
 		return nil
 	})
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 	deployDone := make(chan error, 1)
@@ -101,8 +102,9 @@ func TestDeployAndRestoreCertJobs_canonicalLockOrderCompletes(t *testing.T) {
 	}
 	t.Cleanup(releaseCaddyOpLock)
 	issuer := NewCertIssuer(func() error { return nil })
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 	deployDone := make(chan error, 1)

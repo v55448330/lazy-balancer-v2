@@ -73,6 +73,7 @@ func seedCertificateJob(t *testing.T, status string) (int, string) {
 func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_fails(t *testing.T) {
 	// Given
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	useTemporaryCertDir(t)
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
 	// 自此再调度为异步（go deploymentRetry）——断言必须经 channel 等待
@@ -87,7 +88,7 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 		return nil
 	}
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 	installCertJobVersionTrigger(t)
@@ -116,7 +117,7 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	if err := db.DB.QueryRow("SELECT cluster_version FROM global_config WHERE id=1").Scan(&version); err != nil {
 		t.Fatalf("read cluster version: %v", err)
 	}
-	if status != "downloaded" || certPEM != "new-cert" || keyPEM != "new-key" || deploymentAttempts != 1 || deploymentAvailableAfter == "" || version != 1 {
+	if status != "downloaded" || certPEM != realPEM || keyPEM != realKey || deploymentAttempts != 1 || deploymentAvailableAfter == "" || version != 1 {
 		t.Fatalf("job=(%q,%q,%q) deployment_attempts=%d available_after=%q version=%d", status, certPEM, keyPEM, deploymentAttempts, deploymentAvailableAfter, version)
 	}
 }
@@ -130,8 +131,9 @@ func TestCertIssuer_deployIssuedCertificate_finalizes_post_cleanup_state(t *test
 		reloads++
 		return nil
 	})
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 	installCertJobVersionTrigger(t)
@@ -279,8 +281,9 @@ func TestCertIssuer_deployIssuedCertificate_disabledRuleKeepsDiskUnchanged(t *te
 	}
 	reloads := 0
 	issuer := NewCertIssuer(func() error { reloads++; return nil })
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 
@@ -394,8 +397,9 @@ func TestCertIssuer_deployIssuedCertificate_restores_files_when_job_disabled_bef
 		}
 		return nil
 	})
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 	installCertJobVersionTrigger(t)
@@ -453,8 +457,9 @@ func TestCertIssuer_deployIssuedCertificate_skips_rollback_when_cas_loser_files_
 		}
 		return nil
 	})
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 
@@ -475,8 +480,8 @@ func TestCertIssuer_deployIssuedCertificate_skips_rollback_when_cas_loser_files_
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
 		t.Fatalf("read job status: %v", err)
 	}
-	if string(gotCert) != "new-cert" || string(gotKey) != "new-key" || status != "issued" || reloads != 1 {
-		t.Fatalf("files=(%q,%q) status=%q reloads=%d, want 胜者成果保留 (new-cert,new-key) issued 1（不得回滚胜者写入）",
+	if string(gotCert) != realPEM || string(gotKey) != realKey || status != "issued" || reloads != 1 {
+		t.Fatalf("files=(%q,%q) status=%q reloads=%d, want 胜者成果保留（胜者材料） issued 1（不得回滚胜者写入）",
 			gotCert, gotKey, status, reloads)
 	}
 }
@@ -503,8 +508,9 @@ func TestCertIssuer_deployIssuedCertificate_restores_when_disk_differs_from_own_
 		}
 		return nil
 	})
+	loserPEM, loserKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "loser-cert", keyPEM: "loser-key",
+		ruleID: ruleID, certPEM: loserPEM, keyPEM: loserKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 
@@ -1114,11 +1120,12 @@ func TestCertificateService_recoverCertJobs_preserves_deployment_retry_state(t *
 }
 
 func TestCertificateDeploymentRetry_succeeds_when_provider_deleted(t *testing.T) {
+	retryPEM, retryKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	// Given
 	jobID, _ := seedCertificateJob(t, "downloaded")
 	useTemporaryCertDir(t)
 	const providerID = 999
-	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem='persisted-cert', key_pem='persisted-key', expires_at=datetime('now','+90 days'), ca_provider_id=? WHERE id=?`, providerID, jobID); err != nil {
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem=?, key_pem=?, expires_at=datetime('now','+90 days'), ca_provider_id=? WHERE id=?`, retryPEM, retryKey, providerID, jobID); err != nil {
 		t.Fatalf("seed downloaded certificate: %v", err)
 	}
 	if _, err := db.DB.Exec("DELETE FROM ca_providers"); err != nil {
@@ -1147,11 +1154,12 @@ func TestCertificateDeploymentRetry_succeeds_when_provider_deleted(t *testing.T)
 }
 
 func TestRetryCertificateDeployment_accepts_cleanup_dns_status(t *testing.T) {
+	retryPEM, retryKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	// Given：任务停留在 cleanup_dns 且持有证书材料，部署重试必须能加载并推进到 issued
 	jobID, _ := seedCertificateJob(t, "cleanup_dns")
 	useTemporaryCertDir(t)
 	const providerID = 999
-	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem='persisted-cert', key_pem='persisted-key', expires_at=datetime('now','+90 days'), ca_provider_id=? WHERE id=?`, providerID, jobID); err != nil {
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem=?, key_pem=?, expires_at=datetime('now','+90 days'), ca_provider_id=? WHERE id=?`, retryPEM, retryKey, providerID, jobID); err != nil {
 		t.Fatalf("seed cleanup_dns certificate: %v", err)
 	}
 	reloads := 0
@@ -1176,12 +1184,13 @@ func TestRetryCertificateDeployment_accepts_cleanup_dns_status(t *testing.T) {
 }
 
 func TestRetryCertificateDeployment_cleanup_dns_job_slowRetriesAtMaxAttempts(t *testing.T) {
+	retryPEM, retryKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	// Given：长时间停留在 cleanup_dns 的任务，部署反复失败——封顶后保留可部署态
 	// （落 failed 会把材料/磁盘分叉变成无自动通道的搁浅）
 	jobID, _ := seedCertificateJob(t, "cleanup_dns")
 	useTemporaryCertDir(t)
 	const providerID = 999
-	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem='persisted-cert', key_pem='persisted-key', expires_at=datetime('now','+90 days'), ca_provider_id=?, deployment_attempts=? WHERE id=?`, providerID, maxCertificateDeploymentAttempts-1, jobID); err != nil {
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem=?, key_pem=?, expires_at=datetime('now','+90 days'), ca_provider_id=?, deployment_attempts=? WHERE id=?`, retryPEM, retryKey, providerID, maxCertificateDeploymentAttempts-1, jobID); err != nil {
 		t.Fatalf("seed cleanup_dns certificate at last deployment attempt: %v", err)
 	}
 
@@ -1345,8 +1354,12 @@ func TestCertIssuer_deployIssuedCertificate_serializes_rollback_by_rule(t *testi
 	newIssuer.deploymentRetry = func(int, issuedCertificate, time.Duration) error { return nil }
 	oldDone := make(chan error, 1)
 	newDone := make(chan error, 1)
+	// 材料须过 SAN 覆盖门（confirm 在 reload 前断言——假材料会拒在重载点之前，
+	// reloader 永不触发=测试挂起）：旧部署覆盖 example.com（种子域），
+	// 新任务域为 www.example.com，材料须覆盖该域。
+	oldPEM, oldKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	go func() {
-		oldDone <- oldIssuer.deployIssuedCertificate(context.Background(), oldJobID, issuedCertificate{ruleID: ruleID, certPEM: "old-cert", keyPEM: "old-key", notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1})
+		oldDone <- oldIssuer.deployIssuedCertificate(context.Background(), oldJobID, issuedCertificate{ruleID: ruleID, certPEM: oldPEM, keyPEM: oldKey, notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1})
 	}()
 	<-oldReloadEntered
 	if _, err := db.DB.Exec("UPDATE lb_rules SET domain='www.example.com' WHERE caddy_id=?", ruleID); err != nil {
@@ -1362,7 +1375,8 @@ func TestCertIssuer_deployIssuedCertificate_serializes_rollback_by_rule(t *testi
 	}
 	newJobID := int(newJobID64)
 	go func() {
-		newDone <- newIssuer.deployIssuedCertificate(context.Background(), newJobID, issuedCertificate{ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key", notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1})
+		newPEM, newKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "www.example.com")
+		newDone <- newIssuer.deployIssuedCertificate(context.Background(), newJobID, issuedCertificate{ruleID: ruleID, certPEM: newPEM, keyPEM: newKey, notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1})
 	}()
 
 	// When
@@ -1400,8 +1414,10 @@ func TestCertIssuer_deployIssuedCertificate_serializes_rollback_by_rule(t *testi
 	if err != nil {
 		t.Fatalf("read final key: %v", err)
 	}
-	if string(certPEM) != "new-cert" || string(keyPEM) != "new-key" {
-		t.Fatalf("final certificate=(%q,%q), want newer pair", certPEM, keyPEM)
+	// 终态=新任务（www.example.com）材料：比对叶子证书 SAN 而非裸字节。
+	finalLeaf, perr := parseCertificateLeaf(string(certPEM))
+	if perr != nil || !leafCoversRuleDomains(finalLeaf, "www.example.com") {
+		t.Fatalf("final certificate=(%q,%q), want newer pair covering www.example.com (err=%v)", certPEM, keyPEM, perr)
 	}
 }
 
@@ -1472,8 +1488,9 @@ func TestDeploymentFailed_writesCertJobLogWithAttemptAndReason(t *testing.T) {
 	useCertJobLogTestEnv(t, 1<<20)
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
 	issuer := NewCertIssuer(nil)
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 
@@ -1504,8 +1521,9 @@ func TestDeploymentFailed_entersSlowRetryAtMaxAttempts(t *testing.T) {
 		t.Fatalf("seed attempts: %v", err)
 	}
 	issuer := NewCertIssuer(nil)
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 
@@ -1540,8 +1558,9 @@ func TestDeploymentFailed_capsDisplayedAttemptWhileCounterKeepsGrowing(t *testin
 		t.Fatalf("seed attempts: %v", err)
 	}
 	issuer := NewCertIssuer(nil)
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 
@@ -1585,8 +1604,9 @@ func TestDeploymentFailed_warnsWhenStatusWritebackFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = db.DB.Exec("DROP TRIGGER IF EXISTS force_cert_job_update_fail") })
 	issuer := NewCertIssuer(nil)
+	realPEM, realKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
 	material := issuedCertificate{
-		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		ruleID: ruleID, certPEM: realPEM, keyPEM: realKey,
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
 

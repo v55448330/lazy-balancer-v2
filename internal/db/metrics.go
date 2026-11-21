@@ -629,7 +629,7 @@ func initMetricsSchema(db *sql.DB) error {
 	}
 	// transaction_id 的幂等唯一部分索引（WHERE != ''）让重复事务写入被
 	// OR IGNORE 静默去重，同时保留历史遗留空 transaction_id 行不受唯一约束影响。
-	// 存量重复行：启动期去重（保留每事务最早行）后照常建索引
+	// 存量重复行：启动期去重（保留每事务最后插入行）后照常建索引
 	// 台账裁定：去重后再建索引，不靠跳过——跳过会让 offset 重建/轮转补采把
 	// 重复事件重新入库并重复喂 autoban/rollup）。
 	if err := ensureSecurityEventsTransactionIndex(db); err != nil {
@@ -728,16 +728,19 @@ func ensureSecurityEventsTransactionIndex(db *sql.DB) error {
 		return fmt.Errorf("failed to close duplicate security_events transaction ID rows: %w", err)
 	}
 	if len(duplicates) > 0 {
-		// 去重：保留每事务最早行（首次摄取），删除其余重复行。事件为追加型
-		// 历史，同 transaction_id 的重复行语义等价，保留最早行与「INSERT OR
-		// IGNORE 命中时保留既有行」的运行时口径一致。
+		// 去重：保留每 transaction 的 id 最大行（迁移前最后插入行），删除其余
+		// 重复行。如实口径：运行期唯一部分索引让重复事务写入根本不落库（OR
+		// IGNORE），改判由 UPDATE「后到拦截覆盖先到检测」完成；迁移前重复行的
+		// 真实判定顺序无法从库内推断（id 序只是插入序，不等价于检测→拦截的
+		// 语义序），因此这里只承诺「保留最后插入行」，不宣称与运行期改判语义
+		// 等价——旧注释称「与 INSERT OR IGNORE 保留既有行一致」是漂移表述。
 		result, err := db.Exec(`DELETE FROM security_events WHERE transaction_id != '' AND id NOT IN (
-			SELECT MIN(id) FROM security_events WHERE transaction_id != '' GROUP BY transaction_id)`)
+			SELECT MAX(id) FROM security_events WHERE transaction_id != '' GROUP BY transaction_id)`)
 		if err != nil {
 			return fmt.Errorf("failed to deduplicate security_events transaction IDs: %w", err)
 		}
 		removed, _ := result.RowsAffected()
-		detail := fmt.Sprintf("启动迁移：security_events 重复 transaction_id（%s）已去重删除 %d 行（保留每事务最早行）", strings.Join(duplicates, ", "), removed)
+		detail := fmt.Sprintf("启动迁移：security_events 重复 transaction_id（%s）已去重删除 %d 行（保留每事务最后插入行）", strings.Join(duplicates, ", "), removed)
 		log.Printf("WARN: %s并继续创建唯一索引", detail)
 		recordSystemAudit("启动迁移", "安全事件", detail)
 	}

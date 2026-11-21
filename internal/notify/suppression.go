@@ -9,6 +9,7 @@ package notify
 // 发出方统一经 PublishAutobanTriggered / PublishCCTriggered，禁止绕过直发。
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -18,16 +19,50 @@ const suppressionWindow = 10 * time.Minute
 
 var (
 	suppressMu      sync.Mutex
-	autobanArmed    = map[string]time.Time{} // IP → 自动封禁事件发出时刻
-	ccLastPublished = map[string]time.Time{} // IP → CC 事件上次发出时刻
+	autobanArmed    = map[string]time.Time{} // 抑制键（IPv4 裸地址 / IPv6 /64）→ 自动封禁事件发出时刻
+	ccLastPublished = map[string]time.Time{} // IP（原始地址）→ CC 事件上次发出时刻
 )
 
-// PublishAutobanTriggered 发布自动封禁触发并武装同 IP 的 CC 抑制窗。
+// suppressionKey 归一抑制/去抖键：IPv6 按 /64 前缀归一，IPv4 保持裸地址。
+// 自动封禁的 IPv6 条目是 /64 CIDR（名单值 "2001:db8::/64"），CC 事件携带的
+// 是裸地址——不归一时武装键（CIDR）与查询键（裸地址）永不相等，同段 CC 触发
+// 在已封禁后仍逐 IP 发通知（级联抑制失配，仅通知噪音）。IPv4 映射地址按
+// IPv4 归一。
+func suppressionKey(ip string) string {
+	if prefix, err := netip.ParsePrefix(ip); err == nil {
+		addr := prefix.Addr().Unmap()
+		if !addr.Is6() {
+			return addr.String()
+		}
+		p, err := addr.Prefix(64)
+		if err != nil {
+			return ip
+		}
+		return p.String()
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if !addr.Is6() {
+		return addr.String()
+	}
+	p, err := addr.Prefix(64)
+	if err != nil {
+		return ip
+	}
+	return p.String()
+}
+
+// PublishAutobanTriggered 发布自动封禁触发并武装同一抑制键（IPv6=/64 前缀，
+// 与 CC 触发查询键同归一）的 CC 抑制窗。
 // Fields 键序=模板参数序（目录 BodyFormat："IP（原因/口径）"）。
 func PublishAutobanTriggered(ip, detail string) {
 	now := time.Now()
+	key := suppressionKey(ip)
 	suppressMu.Lock()
-	autobanArmed[ip] = now
+	autobanArmed[key] = now
 	pruneSuppressionLocked(now)
 	suppressMu.Unlock()
 	Publish(Event{Type: EvtAutobanTriggered, Fields: map[string]string{"1": ip, "2": detail}})
@@ -37,8 +72,12 @@ func PublishAutobanTriggered(ip, detail string) {
 // 内时静默跳过。
 func PublishCCTriggered(ip, reason string) {
 	now := time.Now()
+	// 级联抑制按归一键查（IPv6 /64：同段任一地址被封即抑制全段 CC 通知）；
+	// 逐 IP 去抖仍按原始地址（同段不同地址是各自独立的攻击证据，不得互相
+	// 吞掉通知）。
+	armKey := suppressionKey(ip)
 	suppressMu.Lock()
-	if at, ok := autobanArmed[ip]; ok && now.Sub(at) < suppressionWindow {
+	if at, ok := autobanArmed[armKey]; ok && now.Sub(at) < suppressionWindow {
 		suppressMu.Unlock()
 		return
 	}

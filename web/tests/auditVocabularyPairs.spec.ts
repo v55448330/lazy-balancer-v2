@@ -147,6 +147,8 @@ const DYNAMIC_PAIRS: ReadonlyArray<readonly [string, string, string]> = [
   // handlers.go applyFailureSubject 常量（应用失败/保存失败/创建失败/清理失败）
   ...([['应用失败', 'Caddy配置'], ['保存失败', 'Caddy配置'], ['创建失败', '证书任务'], ['清理失败', '证书文件']] as const)
     .map(([a, r]) => [a, r, 'handlers.go applyFailureSubject'] as const),
+  // handlers/security.go ApplyDefaultPolicies：默认策略批量动作（创建/重置 + 失败口径）
+  ...(['创建', '重置', '创建失败', '重置失败'] as const).map((a) => [a, '安全策略', 'security.go 默认策略批量族'] as const),
   // handlers/config_backup.go + config_import_v1.go + coordinator abort：action/actionLabel 补集
   ...(['导入', '还原', '部分失败', '导入失败', '还原失败', '导入警告', '还原警告'] as const).map((a) => [a, '配置备份', 'config_backup.go 导入还原族'] as const),
 ] as ReadonlyArray<readonly [string, string, string]>

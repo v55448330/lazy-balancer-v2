@@ -187,6 +187,38 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	// 行级准入（单源）：pass（放行结果不落库）、未知 kind（带外脏数据/旧版本
+	// 残余形态）与缺失 ts/client_ip 的行（无法定位时间/身份——落库会把 1970
+	// 时间与空 IP 写进事件日志，污染按时间排序/按日统计与自动封禁身份）一律
+	// 跳过并 warn 留痕。INSERT/通知/喂入三处消费同一准入集——旧实现只在落库
+	// 循环跳过，通知循环仍会对被跳过的行发 CC 触发，指向不存在的事件。
+	accepted := make([]humanEventRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Kind == "pass" {
+			continue
+		}
+		// 未知 kind 不得静默落 challenged 污染事件日志与自动封禁喂入——
+		// 与 pass 同口径跳过，响亮 warn 留痕。
+		if row.Kind != "challenge" && row.Kind != "fail" && row.Kind != "rate_reject" {
+			services.Logf("warn", "安全事件 IPC 收到未知 kind，跳过不落库: kind=%q rule_id=%s ip=%s", row.Kind, row.RuleID, row.ClientIP)
+			continue
+		}
+		if row.Ts <= 0 || strings.TrimSpace(row.ClientIP) == "" {
+			services.Logf("warn", "安全事件 IPC 人机事件缺少 ts/client_ip，跳过不落库: kind=%q rule_id=%s ip=%q ts=%d", row.Kind, row.RuleID, row.ClientIP, row.Ts)
+			continue
+		}
+		accepted = append(accepted, row)
+	}
+	if len(accepted) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	attributions := map[string]humanEventAttribution{}
+	for _, row := range accepted {
+		if _, ok := attributions[row.RuleID]; !ok {
+			attributions[row.RuleID] = lookupHumanEventAttribution(row.RuleID)
+		}
+	}
 	ctx := context.WithoutCancel(r.Context())
 	tx, err := db.MetricsDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -194,28 +226,13 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		return
 	}
 	defer tx.Rollback()
-	attributions := map[string]humanEventAttribution{}
-	for _, row := range rows {
-		if _, ok := attributions[row.RuleID]; !ok {
-			attributions[row.RuleID] = lookupHumanEventAttribution(row.RuleID)
-		}
-	}
 	// 批最旧插入分钟（rollup 回退通知用）：只统计真实落库行（pass/未知 kind
 	// 跳过），与 WAF 批 processPass 的 batchOldestMinute 同口径。
+	// 结果语义（2026-11-13 用户裁定）：挑战成功（pass）是放行结果，不是安全
+	// 事件——不落库（避免污染事件日志/统计）；发放/失败逐请求落库，action=
+	// challenged，不计入拦截/检测/攻击面。通过率由 admin 计数承载。
 	var oldestInsert time.Time
-	for _, row := range rows {
-		// 结果语义（2026-11-13 用户裁定）：挑战成功（pass）是放行结果，不是安全
-		// 事件——不落库（避免污染事件日志/统计）；发放/失败逐请求落库，action=
-		// challenged，不计入拦截/检测/攻击面。通过率由 admin 计数承载。
-		if row.Kind == "pass" {
-			continue
-		}
-		// 未知 kind（带外脏数据/旧版本残余形态）不得静默落 challenged 污染
-		// 事件日志与自动封禁喂入——与 pass 同口径跳过，响亮 warn 留痕。
-		if row.Kind != "challenge" && row.Kind != "fail" && row.Kind != "rate_reject" {
-			services.Logf("warn", "安全事件 IPC 收到未知 kind，跳过不落库: kind=%q rule_id=%s ip=%s", row.Kind, row.RuleID, row.ClientIP)
-			continue
-		}
+	for _, row := range accepted {
 		action := "challenged"
 		rule := "human_challenge"
 		if row.Kind == "fail" {
@@ -246,9 +263,13 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		if label := services.AutobanCCTriggerReasonLabel(row.Reason); label != "" {
 			ruleMsg += "（" + label + "）"
 		}
+		// 字段上限与 WAF 管线路同源（直写绕过管线但单行体积契约不变）：
+		// uri/rule_msg 超限按 UTF-8 边界截断并追加标记，避免一条人机行
+		// 可达 ~1MiB、与保留摘要披露的「单行最大约 64KiB」失真。
+		ruleMsg = services.SecurityEventsClipRuleMsgField(ruleMsg)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_events (event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, rule_name, policy_name)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			ts, row.RuleID, attr.policyID, row.ClientIP, row.Method, row.URI, "human", rule, ruleMsg, action, ruleName, attr.policyName); err != nil {
+			ts, row.RuleID, attr.policyID, row.ClientIP, row.Method, services.SecurityEventsClipURIField(row.URI), "human", rule, ruleMsg, action, ruleName, attr.policyName); err != nil {
 			http.Error(w, "human event insert: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -265,10 +286,7 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	//   - rate_reject=拦截事件 → 拦截聚合（首条立即告警+窗口聚合）；
 	//   - 携带 CC 触发原因（reason 非空）=evalCC 触发后路径 → CC 触发事件
 	//     （级联抑制/逐 IP 去抖在 notify 包内收敛，同 IP 10 分钟窗口去重）。
-	for _, row := range rows {
-		if row.Kind == "pass" {
-			continue
-		}
+	for _, row := range accepted {
 		attr := attributions[row.RuleID]
 		if row.Kind == "rate_reject" {
 			notify.RecordBlockedEvent(attr.ruleName, notify.Publish)
@@ -286,11 +304,9 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	// 挑战发放/失败计入自动封禁（按口径维度成员资格，2026-11-13 用户裁定）：
 	// 提交成功后按批喂入（配置每批只读一次，与 WAF 批路径同构），窗口/阈值
 	// 与 WAF 事件共用；主节点/启用/口径门在 services 内收敛。挑战通过永不计。
-	feed := make([]services.HumanObserveItem, 0, len(rows))
-	for _, row := range rows {
-		if row.Kind == "challenge" || row.Kind == "fail" || row.Kind == "rate_reject" {
-			feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, Reason: row.Reason, At: time.UnixMilli(row.Ts).UTC()})
-		}
+	feed := make([]services.HumanObserveItem, 0, len(accepted))
+	for _, row := range accepted {
+		feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, Reason: row.Reason, At: time.UnixMilli(row.Ts).UTC()})
 	}
 	services.ObserveHumanEvents(feed)
 	w.WriteHeader(http.StatusNoContent)
