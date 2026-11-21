@@ -638,10 +638,10 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	const (
 		// 120=117 基线+绑定会话注册/取消 2 路由+默认策略逐项创建（apply-defaults）
 		// 1 路由 Explicit（handler 留痕）；
-		// 8=Generic 不变；19=skip 不变。新增见 auditpolicy.go 登记处注释。
+		// 8=Generic 不变；21=skip（+2：集群事件/统计上报机器接口）。新增见 auditpolicy.go 登记处注释。
 		wantExplicit = 120
 		wantGeneric  = 8
-		wantSkip     = 19
+		wantSkip     = 21
 	)
 	explicitCount, genericCount, skipCount := 0, 0, 0
 	for _, policy := range auditRoutePolicies {
