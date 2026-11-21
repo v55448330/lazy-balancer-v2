@@ -1667,8 +1667,8 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
    标题层级+留白呼吸感，表格/引用/代码落在白卡上，主题变量随明暗。
    直角对齐设计规范（禁 border-radius）。 */
 .tpl-md-preview { background: var(--el-fill-color-light); padding: 14px; font-size: 13px; line-height: 1.7; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); height: 360px; max-height: 46vh; overflow: auto; }
-.tpl-md-preview h2 { font-size: 17px; font-weight: 600; margin: 4px 0 10px; }
-.tpl-md-preview h3 { font-size: 16px; font-weight: 600; margin: 2px 0 10px; }
+.tpl-md-preview h2 { font-size: 18px; font-weight: 600; margin: 4px 0 12px; }
+.tpl-md-preview h3 { font-size: 15px; font-weight: 600; margin: 2px 0 10px; }
 .tpl-md-preview h4 { font-size: 14px; font-weight: 600; margin: 2px 0 8px; }
 .tpl-md-preview p { margin: 4px 0; }
 .tpl-md-preview strong { font-weight: 600; }
@@ -1676,9 +1676,11 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-md-preview li { margin: 3px 0; color: var(--el-text-color-regular); }
 .tpl-md-preview hr { border: none; border-top: 1px solid var(--el-border-color-lighter); margin: 10px 0; }
 .tpl-md-preview blockquote { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); margin: 10px 0 2px; padding: 4px 12px; color: var(--el-text-color-secondary); }
-.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; background: var(--el-fill-color-blank); overflow: hidden; }
-.tpl-md-preview th, .tpl-md-preview td { border: 1px solid var(--el-border-color-lighter); padding: 5px 10px; text-align: left; }
-.tpl-md-preview th { background: var(--el-fill-color); font-weight: 600; }
+/* 表格=可见网格（用户实测：lighter 边框在预览里近不可见，表格退化成「只有
+   间距」）——边框升一档、表头底色加重、单元格留白加大，与 QQ 表格形态对齐。 */
+.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; background: var(--el-fill-color-blank); }
+.tpl-md-preview th, .tpl-md-preview td { border: 1px solid var(--el-border-color); padding: 6px 12px; text-align: left; }
+.tpl-md-preview th { background: var(--el-fill-color-light); font-weight: 600; color: var(--el-text-color-primary); }
 .tpl-md-preview code { background: var(--el-fill-color); padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 12px; }
 .tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
