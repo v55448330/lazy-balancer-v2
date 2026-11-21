@@ -266,8 +266,9 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   // form-hint 为遗留类新代码不得再用——2026-11-22 用户引用规范纠偏）：
   // 模块/投递时间/发送至全部迁移，且模块描述保持单行完整句。
   assert.match(nc, /<div class="form-tip-line">\{\{ t\('app\.notification\.daily\.modulesHint'\) \}\}<\/div>/, '模块描述=form-tip-line 标准类')
-  assert.match(nc, /<span class="form-tip-line">\{\{ t\('app\.notification\.rules\.dailyTimeHint'\) \}\}<\/span>/, '投递时间描述迁移 form-tip-line')
-  assert.match(nc, /<div class="form-tip-line">\{\{ t\('app\.notification\.rules\.channelSelectHint'\) \}\}<\/div>/, '发送至描述迁移 form-tip-line')
+  // 投递时间=同行后缀 form-tip-inline（规范 §16）；发送至=两条合并单行 form-tip-line
+  assert.match(nc, /<span class="form-tip-inline">\{\{ t\('app\.notification\.rules\.dailyTimeHint'\) \}\}<\/span>/, '投递时间描述=form-tip-inline 同行后缀')
+  assert.match(nc, /\{\{ t\('app\.notification\.rules\.channelSelectHint'\) \}\}\{\{ hasDisabledChannels \? '；' \+ t\('app\.notification\.rules\.channelDisabledHint'\) : '' \}\}/, '发送至两条描述合并单行（条件拼接）')
   assert.ok(!/form-hint.*modulesHint/.test(nc), '模块描述禁用遗留 form-hint')
   // QQ 日报预置=内置模板镜像：每日报告标题/数据周期前缀/对齐分隔行/尾部分节线
   assert.match(nc, /`# \$\{L\.dailyHeaderFull\}`/, '预置标题用内置形态（每日报告）')

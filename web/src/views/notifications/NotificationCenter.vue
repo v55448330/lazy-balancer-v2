@@ -182,7 +182,7 @@
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.dailySendTime') }}</span>
               <el-time-select v-model="dailyDraft.send_time" start="00:00" end="23:30" step="00:30" size="small" style="width: 120px" />
-              <span class="form-tip-line">{{ t('app.notification.rules.dailyTimeHint') }}</span>
+              <span class="form-tip-inline">{{ t('app.notification.rules.dailyTimeHint') }}</span>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
@@ -203,8 +203,7 @@
                     {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
                   </el-checkbox>
                 </el-checkbox-group>
-                <div class="form-tip-line">{{ t('app.notification.rules.channelSelectHint') }}</div>
-                <div v-if="hasDisabledChannels" class="form-tip-line">{{ t('app.notification.rules.channelDisabledHint') }}</div>
+                <div class="form-tip-line">{{ t('app.notification.rules.channelSelectHint') }}{{ hasDisabledChannels ? '；' + t('app.notification.rules.channelDisabledHint') : '' }}</div>
                 <span v-if="!userChannels.length" class="ev-more">{{ t('app.notification.rules.noChannelsHint') }}</span>
                 <div class="daily-warn-slot">
                   <div v-if="dailyDraft.channel_ids.length === 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.rules.noDeliveryWarn') }}</span></div>
