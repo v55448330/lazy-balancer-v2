@@ -31,8 +31,14 @@ func TestDefaultEventTemplateQQ_compactLayout(t *testing.T) {
 	if strings.Contains(tpl, "事件详情") {
 		t.Fatalf("QQ 模板不得再含「事件详情」分节标题: %q", tpl)
 	}
-	if strings.Contains(tpl, "# ") {
-		t.Fatalf("QQ 模板不得再用 # 大标题（头重脚轻）: %q", tpl)
+	if strings.Contains(tpl, "\n# ") || strings.HasPrefix(tpl, "# ") {
+		t.Fatalf("QQ 模板不得再用单 # 大标题（头重脚轻；## 次级允许）: %q", tpl)
+	}
+	if !strings.Contains(tpl, "## ") {
+		t.Fatalf("QQ 模板须保留 ## markdown 标题（富文本不被收敛成纯文本）: %q", tpl)
+	}
+	if !strings.Contains(tpl, "> {{body}}") {
+		t.Fatalf("QQ 模板正文须用 > 引用分组（markdown 元素）: %q", tpl)
 	}
 	for _, ph := range []string{"{{title}}", "{{level}}", "{{body}}", "{{event_title}}", "{{node}}", "{{time}}", "{{brand}}"} {
 		if !strings.Contains(tpl, ph) {

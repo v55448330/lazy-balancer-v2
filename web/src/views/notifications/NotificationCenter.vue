@@ -858,18 +858,17 @@ const defaultTplFor = (typ: string, lang: TplLang): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
     [[L.event, '{{event_title}}'], [L.node, '{{node}}'], [L.time, '{{time}}']],
     L.signature)
-  // QQ 事件预置（2026-11-22 第五轮）：紧凑单层——加粗标题+级别→正文→
-  // 分隔线→详情行→署名；无 # 大标题与分节标题（头重脚轻）。
+  // QQ 事件预置（2026-11-22 第五轮修正）：## 标题+引用分组（markdown 富文本）
   if (typ === 'qq') return [
-    '**🔔 {{title}}** · {{level}}',
+    `## 🔔 {{title}} · {{level}}`,
     '',
-    '{{body}}',
+    '> {{body}}',
+    '>',
+    `> ${L.event}${L.colon}{{event_title}}`,
+    `> ${L.node}${L.colon}{{node}}`,
+    `> ${L.time}${L.colon}{{time}}`,
     '',
-    '────────────',
-    `${L.event}${L.colon}{{event_title}}`,
-    `${L.node}${L.colon}{{node}}`,
-    `${L.time}${L.colon}{{time}}`,
-    '—— {{brand}}',
+    '—— {{brand}} · {{time}}',
   ].join('\n')
   return [
     '【{{title}}】（{{level}}）',
