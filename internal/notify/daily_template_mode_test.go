@@ -87,3 +87,31 @@ func TestRenderDaily_includesNodesSummaryAllFormats(t *testing.T) {
 		t.Fatalf("未勾选 nodes_summary 却渲染了节点行:\n%s", got)
 	}
 }
+
+// 级别汉化（用户裁定 2026-11-22 第三轮）：中文消息里不再出现英文级别词——
+// 机器人/邮件模板 {{level}} 渲染中文；webhook 默认载荷保留机器枚举并补 level_label。
+func TestLevelLabelZh_rendersInTemplates(t *testing.T) {
+	if got := levelLabelZh("critical"); got != "严重" || levelLabelZh("warn") != "警告" || levelLabelZh("info") != "信息" {
+		t.Fatalf("级别映射=%q/%q/%q，want 严重/警告/信息", levelLabelZh("critical"), levelLabelZh("warn"), levelLabelZh("info"))
+	}
+	msg := Message{EventType: "cfg.caddy_apply_failed", Level: "warn", Title: "t", Body: "b"}
+	if got := formatBotTextWithTemplate("级别 {{level}}", msg, time.Now()); got != "级别 警告" {
+		t.Fatalf("机器人模板级别=%q，want 中文", got)
+	}
+	if got := renderStyleTemplate("级别 {{level}}", msg, time.Now()); got != "级别 警告" {
+		t.Fatalf("邮件模板级别=%q，want 中文", got)
+	}
+	if got := renderStyleTemplateJSON(`{"level": {{level}}}`, msg, time.Now()); got != `{"level": "warn"}` {
+		t.Fatalf("webhook JSON 模板级别=%q，want 保留机器枚举", got)
+	}
+}
+
+// 从节点标签拼装（name+ip:port；地址缺失退化）。
+func TestSlaveNodeLabel_formats(t *testing.T) {
+	if got := SlaveNodeLabel("s1", "10.1.1.2", 8001); got != "从节点 s1(10.1.1.2:8001)" {
+		t.Fatalf("标签=%q", got)
+	}
+	if got := SlaveNodeLabel("s1", "", 0); got != "从节点 s1" {
+		t.Fatalf("缺地址标签=%q", got)
+	}
+}

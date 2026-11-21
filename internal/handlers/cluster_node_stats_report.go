@@ -32,9 +32,13 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 		return
 	}
 	nodeName := ""
+	nodeLabel := ""
 	if v, ok := c.Get("cluster_node_id"); ok {
 		if nodeID, ok := v.(int); ok {
-			_ = db.DB.QueryRow(`SELECT COALESCE(name,'') FROM nodes WHERE id=?`, nodeID).Scan(&nodeName)
+			var ip string
+			var port int
+			_ = db.DB.QueryRow(`SELECT COALESCE(name,''), COALESCE(ip_address,''), COALESCE(port,0) FROM nodes WHERE id=?`, nodeID).Scan(&nodeName, &ip, &port)
+			nodeLabel = notify.SlaveNodeLabel(nodeName, ip, port)
 		}
 	}
 	if nodeName == "" {
@@ -58,5 +62,5 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 	// 保留窗口裁剪（每次上报顺带清理，幂等）
 	_, _ = db.DB.Exec(`DELETE FROM cluster_node_daily_stats WHERE date < date('now',?)`,
 		"-"+strconv.Itoa(clusterNodeStatsRetentionDays)+" days")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"node": nodeName, "date": stats.Date}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"node": nodeLabel, "date": stats.Date}})
 }

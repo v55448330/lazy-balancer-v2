@@ -75,7 +75,7 @@ func Publish(evt Event) {
 	// 事件带节点信息，主节点事件 Node 恒空不可辨识）——非转发路径才会走到
 	// 这里，转发事件由主端以认证节点名落 Node。
 	if evt.Node == "" {
-		evt.Node = "master"
+		evt.Node = MasterNodeLabel()
 	}
 	select {
 	case queue <- evt:

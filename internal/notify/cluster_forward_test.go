@@ -319,8 +319,11 @@ func TestPublish_masterLocalEventsCarryNodeLabel(t *testing.T) {
 	if len(q) != 1 {
 		t.Fatalf("入队=%d，want 1", len(q))
 	}
-	if got := (<-q).Node; got != "master" {
-		t.Fatalf("本地事件 Node=%q，want master（主节点事件须可辨识来源）", got)
+	if got := (<-q).Node; got != MasterNodeLabel() {
+		t.Fatalf("本地事件 Node=%q，want %q（主节点事件须可辨识来源）", got, MasterNodeLabel())
+	}
+	if !strings.Contains(MasterNodeLabel(), "主节点") {
+		t.Fatalf("主节点标签=%q 须含「主节点」类型词", MasterNodeLabel())
 	}
 	// 已带 Node 的事件不被覆盖（转发/显式标注语义保留）
 	Publish(Event{Type: EvtCaddyApplyFailed, Node: "custom", Fields: map[string]string{"1": "m", "2": "d"}})

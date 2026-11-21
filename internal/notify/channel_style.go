@@ -75,7 +75,7 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 	pairs := []string{
 		"{{title}}", msg.Title,
 		"{{body}}", msg.Body,
-		"{{level}}", msg.Level,
+		"{{level}}", levelLabelZh(msg.Level),
 		"{{event}}", event,
 		"{{time}}", ts.Format("2006-01-02 15:04"),
 		"{{node}}", msg.Node,

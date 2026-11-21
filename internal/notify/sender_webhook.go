@@ -49,12 +49,13 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 	} else {
 		var err error
 		payload, err = json.Marshal(map[string]any{
-			"level":  msg.Level,
-			"time":   ts.Format(time.RFC3339),
-			"node":   msg.Node,
-			"title":  msg.Title,
-			"body":   msg.Body,
-			"fields": fields,
+			"level":       msg.Level,
+			"level_label": levelLabelZh(msg.Level),
+			"time":        ts.Format(time.RFC3339),
+			"node":        msg.Node,
+			"title":       msg.Title,
+			"body":        msg.Body,
+			"fields":      fields,
 		})
 		if err != nil {
 			return fmt.Errorf("webhook 载荷编码失败: %w", err)

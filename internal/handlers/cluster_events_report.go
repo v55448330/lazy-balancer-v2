@@ -70,15 +70,18 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 	// 上报者身份→节点名（令牌认证中间件已验签；这里把载荷 Node 与节点行名
 	// 比对——不一致以节点行为准（防伪造他节点名）。取 nodes 表按认证节点。
 	nodeIDVal, exists := c.Get("cluster_node_id")
-	reporterName := ""
+	reporterLabel := ""
 	if exists {
 		if nodeID, ok := nodeIDVal.(int); ok {
-			_ = db.DB.QueryRow(`SELECT COALESCE(name,'') FROM nodes WHERE id=?`, nodeID).Scan(&reporterName)
+			var name, ip string
+			var port int
+			_ = db.DB.QueryRow(`SELECT COALESCE(name,''), COALESCE(ip_address,''), COALESCE(port,0) FROM nodes WHERE id=?`, nodeID).Scan(&name, &ip, &port)
+			reporterLabel = notify.SlaveNodeLabel(name, ip, port)
 		}
 	}
-	if reporterName == "" {
+	if reporterLabel == "" {
 		// 中间件未注入节点 id（形态变更兜底）：信任载荷名但标记（降级面）
-		reporterName = strings.TrimSpace(req.Node)
+		reporterLabel = "从节点 " + strings.TrimSpace(req.Node)
 	}
 	accepted := 0
 	for _, one := range req.Events {
@@ -88,7 +91,7 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 			Title:  one.Title,
 			Body:   one.Body,
 			Fields: one.Fields,
-			Node:   reporterName,
+			Node:   reporterLabel,
 		}
 		if one.Level != "" {
 			evt.Level = notify.Level(one.Level)
@@ -100,7 +103,7 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 		}
 	}
 	if req.Spooled {
-		services.Logf("info", "集群事件 spool 批次 %s 收敛：节点 %q 接受 %d/%d 条", req.BatchID, reporterName, accepted, len(req.Events))
+		services.Logf("info", "集群事件 spool 批次 %s 收敛：节点 %q 接受 %d/%d 条", req.BatchID, reporterLabel, accepted, len(req.Events))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"accepted": accepted}})
 }

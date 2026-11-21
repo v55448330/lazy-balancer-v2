@@ -95,7 +95,7 @@ func wrapEmailHTML(msg Message, subject, body string, ts time.Time) string {
 	}
 	meta += fmt.Sprintf(`<tr><td style="padding:6px 0;color:#64748b;">时间</td><td style="padding:6px 0;text-align:right;color:#334155;">%s</td></tr>`, stamp)
 	return `<div style="max-width:640px;margin:0 auto;font-family:'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;">` +
-		fmt.Sprintf(`<div style="background:#1e293b;padding:20px 28px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:17px;font-weight:600;">%s</td><td style="text-align:right;"><span style="background:%s;color:#fff;font-size:11px;padding:3px 12px;">%s</span></td></tr></table></div>`, brand, badge, html.EscapeString(msg.Level)) +
+		fmt.Sprintf(`<div style="background:#1e293b;padding:20px 28px;"><table style="width:100%%;border-collapse:collapse;"><tr><td style="color:#f8fafc;font-size:17px;font-weight:600;">%s</td><td style="text-align:right;"><span style="background:%s;color:#fff;font-size:11px;padding:3px 12px;">%s</span></td></tr></table></div>`, brand, badge, html.EscapeString(levelLabelZh(msg.Level))) +
 		`<div style="border:1px solid #e2e8f0;border-top:none;padding:28px;background:#ffffff;">` +
 		fmt.Sprintf(`<h2 style="margin:0 0 10px;font-size:20px;color:#0f172a;">%s</h2>`, html.EscapeString(subject)) +
 		fmt.Sprintf(`<div style="height:3px;width:48px;background:%s;margin:0 0 18px;"></div>`, badge) +

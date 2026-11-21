@@ -63,8 +63,10 @@ func TestHandleClusterEventReport_pinsNodeNameToAuthenticatedNode(t *testing.T) 
 	if len(captured) != 1 {
 		t.Fatalf("入总线事件数=%d，want 1", len(captured))
 	}
-	if captured[0].Node != "slave-a" {
-		t.Fatalf("事件 Node=%q，want slave-a（以认证节点行为准，防伪造）", captured[0].Node)
+	// 2026-11-22 第三轮裁定：节点标签=「从节点 name(ip:port)」（seed ip 10.9.9.9:8000），
+	// 载荷伪造 node=forged 不生效（以认证节点行为准）。
+	if captured[0].Node != "从节点 slave-a(10.0.0.9:8000)" {
+		t.Fatalf("事件 Node=%q，want 从节点 slave-a(10.0.0.9:8000)（以认证节点行为准，防伪造）", captured[0].Node)
 	}
 	if !strings.Contains(rec.Body.String(), `"accepted":1`) {
 		t.Fatalf("响应=%s，want accepted=1", rec.Body.String())

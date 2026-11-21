@@ -129,6 +129,10 @@ func run() error {
 	// 通知中心分发循环与 pending 重投兜底（库装配后尽早挂接——启动期已发生
 	// 的事件（自动封禁/证书任务恢复等）由此可落投递队列）。
 	notify.Bootstrap()
+	// 主节点事件标签（2026-11-22 用户裁定：主从事件都要可辨识——主节点带
+	// 出站 IP+面板端口，从节点由上报端点按 nodes 表拼「从节点 name(ip:port)」）。
+	host, _ := os.Hostname()
+	notify.SetMasterNodeLabel(notify.BuildMasterNodeLabel(host, cfg.Port))
 	// 集群上报 TLS 信任（与快照同步同 TOFU pin 体系；自签主节点下事件/统计
 	// 上报不再握手失败）。
 	services.InstallNotifyClusterForwardTransport()

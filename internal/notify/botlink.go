@@ -209,7 +209,7 @@ func formatBotTextWithTemplate(tpl string, msg Message, ts time.Time) string {
 	pairs := []string{
 		"{{title}}", msg.Title,
 		"{{body}}", msg.Body,
-		"{{level}}", msg.Level,
+		"{{level}}", levelLabelZh(msg.Level),
 		"{{event}}", event,
 		"{{event_title}}", eventDisplayTitle(msg.EventType),
 		"{{node}}", msg.Node,
