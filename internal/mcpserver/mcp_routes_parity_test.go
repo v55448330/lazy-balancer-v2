@@ -89,8 +89,8 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/security/policies/:id/bindings/bulk": "UI 批量便利端点：策略保存/绑定弹框的 bind+unbind 批量形态（单事务单渲染）；Agent 用 set_rule_security_policies 逐规则设置完整绑定集即可达成同等结果",
 	"POST /api/v1/rules/batch-block-pages":             "API 批量便利端点（面板未消费，保留供外部自动化；R4 历史裁定：已发布稳定版公开 API 面不删）：规则列表多选批量设置阶段拦截页（2026-11 裁定停写：零写入零渲染零版本推进，no-op 受理）；阶段页字段属规则载荷，原语已被 update_rule（PUT /rules/:caddy_id 的 4 个阶段页字段）覆盖，Agent 逐规则调用即可",
 	"POST /api/v1/security/policies/:id/split":         "UI 批量便利端点：混合策略一键拆分迁移（复合操作）；原语已被 create_security_policy / set_rule_security_policies / delete_security_policy 覆盖，Agent 可逐步完成同等迁移",
-	"GET /api/v1/security/policies/default-catalog":    "UI 预览数据源：默认策略弹框的目录（名称/描述/引用关系/实时状态），纯展示形状；Agent 用 list_security_policies 等价读取实态",
-	"POST /api/v1/security/policies/apply-defaults":    "UI 便利端点：默认策略批量创建/重置（幂等向导动作，绑定迁移为面板语义）；Agent 用 create_security_policy 逐条创建即可",
+	"GET /api/v1/security/policies/default-catalog":    "UI 预览数据源：默认策略弹框的目录（名称/描述/引用关系/实时状态），仅展示形状而与 list_security_policies 的实态模型非等价（无 id/启用态/规则绑定，且含未创建项的预览描述）；Agent 读取实态用 list_security_policies",
+	"POST /api/v1/security/policies/apply-defaults":    "UI 向导动作：默认策略逐项创建/重置（含脏引用删除重建、绑定迁移、渲染推进的复合动作，reset 模式还会改写既有同名行）；无单原语等价物——Agent 应按需 create_security_policy 逐条创建（不承诺 rebuilt/绑定迁移语义）",
 	// —— OIDC 认证集成(v2.3.0):浏览器跳转/回调链路,Agent 无消费场景;
 	// 配置管理属低频管理面板操作(测试连接为发现探测,面板专用) ——
 	"GET /api/v1/security/human/stats": "总览卡人机验证统计（挑战发放/通过/失败/封禁计数）：admin 代理的瞬时遥测计数，无持久化语义、无写操作；Agent 判断拦截效果时消费 get_security_overview（WAF/事件口径）即可",

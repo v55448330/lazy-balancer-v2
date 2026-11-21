@@ -14,6 +14,9 @@ import (
 func registerNotificationTasks(te *taskengine.Engine) {
 	// 日报「API 调用(今日)」数据源注入（避免 notify→services 循环依赖）。
 	notify.DailyRESTCalls = func() int64 { return GetRESTCallOverview().TodayCalls }
+	// 日报「本地日历日」时区与全站配置时区同源（窗口/日期标签/认证计数桶共用；
+	// 未注入时 notify 回落进程 TZ，会与 task_runs 等配置时区墙钟错位）。
+	notify.DailyLocation = CurrentLocation
 	// 任务失败事件钩子（taskengine 不直接依赖 notify，解循环）。
 	taskengine.TaskFailedHook = func(taskID, message string) {
 		notify.Publish(notify.Event{Type: notify.EvtTaskFailed, Level: notify.LevelWarn,
@@ -41,8 +44,11 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		Kind:        taskengine.KindScheduled,
 		NextSlotFn: func() time.Time {
 			// per-user 发送时间集（AllDailySendTimes 单源）：取全部启用用户
-			// send_time 中「下一个会到来」的时刻；无配置回退 09:00。错过
-			// （停机跨点）由下一 tick 立即补发一次。
+			// send_time 中「下一个会到来」的时刻。槽集合取全集而非单值，迟到
+			// 的早槽不拖累后续槽；Run 体按各用户 send_time 分桶（只投当前槽
+			// 到期者，宽限 5 分钟，见 notify.DeliverDailyForAll）。停机跨过的
+			// 槽不追溯补发（引擎启动首轮只覆盖启动时刻附近的槽）。无配置
+			// 回退 09:00。
 			n := time.Now().Add(time.Minute)
 			best := time.Date(n.Year(), n.Month(), n.Day(), 9, 0, 0, 0, n.Location())
 			if !best.After(n) {

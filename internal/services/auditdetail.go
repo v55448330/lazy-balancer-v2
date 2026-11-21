@@ -207,6 +207,8 @@ var auditSourceTextMap = map[string]string{
 	"first_issuance_retry": "来源：首次签发重试",
 	// 部署生命周期行缺证书材料（ACME 下载完成后进程退出）：补扫重新排队签发。
 	"deployment_material_lost": "来源：证书材料丢失",
+	// 已签发行的材料 SAN 不覆盖当前域名（域改写/CA 返回错误集合）：对账重签。
+	"san_mismatch": "来源：SAN 不覆盖",
 	// 签发执行期发现任务域名与规则当前域名不匹配（并发兜底）：退役旧任务。
 	"domain_mismatch": "来源：规则域名变更",
 	// 配置导入/还原提交链：备份携带的 waiting_ca 存量在 finish 阶段保窗归一

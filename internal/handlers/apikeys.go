@@ -674,8 +674,10 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		auditDetail = services.FormatAuditDetail(auditDetail, "变更："+strings.Join(changes, "、"))
 	}
 	recordAudit(c, "更新", "API密钥", auditDetail)
-	// 启停子集发通知事件（密钥其余字段编辑不属启停语义）。
-	if req.IsEnabled != nil {
+	// 启停子集发通知事件（密钥其余字段编辑不属启停语义）。仅在启用态真实
+	// 翻转时发布——每次保存都带 enabled=当前值是无变化提交，发事件会制造
+	// 「又启用了一次」的假通知。
+	if req.IsEnabled != nil && *req.IsEnabled != (beforeEnabled == 1) {
 		state := "禁用"
 		if *req.IsEnabled {
 			state = "启用"

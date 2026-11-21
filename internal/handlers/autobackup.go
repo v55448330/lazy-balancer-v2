@@ -371,6 +371,14 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	if engineRunID <= 0 {
 		return autoBackupRowView{}, fmt.Errorf("auto-backup 仅允许经任务引擎执行（engineRunID 缺失，trigger=%q）", trigger)
 	}
+	// 单飞抢锁必须先于「失败通知」登记：争用 = 本次未执行（另一实例在跑），
+	// 不是备份失败。此前 defer 已注册后才 TryLock，抢锁失败照样落一条
+	// backup.failed（critical 默认订阅）并把「请稍后重试」当成备份故障告警；
+	// 日志也谎报「备份开始」。
+	if !autoBackupRunMu.TryLock() {
+		return autoBackupRowView{}, errors.New("已有备份任务正在执行，请稍后重试")
+	}
+	defer autoBackupRunMu.Unlock()
 	// 任务日志 tee（手动/自动备份各阶段在 tasks/auto-backup.log 留痕）
 	backupTee := func(stage, msg string) {
 		// 时间戳/级别/阶段口径唯一来源（services.TaskLogf→TeeTaskLogTime）：
@@ -394,10 +402,6 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		}
 	}()
 
-	if !autoBackupRunMu.TryLock() {
-		return autoBackupRowView{}, errors.New("已有备份任务正在执行，请稍后重试")
-	}
-	defer autoBackupRunMu.Unlock()
 	// 本临界区内各处审计写入属登记形态：autoBackupRunMu 是备份域写者单飞锁，
 	// 审计库写路径由 SQLite 单写方语义串行化，两锁无读者共享面（读者不经其中
 	// 任一把）。新增读者共享锁（读写同锁）时不得照抄——读者临界区内做审计

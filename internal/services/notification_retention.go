@@ -38,6 +38,11 @@ func NotificationDeliveryRetentionCleanup(ctx context.Context) (NotificationDeli
 	if days < 1 {
 		days = db.DefaultNotificationDeliveryRetentionDays
 	}
+	// 上限钳位与写侧校验（UpdateConfig 拒绝 >Max）同源：带外改库/旧备份
+	// 可能带入超上限值，读侧钳到上限，避免按荒谬天数做全表保留扫描。
+	if days > db.MaxNotificationDeliveryRetentionDays {
+		days = db.MaxNotificationDeliveryRetentionDays
+	}
 	const batch = 500
 	// 先删子表（每通道结果），再删主表——按 created_at 年龄裁剪。
 	for {

@@ -160,6 +160,7 @@ export default {
       testConfirm: "A real test notification will be sent to the selected channels with the current configuration. Continue?",
       saveConfirm: "Save the receiving channels and message templates for this rule?",
       saveRuleConfirm: "Save the events, delivery channels and minimum level of this rule?",
+      saveRuleConfirmWithEvents: "Save {rules} rule(s) and enable {events} event subscription(s) (unchecked events = unsubscribe from this group)?",
       saveTplConfirm: "Save the per-channel message templates of this rule?",
       tplBody: "Body template",
       tplJson: "JSON template",

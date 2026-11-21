@@ -1181,10 +1181,13 @@ export default {
      "reCreate": "Recreate",
      "applyConfirm": "This will create missing default policies and address lists (existing items reused, broken ones rebuilt). The dialog cannot be closed during creation. Start?",
      "reConfirm": "This will delete and recreate all default policies (custom modifications lost; rule bindings kept, address list entries untouched). The dialog cannot be closed during creation. Reset?",
+     "reConfirmWithDisabled": "This will delete and recreate all default policies, including disabled ones (they return enabled with default fields restored; custom modifications lost; rule bindings kept, address list entries untouched). The dialog cannot be closed during creation. Reset?",
+     "disabledTip": "{count} default policy item(s) are disabled: \"Start\" leaves them untouched; once everything exists, \"Recreate\" restores them enabled",
      "status": {
       "missing": "Not created",
       "created": "Created",
       "exists": "Exists",
+      "disabled": "Exists (disabled)",
       "dirty": "Needs rebuild",
       "rebuilt": "Rebuilt"
      },
@@ -1196,6 +1199,8 @@ export default {
      "doneListTip": ". To add addresses: edit the address list directly, or",
      "goLists": "open IP lists",
      "doneToast": "Default policies created",
+     "failedItemsTip": "{count} item(s) were not created; existing items are reused on retry:",
+     "retry": "Retry",
      "loadFailed": "Failed to load default policy catalog",
      "applyFailed": "Failed to apply default policies (created items recover on retry)"
     },

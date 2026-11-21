@@ -1686,13 +1686,15 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 
 		// REST 调用采集（API 接入页接入统计 REST 列数据源；MCP 路径
 		// 排除——已有专属统计；JWT-only 请求不计入，与「密钥资产」口径一致）。
+		// 入环返回本请求 token，请求结束后凭 token 回写——并发下不能按环形尾
+		// 回写（尾记录可能属于另一个在途/已完成请求）。
 		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
-			services.RecordRESTAPICall(keyName, c.Request.Method, c.Request.URL.Path, c.ClientIP(), 200)
+			token := services.RecordRESTAPICallStart(keyName, c.Request.Method, c.Request.URL.Path, c.ClientIP())
+			c.Next()
+			services.RecordRESTAPICallStatus(token, c.Writer.Status())
+			return
 		}
 		c.Next()
-		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
-			services.RecordRESTAPICallStatus(c.Writer.Status())
-		}
 	}
 }
 

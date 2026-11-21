@@ -517,7 +517,7 @@ func ValidateAutobanConfig(cfg AutobanConfig) error {
 	return nil
 }
 
-// autobanConfigReplaceMu 串行化「读旧值 → 写十列 → 运行期收敛」：两条写路径
+// autobanConfigReplaceMu 串行化「读旧值 → 写十列 → 内存收敛」：两条写路径
 // （PUT 保存 / 备份导入提交后收敛）与 Run 轮/喂入批的配置读共用。
 //
 // 不加锁的两种实测分叉：
@@ -527,7 +527,13 @@ func ValidateAutobanConfig(cfg AutobanConfig) error {
 //   - Run 轮在 UPDATE 与收尾之间读配置，拿到「新配置 + 旧桶」按新窗口并入
 //     候选（窗口变小/口径收窄即批量误封）。
 //
-// 锁序：本锁 → CaddyOpLock（收敛内的禁用收尾）。反向路径不存在：导入面
+// 临界区边界：锁内只做「读旧值 → 写十列 → 内存收敛（清桶/重算达标/调度
+// 联动）」——全部 µs 级；禁用收尾 AutobanDisableFlush 内含 CaddyOpLock +
+// 全量配置重载（秒级、时长由 Caddy 配置决定），**必须在释放本锁后执行**
+// （deferred 收尾）。此前它在锁内跑，期间所有喂入批（RLock）与 Run 轮被整段
+// 扣住：WAF 写侧 2s 超时整批转 spool，人机写入侧无重试直接丢投递。
+//
+// 锁序：本锁 → CaddyOpLock（锁外禁用收尾自取）。反向路径不存在：导入面
 // 在释放 CaddyOpLock 之后才排入收敛（见 config_backup 的 postLockActions）。
 var autobanConfigReplaceMu sync.RWMutex
 
@@ -544,11 +550,12 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if err := ValidateAutobanConfig(cfg); err != nil {
 		return err
 	}
-	// 读旧值→写→收敛必须原子（见 autobanConfigReplaceMu）：中间态对外不可见。
+	// 读旧值→写→内存收敛必须原子（见 autobanConfigReplaceMu）：中间态对外
+	// 不可见；禁用收尾（全量重载）在释放写锁后执行。
 	autobanConfigReplaceMu.Lock()
-	defer autobanConfigReplaceMu.Unlock()
 	prev, err := GetAutobanConfig()
 	if err != nil {
+		autobanConfigReplaceMu.Unlock()
 		return fmt.Errorf("读取自动封禁配置失败: %w", err)
 	}
 	en, dry := 0, 0
@@ -561,13 +568,19 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_escalation=?, autoban_counting_mode=?, autoban_suspicion_multiplier=?, autoban_confirm_floor_ratio=? WHERE id=1`,
 		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry, cfg.Escalation,
 		cfg.CountingMode, cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio); err != nil {
+		autobanConfigReplaceMu.Unlock()
 		return err
 	}
-	// 运行期收敛（清桶/重算 Reached/禁用收尾/调度联动）与备份导入提交后
+	// 运行期收敛（清桶/重算 Reached/调度联动）与备份导入提交后
 	// 共用同一单源——十列有第二条写入路径（导入/还原的通用
 	// `UPDATE global_config`），各自内联判断会让不变量在导入面静默失效。
-	// 本函数已持写锁，走动作体（导出入口负责自取锁）。
-	reconcileAutobanRuntimeAfterConfigReplace(prev, cfg)
+	// 本函数已持写锁，走锁内动作体；返回的收尾（禁用收尾全量重载）在
+	// 解锁后执行。
+	deferred := reconcileAutobanRuntimeLocked(prev, cfg)
+	autobanConfigReplaceMu.Unlock()
+	if deferred != nil {
+		deferred()
+	}
 	return nil
 }
 
@@ -637,28 +650,38 @@ func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceE
 //     以旧计数立即封禁并从这里重算封禁起点/时长；
 //   - 启用态 → 调度联动（应用值在锁内按库实态读取，本参数仅作读失败回退）。
 func ReconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
-	// 收敛动作与配置读互斥（见 autobanConfigReplaceMu）：动作执行期间
-	// Run/喂入批读不到「新配置 + 旧桶」的中间态。
 	autobanConfigReplaceMu.Lock()
-	defer autobanConfigReplaceMu.Unlock()
-	reconcileAutobanRuntimeAfterConfigReplace(old, new)
+	deferred := reconcileAutobanRuntimeLocked(old, new)
+	autobanConfigReplaceMu.Unlock()
+	if deferred != nil {
+		deferred()
+	}
 }
 
-// reconcileAutobanRuntimeAfterConfigReplace 是收敛动作体：调用方必须已持
-// autobanConfigReplaceMu 写锁（SetAutobanConfig 与导出入口共用）。
-func reconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
+// reconcileAutobanRuntimeLocked 是收敛动作体的锁内部分：调用方必须已持
+// autobanConfigReplaceMu 写锁（SetAutobanConfig 与导出入口共用）。返回值是
+// 必须在**释放写锁后**执行的收尾（禁用收尾 AutobanDisableFlush——内含
+// CaddyOpLock + 全量重载，秒级），无收尾时为 nil。
+func reconcileAutobanRuntimeLocked(old, new AutobanConfig) func() {
 	effect := autobanConfigReplaceEffectsOf(old, new)
 	if effect.resetCounters {
 		ResetAutobanCounters()
 	} else if effect.recomputeReached {
 		autobanRecomputeReached(new)
 	}
+	var deferred func()
 	if effect.disableFlush {
-		AutobanDisableFlush()
 		ResetAutobanCounters()
+		// 到期清理 + 强制重载移出写锁：否则整段重载期间喂入批被 RLock 扣住
+		// （见 autobanConfigReplaceMu 临界区边界注释）。锁内已清桶，锁外收尾
+		// 只在名单/渲染面做到期解封，不再触碰计数桶。
+		deferred = AutobanDisableFlush
 	}
 	// 调度应用走与业务驱动整轮对齐共用的互斥（避免「库新/loop 旧」交错）。
+	// 留在锁内：并发 PUT 的启停顺序须与库写入顺序一致（挪到锁外会让先写者
+	// 的 StopLoop 晚于后写者的 StartLoop 执行，落成「库启用、调度停」）。
 	applyBusinessTaskLoop(AutobanTaskID, new.Enabled)
+	return deferred
 }
 
 // AutobanConfigReplaceEffectNote 返回「替换十列后运行期收敛动作」的用户可读
@@ -2048,6 +2071,10 @@ func autobanApplyMergeOutcomeLocked(reason string, out autobanMergeOutcome, obse
 // ③暂存重载强制收敛一次（绕过节流——禁用前节流暂存的名单变化与本次清理
 // 变化必须落盘生效）。重载失败按留痕+保持暂存（重新启用后下一轮 flush
 // 重试）。
+//
+// 调用契约：本函数内含 CaddyOpLock + 全量重载（秒级），**调用方不得持
+// autobanConfigReplaceMu 写锁**（否则整段重载扣住全部喂入批——见该锁的
+// 临界区边界注释）；配置替换路径把它作为解锁后的 deferred 收尾执行。
 func AutobanDisableFlush() {
 	cfg, err := GetAutobanConfig()
 	if err != nil {

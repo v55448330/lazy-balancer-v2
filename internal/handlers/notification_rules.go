@@ -11,7 +11,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -32,7 +31,7 @@ type NotificationRule struct {
 	ID               string            `json:"id"`                // 规则标识（group:<组> 或 daily）
 	Trigger          string            `json:"trigger"`           // event | daily
 	Title            string            `json:"title"`             // 显示名
-	Events           []string          `json:"events"`            // 事件类型列表（event 规则）
+	Events           []string          `json:"events"`            // 已启用订阅的事件子集（组内全量选项=event_titles 键集）
 	EventTitles      map[string]string `json:"event_titles"`      // 事件 ID → 用户可读标题（禁止裸键展示）
 	EventLevels      map[string]string `json:"event_levels"`      // 事件 ID → 目录默认级别（info/warn/critical，标签配色）
 	MinLevel         string            `json:"min_level"`         // 最低级别
@@ -121,6 +120,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 			ID:          "group:" + group,
 			Trigger:     "event",
 			Title:       group,
+			Events:      []string{},
 			EventTitles: map[string]string{},
 			EventLevels: map[string]string{},
 			Enabled:     true,
@@ -128,7 +128,8 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		hasSub := false
 		hasEnabled := false
 		for _, e := range entries {
-			rule.Events = append(rule.Events, e.ID)
+			// 选项源=组内全量事件（EventTitles/EventLevels 键集），Events 仅
+			// 承载「已启用订阅」子集（前端复选回显口径）。
 			rule.EventTitles[e.ID] = e.Title
 			rule.EventLevels[e.ID] = string(e.Level)
 			if sub, ok := subsByEvent[e.ID]; ok {
@@ -142,6 +143,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 					continue // 停用行：不参与启用/通道/级别聚合，但更新信息保留
 				}
 				hasEnabled = true
+				rule.Events = append(rule.Events, e.ID)
 				rule.MinLevel = sub.level
 				if sub.tpl != "" {
 					rule.BodyTemplate = sub.tpl
@@ -295,6 +297,9 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		SendTime         string            `json:"send_time"`
 		Items            []string          `json:"items"`
 		Formats          map[string]string `json:"formats"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -452,7 +457,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		proxy = "管理员代管用户 " + strconv.FormatInt(uid, 10)
 	}
 	recordAudit(c, "修改", "通知规则", services.FormatAuditDetail(proxy, "规则「"+ruleTitle+"」", services.AuditResultPart("success")))
-	notify.Publish(notify.Event{Type: notify.EvtNotifyRuleChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": fmt.Sprintf("#%s", c.Param("id"))}})
+	notify.Publish(notify.Event{Type: notify.EvtNotifyRuleChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": ruleTitle}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

@@ -938,7 +938,9 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		return s.deploymentFailed(jobID, material, "开启证书事务失败: "+err.Error(), fmt.Errorf("begin certificate transaction: %w", err))
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = transitionJob(tx, jobID, deploymentLifecycleJobStatuses, "issued", issuedFinalizeFields(map[string]any{
+	// 终态通知延到 commit 成功后发布：事务内直接 transitionJob 会在提交前
+	// 发「签发成功」，回滚（如 SQLITE_BUSY/提交失败）后用户已收到假通知。
+	afterCommitNotify, err := transitionJobDeferringNotification(tx, jobID, deploymentLifecycleJobStatuses, "issued", issuedFinalizeFields(map[string]any{
 		"message":                    "签发成功",
 		"deployment_attempts":        0,
 		"deployment_available_after": nil,
@@ -983,6 +985,10 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		// ~60 天，手动重试整轮重签烧配额）。改走与文件写入失败相同的
 		// deploymentFailed 重试链（任务回 'downloaded'+退避，兼容 30s 补扫）。
 		return errors.Join(s.deploymentFailed(jobID, material, "证书部署确认失败: "+err.Error(), fmt.Errorf("finalize issued certificate: %w", err)), rollbackErr)
+	}
+	// 提交已落地：此时才发布「签发成功」终态通知（见上方 deferral 注释）。
+	if afterCommitNotify != nil {
+		afterCommitNotify()
 	}
 	s.noteFutureNotBefore(jobID, material)
 	return nil
@@ -1077,6 +1083,8 @@ var ErrCertificateRoleUndetermined = errors.New("无法判定节点角色")
 // `enable_tls=1 AND tls_source='acme_dns'` 的口径不同，本函数只把关「任务与
 // 规则是否仍对得上」——已签发材料写盘后不被 manual 渲染消费，保留材料便于
 // 规则切回 acme_dns 时直接复用。材料保留取向为有意设计，勿对齐过滤口径。
+// 材料非空时另加 SAN 覆盖断言（见下方）：状态门只管「任务行对得上规则」，
+// 不证明这份证书覆盖规则域名。
 func confirmCertificateDeployment(ctx context.Context, jobID int, material issuedCertificate, allowIssued bool) error {
 	// 角色判据走单源 RoleOf（三态），不再内联 COALESCE(g.is_master,1)=1：
 	// SQL 谓词把「角色读失败」与「任务/规则已不可部署」同归 sql.ErrNoRows，
@@ -1111,6 +1119,22 @@ func confirmCertificateDeployment(ctx context.Context, jobID int, material issue
 	}
 	if canonicalJobDomains != canonicalRuleDomains {
 		return fmt.Errorf("certificate job %d domains no longer match rule", jobID)
+	}
+	// 材料 SAN 覆盖断言：任务域与规则域相等只证明「任务行对得上规则」，不证明
+	// 这份证书**覆盖**这些域名（域名曾在任务签发期间被改写、或 CA 返回了错误
+	// 域名集合的证书）。不覆盖的材料写盘后被 Caddy 加载会让握手选择失败，而
+	// 任务已是 issued——续期按 expires_at 预筛（该材料自身有效期可能很长）不会
+	// 重签，形成无周期通道的停滞。此处 fail-closed：覆盖失败按部署失败处理
+	// （走重试链，不写 issued）。空材料不在此门范围（仅状态门把关——调用方
+	// 只做状态预检，真实部署路径材料恒非空）。
+	if strings.TrimSpace(material.certPEM) != "" {
+		leaf, parseErr := parseCertificateLeaf(material.certPEM)
+		if parseErr != nil {
+			return fmt.Errorf("certificate job %d: parse issued material: %w", jobID, parseErr)
+		}
+		if !leafCoversRuleDomains(leaf, canonicalRuleDomains) {
+			return fmt.Errorf("certificate job %d: issued material does not cover rule domains %q", jobID, canonicalRuleDomains)
+		}
 	}
 	// 可部署源态由 jobLifecycleByStatus 派生（JobLifecycle）：新增/重命名部署
 	// 生命周期状态时这里自动跟随，不再维护第三份状态字面量集合。快速重部署链

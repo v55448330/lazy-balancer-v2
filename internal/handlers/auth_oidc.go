@@ -1918,7 +1918,7 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 	if oidcIdentityRows > 0 {
 		message = fmt.Sprintf("OIDC 配置已删除；%d 个存量 OIDC 用户已无法登录。重新配置同一 issuer 可恢复原身份绑定；改用不同 issuer 会按新身份重新开户。请删除不再需要的残留用户。", oidcIdentityRows)
 	}
-	notify.Publish(notify.Event{Type: notify.EvtOIDCChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "禁用"}})
+	notify.Publish(notify.Event{Type: notify.EvtOIDCChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除并清空"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: gin.H{"oidc_identity_rows": oidcIdentityRows}})
 }
 

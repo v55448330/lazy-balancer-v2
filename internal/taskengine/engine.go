@@ -2688,6 +2688,12 @@ func publishTaskFailed(runID int64, message string) {
 	if TaskFailedHook == nil {
 		return
 	}
+	// 关停竞态守卫：终态 UPDATE 成功后进程可能恰在关停（db.DB 已被置 nil），
+	// 此时 QueryRow 会 nil 解引用 panic——关停窗口不发失败事件（终态已落库，
+	// 事实不丢）。
+	if db.DB == nil {
+		return
+	}
 	var taskID string
 	if err := db.DB.QueryRow(`SELECT task_id FROM task_runs WHERE id=?`, runID).Scan(&taskID); err != nil {
 		taskID = fmt.Sprintf("#%d", runID)

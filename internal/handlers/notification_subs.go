@@ -3,7 +3,8 @@ package handlers
 // 通知中心订阅矩阵 REST：事件目录导出 + 用户订阅读写。
 // 订阅语义与 notify.subscribersFor 同口径：显式订阅行按 min_level 过滤；
 // 无显式行按目录 DefaultSub 兜底（critical+warn 默认开）。PUT 的 min_level
-// 空串=删除显式行回默认态。
+// 空串=停用显式行（enabled=0，作为用户意志 opt-out 默认兜底），不删行——
+// 停用行保留更新者/时间，GET 以 enabled/disabled 披露该三态。
 
 import (
 	"fmt"
@@ -25,41 +26,52 @@ func (h *Handlers) ListNotificationCatalog(c *gin.Context) {
 
 // ListNotificationSubscriptions GET /notification/subscriptions——当前用户
 // 订阅矩阵：目录全量行（含未订阅行的默认态）合并本人显式订阅。
+// 三态单源（与 notify.subscribersFor 同口径）：启用行=subscribed；停用行
+// （enabled=0，opt-out 默认兜底）=disabled 且 subscribed=false；无行=默认态。
+// 停用行不回显 min_level/body_template——停用态的级别对投递无意义，回显会
+// 让消费端把「已停用」读成「按该级别订阅」。
 func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 	uid := contextUserID(c)
-	rows, err := db.DB.Query(`SELECT event_type, min_level, COALESCE(body_template,'') FROM notification_subscriptions WHERE user_id=?`, uid)
+	rows, err := db.DB.Query(`SELECT event_type, COALESCE(min_level,''), COALESCE(body_template,''), COALESCE(enabled,1) FROM notification_subscriptions WHERE user_id=?`, uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
 		return
 	}
 	defer rows.Close()
-	explicit := map[string]string{}
-	explicitTpl := map[string]string{}
+	type subRow struct {
+		minLevel, bodyTemplate string
+		enabled                bool
+	}
+	explicit := map[string]subRow{}
 	for rows.Next() {
-		var eventType, minLevel, bodyTemplate string
-		if err := rows.Scan(&eventType, &minLevel, &bodyTemplate); err != nil {
+		var eventType string
+		var row subRow
+		var enabled int
+		if err := rows.Scan(&eventType, &row.minLevel, &row.bodyTemplate, &enabled); err != nil {
 			continue
 		}
-		explicit[eventType] = minLevel
-		explicitTpl[eventType] = bodyTemplate
+		row.enabled = enabled != 0
+		explicit[eventType] = row
 	}
 
 	catalog := notify.CatalogExport()
 	subs := make([]gin.H, 0, len(catalog))
 	for _, e := range catalog {
+		row, hasRow := explicit[e.ID]
+		enabled := hasRow && row.enabled
 		minLevel := ""
-		subscribed := false
 		bodyTemplate := ""
-		if lvl, ok := explicit[e.ID]; ok {
-			subscribed = true
-			minLevel = lvl
-			bodyTemplate = explicitTpl[e.ID]
+		if enabled {
+			minLevel = row.minLevel
+			bodyTemplate = row.bodyTemplate
 		}
 		subs = append(subs, gin.H{
 			"event_type":         e.ID,
 			"level":              e.Level,
 			"default_subscribed": e.DefaultSubscribed,
-			"subscribed":         subscribed,
+			"subscribed":         enabled,
+			"enabled":            enabled,
+			"disabled":           hasRow && !row.enabled,
 			"min_level":          minLevel,
 			"body_template":      bodyTemplate,
 		})
@@ -86,6 +98,9 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 			MinLevel     string `json:"min_level"`
 			BodyTemplate string `json:"body_template"`
 		} `json:"items"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})

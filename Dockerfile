@@ -185,13 +185,15 @@ FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0
 # 升级源超出此版本时构建会失败提示，届时同步更新钉版值。
 # 不装 shadow——全仓（entrypoint/Dockerfile RUN 链/docs/compose）无
 # useradd/usermod/groupadd 等调用，镜像内无消费方。
-# zlib 钉版 1.3.2-r1：alpine 3.24.2 基础镜像快照携带 r0，r1 为上游安全修复——
-# 沿 openssl 钉版先例显式升级（sqlite 依赖隐式装入 zlib）。
+# zlib 不在此层钉版：它在下方 CRS/xdb 下载层钉唯一一次（edge 1.4-r0，CVE
+# 修复版；该层随 curl 从 edge 仓库升级，层末 apk del 只删 curl）。同一包两处
+# 不同钉版（原先此处 1.3.2-r1 + 下方 1.4-r0）最终只由后者决定，前一处只增加
+# 构建脆弱面（源移除即失败）与理解成本。
 # 安全修复（CVE 扫描）：musl 1.2.6-r6 目前只存在于 alpine edge 仓库——3.24
 # 分支最新仍为 r3。这里只对 musl/musl-utils 两个包指定 edge 仓库并精确钉版，
-# 基础系统（busybox/apk/openssl/zlib）仍来自 3.24.4；实测仅这两个包升级，
+# 基础系统（busybox/apk/openssl）仍来自 3.24.4；实测仅这两个包升级，
 # apk 正常运行。edge 若移除 r6，构建在此显性失败（不会静默用回 r3）。
-RUN apk add --no-cache ca-certificates sqlite tzdata tini openssl=3.5.9-r1 zlib=1.3.2-r1 && \
+RUN apk add --no-cache ca-certificates sqlite tzdata tini openssl=3.5.9-r1 && \
     apk add --no-cache --repository https://dl-cdn.alpinelinux.org/alpine/edge/main \
       musl=1.2.6-r6 musl-utils=1.2.6-r6 && \
     apk list -I | grep -Eq '^musl-1\.2\.6-r6 ' && \
@@ -264,7 +266,9 @@ RUN crs_version=v4.28.0; \
       if [ "$n" -ge 3 ]; then echo ">>> ip2region v6 xdb 下载/校验 3 次失败" >&2; exit 1; fi; \
       echo ">>> ip2region v6 xdb 第 ${n}/3 次失败，10s 后重试" >&2; sleep 10; \
     done && \
-    apk del curl
+    apk del curl && \
+    apk list -I | grep -Eq '^zlib-1\.4-r0 ' && \
+    apk list -I | grep -Eq '^openssl-3\.5\.9-r1 '
 
 # 爬虫地址库内置首版：离线新实例由 PrimeCrawlerIPLists 读取并落库/生成 .fast。
 # 数据文件移入 geoipnames 包并随包嵌入二进制（同一份字节
@@ -312,10 +316,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # 不跟随跳转（避免把登录页 200 误判为健康）。探针使用二进制自带子命令。
 # 端口固定 8000，与容器启动参数无关：entrypoint 会透传 `docker run` 的显式参数，
 # 但用 -config 改 port 会让本探针打错端口（Docker DNS/健康状态误判）。
-# zlib 最终镜像为 edge 仓库 1.4-r0（CVE 修复版；stable 3.24 分支为 1.3.2）：
-# 上方基础 apk add 先钉 1.3.2-r1，CRS/xdb 下载层随 curl 从 edge 升级到 1.4-r0
-# （该层末 apk del 只删 curl，zlib 留存）。zlib 动态链接 musl，运行期由
-# apk/libapk 消费；版本钉死保证可重现，见上方两处 apk add。
+# zlib 唯一钉版点在上方 CRS/xdb 下载层：edge 仓库 1.4-r0（CVE 修复版；stable
+# 3.24 分支为 1.3.2），随 curl 从 edge 安装、apk del 只删 curl 而 zlib 留存。
+# 该层末已断言 `zlib-1.4-r0` 与 `openssl-3.5.9-r1` 双命中——源仓库移除钉版时
+# 构建显性失败，不会静默落回旧版。zlib 动态链接 musl，运行期由 apk/libapk
+# 消费；版本钉死保证可重现。
 # 两段尝试各 2s，合计小于 --timeout=5s。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD ["/usr/local/bin/lazy-balancer", "--healthcheck"]

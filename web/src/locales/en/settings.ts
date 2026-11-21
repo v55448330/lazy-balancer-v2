@@ -468,6 +468,7 @@ export default {
         "backup": "Backup",
         "cluster": "Cluster",
         "system": "System",
+        "notifications": "Notifications",
       },
         "loadFailPrefix": "Failed to load task monitor: ",
         "retryNowBtn": "Retry now",

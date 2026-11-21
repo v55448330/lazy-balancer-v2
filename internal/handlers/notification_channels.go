@@ -226,6 +226,9 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		Target      string          `json:"target"`
 		StyleConfig json.RawMessage `json:"style_config"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0")})
 		return
@@ -304,20 +307,24 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		Enabled     *bool           `json:"enabled"`
 		StyleConfig json.RawMessage `json:"style_config"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	// 校验先行（无副作用），写库统一进单事务——四条 UPDATE 曾各自独立提交：
+	// 中途失败（DB 忙/约束）会留下「名称已改、目标/启用态未改」的半更新行。
+	normalizedStyle := ""
+	hasStyle := false
 	if len(req.StyleConfig) > 0 {
 		normalized, err := validateChannelStyle(typ, req.StyleConfig)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
-		if _, err := db.DB.Exec(`UPDATE notification_channels SET style_config=?, updated_at=datetime('now') WHERE id=?`, normalized, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
-			return
-		}
+		normalizedStyle, hasStyle = normalized, true
 	}
 	if req.Target != "" {
 		if err := validateChannelTarget(typ, req.Target); err != nil {
@@ -325,24 +332,43 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 			return
 		}
 	}
+	tx, err := db.DB.Begin()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+		return
+	}
+	defer tx.Rollback()
+	failTx := func(err error) {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+	}
+	if hasStyle {
+		if _, err := tx.Exec(`UPDATE notification_channels SET style_config=?, updated_at=datetime('now') WHERE id=?`, normalizedStyle, id); err != nil {
+			failTx(err)
+			return
+		}
+	}
 	if req.Name != "" {
-		if _, err := db.DB.Exec(`UPDATE notification_channels SET name=?, updated_at=datetime('now') WHERE id=?`, req.Name, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+		if _, err := tx.Exec(`UPDATE notification_channels SET name=?, updated_at=datetime('now') WHERE id=?`, req.Name, id); err != nil {
+			failTx(err)
 			return
 		}
 	}
 	if req.Target != "" {
 		target := pinBotChannelTarget(owner, typ, req.Target)
-		if _, err := db.DB.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now') WHERE id=?`, target, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+		if _, err := tx.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now') WHERE id=?`, target, id); err != nil {
+			failTx(err)
 			return
 		}
 	}
 	if req.Enabled != nil {
-		if _, err := db.DB.Exec(`UPDATE notification_channels SET enabled=?, updated_at=datetime('now') WHERE id=?`, boolToInt(*req.Enabled), id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+		if _, err := tx.Exec(`UPDATE notification_channels SET enabled=?, updated_at=datetime('now') WHERE id=?`, boolToInt(*req.Enabled), id); err != nil {
+			failTx(err)
 			return
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		failTx(err)
+		return
 	}
 	// 审计详情=通道名+结果（禁「通道 #id」形态）；改名以新名为准。
 	auditName := req.Name
@@ -357,7 +383,7 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		subject = "管理员修改用户" + subject
 	}
 	recordAudit(c, "修改", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
-	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": fmt.Sprintf("#%s", c.Param("id"))}})
+	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": auditName}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
@@ -397,7 +423,7 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 		subject = "管理员删除用户" + subject
 	}
 	recordAudit(c, "删除", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
-	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除", "3": fmt.Sprintf("#%s", c.Param("id"))}})
+	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除", "3": auditName}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

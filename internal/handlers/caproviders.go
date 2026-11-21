@@ -219,7 +219,16 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	} else {
 		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), old.Name, fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
-	notify.Publish(notify.Event{Type: notify.EvtCAProviderChanged, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("#%s", c.Param("id"))}})
+	// 事件第三/第二参用可读名而非裸编号（模板「更新了 CA 提供商「%s」」）：
+	// 名称按生效值（trim 后请求值优先，缺省沿用旧名），空名回退编号。
+	caName := old.Name
+	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
+		caName = strings.TrimSpace(*req.Name)
+	}
+	if caName == "" {
+		caName = fmt.Sprintf("提供商 %d", id)
+	}
+	notify.Publish(notify.Event{Type: notify.EvtCAProviderChanged, Fields: map[string]string{"1": c.GetString("username"), "2": caName}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4d941fb6"), MessageKey: "k_4d941fb6"})
 }
 

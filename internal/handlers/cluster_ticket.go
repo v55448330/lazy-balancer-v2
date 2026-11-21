@@ -106,7 +106,10 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	// 审计带节点名(与服务控制事件同格式「节点 %d（%s）」,:ID 必留,
 	// nodes.name 无 UNIQUE,仅名无法定位行)。
 	recordAudit(c, "生成", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d（%s）", nodeID, response.NodeName), services.AuditResultPart("success")))
-	notify.Publish(notify.Event{Type: notify.EvtClusterLoginTicket, Fields: map[string]string{"1": c.GetString("username"), "2": response.NodeName, "3": fmt.Sprintf("%d", nodeID)}})
+	// 第三参=票据的登录目标用户（模板「目标用户：%s」）。票据只为主端当前
+	// 操作者签发（claims 取当前会话身份），故目标用户=操作者本人；此前填
+	// 节点 ID 会把「目标用户」渲染成裸编号。
+	notify.Publish(notify.Event{Type: notify.EvtClusterLoginTicket, Fields: map[string]string{"1": c.GetString("username"), "2": response.NodeName, "3": c.GetString("username")}})
 	c.JSON(http.StatusOK, response)
 }
 

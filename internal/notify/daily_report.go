@@ -6,15 +6,65 @@ package notify
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 )
+
+// dailyReportTaskID 日报定时任务 ID（services 注册的 notification-daily-report；
+// 任务日志落 tasks/notification-daily-report.log 的落点键）。
+const dailyReportTaskID = "notification-daily-report"
+
+// dailyTimeLayout 库内墙钟串布局（各库统一秒级、无时区后缀）。
+const dailyTimeLayout = "2006-01-02 15:04:05"
+
+// dailySlotGrace 用户 send_time 槽的到期宽限：引擎 tick 抖动/启动补跑允许迟到
+// 数分钟仍按该槽投递；超出宽限不追溯（昨日摘要跨天已无意义）。
+const dailySlotGrace = 5 * time.Minute
+
+// DailyLocation 日报「本地日历日」时区单源（services 启动装配注入
+// CurrentLocation——与全站配置时区/task_runs 墙钟同源；未注入=进程 TZ）。
+var DailyLocation func() *time.Location
+
+// dailySlotScopeKey 定时分槽标记（引擎自动 tick 注入）：只有它存在时才按
+// 各用户 send_time 分桶；管理端「立即全员发送」与任务页手动执行保持强发。
+type dailySlotScopeKey struct{}
+
+func withDailySlotScope(ctx context.Context) context.Context {
+	return context.WithValue(ctx, dailySlotScopeKey{}, true)
+}
+
+func dailySlotScoped(ctx context.Context) bool {
+	v, _ := ctx.Value(dailySlotScopeKey{}).(bool)
+	return v
+}
+
+func dailyLocation() *time.Location {
+	if DailyLocation != nil {
+		if loc := DailyLocation(); loc != nil {
+			return loc
+		}
+	}
+	return time.Local
+}
+
+// dailyDayBounds 昨日本地日历日半开区间 [day0, day1)（配置时区墙钟）。
+// 不用 Truncate(24h)：那是「自 UTC 零点起算的整日」，在 +08:00 会得到本地
+// 08:00→08:00 的窗口（历史缺陷）。
+func dailyDayBounds(now time.Time) (day0, day1 time.Time) {
+	loc := dailyLocation()
+	n := now.In(loc)
+	day0 = time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -1)
+	day1 = day0.AddDate(0, 0, 1)
+	return day0, day1
+}
 
 // DailyConfig 单用户日报配置。
 type DailyConfig struct {
@@ -59,9 +109,33 @@ func DefaultFormatForChannel(channelType string) string {
 // DailyItemIDs 日报可定制项目（勾选清单契约）。
 var DailyItemIDs = []string{
 	"requests", "allowed", "logged", "distinct_ips", "bandwidth", "peak_qps",
-	"blocked", "attack_top", "top_ip", "top_ips", "top_paths", "cc_triggered", "autoban",
+	"blocked", "attack_top", "top_ips", "top_paths", "cc_triggered", "autoban",
 	"cert_status", "cert_expiring", "cluster_status", "uptime", "threat_db", "app_version",
 	"api_calls", "mcp_calls", "task_status", "backup_status", "login_status",
+}
+
+// legacyDailyItemIDs 已从清单移除的历史项目（2026-11-21 裁定：top_ip 与
+// top_ips 同源同值的重复项，保留 top_ips）。存量配置读到这些键即丢弃——
+// 渲染层本就按分节项目裁剪，丢弃是为了让配置/预览/导出三面不再出现幽灵项。
+var legacyDailyItemIDs = []string{"top_ip"}
+
+// normalizeDailyItems 过滤已移除的历史项目（未知键保留：可能是更新版本写入
+// 的配置，跨版本回滚时不该被静默清空）。
+func normalizeDailyItems(items []string) []string {
+	if len(items) == 0 {
+		return items
+	}
+	drop := make(map[string]bool, len(legacyDailyItemIDs))
+	for _, id := range legacyDailyItemIDs {
+		drop[id] = true
+	}
+	out := make([]string, 0, len(items))
+	for _, id := range items {
+		if !drop[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // DailyItemLabels 项目中文标签（前端渲染+正文模板共用）。
@@ -74,7 +148,6 @@ var DailyItemLabels = map[string]string{
 	"peak_qps":       "峰值请求/窗",
 	"blocked":        "拦截次数",
 	"attack_top":     "攻击 TOP 规则",
-	"top_ip":         "TOP 攻击源",
 	"top_ips":        "TOP 攻击源 IP",
 	"top_paths":      "TOP 攻击路径",
 	"cc_triggered":   "CC 触发次数",
@@ -93,21 +166,26 @@ var DailyItemLabels = map[string]string{
 }
 
 // GetDailyConfig 读单用户配置（无行=默认：启用+全项目+09:00+markdown）。
+// 查询失败必须上抛：把「库坏了」伪装成「无配置」会让日报静默改回默认项目/时间，
+// 用户看到的覆盖范围变化与真实故障无法区分（SYSH-152-14）。
 func GetDailyConfig(userID int64) (DailyConfig, error) {
 	cfg := DailyConfig{UserID: userID, Enabled: true, SendTime: "09:00",
 		Items: append([]string{}, DailyItemIDs...), Formats: map[string]string{}}
 	var raw string
 	err := db.DB.QueryRow(`SELECT COALESCE(config,'') FROM notification_daily WHERE user_id=?`, userID).Scan(&raw)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return cfg, nil // 无行=默认
 	}
-	_ = errors.New
+	if err != nil {
+		return cfg, fmt.Errorf("读取日报配置失败: %w", err)
+	}
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return cfg, fmt.Errorf("日报配置解析失败: %w", err)
 	}
 	if cfg.Items == nil {
 		cfg.Items = append([]string{}, DailyItemIDs...)
 	}
+	cfg.Items = normalizeDailyItems(cfg.Items)
 	return cfg, nil
 }
 
@@ -137,9 +215,12 @@ func SaveDailyConfig(cfg DailyConfig) error {
 	return err
 }
 
-// DeliverDailyForAll 遍历全部启用日报的用户：按各自配置渲染昨日摘要并直接
-// 落 pending 投递（不经事件订阅面——日报是独立区块，不走订阅矩阵过滤）。
-// 返回渲染成功的用户数。Scheduled 任务体与管理员手动触发共用本函数（单源）。
+// DeliverDailyForAll 遍历启用日报的用户：按各自配置渲染昨日摘要并直接落
+// pending 投递（不经事件订阅面——日报是独立区块，不走订阅矩阵过滤）。
+// 分槽：引擎自动 tick 路径（ctx 带 dailySlotScope 标记）只投递各自 send_time
+// 槽到期的用户（槽取全部用户时间集，见 AllDailySendTimes）；管理端手动触发
+// 与任务页「立即执行」不带标记=立即全员强发，不受槽约束。
+// 返回渲染成功的用户数。
 func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 	rows, err := db.DB.Query(`SELECT user_id FROM notification_daily WHERE COALESCE(json_extract(config,'$.enabled'),1)=1`)
 	if err != nil {
@@ -153,10 +234,20 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 		}
 	}
 	rows.Close()
-	rendered := 0
+	scheduled := dailySlotScoped(ctx)
+	loc := dailyLocation()
+	rendered, skipped := 0, 0
 	for _, u := range users {
 		cfg, err := GetDailyConfig(u)
-		if err != nil || !cfg.Enabled {
+		if err != nil {
+			taskLogWarn(ctx, "daily", "日报配置读取失败（user=%d）: %v", u, err)
+			continue
+		}
+		if !cfg.Enabled {
+			continue
+		}
+		if scheduled && !dailySlotDue(u, cfg, now, loc) {
+			skipped++
 			continue
 		}
 		data, err := CollectDailyData(ctx, now)
@@ -170,8 +261,37 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 		}
 		rendered++
 	}
-	taskLogf(ctx, "daily", "日报轮完成：启用用户 %d · 渲染投递 %d", len(users), rendered)
+	taskLogf(ctx, "daily", "日报轮完成：启用用户 %d · 渲染投递 %d · 非本槽跳过 %d（定时=%v）", len(users), rendered, skipped, scheduled)
 	return rendered, nil
+}
+
+// dailySlotDue 定时路径判定：该用户当日 send_time 槽已到期且在宽限窗内，
+// 且本槽尚未投递过（同槽重入/重复 tick 不重复发）。send_time 非法按 09:00
+// 兜底（与 GetDailyConfig 默认槽一致；AllDailySendTimes 会跳过非法槽）。
+func dailySlotDue(userID int64, cfg DailyConfig, now time.Time, loc *time.Location) bool {
+	slot := dailySlotAt(now, cfg.SendTime, loc)
+	if now.Before(slot) || now.Sub(slot) > dailySlotGrace {
+		return false
+	}
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries
+		WHERE user_id=? AND event_type=? AND is_test=0 AND created_at>=?`,
+		userID, EvtDailyReport, slot.UTC().Format(dailyTimeLayout)).Scan(&n); err != nil {
+		// 读失败按「未投递」继续：宁可重复一份日报，也不让故障吞掉当天日报。
+		taskLogWarn(context.Background(), "daily", "日报槽水位查询失败（user=%d）: %v", userID, err)
+		return true
+	}
+	return n == 0
+}
+
+// dailySlotAt 当日 send_time 槽时刻（配置时区）。
+func dailySlotAt(now time.Time, sendTime string, loc *time.Location) time.Time {
+	n := now.In(loc)
+	hh, mm := 9, 0
+	if t, err := time.ParseInLocation("15:04", sendTime, loc); err == nil {
+		hh, mm = t.Hour(), t.Minute()
+	}
+	return time.Date(n.Year(), n.Month(), n.Day(), hh, mm, 0, 0, loc)
 }
 
 // deliverDaily 日报落 pending 投递：body 存**数据载荷 JSON**（非成品正文）
@@ -209,7 +329,6 @@ func dailyValues(data DailyData) map[string]string {
 		"peak_qps":       fmt.Sprintf("%d", data.PeakQPS),
 		"blocked":        fmt.Sprintf("%d", data.Blocked),
 		"attack_top":     data.TopRule,
-		"top_ip":         data.TopIP,
 		"top_ips":        data.TopIPs,
 		"top_paths":      data.TopPaths,
 		"cc_triggered":   fmt.Sprintf("%d", data.CCTriggered),
@@ -259,7 +378,6 @@ type DailyData struct {
 	PeakQPS      int64
 	Blocked      int64
 	TopRule      string
-	TopIP        string
 	TopIPs       string
 	TopPaths     string
 	CCTriggered  int64
@@ -284,23 +402,30 @@ type DailyData struct {
 }
 
 // CollectDailyData 采集昨日摘要（全项目数据一次查询；未勾选项目由渲染层裁剪）。
+//
+// 时间口径（三库混存，必须按各自口径派生窗口，否则时区偏移会把昨日事件切出窗口）：
+//   - security_events.event_time / metrics_history.timestamp / audit_log.created_at /
+//     auto_backups.created_at：UTC 墙钟串 → 窗口用 UTC 串；
+//   - task_runs.started_at：配置时区墙钟串 → 窗口用本地串；
+//   - mcp_tool_stats.date：本地日历日 → 直接比日期标签。
 func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
-	y0 := now.AddDate(0, 0, -1).Truncate(24 * time.Hour)
-	y1 := y0.Add(24 * time.Hour)
-	d := DailyData{Date: y0.Format("2006-01-02")}
-	f0, f1 := y0.Format("2006-01-02 15:04:05"), y1.Format("2006-01-02 15:04:05")
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<?`, f0, f1).Scan(&d.Requests)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked'`, f0, f1).Scan(&d.Blocked)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='allowed'`, f0, f1).Scan(&d.Allowed)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='logged'`, f0, f1).Scan(&d.Logged)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(DISTINCT client_ip) FROM security_events WHERE event_time>=? AND event_time<?`, f0, f1).Scan(&d.DistinctIPs)
-	if e := db.MetricsDB.QueryRowContext(ctx, `SELECT rule_name FROM security_events WHERE event_time>=? AND event_time<? GROUP BY rule_name ORDER BY COUNT(*) DESC LIMIT 1`, f0, f1).Scan(&d.TopRule); e != nil {
+	day0, day1 := dailyDayBounds(now)
+	d := DailyData{Date: day0.Format("2006-01-02")}
+	u0, u1 := day0.UTC().Format(dailyTimeLayout), day1.UTC().Format(dailyTimeLayout)
+	l0, l1 := day0.Format(dailyTimeLayout), day1.Format(dailyTimeLayout)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<?`, u0, u1).Scan(&d.Requests)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked'`, u0, u1).Scan(&d.Blocked)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='allowed'`, u0, u1).Scan(&d.Allowed)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='logged'`, u0, u1).Scan(&d.Logged)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(DISTINCT client_ip) FROM security_events WHERE event_time>=? AND event_time<?`, u0, u1).Scan(&d.DistinctIPs)
+	if e := db.MetricsDB.QueryRowContext(ctx, `SELECT rule_name FROM security_events WHERE event_time>=? AND event_time<? GROUP BY rule_name ORDER BY COUNT(*) DESC LIMIT 1`, u0, u1).Scan(&d.TopRule); e != nil {
 		d.TopRule = "无"
 	}
-	if e := db.MetricsDB.QueryRowContext(ctx, `SELECT client_ip FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY client_ip ORDER BY COUNT(*) DESC LIMIT 1`, f0, f1).Scan(&d.TopIP); e != nil {
-		d.TopIP = "无"
-	}
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM autoban_recidivism WHERE last_ban_at>=?`, f0).Scan(&d.Autobans)
+	// 自动封禁次数：audit_log 的「自动封禁」系统动作行（与 UI 状态卡
+	// services.AutobanBannedToday 同源：逐 IP 行各计 1 + 单轮上限的省略量取
+	// 汇总行携带数），窗口 [u0,u1) 上下界都有——旧口径查累犯表 last_ban_at>=f0
+	// 既无上界、也不含升级关闭（Escalation=off 不写累犯表）时的封禁。
+	d.Autobans = countAutobanBans(ctx, u0, u1)
 	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status IN ('issued','wait_reschedule','downloading')`).Scan(&d.CertsActive)
 	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status='failed'`).Scan(&d.CertsFailed)
 	var master int
@@ -309,13 +434,13 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	d.ClusterNote = map[bool]string{true: "正常（主节点）", false: "从节点/未启用"}[d.ClusterOK && master == 1]
 	// 流量：带宽（入+出）与峰值请求/采样窗。
 	var bw int64
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes_in+bytes_out),0) FROM metrics_history WHERE timestamp>=? AND timestamp<?`, f0, f1).Scan(&bw)
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes_in+bytes_out),0) FROM metrics_history WHERE timestamp>=? AND timestamp<?`, u0, u1).Scan(&bw)
 	d.Bandwidth = formatBytes(bw)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COALESCE(MAX(requests_total),0) FROM metrics_history WHERE timestamp>=? AND timestamp<?`, f0, f1).Scan(&d.PeakQPS)
+	d.PeakQPS = peakWindowRequests(ctx, u0, u1)
 	// 安全明细：TOP 攻击源 IP / TOP 路径（各 5）/ CC 触发。
-	d.TopIPs = joinLimitRows(topPairs(ctx, `SELECT client_ip, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY client_ip ORDER BY COUNT(*) DESC LIMIT 5`, f0, f1))
-	d.TopPaths = joinLimitRows(topPairs(ctx, `SELECT uri, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY uri ORDER BY COUNT(*) DESC LIMIT 5`, f0, f1))
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND event_type='cc'`, f0, f1).Scan(&d.CCTriggered)
+	d.TopIPs = joinLimitRows(topPairs(ctx, `SELECT client_ip, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY client_ip ORDER BY COUNT(*) DESC LIMIT 5`, u0, u1))
+	d.TopPaths = joinLimitRows(topPairs(ctx, `SELECT uri, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY uri ORDER BY COUNT(*) DESC LIMIT 5`, u0, u1))
+	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND event_type='cc'`, u0, u1).Scan(&d.CCTriggered)
 	// 证书临期明细：30 天内到期的已签发证书（域名+到期日）。
 	d.CertExpiring = certExpiringList(ctx, now)
 	// 系统运行：时长/威胁库版本/应用版本。
@@ -326,14 +451,83 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	if DailyRESTCalls != nil {
 		d.APICalls = DailyRESTCalls()
 	}
-	_ = db.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(calls),0) FROM mcp_tool_stats WHERE date=?`, y0.Format("2006-01-02")).Scan(&d.MCPCalls)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='success'`, f0, f1).Scan(&d.TaskOK)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='failed'`, f0, f1).Scan(&d.TaskFailed)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='success'`, f0, f1).Scan(&d.BackupOK)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='failed'`, f0, f1).Scan(&d.BackupFailed)
-	// 用户认证：当日登录成功/失败/MFA 失败（Publish 累加）。
-	d.LoginOK, d.LoginFailed, d.MFAFailed = readAuthCounters()
+	_ = db.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(calls),0) FROM mcp_tool_stats WHERE date=?`, d.Date).Scan(&d.MCPCalls)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='success'`, l0, l1).Scan(&d.TaskOK)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='failed'`, l0, l1).Scan(&d.TaskFailed)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='success'`, u0, u1).Scan(&d.BackupOK)
+	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='failed'`, u0, u1).Scan(&d.BackupFailed)
+	// 用户认证：昨日（日期标签同源）登录成功/失败/MFA 失败（Publish 累加）。
+	d.LoginOK, d.LoginFailed, d.MFAFailed = readAuthCounters(d.Date)
 	return d, nil
+}
+
+// peakWindowRequests 昨日采样窗峰值请求数（相邻全局累计采样的最大增量）。
+// metrics_history.requests_total 是**累计快照**：MAX(requests_total) 得到的是
+// 窗口末尾的累计总量（旧实现把「当日总量」当日峰值报出）。口径：
+//   - 只取全局行（rule_id IS NULL）——规则级行是同一流量的明细拆分，重复计入会翻倍；
+//   - 增量 = 当前 − 上一样本；负值（/load/重启归零）取当前值，与
+//     metrics_counter_checkpoint 的重置钳制同源；
+//   - 窗口首样本的上一样本取窗口前最后一条（无基线则首样本不产增量）。
+func peakWindowRequests(ctx context.Context, u0, u1 string) int64 {
+	if db.MetricsDB == nil {
+		return 0
+	}
+	var prev int64
+	hasPrev := false
+	if err := db.MetricsDB.QueryRowContext(ctx, `SELECT requests_total FROM metrics_history
+		WHERE rule_id IS NULL AND timestamp<? ORDER BY timestamp DESC LIMIT 1`, u0).Scan(&prev); err == nil {
+		hasPrev = true
+	}
+	rows, err := db.MetricsDB.QueryContext(ctx, `SELECT requests_total FROM metrics_history
+		WHERE rule_id IS NULL AND timestamp>=? AND timestamp<? ORDER BY timestamp`, u0, u1)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var peak int64
+	for rows.Next() {
+		var cur int64
+		if rows.Scan(&cur) != nil {
+			continue
+		}
+		if hasPrev {
+			delta := cur - prev
+			if delta < 0 {
+				delta = cur
+			}
+			if delta > peak {
+				peak = delta
+			}
+		}
+		prev, hasPrev = cur, true
+	}
+	return peak
+}
+
+// autobanAuditSummaryPrefix 单轮逐 IP 审计行超限时的汇总行前缀。与
+// services.autobanAuditSummaryPrefix 必须一字一致（notify 不可反向 import
+// services；两处同源契约，改动时同步）。
+const autobanAuditSummaryPrefix = "汇总：其余 "
+
+// countAutobanBans 窗口内自动封禁次数。折算公式与 services.AutobanBannedToday
+// 的 SQL 同口径：前缀命中行取前缀后的省略数（解析不出按 1 保守计），其余
+// 「自动封禁」行各计 1——行数上限不会让洪峰轮次的封禁数被截断或重复计。
+func countAutobanBans(ctx context.Context, u0, u1 string) int64 {
+	if db.AuditDB == nil {
+		return 0
+	}
+	prefixRunes := utf8.RuneCountInString(autobanAuditSummaryPrefix)
+	var n int64
+	err := db.AuditDB.QueryRowContext(ctx, `SELECT COALESCE(SUM(
+		CASE WHEN substr(COALESCE(detail,''),1,?) = ?
+		THEN MAX(CAST(substr(COALESCE(detail,''),?) AS INTEGER), 1)
+		ELSE 1 END), 0)
+		FROM audit_log WHERE action=? AND created_at>=? AND created_at<?`,
+		prefixRunes, autobanAuditSummaryPrefix, prefixRunes+1, "自动封禁", u0, u1).Scan(&n)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // RenderDaily 按格式渲染日报（items 裁剪；html 转义；text/markdown/json 纯文本）。

@@ -1398,11 +1398,13 @@ var newColumnsRegistry = map[string]string{
 	// + 排队等待秒数（0=自动取 CC 窗口；域 [0,300] 写侧钳位）。
 	"security_policies.cc_trigger_action": "TEXT NOT NULL DEFAULT 'challenge'",
 	"security_policies.cc_queue_wait_sec": "INTEGER NOT NULL DEFAULT 0",
-	"global_config.cc_detect_enabled":     "INTEGER NOT NULL DEFAULT 0",
-	"global_config.cc_rps_limit":          fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCCRPSLimit),
-	"global_config.cc_rps_window":         fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCCRPSWindow),
-	"global_config.cc_4xx_ratio":          fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCC4xxRatio),
-	"global_config.cc_session_anomaly":    "INTEGER NOT NULL DEFAULT 0",
+	// 默认策略身份列（2026-11-21 audit152 SECH-152-03）：1=面板「默认策略」
+	// 创建/重建的行。apply/catalog/reset 按「名 + 本列」匹配——用户自建同名
+	// 策略不再被复用/删除/冒充 exists；reset 只删本列=1 行。存量行由
+	// backfillDefaultPolicyMarkers 按「种子名 + [默认规则] 描述前缀」回填。
+	"security_policies.is_default_policy": "INTEGER NOT NULL DEFAULT 0",
+	// global_config.cc_* 五列为零消费退役列（CC 阈值/开关已迁策略级
+	// security_policies.cc_*）：见 deadColumnDrops 同批登记。
 
 	"global_config.human_secret":                      "TEXT NOT NULL DEFAULT ''",
 	"security_crs_version.update_status":              "TEXT DEFAULT 'idle'",
@@ -1835,6 +1837,13 @@ func runMigrations() error {
 	// 补齐收敛——重建迁移自身漏列不再造成列永久丢失（数据按列默认值回填）。
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
 		return err
+	}
+	// 默认策略身份标记自愈（2026-11-21 audit152）：is_default_policy 列引入前
+	// 创建/备份恢复的默认策略行为 0——按「种子名 + [默认规则] 描述前缀」
+	// 幂等补标，否则 apply/catalog 会把真默认当用户行、重复创建同名策略。
+	// 只读探测门 + 命中才写（收敛库启动零写，同 ensureSetupAdminFlagAtStartup）。
+	if err := backfillDefaultPolicyMarkers(); err != nil {
+		return fmt.Errorf("failed to backfill default policy markers: %w", err)
 	}
 	// 保护目标自愈：users 重建/存量迁移可能留下「无标记」状态，按「最低 id
 	// 的启用管理员」补标（空库/无启用管理员时零命中，不阻断启动）。
@@ -2408,6 +2417,16 @@ func runMigrations() error {
 		// 与版本触发器均已摘除，存量值随列一并删除。
 		{"global_config", "autoban_nat_detection"},
 		{"global_config", "autoban_nat_fingerprint_threshold"},
+		// CC 全局阈值五列退役（2026-11-21 audit152 SVC-152-05）：CC 检测
+		// 开关/阈值已迁策略级 security_policies.cc_*（loadCCConfig 按启用策略
+		// 读取），global_config 同名列全仓零读零写（备份导出/导入按列存在性
+		// 过滤，旧备份携带的键自动跳过）。同 metrics_* 先例：fresh 库不建、
+		// 存量库启动删除。
+		{"global_config", "cc_detect_enabled"},
+		{"global_config", "cc_rps_limit"},
+		{"global_config", "cc_rps_window"},
+		{"global_config", "cc_4xx_ratio"},
+		{"global_config", "cc_session_anomaly"},
 	}
 	for _, drop := range deadColumnDrops {
 		dropped, err := dropColumnIfExists(drop.table, drop.column)

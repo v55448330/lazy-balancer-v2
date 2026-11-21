@@ -66,12 +66,11 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 
 // wrapEmailHTML 事件邮件统一精美卡片：深色品牌头+级别徽章+标题+accent 条+
 // 浅色正文面板+事件/节点/时间元信息网格+署名。与日报卡片同族。
+// 正文一律转义：事件正文来自目录模板/外部输入（IP、UA、规则名），原样拼进
+// HTML 即注入面；日报受控 HTML 载荷走 htmlBody 分支、不经本函数。
 func wrapEmailHTML(msg Message, subject, body string, ts time.Time) string {
 	stamp := ts.Format("2006-01-02 15:04")
 	inner := html.EscapeString(body)
-	if strings.Contains(body, "<") {
-		inner = body
-	}
 	badge := map[string]string{"critical": "#ef4444", "warn": "#f59e0b", "info": "#3b82f6"}[msg.Level]
 	if badge == "" {
 		badge = "#3b82f6"

@@ -1505,7 +1505,12 @@ func CertReconcileOnce(ctx context.Context) error {
 	if backfillErr != nil {
 		Logf("warn", "证书任务对账补建失败: %v", backfillErr)
 	}
-	if err := errors.Join(reconcileErr, expiryErr, sweepErr, backfillErr); err != nil {
+	// 停滞态出路：已签发但材料不覆盖域名的行按待续期重新签发（见函数注释）。
+	uncoveredRequeued, uncoveredErr := reconcileUncoveredIssuedCertJobs(ctx)
+	if uncoveredErr != nil {
+		Logf("warn", "证书任务 SAN 覆盖复核失败: %v", uncoveredErr)
+	}
+	if err := errors.Join(reconcileErr, expiryErr, sweepErr, backfillErr, uncoveredErr); err != nil {
 		// 降级跳过/调度取消不是故障——但轮次未完成，摘要必须如实说明
 		// 中止而非「完成」（部分计数不可信）。ctx 已取消同样按中止：
 		// 驱动层可能返回自己的取消包装错误（errors.Is 不可达）。
@@ -1513,13 +1518,13 @@ func CertReconcileOnce(ctx context.Context) error {
 			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 			(ctx != nil && ctx.Err() != nil)
 		if aborted {
-			TaskLogf("cert-reconcile", "skipped", "状态对账中止：%v（已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建——均为部分计数，恢复后下一周期重做）", err, rebuilt, filledExpiry, swept, created)
+			TaskLogf("cert-reconcile", "skipped", "状态对账中止：%v（已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建、%d 个 SAN 不覆盖重签——均为部分计数，恢复后下一周期重做）", err, rebuilt, filledExpiry, swept, created, uncoveredRequeued)
 			return err
 		}
-		TaskLogf("cert-reconcile", "reconcile", "状态对账失败：%v（失败轮结果不可信，下一周期重试；已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建——均为部分计数）", err, rebuilt, filledExpiry, swept, created)
+		TaskLogf("cert-reconcile", "reconcile", "状态对账失败：%v（失败轮结果不可信，下一周期重试；已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建、%d 个 SAN 不覆盖重签——均为部分计数）", err, rebuilt, filledExpiry, swept, created, uncoveredRequeued)
 		return err
 	}
-	TaskLogf("cert-reconcile", "reconcile", "状态对账完成：断链重建 %d 个、到期回填 %d 个、孤儿清理 %d 个、任务补建 %d 个（一致时为 0）", rebuilt, filledExpiry, swept, created)
+	TaskLogf("cert-reconcile", "reconcile", "状态对账完成：断链重建 %d 个、到期回填 %d 个、孤儿清理 %d 个、任务补建 %d 个、SAN 不覆盖重签 %d 个（一致时为 0）", rebuilt, filledExpiry, swept, created, uncoveredRequeued)
 	return nil
 }
 
@@ -1652,15 +1657,13 @@ func (s *CertificateService) requeueWaitingCAJobs(gates ...func() error) (requeu
 			// 窗口/错误码残留清理与续期巡检的重排迁移同字段集：failed→queued
 			// 后若以非 429 原因再次失败，recordJobFailure 会写新窗口/错误码，
 			// 旧值不得跨失败轮残留（UI/导出看到与当前轮矛盾的窗口）。
-			err := transitionJob(db.DB, job.id, []string{"failed"}, "queued", map[string]any{
+			// 域守卫与续期/启动恢复同源（requeueCertJobGuarded）：扫描判定
+			// 通过后规则被改域/停用，本次不得按旧域入队。
+			return requeueCertJobGuarded(job.id, []string{"failed"}, job.domain, map[string]any{
 				"message":            "冷却结束，重新排队签发",
 				"ca_available_after": nil,
 				"last_error_code":    nil,
 			})
-			if errors.Is(err, ErrJobTransitionConflict) {
-				return job.id, false, nil
-			}
-			return job.id, err == nil, err
 		})
 		if err != nil {
 			actionErr = errors.Join(actionErr, fmt.Errorf("重排 CA 冷却任务 %d（规则 %s）: %w", job.id, job.ruleID, err))
@@ -1927,11 +1930,9 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		// requeueCanceledJob 会把新执行状态打回 'queued'。命中在途任务时跳过
 		// 转换/入队/审计，任务由在途执行自身收尾。
 		_, changed, err := qm.EnqueueIfActive(job.providerID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
-			err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "queued", map[string]any{"message": "等待排队签发"})
-			if errors.Is(err, ErrJobTransitionConflict) {
-				return job.id, false, nil
-			}
-			return job.id, err == nil, err
+			// 域守卫：扫描装载与本次迁移之间规则可能被改域/停用——旧域任务
+			// 不得按「等待排队签发」重新入队（requeueCertJobGuarded 单源）。
+			return requeueCertJobGuarded(job.id, nonTerminalJobStatuses, job.domain, map[string]any{"message": "等待排队签发"})
 		})
 		if err != nil {
 			return fmt.Errorf("enqueue recovered certificate job %d: %w", job.id, err)
@@ -2128,6 +2129,32 @@ func upsertQueuedCertJob(ruleID string, list []string, caProviderID int) (int, b
 		return id, false, nil
 	}
 	return id, err == nil, err
+}
+
+// certJobRuleCurrentExistsSQL 是「任务行的规则仍是当前 ACME 签发目标」的
+// EXISTS 谓词（j=cert_jobs 别名）：续期/补扫的转 queued 迁移用它挡住
+// 「扫描判定通过 → 迁移落库」之间规则被改域/停用/改证书来源的窗口。
+// 与 handlers/certjobs.go 重试路径的 EXISTS 同口径（enabled + enable_tls +
+// tls_source + 域名双形式匹配——job.domain 是排序后的规范形式，规则行保留
+// 用户输入顺序，两个形式都要收）。
+func certJobRuleCurrentExistsSQL(jobAlias string) string {
+	return `EXISTS (
+			SELECT 1 FROM lb_rules r
+			WHERE r.caddy_id=` + jobAlias + `.rule_id AND r.enabled=1 AND r.enable_tls=1
+			  AND r.tls_source='acme_dns' AND lower(replace(r.domain,' ','')) IN (?,?)
+		)`
+}
+
+// requeueCertJobGuarded 是续期/补扫「转 queued」入队迁移的单源闭包：
+// 状态 CAS + 规则当前态域守卫。守卫不满足（扫描后规则已改域/停用）时按 CAS
+// 冲突返回 changed=false——调用方保持任务原态、不写审计、不入队。
+func requeueCertJobGuarded(jobID int, from []string, jobDomain string, fields map[string]any) (int, bool, error) {
+	err := transitionJobGuarded(db.DB, jobID, from, "queued", fields,
+		certJobRuleCurrentExistsSQL("cert_jobs"), jobDomain, ReversedCertJobDomain(jobDomain))
+	if errors.Is(err, ErrJobTransitionConflict) {
+		return jobID, false, nil
+	}
+	return jobID, err == nil, err
 }
 
 // ErrCertRuleBusy 标记「规则证书任务屏障期」导致的入队拒绝——规则正在
@@ -2468,15 +2495,13 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 			// 冷却残留必须与 recordJobFailure（统一失败写侧）的字段集对齐：
 			// failed→queued 后若以非 429 原因再次失败，会写入新窗口/错误码，
 			// 旧值不得跨失败轮残留（导出/备份/未来消费方看到矛盾字段）。
-			err := transitionJob(db.DB, j.ID, []string{"issued", "failed"}, "queued", map[string]any{
+			// 域守卫：候选装载与本次迁移之间规则可能被改域/停用——旧域任务
+			// 不得按续期通道入队（与 handlers/certjobs.go 重试路径 EXISTS 同源）。
+			return requeueCertJobGuarded(j.ID, []string{"issued", "failed"}, j.Domain, map[string]any{
 				"message":            message,
 				"ca_available_after": nil,
 				"last_error_code":    nil,
 			})
-			if errors.Is(err, ErrJobTransitionConflict) {
-				return j.ID, false, nil
-			}
-			return j.ID, err == nil, err
 		})
 		if err != nil {
 			actionErr = errors.Join(actionErr, fmt.Errorf("续期入队任务 %d（规则 %s）: %w", j.ID, j.RuleID, err))

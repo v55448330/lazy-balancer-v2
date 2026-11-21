@@ -77,6 +77,9 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		AttackWarnAt     *int  `json:"attack_warn_at"`
 		AttackCriticalAt *int  `json:"attack_critical_at"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
@@ -186,6 +189,9 @@ func (h *Handlers) TestSMTPSettings(c *gin.Context) {
 		From     string `json:"from"`
 		TLS      bool   `json:"tls"`
 		Insecure bool   `json:"insecure"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	_ = c.ShouldBindJSON(&req)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)

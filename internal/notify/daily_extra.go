@@ -1,7 +1,8 @@
 package notify
 
 // 日报扩展数据源：进程运行时长、应用版本、认证日计数、REST 调用指针、
-// 列表/字节/时长格式化。认证计数由 bus.Publish 对 auth.* 事件累加（按日重置）。
+// 列表/字节/时长格式化。认证计数由 bus.Publish 对 auth.* 事件按本地日历日
+// 分桶累加（日报次日读昨日桶，跨零点不丢）。
 
 import (
 	"context"
@@ -22,18 +23,26 @@ var AppVersion = "dev"
 // DailyRESTCalls 当日 REST 调用数指针（services 注入，避免 notify→services 循环）。
 var DailyRESTCalls func() int64
 
-type authDayCounters struct {
-	mu   sync.Mutex
-	date string
+// authDayCount 单日登录成功/失败/MFA 失败的累加桶。
+type authDayCount struct {
 	ok   int64
 	fail int64
 	mfa  int64
 }
 
-var authCounters authDayCounters
+// authCounters 按「本地日历日」分桶的认证事件计数（Publish 累加；进程内）。
+// 按日分桶而非单日覆盖：日报在次日读「昨日」桶，旧实现的单日重置会让跨零点
+// 后的读数把昨日统计清零（两日相互覆盖）。只保留今天与昨天两个桶（有界）。
+var authCounters struct {
+	mu   sync.Mutex
+	days map[string]authDayCount
+}
 
 // noteAuthEvent 由 Publish 调用：按日累加登录成功/失败/MFA 失败。
-func noteAuthEvent(typ string) {
+func noteAuthEvent(typ string) { noteAuthEventAt(typ, time.Now()) }
+
+// noteAuthEventAt 带时刻的累加入口（测试缝：同一进程可构造跨日序列）。
+func noteAuthEventAt(typ string, at time.Time) {
 	var kind int // 0=忽略 1=ok 2=fail 3=mfa
 	switch typ {
 	case EvtLoginSuccess:
@@ -45,28 +54,48 @@ func noteAuthEvent(typ string) {
 	default:
 		return
 	}
-	today := time.Now().Format("2006-01-02")
+	date := at.In(dailyLocation()).Format("2006-01-02")
 	authCounters.mu.Lock()
 	defer authCounters.mu.Unlock()
-	if authCounters.date != today {
-		// 字段级重置（不可整体赋值换掉 mu——持锁期间换 mutex 致 defer unlock 未锁 panic）。
-		authCounters.date = today
-		authCounters.ok, authCounters.fail, authCounters.mfa = 0, 0, 0
+	if authCounters.days == nil {
+		authCounters.days = map[string]authDayCount{}
 	}
+	c := authCounters.days[date]
 	switch kind {
 	case 1:
-		authCounters.ok++
+		c.ok++
 	case 2:
-		authCounters.fail++
+		c.fail++
 	case 3:
-		authCounters.mfa++
+		c.mfa++
+	}
+	authCounters.days[date] = c
+	// 有界：日报只读昨日，保留今天+昨天即可（长跑进程不随天数无限增长）。
+	prev := previousDailyDate(date)
+	for d := range authCounters.days {
+		if d != date && d != prev {
+			delete(authCounters.days, d)
+		}
 	}
 }
 
-func readAuthCounters() (ok, fail, mfa int64) {
+// previousDailyDate 本地日历日的前一天标签（解析失败返回空串=不保留昨天）。
+func previousDailyDate(date string) string {
+	t, err := time.ParseInLocation("2006-01-02", date, dailyLocation())
+	if err != nil {
+		return ""
+	}
+	return t.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+// readAuthCounters 读指定日历日（"2006-01-02"）的认证计数；日报读 d.Date 当日。
+// 计数是进程内状态：重启后当日/昨日桶从 0 起算（事实源为 auth 审计日志，
+// 日报只作概览——与旧实现同边界，分桶修复不改变该限制）。
+func readAuthCounters(date string) (ok, fail, mfa int64) {
 	authCounters.mu.Lock()
 	defer authCounters.mu.Unlock()
-	return authCounters.ok, authCounters.fail, authCounters.mfa
+	c := authCounters.days[date]
+	return c.ok, c.fail, c.mfa
 }
 
 // joinLimitRows 把 (label,count) 行集合格式化为多行列表（每行「label ×n」，空=无）。

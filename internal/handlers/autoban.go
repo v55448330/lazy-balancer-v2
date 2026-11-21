@@ -312,10 +312,12 @@ func (h *Handlers) autobanListReferenced(preset autobanPresetListState) bool {
 // autobanBanEffectiveIP IP 级通道封禁是否真正生效：预置名单存在且
 // 含未到期条目，并被至少一个「启用 + IP 访问控制启用 + deny 模式」的策略在
 // ip_acl_list_refs 中引用，且该策略已绑定到「启用 + 至少一个启用上游」的
-// HTTP 规则（渲染层对零启用上游的规则整条跳过——见
-// services/caddy.go 全量渲染的 enabledUpstreamCount 门——此前判据只看到规则
-// 启用，名单实际不拦截却抑制黄条）。白名单/受信代理/CRS 排除引用不构成拦截
-// 生效。L4 与 IP ACL 消费本通道。
+// 已发布规则。HTTP 与 TCP（L4）规则都在消费面：L4 渲染把 deny 模式 ACL
+// 并集写成 IP 名单文件匹配器，命中断连（见 services/l4_security_render.go
+// 的 deny 段），且两协议同样受「零启用上游整条跳过」门约束（services/caddy.go
+// 全量渲染的 enabledUpstreamCount 门）——此前判据只看 HTTP 规则，仅绑定到
+// TCP 规则时名单实际拦截却被判不生效（黄条误报）。白名单/受信代理/CRS
+// 排除引用不构成拦截生效。
 // 已知边界：TLS 规则在证书待签发窗口同样被渲染层整条跳过（availableCerts
 // 门），本判据不覆盖该窗口——证书可用集在渲染器内部计算（含 ACME 签发态与
 // 文件就绪探测），在此复制判据会形成第二份实现；签发起步通常以分钟计，且
@@ -334,7 +336,7 @@ func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 		  AND EXISTS (SELECT 1 FROM json_each(COALESCE(p.ip_acl_list_refs,'[]')) je WHERE je.value=?)
 		  AND EXISTS (SELECT 1 FROM security_policy_bindings b
 		              JOIN lb_rules r ON r.caddy_id=b.rule_caddy_id
-		              WHERE b.policy_id=p.id AND r.protocol='http' AND COALESCE(r.enabled,0)=1
+		              WHERE b.policy_id=p.id AND r.protocol IN ('http','tcp') AND COALESCE(r.enabled,0)=1
 		                AND EXISTS (SELECT 1 FROM upstreams u
 		                            WHERE u.rule_id=r.caddy_id AND `+services.UpstreamEnabledSQLPredicate+`))`,
 		preset.id).Scan(&count); err != nil {

@@ -327,12 +327,22 @@ func rejectWriteDuringImport(c *gin.Context, action string) bool {
 // 但同属管理员高危操作被拒的复盘面：此前只有在途任务排空一条留痕，证书队列
 // 排空（409）与读规则/开事务（500）完全静默，形成第二套方言。
 // detail 是已带阶段与「未执行/未修改」结论的审计文案；审计动作按动作词取
-// 字面量（词汇门禁要求静态词条）。返回 cause 供调用方直接作为 begin 的
-// error 返回，响应文案与日志同源。
-func failImportBegin(action, detail string, cause error) error {
+// 字面量（词汇门禁要求静态词条）。审计走 recordAudit（保留操作者用户名/
+// API Key 归因/真实客户端 IP）——此前裸 RecordAuditLog("system",…) 会把
+// 管理员被拒的导入记成系统身份，审计页无法追溯到人。
+// c 为 nil（测试直调 begin、无 HTTP 请求）时回落 system 身份。
+// 返回 cause 供调用方直接作为 begin 的 error 返回，响应文案与日志同源。
+func failImportBegin(c *gin.Context, action, detail string, cause error) error {
 	services.Logf("warn", "配置%s被拒绝：%s（%v）", action, detail, cause)
+	// 操作标签字面量直写（audit_vocabulary 守卫：动态表达式不入白名单）。
 	if action == "还原" {
-		services.RecordAuditLog("system", "还原失败", "配置备份", detail, "")
+		if c != nil {
+			recordAudit(c, "还原失败", "配置备份", detail)
+		} else {
+			services.RecordAuditLog("system", "还原失败", "配置备份", detail, "")
+		}
+	} else if c != nil {
+		recordAudit(c, "导入失败", "配置备份", detail)
 	} else {
 		services.RecordAuditLog("system", "导入失败", "配置备份", detail, "")
 	}
@@ -341,8 +351,9 @@ func failImportBegin(action, detail string, cause error) error {
 
 // action 是本次会话的动作词（「导入」/「还原」）——排空失败等建会话前的审计
 // 也要带正确动作，不能一律记「导入失败」（自动备份还原路径同样走本函数）。
-func (h *Handlers) beginConfigImport(ctx context.Context, action string) (*configImportSession, error) {
-	return h.beginConfigImportWithPrelock(ctx, prelockNone, action)
+// c 只用于失败审计的操作者归因（nil=无请求，回落 system），不影响会话语义。
+func (h *Handlers) beginConfigImport(c *gin.Context, ctx context.Context, action string) (*configImportSession, error) {
+	return h.beginConfigImportWithPrelock(c, ctx, prelockNone, action)
 }
 
 // prelockNone 显式表达「无预锁」——与「有预锁」区分，避免调用方误传 nil 顺序
@@ -352,7 +363,7 @@ func prelockNone() func() { return nil }
 // beginConfigImportWithPrelock 在 Pause/Cancel/Wait 排空完成之后、取
 // caddyOpMu 与开启事务之前调用 prelock（返回释放函数）。配置导入用它把
 // WAF 文件锁放在排空之后：先取锁会让阻塞在 wafFileMu 的更新任务无法被取消。
-func (h *Handlers) beginConfigImportWithPrelock(ctx context.Context, prelock func() func(), action string) (*configImportSession, error) {
+func (h *Handlers) beginConfigImportWithPrelock(c *gin.Context, ctx context.Context, prelock func() func(), action string) (*configImportSession, error) {
 	if action == "" {
 		action = "导入"
 	}
@@ -429,7 +440,7 @@ func (h *Handlers) beginConfigImportWithPrelock(ctx context.Context, prelock fun
 		cancel()
 		if !drained {
 			drainDetail := fmt.Sprintf("在途任务未排空（等待上限 %s），%s未执行（配置未修改）", importInFlightDrainTimeout, action)
-			failImportBegin(action, drainDetail, errImportTaskDrainIncomplete)
+			failImportBegin(c, action, drainDetail, errImportTaskDrainIncomplete)
 			// 与 close 同序：先恢复本代暂停，再允许下一代导入进入。
 			resumeEngine()
 			releaseSession()
@@ -454,7 +465,7 @@ func (h *Handlers) beginConfigImportWithPrelock(ctx context.Context, prelock fun
 		// 不得继续导入。
 		if !recovery.manager.PauseAndDrain() {
 			certDetail := fmt.Sprintf("证书任务执行中，%s未执行（配置未修改）", action)
-			failImportBegin(action, certDetail, errCertQueueDrainIncomplete)
+			failImportBegin(c, action, certDetail, errCertQueueDrainIncomplete)
 			// 先解除 hold 再恢复队列/释放会话锁——否则第二个导入可在锁窗口
 			// 内看到「队列 inactive」并在第一个导入 Resume 后与之并发。
 			recovery.hold = false
@@ -490,12 +501,16 @@ func (h *Handlers) beginConfigImportWithPrelock(ctx context.Context, prelock fun
 	// 会话建立后，apply→版本写入→清理判定→commit 必须不因客户端断连
 	// 切换到已取消上下文；前置排空与加锁仍使用原请求上下文。
 	session := &configImportSession{h: h, ctx: context.WithoutCancel(ctx), recovery: recovery, resumeEngine: resumeEngine, releaseBeforeLock: releaseBeforeLock, action: action}
-	ruleIDs, err := importRuleIDsForBegin(ctx)
+	// importRuleIDsForBegin 与后续事务写在同一个「会话已建立、不得因客户端断连
+	// 取消」的语义里：读规则集是建会话的最后一步（已拿 caddyOpMu/已暂停调度），
+	// 此时请求 ctx 被取消（前端超时/关页）会让读完失败并回滚整个已就绪会话，
+	// 与下方 importBeginTx 的 context.WithoutCancel 口径不一致。用 session.ctx。
+	ruleIDs, err := importRuleIDsForBegin(session.ctx)
 	if err != nil {
 		// CA 已暂停：必须在释放会话锁之前恢复既有活动态——否则第二个导入可
 		// 在窗口内把「队列 inactive」当作稳定状态，随后与本导入的 Resume 并发。
 		err = finishImportFailure(nil, &session.recovery, fmt.Errorf("读取现有规则: %w", err))
-		failImportBegin(action, fmt.Sprintf("读取现有规则失败，%s未执行（数据库未修改）", action), err)
+		failImportBegin(c, action, fmt.Sprintf("读取现有规则失败，%s未执行（数据库未修改）", action), err)
 		releaseBegin()
 		return nil, err
 	}
@@ -504,7 +519,7 @@ func (h *Handlers) beginConfigImportWithPrelock(ctx context.Context, prelock fun
 	if err != nil {
 		err = finishImportFailure(nil, &session.recovery, err)
 		wrapped := fmt.Errorf("开始导入事务: %w", err)
-		failImportBegin(action, fmt.Sprintf("开启导入事务失败，%s未执行（数据库未修改）", action), wrapped)
+		failImportBegin(c, action, fmt.Sprintf("开启导入事务失败，%s未执行（数据库未修改）", action), wrapped)
 		releaseBegin()
 		return nil, wrapped
 	}

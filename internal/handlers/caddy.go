@@ -774,10 +774,15 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 	}
 	// 与 UpdateConfig 同门、同分类器：DB 故障不得被回成 400 携带底层错误文本
 	// （管理员会误判为载荷非法），纯配置错误才 400 展示全部问题。
+	// 门控同保存端：只有进入渲染的变更才做「存量规则可渲染性」预检——
+	// 面板/保留策略等非渲染字段的保存本就不碰 Caddy，预览却按全量预检会让
+	// 预览对同一载荷给出与保存不同的结论（保存放行、预览 400）。
 	// 预览是 AuditPolicySkip（不落库的查询）：不产生失败留痕。
-	if err := validateEnabledStoredRuleConfigs(c.Request.Context()); err != nil {
-		writeConfigValidationFailure(c, err, false)
-		return
+	if plan.AffectsCaddy {
+		if err := validateEnabledStoredRuleConfigs(c.Request.Context()); err != nil {
+			writeConfigValidationFailure(c, err, false)
+			return
+		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: plan})
 }
@@ -1079,10 +1084,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			}
 			recordAudit(c, "更新失败", "全局配置", caddyFailureAuditDetail("Caddy 配置应用失败", applyErr))
 			// 2026-09-07：与规则域统一——配置拒绝→400，传输/系统→500。
+			// 响应内错误原文必须经 RedactCaddyAdminEndpoint：/load 传输失败恒是
+			// url.Error 形态（含自定义 caddy_admin_url 的地址与端口），全员可见
+			// 响应不得披露内部控制面端点。
 			if rejected {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d4a12434", apimsg.ErrMsg(c, applyErr))})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d4a12434", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, applyErr)))})
 			} else {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a76cfec8", apimsg.ErrMsg(c, applyErr))})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a76cfec8", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, applyErr)))})
 			}
 			return
 		}
@@ -1715,10 +1723,12 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		}
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail("Caddy 配置应用失败", err))
 		// 2026-09-07：与统一——配置拒绝→400，传输/系统→500。
+		// 响应内错误原文经 RedactCaddyAdminEndpoint（同 UpdateConfig 两出口）：
+		// /load 传输失败携带 admin 端点原文，不得进入全员可见响应。
 		if rejected {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_6a049747", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_6a049747", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, err)))})
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a76cfec8", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a76cfec8", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, err)))})
 		}
 		return
 	}
@@ -1781,6 +1791,8 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
+		// 失败同样是可用性事实（此前只在成功时发事件——启停通知永远「成功」）。
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": "失败"}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
@@ -1789,6 +1801,7 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	// caddyApplyNoteLocked: caller already holds caddyOpMu (applyCaddyConfigE
 	// would re-lock the non-reentrant mutex and deadlock).
 	if note := h.caddyApplyNoteLocked(); note != "" {
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": "失败（配置应用未生效）"}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已启动", note)})
 		return
 	}
@@ -1806,6 +1819,7 @@ func (h *Handlers) StopCaddy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "停止", "3": "失败"}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
@@ -1821,15 +1835,18 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "失败"}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "失败"}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// Same as StartCaddy: caller holds caddyOpMu, use the locked variant.
 	if note := h.caddyApplyNoteLocked(); note != "" {
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "失败（配置应用未生效）"}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: caddyLifecycleApplyFailureMessage("Caddy 已重启", note)})
 		return
 	}

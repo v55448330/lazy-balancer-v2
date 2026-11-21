@@ -51,6 +51,9 @@ type hotPathIPListFixture struct {
 
 func newHotPathIPListFixture(t *testing.T) *hotPathIPListFixture {
 	t.Helper()
+	// 全局缝隔离：本 fixture 消费者会换 notifyPublish seam（audit152 修复批起），
+	// 未隔离会包级泄漏（TestHandlerGlobalSeamWritersUseIsolatedGlobal 归因失败）。
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	f := &hotPathIPListFixture{t: t}
 	f.adminSrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

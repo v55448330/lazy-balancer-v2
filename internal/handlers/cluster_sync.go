@@ -166,7 +166,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		fmt.Sprintf("已清除 %d 个主节点证书指纹，下次同步将重新验证并钉扎", removed),
 		services.AuditResultPart("success"),
 	))
-	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "清除了全部集群信任锚", "3": "forget-pins"}})
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "清除了全部集群信任锚", "3": fmt.Sprintf("主节点证书指纹 %d 个", removed)}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_d94bc52e"), MessageKey: "k_d94bc52e"})
 }
 
@@ -218,6 +218,11 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 	}
 	recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
 		fmt.Sprintf("节点 %d（%s）", nodeID, host), services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{
+		"1": c.GetString("username"),
+		"2": "清除了单节点证书指纹钉",
+		"3": fmt.Sprintf("节点 %d（%s）", nodeID, host),
+	}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_bcd41466"), MessageKey: "k_bcd41466"})
 }
 

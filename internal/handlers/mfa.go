@@ -913,6 +913,6 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	}
 	recordAudit(c, "重置", "用户认证", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtMFAChanged,
-		Fields: map[string]string{"1": target, "2": "重置"}})
+		Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("重置了目标用户 %s", target)}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_54bac549"), MessageKey: "k_54bac549"})
 }

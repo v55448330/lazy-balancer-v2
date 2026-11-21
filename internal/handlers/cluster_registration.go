@@ -77,7 +77,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(fmt.Sprintf("有效期至：%s", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
-	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "生成了集群注册令牌", "3": "-"}})
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "生成了集群注册令牌", "3": "有效期至 " + expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_9fc1e233"), MessageKey: "k_9fc1e233", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
 }
 
@@ -321,6 +321,11 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 		fmt.Sprintf("节点 %d", id),
 		fmt.Sprintf("站点坐标：纬度 %.4f，经度 %.4f", *req.ServerMapLat, *req.ServerMapLon),
 		services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{
+		"1": c.GetString("username"),
+		"2": "更新了节点站点坐标",
+		"3": fmt.Sprintf("节点 %d（纬度 %.4f，经度 %.4f）", id, *req.ServerMapLat, *req.ServerMapLon),
+	}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_fc52663d"), MessageKey: "k_fc52663d", Data: gin.H{
 		"server_map_lat": *req.ServerMapLat,
 		"server_map_lon": *req.ServerMapLon,
@@ -350,6 +355,14 @@ func (h *Handlers) UpdateClusterNodeAccessURL(c *gin.Context) {
 	h.clusterNodeAction(c, "更新地址", func(id int) error {
 		return h.clusterService.UpdateNodeAccessURL(c.Request.Context(), id, req.AccessURL)
 	})
+	// 成功才发通知事件（clusterNodeAction 内已写响应；失败分支各自 return）。
+	if c.Writer.Status() == http.StatusOK {
+		notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{
+			"1": c.GetString("username"),
+			"2": "更新了节点访问地址",
+			"3": "节点 " + registerAuditField(c.Param("id")),
+		}})
+	}
 }
 
 func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation func(int) error) {

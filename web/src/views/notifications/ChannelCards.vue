@@ -462,11 +462,15 @@ const saveDrawer = async (): Promise<void> => {
   } catch { return }
   saving.value = true
   try {
+    // 编辑目标必须在任何 await 之前捕获：抽屉关闭（drawerVisible=false →
+    // resetDrawer）会把 editTarget 清空，保存后才判 `editTarget.value` 恒为
+    // null，机器人通道的「保存即自动测试」整段被跳过（静默不回测）。
+    const editing = editTarget.value
     const key = { webhook: 'url', email: 'email', qq: 'openid', wx_clawbot: 'receiver' }[drawerForm.value.type] ?? 'target'
     const target = JSON.stringify({ [key]: drawerForm.value.targetValue.trim() })
-    if (editTarget.value) {
+    if (editing) {
       // 编辑：名称/目标/样式一次提交（样式全量覆盖=所见即所存）
-      await request.put(`/notification/channels/${editTarget.value.id}`, {
+      await request.put(`/notification/channels/${editing.id}`, {
         name: drawerForm.value.name.trim(),
         target,
         style_config: buildStyleConfig(),
@@ -488,9 +492,11 @@ const saveDrawer = async (): Promise<void> => {
     }
     drawerVisible.value = false
     await fetchChannels()
-    // 机器人通道保存后自动测试：绑定「绑定测试」确认后立即验证可达性，无需手动点测试
-    if (editTarget.value && (drawerForm.value.type === 'qq' || drawerForm.value.type === 'wx_clawbot')) {
-      const cur = channels.value.find(c => c.id === editTarget.value?.id)
+    // 机器人通道保存后自动测试：按捕获的编辑目标类型判定（关闭抽屉已清
+    // editTarget，用 target 判型才能稳定触发），绑定「绑定测试」确认后立即
+    // 验证可达性，无需手动点测试。
+    if (editing.type === 'qq' || editing.type === 'wx_clawbot') {
+      const cur = channels.value.find(c => c.id === editing.id)
       if (cur) await doTestChannel(cur)
     }
   } catch (e) { console.error(e) } finally { saving.value = false }

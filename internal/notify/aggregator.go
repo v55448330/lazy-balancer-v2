@@ -47,10 +47,14 @@ func RecordBlockedEvent(ruleName string, publish func(Event)) {
 	if ruleName != "" {
 		blockedCurrent.topRule[ruleName]++
 	}
+	// 「是否本轮首条」必须在锁内判定并落局部变量：锁外再读 blockedCurrent
+	// 会与 flush（置 nil）/窗口轮换竞争——nil 解引用 panic，或把轮换后窗口的
+	// 非首条误当首条重发（-race 实证）。
+	first := blockedCurrent.count == 1
 	blockedMu.Unlock()
 
 	// 首个拦截立即发布一条 info（及时性；后续进聚合）。
-	if blockedCurrent.count == 1 {
+	if first {
 		Publish(Event{
 			Type: EvtBlockedAggregate, Level: LevelInfo,
 			Title:  "拦截聚合",

@@ -468,6 +468,7 @@ export default {
         "backup": "备份",
         "cluster": "集群",
         "system": "系统",
+        "notifications": "通知",
       },
         "loadFailPrefix": "任务监控加载失败：",
         "retryNowBtn": "立即重试",

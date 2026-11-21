@@ -633,6 +633,18 @@ func securityEventsClipTextField(value string, capBytes int) string {
 	return value[:cut] + securityEventsTruncatedMarker
 }
 
+// SecurityEventsClipURIField / SecurityEventsClipRuleMsgField 是人机事件直写
+// 通道（handlers 侧）复用的字段上限单源：直写绕过 WAF 管线，但单行体积契约
+// 必须与管线路一致（头/体/URI/rule_msg 各自上限 + 截断标记），否则一条人机
+// 行可达 1MiB，与保留策略披露的「单行最大约 64KiB」失真。
+func SecurityEventsClipURIField(value string) string {
+	return securityEventsClipTextField(value, securityEventsURICap)
+}
+
+func SecurityEventsClipRuleMsgField(value string) string {
+	return securityEventsClipTextField(value, securityEventsRuleMsgCap)
+}
+
 // securityEventsRuleMsgWithDroppedNote 在本行命中明细被写侧上限截断时给
 // rule_msg（= 首条消息文本）追加披露后缀：先按「上限 − 后缀」裁正文再拼接，
 // 后缀永远不被裁剪吃掉；拼好的字段仍不超过 securityEventsRuleMsgCap（行体积

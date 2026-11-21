@@ -111,6 +111,13 @@ func dispatch(evt Event) {
 	}
 	for _, uid := range userIDs {
 		insertDeliveryPending(uid, evt)
+		// MCP 实时推送与通道投递同源过滤：显式空选接收通道（channel_ids='[]'，
+		// 用户裁定「全不选=不订阅」）的用户不再收推送——旧实现无条件推送，
+		// 用户关掉全部通道后仍被 MCP 会话打扰。MCP 不是独立通道行，选择面里
+		// 只有「显式空选」这一态可判定。
+		if subscriptionChannelSelectionFor(uid, evt.Type).explicitEmpty {
+			continue
+		}
 		firePushHooks(uid, Message{EventType: evt.Type, Level: string(evt.Level), Title: evt.Title, Body: evt.Body})
 	}
 }

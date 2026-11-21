@@ -167,6 +167,7 @@ export default {
       testConfirm: "将按当前配置向选定通道真实发送一条测试通知，是否继续？",
       saveConfirm: "确认保存当前规则的接收通道与消息模板？",
       saveRuleConfirm: "确认保存该规则的事件、接收通道与最低级别？",
+      saveRuleConfirmWithEvents: "确认保存 {rules} 条规则、将启用 {events} 个事件订阅（未勾选事件=取消订阅本组）？",
       saveTplConfirm: "确认保存当前规则的每通道消息模板？",
       tplBody: "正文模板",
       tplJson: "JSON 模板",

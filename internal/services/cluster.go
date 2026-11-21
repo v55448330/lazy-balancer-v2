@@ -566,7 +566,12 @@ func (s *ClusterService) UpdateNodeAccessURL(ctx context.Context, nodeID int, ac
 func (s *ClusterService) ApproveNode(ctx context.Context, nodeID int, now time.Time) error {
 	// 注册密钥 24h 到期窗口用注入 now（同域 RegistrationStatus/票据族惯例）：
 	// 真实时钟会让到期边界无法确定性测试。
-	result, err := s.db.ExecContext(ctx, `UPDATE nodes SET is_approved=1, status='online', registration_secret_expires_at=?, cluster_token_hash=NULL, cluster_token_delivered=0 WHERE id=? AND status='pending' AND COALESCE(registration_secret,'')<>'' AND `+masterRoleConditionSQL,
+	// status 列写 'approved' 而非历史 'online'：在线判定唯一口径是
+	// is_approved + last_seen + nodeOfflineThreshold（ComputeNodeStatus，见
+	// nodes DDL 的历史列注释）——审批落 'online' 会让该列断言节点已上报，
+	// 与「尚未收到任何上报」的事实相反。写 'approved' 同时保留审批 SQL 的
+	// status='pending' 一次性判定（重复审批仍 0 行命中 → 409 语义不变）。
+	result, err := s.db.ExecContext(ctx, `UPDATE nodes SET is_approved=1, status='approved', registration_secret_expires_at=?, cluster_token_hash=NULL, cluster_token_delivered=0 WHERE id=? AND status='pending' AND COALESCE(registration_secret,'')<>'' AND `+masterRoleConditionSQL,
 		now.UTC().Add(24*time.Hour), nodeID)
 	if err != nil {
 		return fmt.Errorf("批准节点: %w", err)
@@ -776,6 +781,10 @@ func (s *ClusterService) applyRoleSideEffects() {
 		// 缓存键只有 version/ownership/开关，不含角色——降级期间在途的
 		// master-only Run 可写过库且 is_master=0 不 bump 版本。
 		clusterSnapshotCaches.Delete(s.db)
+		// 三节哈希缓存同族：键=(库句柄, cluster_version)，旧角色时代读到的
+		// 节哈希在角色翻转后可能成为新角色的跳过判定依据（主→从→主往返时
+		// 版本号未必前进）。注销路径已清，翻转路径此前漏清。
+		forgetClusterSectionHashCache(s.db)
 		// 旧角色时代的分区上报缓存不再有权威来源。
 		s.clearAllSectionReports()
 	}

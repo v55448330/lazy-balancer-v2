@@ -142,6 +142,9 @@ var catalog = []catalogEntry{
 	{EvtTaskFailed, LevelWarn, true, "定时任务失败", "任务 %s 执行失败：%s"},
 	{EvtAPIKeyExpiryWarning, LevelWarn, true, "API 密钥临期", "API 密钥「%s」将于 %s 到期（剩余 %s 天）"},
 	// ── 2026-11-21 查漏补缺批：可用性/安全敏感 = warn+默认订阅；常规运维 = info ──
+	// cfg.caddy_lifecycle 参数序：1=操作人 2=动作（启动/停止/重启）3=结果
+	// ——结果为自由文本，启动/停止失败同样发本事件，失败时传「失败：<原因摘要>」
+	//（发布点见 handlers/caddy.go；模板本身不区分成功/失败措辞）。
 	{EvtCaddyLifecycle, LevelWarn, true, "Caddy 服务启停", "用户 %s %s Caddy 服务（%s）"},
 	{EvtAdminTLSChanged, LevelInfo, false, "Admin TLS 配置变更", "用户 %s 更新了管理接口 TLS 配置"},
 	{EvtOIDCChanged, LevelInfo, false, "OIDC 配置变更", "用户 %s %s了 OIDC 单点登录配置"},

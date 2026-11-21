@@ -236,7 +236,59 @@ func issuedFinalizeFields(extra map[string]any) map[string]any {
 	return fields
 }
 
+// certJobOutcomeNotifier 是终态通知发布的测试缝（生产恒 notifyCertJobOutcome）；
+// 钉「事务内迁移不在提交前发布通知」（见 transitionJobDeferringNotification）。
+var certJobOutcomeNotifier = notifyCertJobOutcome
+
 func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, fields map[string]any) error {
+	if err := transitionJobUpdate(tx, id, from, to, fields, "", nil); err != nil {
+		return err
+	}
+	fireCertJobOutcomeNotification(id, to, from, fields)
+	return nil
+}
+
+// transitionJobDeferringNotification 执行迁移但不立即发布终态通知，返回的
+// afterCommit 闭包由调用方在**事务提交成功后**调用（提交失败/回滚=不发布）。
+// 事务内直接 transitionJob 会在 commit 之前发通知：回滚后用户已收到
+// 「签发成功」，而库里仍是旧状态（假通知）。非事务调用方继续用 transitionJob。
+func transitionJobDeferringNotification(tx jobTransitionExecutor, id int, from []string, to string, fields map[string]any) (afterCommit func(), err error) {
+	if err := transitionJobUpdate(tx, id, from, to, fields, "", nil); err != nil {
+		return nil, err
+	}
+	if !certJobOutcomeNotifies(to, from) {
+		return nil, nil
+	}
+	return func() { fireCertJobOutcomeNotification(id, to, from, fields) }, nil
+}
+
+// transitionJobGuarded 是 transitionJob 的可附加守卫变体：guardSQL（+参数）
+// 追加在状态 CAS 之后，0 行命中同归 ErrJobTransitionConflict。用于「扫描判定
+// 通过 → 迁移落库」之间上游前提可能已变的入队迁移（续期/补扫的规则域守卫）。
+func transitionJobGuarded(tx jobTransitionExecutor, id int, from []string, to string, fields map[string]any, guardSQL string, guardArgs ...any) error {
+	return transitionJobUpdate(tx, id, from, to, fields, guardSQL, guardArgs)
+}
+
+// certJobOutcomeNotifies 是「哪些迁移发布终态通知」的单源判据：
+//   - →issued：签发成功（域名）；
+//   - →failed 且 from 集不含部署生命周期态（downloaded/issued）：签发失败
+//     （部署失败走快速重部署链自动收敛，不按「签发失败」通知）。
+func certJobOutcomeNotifies(to string, from []string) bool {
+	return to == "issued" || (to == "failed" && !slices.Contains(from, "downloaded") && !slices.Contains(from, "issued"))
+}
+
+func fireCertJobOutcomeNotification(id int, to string, from []string, fields map[string]any) {
+	if !certJobOutcomeNotifies(to, from) {
+		return
+	}
+	certJobOutcomeNotifier(id, to, fields["message"])
+}
+
+// transitionJobUpdate 是全部 cert_jobs 状态迁移的单条 UPDATE 落点（守卫变体与
+// 通知变体共用）：状态 CAS 之外可选追加调用方守卫（guardSQL 追加在
+// id/status CAS 之后；0 行命中同归 ErrJobTransitionConflict——「状态不再满足」
+// 与「规则已改域/停用」在入队语义里同属「本次不迁移」）。
+func transitionJobUpdate(tx jobTransitionExecutor, id int, from []string, to string, fields map[string]any, guardSQL string, guardArgs []any) error {
 	if len(from) == 0 {
 		return fmt.Errorf("transition certificate job %d to %s: %w", id, to, ErrJobTransitionConflict)
 	}
@@ -259,10 +311,12 @@ func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, f
 	for _, status := range from {
 		args = append(args, status)
 	}
-	result, err := tx.Exec(
-		"UPDATE cert_jobs SET "+strings.Join(assignments, ",")+" WHERE id=? AND status IN ("+placeholders+")",
-		args...,
-	)
+	query := "UPDATE cert_jobs SET " + strings.Join(assignments, ",") + " WHERE id=? AND status IN (" + placeholders + ")"
+	if guardSQL != "" {
+		query += " AND (" + guardSQL + ")"
+		args = append(args, guardArgs...)
+	}
+	result, err := tx.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("transition certificate job %d to %s: %w", id, to, err)
 	}
@@ -272,13 +326,6 @@ func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, f
 	}
 	if updated != 1 {
 		return fmt.Errorf("transition certificate job %d to %s: %w", id, to, ErrJobTransitionConflict)
-	}
-	// 证书任务终态通知（fire-and-forget，不影响转换本身）：
-	//   - →issued：签发成功（域名）；
-	//   - →failed 且 from 集不含部署生命周期态（downloaded/issued）：签发失败
-	//     （部署失败走快速重部署链自动收敛，不按「签发失败」通知）。
-	if to == "issued" || (to == "failed" && !slices.Contains(from, "downloaded") && !slices.Contains(from, "issued")) {
-		notifyCertJobOutcome(id, to, fields["message"])
 	}
 	return nil
 }

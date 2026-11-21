@@ -504,7 +504,12 @@ const eventCatalog = ref<CatalogEvent[]>([])
 // catalog 未到达时回退规则自带 events。
 const rowEventOptions = (rule: Rule): string[] => {
   const ids = eventCatalog.value.filter(e => e.group === rule.title).map(e => e.id)
-  return ids.length ? ids : (rule.events ?? [])
+  if (ids.length) return ids
+  // catalog 未到达时的回退：后端伪行的 event_titles/event_levels 键集恒为
+  // 「组内全部事件」，而 events 现为「已订阅子集」（仅 enabled=1 的显式行）——
+  // 拿 events 当选项源会让浮层只剩已订阅项、无法新增订阅。events 只作订阅态回显。
+  const titles = Object.keys(rule.event_titles ?? {})
+  return titles.length ? titles : (rule.events ?? [])
 }
 // 浮层事件分区：按级别分三段（严重→警告→信息），仅列非空段；级别取 catalog level。
 const EVENT_SECTION_ORDER: readonly EventLevel[] = ['critical', 'warn', 'info']
@@ -1120,7 +1125,16 @@ const anyRuleDirty = computed<boolean>(() => eventRules.value.some(r => ruleDraf
 const saveAllRuleDrafts = async (): Promise<void> => {
   const dirty = eventRules.value.map(asRule).filter(r => ruleDraftDirty(r))
   if (!dirty.length || savingAllRules.value) return
-  try { await ElMessageBox.confirm(t('app.notification.rules.saveRuleConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
+  // 确认文案带勾选集总量：events 现为「已订阅子集」，空勾选=取消订阅本组
+  // 全部事件（合法保存，不拦截）；非空时显式提示将启用 N 个事件订阅。
+  const eventsToEnable = dirty.reduce((n, r) => n + (ruleDrafts.value[r.id]?.events.length ?? 0), 0)
+  try {
+    await ElMessageBox.confirm(
+      eventsToEnable > 0
+        ? t('app.notification.rules.saveRuleConfirmWithEvents', { rules: dirty.length, events: eventsToEnable })
+        : t('app.notification.rules.saveRuleConfirm'),
+      t('app.notification.rules.confirmTitle'), { type: 'warning' })
+  }
   catch { return }
   savingAllRules.value = true
   try {

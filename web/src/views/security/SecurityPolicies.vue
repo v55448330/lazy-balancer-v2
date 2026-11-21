@@ -1067,6 +1067,7 @@
       </template>
       <div class="defaults-dialog-body">
         <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.defaults.previewTip') }}</span></div>
+        <div v-if="defaultsDisabledCount > 0" class="info-note-bar defaults-disabled-tip"><span class="info-note-desc">{{ t('app.security.policies.defaults.disabledTip', { count: defaultsDisabledCount }) }}</span></div>
         <template v-for="section in defaultsSections" :key="section.key">
           <DialogSectionHeader :title="section.label" :tone="section.tone" />
           <div class="dialog-panel defaults-panel">
@@ -1103,12 +1104,16 @@
           </div>
         </template>
         <div v-if="defaultsPhase === 'done'" class="info-note-bar defaults-done-tip">
-          <span class="info-note-desc">
+          <span v-if="defaultsApplyFailed" class="info-note-desc">{{ t('app.security.policies.defaults.failedItemsTip', { count: defaultsFailedNames.length }) }}</span>
+          <span v-else class="info-note-desc">
             {{ t('app.security.policies.defaults.doneBindTip') }}
             <AccessibleLink type="primary" size="small" @click="goToPoliciesList">{{ t('app.security.policies.defaults.goRules') }}</AccessibleLink>
             {{ t('app.security.policies.defaults.doneListTip') }}
             <AccessibleLink type="primary" size="small" @click="goToIpLists">{{ t('app.security.policies.defaults.goLists') }}</AccessibleLink>
           </span>
+        </div>
+        <div v-if="defaultsPhase === 'done' && defaultsApplyFailed && defaultsFailedNames.length" class="defaults-failed-names">
+          <el-tag v-for="n in defaultsFailedNames" :key="n" size="small" effect="plain" type="danger">{{ n }}</el-tag>
         </div>
       </div>
       <template #footer>
@@ -1116,7 +1121,10 @@
           <el-button :disabled="defaultsRunning" @click="defaultsVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
           <el-button type="primary" :loading="defaultsRunning" :disabled="!defaultsCatalog" @click="runApplyDefaults">{{ t(defaultsAllExist ? 'app.security.policies.defaults.reCreate' : 'app.security.policies.defaults.start') }}</el-button>
         </template>
-        <el-button v-else type="primary" @click="defaultsVisible = false">{{ t('app.security.policies.common.close') }}</el-button>
+        <template v-else>
+          <el-button v-if="defaultsApplyFailed" :loading="defaultsRunning" @click="runApplyDefaults">{{ t('app.security.policies.defaults.retry') }}</el-button>
+          <el-button type="primary" @click="defaultsVisible = false">{{ t('app.security.policies.common.close') }}</el-button>
+        </template>
       </template>
     </el-dialog>
 </template>
@@ -1179,6 +1187,9 @@ const defaultsPhase = ref<'preview' | 'running' | 'done'>('preview')
 const defaultsRunning = computed(() => defaultsPhase.value === 'running')
 const defaultsCatalog = ref<DefaultCatalog | null>(null)
 const defaultsItems = ref<DefaultApplyItem[]>([])
+// 应用失败态：失败即完成态（phase=done，弹框可关），但结果区必须显性区分
+// 「全部成功」——否则 done 态会冒充成功（后端 500 只带回已建项，缺项即失败项）。
+const defaultsApplyFailed = ref(false)
 const defaultsExpanded = ref(new Set<string>())
 const toggleDefaultsRow = (key: string): void => {
   const next = new Set(defaultsExpanded.value)
@@ -1200,6 +1211,16 @@ const defaultsAppliedStatus = computed(() => {
 })
 const rowStatus = (kind: string, name: string, catalogStatus: string): string =>
   defaultsAppliedStatus.value.get(kind + name) ?? catalogStatus
+// 失败项=目录里有、结果项里没有的条目（后端错误响应只带回已建项；缺项即未建成）。
+const defaultsFailedNames = computed<string[]>(() => {
+  const cat = defaultsCatalog.value
+  if (!cat) return []
+  const applied = defaultsAppliedStatus.value
+  const names: string[] = []
+  for (const l of cat.lists) if (!applied.has('list' + l.name)) names.push(l.name)
+  for (const p of cat.policies) if (!applied.has('policy' + p.name)) names.push(p.name)
+  return names
+})
 const defaultsSections = computed<DefaultsSection[]>(() => {
   if (!defaultsCatalog.value) return []
   const sections: DefaultsSection[] = []
@@ -1232,20 +1253,35 @@ const defaultsSections = computed<DefaultsSection[]>(() => {
   }
   return sections
 })
-// §15 状态标签语义：未创建/已存在=info·success、创建后=success、需重建/已重建=warning
+// §15 状态标签语义：未创建/已存在=info·success、创建后=success、需重建/已重建/已禁用=warning
 const defaultsStatusTagType = (status: string): 'success' | 'info' | 'warning' =>
   status === 'missing' || status === 'exists' ? 'info' : status === 'created' ? 'success' : 'warning'
-// 全部已存在（列表+策略，无 missing/dirty）→ 弹框按钮切「重新创建」（reset）
+// disabled=行存在但 enabled=0（用户手动禁用）。apply（非 reset）不改写它——既不算
+// exists 也不算 missing；reset 才删除重建恢复 enabled=1。故「可执行动作」判据必须
+// 把 disabled 视为已存在（否则含禁用项时永远停在「开始创建」，而 apply 是空操作，
+// 「重新创建/reset」入口彻底不可达=禁用态不可恢复）。
 const defaultsAllExist = computed(() => {
   const cat = defaultsCatalog.value
   if (!cat) return false
-  return cat.lists.every((l) => l.status === 'exists') && cat.policies.every((p) => p.status === 'exists')
+  const present = (s: string): boolean => s === 'exists' || s === 'disabled'
+  return cat.lists.every((l) => present(l.status)) && cat.policies.every((p) => present(p.status))
+})
+// 禁用项提示：非 reset 的 apply 对它们零动作，必须在确认前告知「重置才恢复」。
+const defaultsDisabledCount = computed(() => {
+  const cat = defaultsCatalog.value
+  if (!cat) return 0
+  return cat.lists.filter((l) => l.status === 'disabled').length
+    + cat.policies.filter((p) => p.status === 'disabled').length
 })
 const refName = (ref: string): string =>
   defaultsCatalog.value?.lists.find((l) => l.key === ref)?.name ?? ref
 const openDefaultsDialog = async (): Promise<void> => {
   defaultsPhase.value = 'preview'
   defaultsItems.value = []
+  defaultsApplyFailed.value = false
+  // 先清快照再拉取：打开瞬间不得渲染上一次的目录（状态可能已过期——
+  // 别处刚创建/禁用同名策略，旧快照会把行标签显示成已过时的「未创建」）。
+  defaultsCatalog.value = null
   defaultsVisible.value = true
   try {
     const res = await request.get<APIResponse<DefaultCatalog>>('/security/policies/default-catalog')
@@ -1261,7 +1297,11 @@ const runApplyDefaults = async (): Promise<void> => {
   const reset = defaultsAllExist.value
   try {
     await ElMessageBox.confirm(
-      t(reset ? 'app.security.policies.defaults.reConfirm' : 'app.security.policies.defaults.applyConfirm'),
+      t(reset
+        ? (defaultsDisabledCount.value > 0
+          ? 'app.security.policies.defaults.reConfirmWithDisabled'
+          : 'app.security.policies.defaults.reConfirm')
+        : 'app.security.policies.defaults.applyConfirm'),
       t('app.security.policies.common.confirmTitle'),
       { type: 'warning' },
     )
@@ -1269,11 +1309,15 @@ const runApplyDefaults = async (): Promise<void> => {
     return
   }
   defaultsPhase.value = 'running'
+  defaultsApplyFailed.value = false
   try {
     const res = await request.post<APIResponse<DefaultApplyItem[]>>('/security/policies/apply-defaults', { reset })
-    defaultsItems.value = res.data || []
+    defaultsItems.value = res.data ?? []
     defaultsPhase.value = 'done'
-    ElMessage.success(t('app.security.policies.defaults.doneToast'))
+    // 退化 200（k_7d87740a：DB 已提交但重载 Caddy 失败）必须走 showSaveResult
+    // 的常驻警告——原实现恒 ElMessage.success，重载失败被伪装成成功、用户
+    // 无从得知策略尚未生效。普通成功仍走 MFA 感知提示。
+    showSaveResult(res, t('app.security.policies.defaults.doneToast'))
     void fetchData()
     // 目录重拉：行标签从「未创建/需重建」实时翻成「已存在」
     try {
@@ -1281,12 +1325,20 @@ const runApplyDefaults = async (): Promise<void> => {
       defaultsCatalog.value = cat.data ?? defaultsCatalog.value
     } catch { /* 目录刷新失败不覆盖结果态——apply 状态仍已覆盖行标签 */ }
   } catch (e) {
-    // 部分成功：后端 500 也会带回已建项——展示进度后停在完成态（重跑恢复）
-    if (e instanceof ApiRequestError && Array.isArray((e as unknown as { payload?: { data?: DefaultApplyItem[] } }).payload?.data)) {
-      defaultsItems.value = ((e as unknown as { payload?: { data?: DefaultApplyItem[] } }).payload?.data) ?? []
-      defaultsPhase.value = 'done'
-    }
+    defaultsApplyFailed.value = true
+    // 部分成功：后端 500/失败信封的 data 带回已建项——展示进度后停在完成态
+    // （重跑走 exists/rebuilt 恢复）。ApiRequestError 暴露的是 data（完整信封
+    // {code,message,data}），不暴露 payload：原读 payload.data 恒 undefined，
+    // 部分进度整段丢失。
+    const partial = e instanceof ApiRequestError
+      ? (e.data as { data?: DefaultApplyItem[] } | undefined)?.data
+      : undefined
+    if (Array.isArray(partial)) defaultsItems.value = partial
     ElMessage.error(t('app.security.policies.defaults.applyFailed'))
+  } finally {
+    // 兜底：任何未走到 done 的路径都必须退出 running（失败即完成态，可关框、
+    // 可重试）。否则 running 会永久锁死弹框（show-close / escape / 取消全被禁）。
+    if (defaultsPhase.value === 'running') defaultsPhase.value = 'done'
   }
 }
 // 指引链接：同款深链 window.open（goToBlockPagesPage 同范式）
@@ -4256,4 +4308,5 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .defaults-detail-refs { display: flex; flex-wrap: wrap; gap: 4px; }
 .defaults-done-tip { margin-top: 12px; }
 .defaults-done-tip :deep(.el-link) { font-size: 12px; vertical-align: baseline; }
+.defaults-failed-names { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 </style>

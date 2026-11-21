@@ -195,6 +195,9 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	var req struct {
 		FailedOnly bool `json:"failed_only"`
 	}
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	// 空 body 兼容（旧客户端无 body 全量重发）：EOF 视同缺省，坏 JSON 仍 400。
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})

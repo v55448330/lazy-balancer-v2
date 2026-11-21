@@ -644,6 +644,13 @@ const TASK_NAME_KEYS: Record<string, string> = {
   '时区刷新': 'tzRefresh',
   '安全事件采集': 'secEventCollect',
   '安全事件保留清理': 'secEventRetention',
+  // 通知中心任务族（后端 services/notification_tasks.go 注册名；Category=通知）
+  '通知投递': 'notificationDelivery',
+  '通知日报': 'notificationDailyReport',
+  'QQ 机器人连接': 'qqBotConnection',
+  '微信机器人连接': 'wxBotConnection',
+  '通知投递保留清理': 'notificationDeliveryRetention',
+  'API 密钥临期预警': 'apikeyExpiryWarning',
   '系统配置载入': 'configLoad',
 }
 
@@ -1000,11 +1007,11 @@ const scheduleStoppedTip = (row: TaskInfo) => {
 
 // 分类显示名映射(后端 category 为 zh 码;徽标/下拉经此翻译)
 const categoryLabel = (c: string): string => {
-  const keys: Record<string, string> = { '安全防护': 'security', '证书': 'certs', '备份': 'backup', '集群': 'cluster', '系统': 'system' }
+  const keys: Record<string, string> = { '安全防护': 'security', '证书': 'certs', '备份': 'backup', '集群': 'cluster', '系统': 'system', '通知': 'notifications' }
   return keys[c] ? t(`app.settings.taskMonitor.categories.${keys[c]}`) : c
 }
 
-const categoryOrder: Record<string, number> = { '安全防护': 0, '证书': 1, '备份': 2, '集群': 3, '系统': 4 }
+const categoryOrder: Record<string, number> = { '安全防护': 0, '证书': 1, '备份': 2, '集群': 3, '系统': 4, '通知': 5 }
 const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' =>
   c === '安全防护' ? 'primary' : c === '证书' ? 'success' : c === '备份' ? 'warning' : 'info'
 // caddy-restart（Caddy 崩溃自愈 watcher 通道）此前裸显

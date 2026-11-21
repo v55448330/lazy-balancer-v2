@@ -692,9 +692,13 @@ func validateV2BackupBooleanTypes(backup configBackup) error {
 // 读取 lb_rules.created_at、证书任务读取 cert_jobs.created_at、主节点集群
 // 快照读取 path_rules.created_at 全线 500，且无 UI 自愈路径）。NULL 不在此门
 // 范围：写入侧 restoreTable 按 backupTableNullDefaults 归一为可解析 epoch。
-// 可空时间列（users.last_login、api_keys.last_used/expires_at、cert_jobs.expires_at）
-// 同在大门内：NULL 合法（导入后按 sql.NullTime/JSONNullTime 消费），非 NULL 的
-// 不可解析文本在列表/登录扫描时同样 500——门覆盖面必须等于声明面。
+// 可空时间列（users.last_login、api_keys.last_used/expires_at、cert_jobs.expires_at
+// 与 ca_available_after/deployment_available_after）同在大门内：NULL 合法
+// （导入后按 sql.NullTime/JSONNullTime 消费），非 NULL 的不可解析文本在
+// 列表/登录扫描时同样 500——门覆盖面必须等于声明面。
+// ca_available_after（CA 退避窗口）与 deployment_available_after（部署重试
+// 窗口）是续期/补扫的比较键：datetime() 解析失败的行会被退回
+// 「窗口未到期」或「立即重试」的错误分支，静默停摆而无 UI 自愈路径。
 var backupTimeColumns = map[string][]string{
 	"lb_rules":            {"created_at", "updated_at"},
 	"path_rules":          {"created_at", "updated_at"},
@@ -702,7 +706,7 @@ var backupTimeColumns = map[string][]string{
 	"api_keys":            {"created_at", "last_used", "expires_at"},
 	"ca_providers":        {"created_at", "updated_at"},
 	"certificate_configs": {"created_at", "updated_at"},
-	"cert_jobs":           {"created_at", "updated_at", "expires_at"},
+	"cert_jobs":           {"created_at", "updated_at", "expires_at", "ca_available_after", "deployment_available_after"},
 	// nodes.created_at 同族——垃圾文本落库后节点列表时间扫描失败；
 	// 其余 nodes 时间列（last_seen/last_sync_at）由 sanitizeNodeRowsForRestore
 	// 在更上游删除，不进门。
@@ -5703,8 +5707,16 @@ func collectImportAttributionMismatches(ctx context.Context, tx *sql.Tx, tables 
 // suppressImportClusterVersionBumps 在导入事务内暂时把 is_master 置为 0，
 // 使既有行级触发器跳过逐行 cluster_version 写放大；提交前由返回的 restore
 // 恢复角色。读取/恢复都采用 COALESCE(is_master,1) 单源口径（NULL 视为主节点，
-// 与 RoleOf/写闸/触发器一致）。coordinator 的显式 BumpClusterVersion 因而成为
-// 唯一一次版本递增。该角色变化只在未提交事务可见，任何 abort 都随 ROLLBACK 消失。
+// 与 RoleOf/写闸/触发器一致）。该角色变化只在未提交事务可见，任何 abort 都随 ROLLBACK 消失。
+//
+// 递增口径如实化（勿再读成「全轮只 bump 一次」）：restore 在 commit 之前执行
+// （事务必须携带 is_master=1 落库），因此 commit 段里在 restore 之后发生的
+// 写入仍会触发触发器——coordinator 的显式 BumpClusterVersion（主递增）之后，
+// collectPostCommitCleanup 的 cert_jobs DELETE 与 expires_at 回填（同事务、
+// is_master 已为 1）各可能再 bump 若干次。这些额外递增无害：cluster_version
+// 是单调变更标记，从端 304 门只关心「变过」，多次递增与一次等价（快照缓存/
+// 节哈希缓存按版本失效，跳变不丢语义）。刻意不为这段再插一次 is_master=0
+// 往返：那会让「角色列在提交前的最终值」多一条写路径，换不来任何可观测收益。
 func suppressImportClusterVersionBumps(ctx context.Context, tx *sql.Tx) (restore func() error, err error) {
 	var role int
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_master,1) FROM global_config WHERE id=1`).Scan(&role); err != nil {
@@ -6173,12 +6185,46 @@ func notifyImportOutcome(c *gin.Context, action string, ok bool, detail string) 
 	notify.Publish(notify.Event{Type: eventType, Fields: fields})
 }
 
+// rejectConcurrentConfigImport 是导入/还原入口的并发 fast-fail：导入会话锁
+// （configImportBeginMu）覆盖整个会话（暂停→排空→事务→提交后清理），后到的
+// 导入原本会一直阻塞在该锁上——请求最长可挂到 busy_timeout/前端超时，且排队
+// 期间前端无法区分「进行中」与「卡死」。入口处非阻塞探测：已有会话持锁即
+// 409（可重试语义），真正串行化仍由 beginConfigImport 的锁保证（探测与取锁
+// 之间的竞态由那道锁兜住，这里只收窄等待窗口）。
+// 文案复用「配置导入进行中，暂不能%s」词条（导入/还原同族）。
+func rejectConcurrentConfigImport(c *gin.Context, action string) bool {
+	if !configImportBeginBusy() {
+		return false
+	}
+	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict,
+		Message: apimsg.Tf(c, "k_9118ba7d", "开始新的"+action)})
+	return true
+}
+
+// configImportBeginBusy 非阻塞探测导入会话锁是否已被持有（TryLock 成功即
+// 立即释放——探测不得改变锁状态）。判据是锁本身而非 importWindowActive：
+// 这里的语义是「本导入会不会被阻塞」，不是「导入窗口是否开启」。
+// 与 configImportBusy 的分工（勿混用）：configImportBusy 供写端点做
+// 「导入窗口内一律 409」的判定，必须只认窗口计数（持锁但没有会话不得误报）；
+// 本探针反过来只服务导入/还原入口自身的 fast-fail——持锁者（含别的会话）
+// 会让 begin 阻塞，故按锁判定。
+func configImportBeginBusy() bool {
+	if !configImportBeginMu.TryLock() {
+		return true
+	}
+	configImportBeginMu.Unlock()
+	return false
+}
+
 // importConfigBackupCore 携带导入全量逻辑,HTTP 导入端点与自动备份还原端点
 // (autobackup.go)共用。128MB 压缩上限由 HTTP 调用方 limitConfigImportBody
 // 与自动备份还原读取侧共同把守。内存
 // 峰值评估——lbbak 解压(gzip 放大,条目上限在读入内存前拦截)+config.json
 // 展开为 map+checksum 重 marshal,峰值约上限的 ~10×（约 1.2-1.5GB 瞬态）；
-// 导入为管理员手动低频操作，当前不加并发互斥（记录裁定，不再重复评估）。
+// 导入为管理员手动低频操作。
+// 并发模型：**会话级串行**由 configImportBeginMu 保证（后到者阻塞在锁上），
+// 入口另加 rejectConcurrentConfigImport 的非阻塞 409 fast-fail；单会话内的
+// 解析/校验/事务是顺序执行，不做多导入并行（多份载荷的内存峰值叠加不可接受）。
 // data 为调用方已完整读入的备份字节（读体失败由调用方就地返回，不再把半
 // 消费的 body 透传进来）；filename 非空时进入审计来源(还原路径);action 为
 // 审计动作与结果文案前缀(「导入」/「还原」)。

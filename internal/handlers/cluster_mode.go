@@ -121,7 +121,11 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	// 不得复活（标准 §5，与服务层 restore 同口径——裸 Resume 会让同步在无调度
 	// 状态运行，与 BecomeSlave 刚写入的「切从后不会同步」审计直接矛盾）。
 	services.ResumeSyncIfUserEnabled(h.syncService.Resume)
-	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK))
+	// 重复 ip:port 注册命中「已批准」节点时主节点侧 upsert 会重置该节点审批与
+	// 令牌——审计点名被覆盖节点，避免运营方把覆盖误认为新节点加入（与
+	// RegistrationStatus/注册端点同口径）。响应文案保持 catalog 词条不变
+	// （属通用成功语义，覆盖事实走审计页可追溯）。
+	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK, registration.OverwrittenNodeID, registration.OverwrittenNodeName))
 	// 成功文案走 catalog 双语（与 Promote/UpdateClusterSettings 同口径）：
 	// 明文 HTTP 警告是独立变体词条，不得拼接硬编码中文。
 	key := "k_f388eab8"
@@ -242,8 +246,17 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 
 // switchToSlaveAuditDetail 构建切换从节点的审计详情;出口 IP 探测失败
 // 时追加点名——上报地址为空、由主节点按注册来源地址落库，运维可见。
-func switchToSlaveAuditDetail(masterURL string, outboundIPOK bool) string {
+// 主节点回填了被覆盖节点（重复 ip:port 命中已批准节点的 upsert）时同样点名：
+// 该节点的审批/令牌已在主节点被重置，运营方必须能在审计里看到这一事实。
+func switchToSlaveAuditDetail(masterURL string, outboundIPOK bool, overwrittenNodeID int, overwrittenNodeName string) string {
 	parts := []string{"主节点 → 从节点", masterURL, "等待审批"}
+	if overwrittenNodeID > 0 {
+		name := strings.TrimSpace(overwrittenNodeName)
+		if name == "" {
+			name = "-"
+		}
+		parts = append(parts, fmt.Sprintf("已覆盖节点 #%d（%s），其审批与令牌已重置", overwrittenNodeID, name))
+	}
 	if !outboundIPOK {
 		parts = append(parts, "出口 IP 探测失败，已按注册来源地址登记，请稍后在节点设置中确认访问地址")
 	}
