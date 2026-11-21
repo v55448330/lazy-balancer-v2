@@ -23,7 +23,8 @@ func richValues() map[string]string {
 func TestRenderDailyRich_itemsAndTrim(t *testing.T) {
 	items := []string{"requests", "top_ips", "cert_expiring", "uptime", "threat_db", "login_status"}
 	md := renderDailyFromValues("2026-11-19", richValues(), items, "markdown")
-	for _, want := range []string{"- 45.33.32.9 ×321", "a.com · 2026-11-25", "32 天 4 小时", "CRS 4.0", "MFA失败 1", "| 请求数 | 1200 |"} {
+	// 2026-11-22 多值项表格化设计后：TOP IP/临期证书出语义表格（非裸列表）
+	for _, want := range []string{"| 45.33.32.9 | 321 |", "| a.com | 2026-11-25 |", "32 天 4 小时", "CRS 4.0", "MFA失败 1", "| 请求数 | 1200 |"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown 缺富项 %q:\n%s", want, md)
 		}
@@ -63,5 +64,58 @@ func TestDailyItemIDs_labelsComplete(t *testing.T) {
 				t.Fatalf("分节 %q 引用未登记项目 %q", sec.title, it)
 			}
 		}
+	}
+}
+
+// 日报 markdown 多值项表格化设计（2026-11-22 用户裁定：攻击源/攻击路径/
+// 证书明细/各节点摘要原为「加粗标签+裸行」无设计）——按内容语义各配表格：
+// 节点摘要=节点/请求/拦截/独立IP/备注五列；TOP 列表=名目/次数两列右对齐；
+// 临期证书=域名/到期日两列。任何行解析失败整项回退旧列表形态（fail-safe）。
+func TestRenderDailyMarkdown_multiValueTableDesign(t *testing.T) {
+	values := map[string]string{
+		"requests":      "128340",
+		"top_ips":       "45.33.32.9 ×321\n1.2.3.4 ×120",
+		"top_paths":     "/login ×200\n/api ×150",
+		"cert_expiring": "a.com · 2026-11-25\nb.com · 2026-11-28",
+		"nodes_summary": "slave-a：请求 22014 · 拦截 156 · 独立IP 402\nslave-b：请求 9821 · 拦截 12 · 独立IP 210 · TOP 规则 SQLi · CC 2 · 自动封禁 1",
+	}
+	got := renderDailyFromValues("2026-11-21", values, []string{"requests", "top_ips", "top_paths", "cert_expiring", "nodes_summary"}, "markdown")
+	for _, want := range []string{
+		"| 节点 | 请求 | 拦截 | 独立IP | 备注 |",
+		"| --- | ---: | ---: | ---: | --- |",
+		"| slave-a | 22014 | 156 | 402 | — |",
+		"| slave-b | 9821 | 12 | 210 | TOP 规则 SQLi · CC 2 · 自动封禁 1 |",
+		"| 攻击源 IP | 次数 |",
+		"| 45.33.32.9 | 321 |",
+		"| 攻击路径 | 次数 |",
+		"| /login | 200 |",
+		"| 域名 | 到期日 |",
+		"| a.com | 2026-11-25 |",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("多值表格设计缺 %q:\n%s", want, got)
+		}
+	}
+	// 标量指标表回归不变
+	if !strings.Contains(got, "| 指标 | 数值 |") {
+		t.Fatalf("标量指标表回归丢失:\n%s", got)
+	}
+	// 旧列表形态不得残留于这些项
+	if strings.Contains(got, "- 45.33.32.9") || strings.Contains(got, "- a.com") {
+		t.Fatalf("多值项不得再回退裸列表（可解析行）:\n%s", got)
+	}
+}
+
+// fail-safe：解析失败的行（如数据损坏节点）整项回退旧「加粗标签+列表」形态。
+func TestRenderDailyMarkdown_multiValueFallbackOnBadLine(t *testing.T) {
+	values := map[string]string{
+		"nodes_summary": "slave-a：请求 22014 · 拦截 156 · 独立IP 402\nbad-node：数据损坏",
+	}
+	got := renderDailyFromValues("2026-11-21", values, []string{"nodes_summary"}, "markdown")
+	if strings.Contains(got, "| 节点 |") {
+		t.Fatalf("含不可解析行时不得出表格（回退列表）:\n%s", got)
+	}
+	if !strings.Contains(got, "**各节点摘要**") || !strings.Contains(got, "- bad-node：数据损坏") {
+		t.Fatalf("回退形态必须保留加粗标签+列表:\n%s", got)
 	}
 }

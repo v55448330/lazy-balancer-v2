@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -783,9 +784,14 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			var tbl, lists strings.Builder
 			for _, r := range rows {
 				if strings.Contains(r[1], "\n") {
-					fmt.Fprintf(&lists, "**%s**\n", r[0])
-					for _, ln := range strings.Split(r[1], "\n") {
-						fmt.Fprintf(&lists, "- %s\n", ln)
+					if md, ok := mdMultiValueTable(r[2], r[0], r[1]); ok {
+						fmt.Fprintf(&lists, "**%s**\n%s", r[0], md)
+					} else {
+						// 解析失败（未知形态/数据损坏行）：整项回退加粗标签+列表
+						fmt.Fprintf(&lists, "**%s**\n", r[0])
+						for _, ln := range strings.Split(r[1], "\n") {
+							fmt.Fprintf(&lists, "- %s\n", ln)
+						}
 					}
 				} else {
 					fmt.Fprintf(&tbl, "| %s | %s |\n", r[0], r[1])
@@ -825,12 +831,74 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 	}
 }
 
+// mdMultiValueTable 多值项按内容语义出 markdown 表格（2026-11-22 用户裁定
+// 的日报样式设计）：节点摘要=节点/请求/拦截/独立IP/备注；TOP 攻击源/路径=
+// 名目/次数（右对齐）；临期证书=域名/到期日。任何行解析失败整项回退 ok=false
+// （fail-safe，不半表半列表）。转义：单元格内管道符会破坏表格，替换为全角。
+func mdMultiValueTable(item, label, value string) (string, bool) {
+	cell := func(x string) string { return strings.ReplaceAll(x, "|", "｜") }
+	lines := strings.Split(value, "\n")
+	switch item {
+	case "nodes_summary":
+		type nodeRow struct{ node, req, blocked, ips, note string }
+		var out []nodeRow
+		for _, ln := range lines {
+			m := nodesSummaryLine.FindStringSubmatch(ln)
+			if m == nil {
+				return "", false
+			}
+			note := "—"
+			if strings.TrimSpace(m[5]) != "" {
+				note = strings.TrimPrefix(strings.TrimSpace(m[5]), "· ")
+			}
+			out = append(out, nodeRow{m[1], m[2], m[3], m[4], cell(note)})
+		}
+		var b strings.Builder
+		b.WriteString("| 节点 | 请求 | 拦截 | 独立IP | 备注 |\n| --- | ---: | ---: | ---: | --- |\n")
+		for _, r := range out {
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", cell(r.node), r.req, r.blocked, r.ips, r.note)
+		}
+		return b.String(), true
+	case "top_ips", "top_paths":
+		head := "| 攻击源 IP | 次数 |"
+		if item == "top_paths" {
+			head = "| 攻击路径 | 次数 |"
+		}
+		var b strings.Builder
+		b.WriteString(head + "\n| --- | ---: |\n")
+		for _, ln := range lines {
+			i := strings.LastIndex(ln, "×")
+			if i < 0 {
+				return "", false
+			}
+			fmt.Fprintf(&b, "| %s | %s |\n", cell(strings.TrimSpace(ln[:i])), strings.TrimSpace(ln[i+len("×"):]))
+		}
+		return b.String(), true
+	case "cert_expiring":
+		var b strings.Builder
+		b.WriteString("| 域名 | 到期日 |\n| --- | ---: |\n")
+		for _, ln := range lines {
+			i := strings.LastIndex(ln, "·")
+			if i < 0 {
+				return "", false
+			}
+			fmt.Fprintf(&b, "| %s | %s |\n", cell(strings.TrimSpace(ln[:i])), strings.TrimSpace(ln[i+len("·"):]))
+		}
+		return b.String(), true
+	}
+	_ = label
+	return "", false
+}
+
+// nodesSummaryLine 节点摘要行契约：`节点：请求 N · 拦截 N · 独立IP N[ · 附加]`
+var nodesSummaryLine = regexp.MustCompile(`^([^：]+)：请求 (\d+) · 拦截 (\d+) · 独立IP (\d+)(.*)$`)
+
 // secRows 节内启用项目→[label,value] 行（空节省略）。
-func secRows(items []string, enabled map[string]bool, label, val func(string) string) [][2]string {
-	var rows [][2]string
+func secRows(items []string, enabled map[string]bool, label, val func(string) string) [][3]string {
+	var rows [][3]string
 	for _, it := range items {
 		if enabled[it] {
-			rows = append(rows, [2]string{label(it), val(it)})
+			rows = append(rows, [3]string{label(it), val(it), it})
 		}
 	}
 	return rows

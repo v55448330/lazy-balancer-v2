@@ -191,7 +191,10 @@
               <el-checkbox-group :model-value="dailyModuleChecked" size="small" class="notif-pick-group daily-items" @update:model-value="toggleDailyModule">
                 <el-checkbox v-for="mod in dailyModules" :key="mod.id" :value="mod.id" border size="small">{{ mod.emoji }} {{ mod.label }}</el-checkbox>
               </el-checkbox-group>
-              <span class="form-hint">{{ t('app.notification.daily.modulesHint') }}</span>
+              <div class="tpl-hints">
+                <div class="form-tip-line">{{ t('app.notification.daily.modulesHint') }}</div>
+                <div class="form-tip-line">{{ t('app.notification.daily.modulesHintTemplate') }}</div>
+              </div>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.sendTo') }}</span>
