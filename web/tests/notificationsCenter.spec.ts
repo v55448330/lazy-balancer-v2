@@ -250,3 +250,20 @@ test('zh/en 通知词条同位：叶子键集一致且 app.notification 前缀',
   assert.equal(zhApp.tabs.credentials, '邮件凭据')
   assert.equal(enApp.tabs.credentials, 'Email credentials')
 })
+
+// 2026-11-22 日报渲染模式显式开关（用户裁定）：弹窗 radio + daily_mode 落库 +
+// 模块拼装只读/预览提示；Markdown 预览=消息卡 CSS 方案（主题变量，禁 hex）。
+test('日报渲染模式显式开关与消息卡预览样式', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  assert.match(nc, /t\('app\.notification\.daily\.renderMode'\)/, '渲染模式行必须在弹窗')
+  assert.match(nc, /value="modules"/, '模块拼装选项必须在位')
+  assert.match(nc, /value="template"/, '自定义模板选项必须在位')
+  assert.match(nc, /style\.daily_mode = dailyModes\.value\[String\(ch\.id\)\] \?\? 'modules'/, '保存必须落 daily_mode（缺省 modules）')
+  assert.match(nc, /:readonly="tplMode === 'daily' && tplDailyMode === 'modules'"/, '模块拼装模式编辑器必须只读')
+  assert.match(nc, /modeModulesPreviewHint/, '模块拼装预览提示必须在位')
+  assert.match(nc, /seedDailyModes/, '弹窗打开必须按存量/显式值播种渲染模式')
+  // 消息卡：主题变量 + designGuard 高度 token 保持
+  assert.match(nc, /\.tpl-md-preview \{ background: var\(--el-fill-color-light\)/, '预览画布必须用主题变量')
+  assert.ok(!/\.tpl-md-preview[^\n]*#f9fafb/.test(nc), '预览样式禁硬编码 hex')
+  assert.match(nc, /\.tpl-md-preview hr \{ border: none; border-top: 1px solid var\(--el-border-color-lighter\)/, '分节 hr 须主题变量')
+})

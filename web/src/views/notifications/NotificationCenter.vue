@@ -360,9 +360,19 @@
               <el-option v-for="f in tplFormatSelectOptions" :key="f.value" :value="f.value" :label="f.label" />
             </el-select>
           </div>
-          <!-- JSON/HTML/Markdown 高亮编辑（CodeEditor 全站单源）；纯文本用 textarea -->
-          <CodeEditor v-if="tplEditorLang !== 'text'" v-model="tplText" :language="tplEditorLang" height="220px" :aria-label="tplEditorLabel" />
-          <el-input v-else v-model="tplText" type="textarea" :rows="7" :placeholder="tplPlaceholder" />
+          <!-- 日报渲染模式显式开关（2026-11-22 裁定）：模块拼装/自定义模板二选一可见可切 -->
+          <div v-if="tplMode === 'daily'" class="tpl-format-row">
+            <span class="tpl-format-label">{{ t('app.notification.daily.renderMode') }}</span>
+            <el-radio-group v-model="tplDailyMode" size="small">
+              <el-radio-button value="modules">{{ t('app.notification.daily.modeModules') }}</el-radio-button>
+              <el-radio-button value="template">{{ t('app.notification.daily.modeTemplate') }}</el-radio-button>
+            </el-radio-group>
+            <span class="form-tip-inline">{{ tplDailyMode === 'modules' ? t('app.notification.daily.modeModulesHint') : t('app.notification.daily.modeTemplateHint') }}</span>
+          </div>
+          <!-- JSON/HTML/Markdown 高亮编辑（CodeEditor 全站单源）；纯文本用 textarea；
+               日报模块拼装模式下编辑器只读（模板保留但不生效） -->
+          <CodeEditor v-if="tplEditorLang !== 'text'" v-model="tplText" :language="tplEditorLang" height="220px" :aria-label="tplEditorLabel" :readonly="tplMode === 'daily' && tplDailyMode === 'modules'" />
+          <el-input v-else v-model="tplText" type="textarea" :rows="7" :placeholder="tplPlaceholder" :readonly="tplMode === 'daily' && tplDailyMode === 'modules'" />
           <div v-if="tplLengthLimit > 0" class="tpl-length-row">
             <span class="form-hint" :class="{ 'tpl-length-over': tplText.length > tplLengthLimit }">{{ tplText.length }} / {{ tplLengthLimit }}</span>
           </div>
@@ -380,8 +390,10 @@
         <el-collapse v-model="tplPreviewOpen" class="tpl-preview-collapse">
           <el-collapse-item name="preview">
             <template #title><DialogSectionHeader :title="t('app.notification.rules.preview')" /></template>
-            <!-- 上半部分即正文源码，预览区直接渲染：HTML iframe / Markdown 渲染；不再提供源码切换 -->
-            <iframe v-if="tplEditorLang === 'markup'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
+            <!-- 上半部分即正文源码，预览区直接渲染：HTML iframe / Markdown 渲染；不再提供源码切换。
+                 日报模块拼装模式无模板可预览——提示最终形态由「包含模块」勾选决定。 -->
+            <pre v-if="tplMode === 'daily' && tplDailyMode === 'modules'" class="tpl-preview">{{ t('app.notification.daily.modeModulesPreviewHint') }}</pre>
+            <iframe v-else-if="tplEditorLang === 'markup'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
             <div v-else-if="tplEditorLang === 'markdown'" class="tpl-md-preview" v-html="tplPreviewHtml"></div>
             <pre v-else class="tpl-preview">{{ previewText }}</pre>
           </el-collapse-item>
@@ -1365,6 +1377,31 @@ const refreshDialogState = async (): Promise<void> => {
   await fetchRules(false)
 }
 
+// 日报渲染模式（显式二选一开关，2026-11-22 裁定）：'modules'=模块拼装（已存
+// 模板保留但不生效），'template'=自定义模板独占。初值=通道 style_config
+// daily_mode 显式值，缺省按存量推断（有正文模板键=template，与后端
+// DailyModuleModeEffective 同口径）。
+type DailyRenderMode = 'modules' | 'template'
+const dailyModes = ref<Record<string, DailyRenderMode>>({})
+const styleDailyModeFor = (ch: RuleChannel): DailyRenderMode => {
+  const full = dailyFullChannels.value.find(c => c.id === ch.id)
+  let style: Record<string, unknown> = {}
+  try { style = JSON.parse(full?.style_config || '{}') as Record<string, unknown> } catch { style = {} }
+  const explicit = style.daily_mode
+  if (explicit === 'modules' || explicit === 'template') return explicit
+  const tpl = style[channelBodyTplKey(ch.type)]
+  return typeof tpl === 'string' && tpl.trim() !== '' ? 'template' : 'modules'
+}
+const seedDailyModes = (): void => {
+  const modes: Record<string, DailyRenderMode> = {}
+  for (const ch of channelOptions.value) modes[String(ch.id)] = styleDailyModeFor(ch)
+  dailyModes.value = modes
+}
+const tplDailyMode = computed<DailyRenderMode>({
+  get: () => dailyModes.value[tplChannelTab.value] ?? 'modules',
+  set: (v) => { dailyModes.value = { ...dailyModes.value, [tplChannelTab.value]: v } },
+})
+
 // 日报草稿库：既有正文模板 > 通道形态预置（逐通道；未保存过=预置形态）
 const seedDailyTplDrafts = (): void => {
   const drafts: Record<number, string> = {}
@@ -1389,6 +1426,7 @@ const openDailyTpl = async (): Promise<void> => {
   const drafts: Record<string, string> = {}
   for (const c of tplTabChannels.value) drafts[String(c.id)] = dailyTplDrafts.value[c.id] ?? defaultChannelTplFor(c.type, tplLang.value)
   tplTexts.value = drafts
+  seedDailyModes()
   tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
   tplPreviewOpen.value = []
   tplDialogVisible.value = true
@@ -1416,6 +1454,8 @@ const saveChannelBodyTemplate = async (ch: RuleChannel): Promise<boolean> => {
     const key = channelBodyTplKey(ch.type)
     if (draft) style[key] = draft
     else delete style[key]
+    // 渲染模式显式落库：模块拼装=模板键保留但不生效（后端按 daily_mode 决策）
+    style.daily_mode = dailyModes.value[String(ch.id)] ?? 'modules'
     await request.put(`/notification/channels/${ch.id}`, { style_config: style })
     full.style_config = JSON.stringify(style)
     mfaAwareSuccess(t('app.notification.daily.templateSaved'))
@@ -1623,17 +1663,22 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .tpl-hints .form-tip-line { margin-top: 0; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; height: 360px; max-height: 46vh; overflow: auto; }
-.tpl-md-preview { background: #f9fafb; padding: 10px 12px; font-size: 13px; line-height: 1.7; color: #111827; border: 1px solid #eef2f7; height: 360px; max-height: 46vh; overflow: auto; }
-.tpl-md-preview h2 { font-size: 16px; margin: 6px 0; }
-.tpl-md-preview h3 { font-size: 14px; margin: 8px 0 6px; }
-.tpl-md-preview h4 { font-size: 13px; margin: 8px 0 4px; }
-.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; }
-.tpl-md-preview th, .tpl-md-preview td { border: 1px solid #e5e7eb; padding: 4px 8px; text-align: left; }
-.tpl-md-preview th { background: #f3f4f6; }
-.tpl-md-preview blockquote { border-left: 3px solid #d1d5db; margin: 6px 0; padding: 2px 10px; color: #6b7280; }
-.tpl-md-preview ul { margin: 4px 0; padding-left: 18px; }
-.tpl-md-preview hr { border: none; border-top: 1px solid #e5e7eb; margin: 8px 0; }
-.tpl-md-preview code { background: #eef2f7; padding: 1px 4px; font-family: ui-monospace, monospace; }
+/* Markdown 预览=消息卡形态（2026-11-22 用户裁定 CSS 方案）：画布底色上
+   标题层级+留白呼吸感，表格/引用/代码落在白卡上，主题变量随明暗。 */
+.tpl-md-preview { background: var(--el-fill-color-light); padding: 14px; font-size: 13px; line-height: 1.7; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; height: 360px; max-height: 46vh; overflow: auto; }
+.tpl-md-preview h2 { font-size: 17px; font-weight: 600; margin: 4px 0 10px; }
+.tpl-md-preview h3 { font-size: 16px; font-weight: 600; margin: 2px 0 10px; }
+.tpl-md-preview h4 { font-size: 14px; font-weight: 600; margin: 2px 0 8px; }
+.tpl-md-preview p { margin: 4px 0; }
+.tpl-md-preview strong { font-weight: 600; }
+.tpl-md-preview ul { margin: 6px 0; padding-left: 18px; }
+.tpl-md-preview li { margin: 3px 0; color: var(--el-text-color-regular); }
+.tpl-md-preview hr { border: none; border-top: 1px solid var(--el-border-color-lighter); margin: 10px 0; }
+.tpl-md-preview blockquote { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); border-radius: 0 6px 6px 0; margin: 10px 0 2px; padding: 4px 12px; color: var(--el-text-color-secondary); }
+.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; background: var(--el-fill-color-blank); border-radius: 6px; overflow: hidden; }
+.tpl-md-preview th, .tpl-md-preview td { border: 1px solid var(--el-border-color-lighter); padding: 5px 10px; text-align: left; }
+.tpl-md-preview th { background: var(--el-fill-color); font-weight: 600; }
+.tpl-md-preview code { background: var(--el-fill-color); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
 .tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
 .daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }

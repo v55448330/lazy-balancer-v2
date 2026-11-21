@@ -50,7 +50,7 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 		subject = renderStyleTemplate(cfg.SubjectTemplate, msg, ts)
 	}
 	body := msg.Body
-	if cfg.BodyTemplate != "" && !msg.TemplateApplied {
+	if cfg.BodyTemplate != "" && !msg.TemplateApplied && !msg.dailyTemplatesSuppressed() {
 		body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
 	}
 	tlsEnabled, insecure := smtpTLSOptions()

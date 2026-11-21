@@ -135,6 +135,13 @@ export default {
         saveTplConfirm: '将保存通道「{name}」的内容模板到通道配置，是否继续？',
         templateSaved: '内容模板已保存',
         templateTooLong: '内容模板过长（≤2000 字符）',
+        renderMode: '渲染模式',
+        modeModules: '模块拼装',
+        modeTemplate: '自定义模板',
+        modeModulesHint: '按「包含模块」勾选拼装分节日报；已存模板保留但不生效',
+        modeTemplateHint: '模板独占整份日报版式，全部日报变量可放置',
+        modeModulesPreviewHint: '模块拼装模式无模板预览——最终形态由日报页「包含模块」勾选决定，可用「日报预览」查看。',
+
         bodyTemplateTooLong: '正文模板过长（≤4000 字符）',
         testSend: '测试发送',
         testSent: '日报测试已加入投递队列，结果见投递记录',

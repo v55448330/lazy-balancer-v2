@@ -22,8 +22,28 @@ import (
 type ChannelStyle struct {
 	PayloadTemplate string `json:"payload_template"`
 	SubjectTemplate string `json:"subject_template"`
+	ContentTemplate string `json:"content_template"`
+	BodyTemplate    string `json:"body_template"`
 	MsgType         string `json:"msg_type"`
 	DailyFormat     string `json:"daily_format"`
+	// DailyMode 日报渲染模式显式开关（2026-11-22 用户裁定）："modules"=模块
+	// 拼装（忽略已存正文模板，走 items 分节渲染）；"template"=自定义模板独占；
+	// 缺省=存量回填推断（见 DailyModuleModeEffective）。
+	DailyMode string `json:"daily_mode"`
+}
+
+// DailyModuleModeEffective 日报是否走模块拼装（抑制该通道正文模板）。
+// 显式值优先；缺省按存量推断——有任一正文模板键（机器人 content_template/
+// 邮件 body_template/webhook payload_template）即模板模式，与加开关前的
+// 隐式行为一致（存量用户无感迁移）。未知值同样按存量推断（向前兼容）。
+func (s ChannelStyle) DailyModuleModeEffective() bool {
+	if s.DailyMode == "modules" {
+		return true
+	}
+	if s.DailyMode == "template" {
+		return false
+	}
+	return s.ContentTemplate == "" && s.BodyTemplate == "" && s.PayloadTemplate == ""
 }
 
 // ParseChannelStyle 容错解析（坏 JSON/空串=零值默认；派发路径不可因样式
@@ -188,6 +208,11 @@ func renderBotMessage(tpl string, msg Message, ts time.Time, typ string) string 
 	// 预置）再套一层会产生双标题/双正文；原样发送。
 	if msg.TemplateApplied {
 		return msg.Body
+	}
+	// 日报模块拼装模式：通道模板不生效，回到与无模板一致的默认链
+	// （标题+分节正文；分节成品已含署名）。
+	if msg.dailyTemplatesSuppressed() {
+		tpl = ""
 	}
 	if strings.TrimSpace(tpl) == "" && msg.EventType != EvtDailyReport {
 		tpl = defaultEventTemplate(typ)

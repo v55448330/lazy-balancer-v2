@@ -128,6 +128,13 @@ export default {
         saveTplConfirm: 'Save the content template of channel "{name}" into its channel configuration? Continue?',
         templateSaved: 'Content template saved',
         templateTooLong: 'Content template too long (≤2000 chars)',
+        renderMode: 'Render mode',
+        modeModules: 'Sectioned modules',
+        modeTemplate: 'Custom template',
+        modeModulesHint: "Assembles the report from the 'Modules' checkboxes; stored template is kept but inactive",
+        modeTemplateHint: 'Template takes over the full report layout; all daily variables available',
+        modeModulesPreviewHint: "No template preview in sectioned mode — final form follows the 'Modules' checkboxes; use 'Daily preview' to inspect.",
+
         bodyTemplateTooLong: 'Body template too long (≤4000 chars)',
         testSend: 'Test send',
         testSent: 'Daily report test queued for delivery; see delivery log for the result',

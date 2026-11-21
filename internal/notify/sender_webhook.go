@@ -52,7 +52,7 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 		if err != nil {
 			return fmt.Errorf("载荷编码失败: %w", err)
 		}
-	} else if cfg.PayloadTemplate != "" {
+	} else if cfg.PayloadTemplate != "" && !msg.dailyTemplatesSuppressed() {
 		// 用户 JSON 模板（占位符 {{title}}/{{body}}/{{level}}/{{event}}/
 		// {{time}}/{{node}}；保存时已校验占位符替换后可解析）
 		payload = []byte(renderStyleTemplateJSON(cfg.PayloadTemplate, msg, ts))

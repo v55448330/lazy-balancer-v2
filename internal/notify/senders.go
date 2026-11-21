@@ -33,6 +33,16 @@ type Message struct {
 	// webhook payload_template）不得再套一层（2026-11-22 用户实测双渲染：
 	// 标题/正文各两份+外层 ** 字面量泄漏）。默认链（无事件模板）不置位。
 	TemplateApplied bool
+	// DailyModuleMode 日报渲染模式=模块拼装（通道 style_config.daily_mode
+	// 显式选择/存量推断，daemon 派发时置位）：该通道已存正文模板保留但不
+	// 生效，日报走 items 分节渲染（2026-11-22 二选一显式开关）。
+	DailyModuleMode bool
+}
+
+// dailyTemplatesSuppressed 日报是否抑制通道正文模板（模块拼装模式）；
+// 事件消息不受影响。
+func (m Message) dailyTemplatesSuppressed() bool {
+	return m.EventType == EvtDailyReport && m.DailyModuleMode
 }
 
 // testNotificationMessage 通道「测试」按钮共用的测试消息。
