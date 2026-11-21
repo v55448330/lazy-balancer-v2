@@ -54,14 +54,22 @@ func Bootstrap() {
 func DroppedCount() int64 { return droppedCount.Load() }
 
 // Publish 发布事件（目录外事件拒绝——订阅矩阵与模板均以目录为唯一事实源）。
+// 集群从节点（用户裁定 2026-11-22 主节点集中汇聚）：不入本地队列，转发主节点
+// （即时推送，失败 spool 兜底）；订阅匹配/投递全部在主节点完成。
 func Publish(evt Event) {
 	if _, ok := catalogByID(evt.Type); !ok {
 		log.Printf("WARN: notify.Publish 事件 %q 不在目录中，已丢弃", evt.Type)
 		return
 	}
-	noteAuthEvent(evt.Type) // 日报认证日计数（登录成功/失败/MFA 失败）
+	noteAuthEvent(evt.Type) // 日报认证日计数（本机登录态本地语义，从节点也计）
 	if evt.Time.IsZero() {
 		evt.Time = time.Now()
+	}
+	if shouldForwardClusterEvent(evt) {
+		if err := forwardEventToMaster(evt); err != nil {
+			spoolClusterEvent(evt)
+		}
+		return
 	}
 	select {
 	case queue <- evt:

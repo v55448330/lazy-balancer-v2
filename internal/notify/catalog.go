@@ -174,6 +174,11 @@ var catalog = []catalogEntry{
 // defaultSubscribedFor 新用户默认订阅集：critical+warn 全开，info 与日报默认关。
 func defaultSubscribedFor(e catalogEntry) bool { return e.DefaultSub }
 
+// CatalogLookup 外部目录查询（集群上报端点的目录门——与 Publish 同口径）。
+func CatalogLookup(id string) bool {
+	_, ok := catalogByID(id)
+	return ok
+}
 // catalogByID 事件 ID → 目录条目。
 func catalogByID(id string) (catalogEntry, bool) {
 	for _, e := range catalog {
