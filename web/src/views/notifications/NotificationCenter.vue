@@ -1663,26 +1663,35 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .tpl-hints .form-tip-line { margin-top: 0; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; height: 360px; max-height: 46vh; overflow: auto; }
-/* Markdown 预览=消息卡形态（2026-11-22 用户裁定 CSS 方案）：画布底色上
-   标题层级+留白呼吸感，表格/引用/代码落在白卡上，主题变量随明暗。
-   直角对齐设计规范（禁 border-radius）。 */
-.tpl-md-preview { background: var(--el-fill-color-light); padding: 14px; font-size: 13px; line-height: 1.7; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); height: 360px; max-height: 46vh; overflow: auto; }
-.tpl-md-preview h1 { font-size: 18px; font-weight: 600; margin: 4px 0 12px; }
-.tpl-md-preview h2 { font-size: 16px; font-weight: 600; margin: 2px 0 10px; }
-.tpl-md-preview h3 { font-size: 14px; font-weight: 600; margin: 2px 0 8px; }
-.tpl-md-preview h4 { font-size: 13px; font-weight: 600; margin: 2px 0 6px; }
-.tpl-md-preview p { margin: 4px 0; }
+/* Markdown 预览（marked+DOMPurify，2026-11-22 方案 B）完整元素样式集：
+   GitHub 风格排版节奏（标题梯度+下划线/段落韵律/列表缩进/斑马纹表格/
+   引用条/代码底色），直角对齐设计规范（禁 border-radius），主题变量随明暗。 */
+.tpl-md-preview { background: var(--el-fill-color-light); padding: 16px; font-size: 13px; line-height: 1.75; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); height: 360px; max-height: 46vh; overflow: auto; }
+.tpl-md-preview h1 { font-size: 18px; font-weight: 600; margin: 6px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.tpl-md-preview h2 { font-size: 16px; font-weight: 600; margin: 14px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.tpl-md-preview h3 { font-size: 14px; font-weight: 600; margin: 12px 0 8px; }
+.tpl-md-preview h4 { font-size: 13px; font-weight: 600; margin: 10px 0 6px; }
+.tpl-md-preview h5, .tpl-md-preview h6 { font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
+.tpl-md-preview p { margin: 6px 0; }
 .tpl-md-preview strong { font-weight: 600; }
-.tpl-md-preview ul { margin: 6px 0; padding-left: 18px; }
-.tpl-md-preview li { margin: 3px 0; color: var(--el-text-color-regular); }
-.tpl-md-preview hr { border: none; border-top: 1px solid var(--el-border-color-lighter); margin: 10px 0; }
-.tpl-md-preview blockquote { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); margin: 10px 0 2px; padding: 4px 12px; color: var(--el-text-color-secondary); }
-/* 表格=可见网格（用户实测：lighter 边框在预览里近不可见，表格退化成「只有
-   间距」）——边框升一档、表头底色加重、单元格留白加大，与 QQ 表格形态对齐。 */
-.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; background: var(--el-fill-color-blank); }
-.tpl-md-preview th, .tpl-md-preview td { border: 1px solid var(--el-border-color); padding: 6px 12px; text-align: left; }
-.tpl-md-preview th { background: var(--el-fill-color-light); font-weight: 600; color: var(--el-text-color-primary); }
-.tpl-md-preview code { background: var(--el-fill-color); padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 12px; }
+.tpl-md-preview em { color: var(--el-text-color-regular); }
+.tpl-md-preview a { color: var(--el-color-primary); text-decoration: none; }
+.tpl-md-preview a:hover { text-decoration: underline; }
+.tpl-md-preview ul, .tpl-md-preview ol { margin: 6px 0; padding-left: 22px; }
+.tpl-md-preview li { margin: 3px 0; }
+.tpl-md-preview li > ul, .tpl-md-preview li > ol { margin: 2px 0; }
+.tpl-md-preview hr { border: none; border-top: 1px solid var(--el-border-color-lighter); margin: 12px 0; }
+.tpl-md-preview blockquote { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); margin: 10px 0; padding: 6px 14px; color: var(--el-text-color-secondary); }
+.tpl-md-preview blockquote p { margin: 2px 0; }
+.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; background: var(--el-fill-color-blank); }
+.tpl-md-preview th, .tpl-md-preview td { border: 1px solid var(--el-border-color); padding: 6px 12px; }
+/* 表头/斑马纹用可辨档位：fill-color-light(#f5f7fa) 与 lighter(#fafafa) 对白底
+   差 2-5/255 人眼不可辨（用户两轮反馈表格存在感不足），升 dark/regular。 */
+.tpl-md-preview th { background: var(--el-fill-color-dark); font-weight: 600; }
+.tpl-md-preview tbody tr:nth-child(even) td { background: var(--el-fill-color-light); }
+.tpl-md-preview code { background: var(--el-fill-color); padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.tpl-md-preview pre { background: var(--el-fill-color); padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
+.tpl-md-preview pre code { background: none; padding: 0; font-size: 12px; }
 .tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
 .daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
