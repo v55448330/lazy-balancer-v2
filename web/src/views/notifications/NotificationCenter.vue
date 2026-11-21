@@ -181,8 +181,10 @@
           <div v-if="dailyDraft" class="daily-body">
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.rules.dailySendTime') }}</span>
-              <el-time-select v-model="dailyDraft.send_time" start="00:00" end="23:30" step="00:30" size="small" style="width: 120px" />
-              <span class="form-tip-inline">{{ t('app.notification.rules.dailyTimeHint') }}</span>
+              <div>
+                <el-time-select v-model="dailyDraft.send_time" start="00:00" end="23:30" step="00:30" size="small" style="width: 120px" />
+                <span class="form-tip-inline">{{ t('app.notification.rules.dailyTimeHint') }}</span>
+              </div>
             </div>
             <div class="daily-field">
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
@@ -937,7 +939,8 @@ const previewText = computed(() => {
     for (const [k, v] of Object.entries(dailySampleValues)) {
       // QQ（markdown）多值变量展开语义表格（与实际投递同口径）；其余格式回退原始多行值
       const md = tplEditorLang.value === 'markdown' ? dailyMultiValueMd(k, v) : null
-      text = text.split(`{{${k}}}`).join(md ?? v)
+      // 表格前后留空行（与后端展开同口径）：粘连时解析器把相邻标签/表头吞成上一表数据行
+      text = text.split(`{{${k}}}`).join(md ? `\n${md}\n` : v)
     }
   }
   return text

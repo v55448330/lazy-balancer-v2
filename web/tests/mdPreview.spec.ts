@@ -64,3 +64,18 @@ test('日报多值变量表格化（与后端 mdMultiValueTable 同口径）', a
   assert.equal(dailyMultiValueMd('nodes_summary', 'bad：数据损坏'), null)
   assert.equal(dailyMultiValueMd('requests', '1200'), null)
 })
+
+test('多值表格块空行分隔（粘连会把下一表表头吞成数据行）', async () => {
+  const { dailyMultiValueMd } = await import('../src/utils/mdPreview.ts')
+  const block = (label: string, md: string): string => `**${label}**\n\n${md}\n`
+  const ips = dailyMultiValueMd('top_ips', '45.33.32.9 ×321\n1.2.3.4 ×120') ?? ''
+  const paths = dailyMultiValueMd('top_paths', '/login ×200\n/api ×150') ?? ''
+  const spaced = block('TOP 攻击源 IP', ips) + '\n' + block('TOP 攻击路径', paths)
+  const html = mdToHtml(spaced)
+  assert.equal((html.match(/<table>/g) || []).length, 2, '两表各自成表')
+  assert.ok(!/<td[^>]*>-{3,}<\/td>/.test(html), '分隔行不得被吞成数据行')
+  // 粘连形态的反例钉测（生成端禁止产出）
+  const glued = `**A**\n${ips}\n**B**\n${paths}`
+  const gluedHtml = mdToHtml(glued)
+  assert.ok(/<td[^>]*>-{3,}<\/td>/.test(gluedHtml) || (gluedHtml.match(/<table>/g) || []).length < 2, '粘连形态必然破表（生成端必须空行分隔）')
+})

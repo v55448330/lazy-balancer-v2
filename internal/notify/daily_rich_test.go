@@ -150,3 +150,31 @@ func TestBotDailyTemplate_multiValueVarsAsTables(t *testing.T) {
 		t.Fatalf("微信通道不得注入 markdown 表格:\n%s", gotWx)
 	}
 }
+
+// 多值块空行契约（2026-11-22 用户实测攻击路径表头被吞成数据行）：标签与表格
+// 之间、相邻块之间必须空行——粘连时 markdown 解析器把下一块标签/表头/分隔行
+// 吞成上一表的正文行。钉内置链与自定义模板变量两侧的产出形态。
+func TestDailyMultiValueBlocksBlankLineSeparated(t *testing.T) {
+	values := map[string]string{
+		"top_ips":   "45.33.32.9 ×321\n1.2.3.4 ×120",
+		"top_paths": "/login ×200\n/api ×150",
+	}
+	md := renderDailyFromValues("2026-11-21", values, []string{"top_ips", "top_paths"}, "markdown")
+	if !strings.Contains(md, "**TOP 攻击源 IP**\n\n| 攻击源 IP | 次数 |") {
+		t.Fatalf("标签与表格间须空行:\n%q", md)
+	}
+	if !strings.Contains(md, "| 1.2.3.4 | 120 |\n\n**TOP 攻击路径**") {
+		t.Fatalf("相邻块之间须空行（否则表头被吞）:\n%q", md)
+	}
+
+	msg := Message{EventType: EvtDailyReport, Title: "每日日报", Fields: map[string]string{
+		"top_ips": "45.33.32.9 ×321", "top_paths": "/login ×200",
+	}}
+	got := renderBotMessage("**A**\n{{top_ips}}\n**B**\n{{top_paths}}", msg, time.Unix(0, 0), "qq")
+	if !strings.Contains(got, "**A**\n\n| 攻击源 IP | 次数 |") {
+		t.Fatalf("自定义模板变量展开后标签与表格间须空行:\n%q", got)
+	}
+	if !strings.Contains(got, "| 45.33.32.9 | 321 |\n\n**B**") {
+		t.Fatalf("变量表格后与下一标签间须空行:\n%q", got)
+	}
+}

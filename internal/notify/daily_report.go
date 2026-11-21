@@ -785,7 +785,10 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			for _, r := range rows {
 				if strings.Contains(r[1], "\n") {
 					if md, ok := mdMultiValueTable(r[2], r[0], r[1]); ok {
-						fmt.Fprintf(&lists, "**%s**\n%s", r[0], md)
+						// 标签与表格间、相邻块间必须空行：粘连时 markdown 解析器把
+						// 下一块的标签行/表头/分隔行吞成上一表的正文行（2026-11-22
+						// 用户实测攻击路径表头变数据行）。
+						fmt.Fprintf(&lists, "**%s**\n\n%s\n", r[0], md)
 					} else {
 						// 解析失败（未知形态/数据损坏行）：整项回退加粗标签+列表
 						fmt.Fprintf(&lists, "**%s**\n", r[0])

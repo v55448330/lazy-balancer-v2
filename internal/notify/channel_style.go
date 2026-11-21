@@ -225,7 +225,9 @@ func renderBotMessage(tpl string, msg Message, ts time.Time, typ string) string 
 		for _, k := range []string{"top_ips", "top_paths", "cert_expiring", "nodes_summary"} {
 			if v, ok := fields[k]; ok {
 				if md, ok2 := mdMultiValueTable(k, "", v); ok2 {
-					fields[k] = strings.TrimRight(md, "\n")
+					// 前后各留一空行：模板里标签行紧跟变量时，表格与标签/
+					// 相邻块粘连会被解析器互相吞并（表头变数据行）。
+					fields[k] = "\n" + strings.TrimRight(md, "\n") + "\n"
 				}
 			}
 		}
