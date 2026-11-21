@@ -435,6 +435,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
+import { mdToHtml } from '@/utils/mdPreview'
 import { formatDate } from '@/utils/date'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
@@ -909,47 +910,9 @@ const dailySampleValues = {
   task_status: '成功 12 / 失败 1', backup_status: '成功 7 / 失败 0',
   login_status: '成功 40 / 失败 3 / MFA失败 1',
 }
-// 轻量 Markdown→HTML（预览用，覆盖 QQ 模板子集：#/##/### 标题、**加粗**、- 列表、
-// > 引用、| 表格、段落；先转义再渲染，禁脚本）。
-const mdToHtml = (md: string): string => {
-  const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const inline = (s: string): string => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+?)`/g, '<code>$1</code>')
-  const lines = md.split('\n')
-  const out: string[] = []
-  let i = 0
-  while (i < lines.length) {
-    const ln = lines[i]
-    if (/^\s*\|/.test(ln) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
-      const header = ln.trim().replace(/^\||\|$/g, '').split('|').map(c => `<th>${inline(c.trim())}</th>`).join('')
-      i += 2
-      const rows: string[] = []
-      while (i < lines.length && /^\s*\|/.test(lines[i])) {
-        rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map(c => `<td>${inline(c.trim())}</td>`).join(''))
-        i++
-      }
-      out.push(`<table><thead><tr>${header}</tr></thead><tbody>${rows.map(r => `<tr>${r}</tr>`).join('')}</tbody></table>`)
-      continue
-    }
-    if (/^###\s+/.test(ln)) { out.push(`<h4>${inline(ln.replace(/^###\s+/, ''))}</h4>`); i++; continue }
-    if (/^##\s+/.test(ln)) { out.push(`<h3>${inline(ln.replace(/^##\s+/, ''))}</h3>`); i++; continue }
-    if (/^#\s+/.test(ln)) { out.push(`<h2>${inline(ln.replace(/^#\s+/, ''))}</h2>`); i++; continue }
-    if (/^\s*-\s+/.test(ln)) {
-      const items: string[] = []
-      while (i < lines.length && /^\s*-\s+/.test(lines[i])) { items.push(`<li>${inline(lines[i].replace(/^\s*-\s+/, ''))}</li>`); i++ }
-      out.push(`<ul>${items.join('')}</ul>`); continue
-    }
-    if (/^\s*>\s?/.test(ln)) {
-      const items: string[] = []
-      while (i < lines.length && /^\s*>\s?/.test(lines[i])) { items.push(inline(lines[i].replace(/^\s*>\s?/, ''))); i++ }
-      out.push(`<blockquote>${items.join('<br>')}</blockquote>`); continue
-    }
-    if (ln.trim() === '') { i++; continue }
-    out.push(`<p>${inline(ln)}</p>`); i++
-  }
-  return out.join('\n')
-}
 const previewText = computed(() => {
   let text = tplText.value
+    .replace(/\{\{event_title\}\}/g, t('app.notification.rules.previewSampleTitle'))
     .replace(/\{\{title\}\}/g, t('app.notification.rules.previewSampleTitle'))
     .replace(/\{\{body\}\}/g, t('app.notification.rules.previewSampleBody'))
     .replace(/\{\{level\}\}/g, 'critical')
@@ -1669,6 +1632,7 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-md-preview th { background: #f3f4f6; }
 .tpl-md-preview blockquote { border-left: 3px solid #d1d5db; margin: 6px 0; padding: 2px 10px; color: #6b7280; }
 .tpl-md-preview ul { margin: 4px 0; padding-left: 18px; }
+.tpl-md-preview hr { border: none; border-top: 1px solid #e5e7eb; margin: 8px 0; }
 .tpl-md-preview code { background: #eef2f7; padding: 1px 4px; font-family: ui-monospace, monospace; }
 .tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
