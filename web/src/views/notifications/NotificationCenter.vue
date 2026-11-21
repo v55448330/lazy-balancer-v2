@@ -192,8 +192,7 @@
                 <el-checkbox-group :model-value="dailyModuleChecked" size="small" class="notif-pick-group daily-items" @update:model-value="toggleDailyModule">
                   <el-checkbox v-for="mod in dailyModules" :key="mod.id" :value="mod.id" border size="small">{{ mod.emoji }} {{ mod.label }}</el-checkbox>
                 </el-checkbox-group>
-                <div class="form-tip-line">{{ t('app.notification.daily.modulesHint') }}</div>
-                <div class="form-tip-line">{{ t('app.notification.daily.modulesHintTemplate') }}</div>
+                <div class="form-hint">{{ t('app.notification.daily.modulesHint') }}</div>
               </div>
             </div>
             <div class="daily-field">
@@ -804,7 +803,7 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     fieldHeader: '项目', valueHeader: '内容',
     level: '级别', event: '事件', node: '节点', time: '时间', date: '日期',
     eventName: '事件名称', nodeName: '所属节点', occurredAt: '发生时间', notifyCenter: '通知中心', levelB: '级别',
-    dailyHeader: '📊 {{brand}} 日报', generatedAt: '生成于',
+    dailyHeader: '📊 {{brand}} 日报', dailyHeaderFull: '📊 {{brand}} 每日报告', dataPeriod: '数据周期', generatedAt: '生成于',
     secOverview: '🌐 全局概览', secSecurity: '🛡 安全风险', secCert: '🔒 证书状态',
     secCluster: '🖥 服务状态', secIntegrations: '🔌 接入与任务', secAuth: '👤 用户认证',
     wxCluster: '🖥 服务状态', secRun: '⚙️ 运行状态', metricHeader: '指标',
@@ -824,7 +823,7 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
     fieldHeader: 'Field', valueHeader: 'Value',
     level: 'Level', event: 'Event', node: 'Node', time: 'Time', date: 'Date',
     eventName: 'Event', nodeName: 'Node', occurredAt: 'Occurred at', notifyCenter: 'Notification Center', levelB: 'Level',
-    dailyHeader: '📊 {{brand}} Daily Report', generatedAt: 'Generated at',
+    dailyHeader: '📊 {{brand}} Daily Report', dailyHeaderFull: '📊 {{brand}} Daily Report', dataPeriod: 'Data period', generatedAt: 'Generated at',
     secOverview: '🌐 Overview', secSecurity: '🛡 Security', secCert: '🔒 Certificates',
     secCluster: '🖥 Service Status', secIntegrations: '🔌 Integrations & Tasks', secAuth: '👤 User Authentication',
     wxCluster: '🖥 Service Status', secRun: '⚙️ Runtime Status', metricHeader: 'Metric',
@@ -1228,14 +1227,17 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;">{{body}}</div>',
     [[L.date, '{{date}}'], [L.time, '{{time}}']],
     L.signature)
+  // QQ 日报预置=内置模板（模块拼装渲染形态）逐字镜像：标题/数据周期前缀/
+  // `:--- | ---:` 对齐分隔行/尾部分节线与 renderDailyFromValues 同口径；
+  // 多值变量（{{top_ips}} 等）投递时展开语义表格（dailyMultiValueMd 同源）。
   if (typ === 'qq') return [
-    `# ${L.dailyHeader}`,
-    `> {{date}} · ${L.generatedAt} {{time}}`,
+    `# ${L.dailyHeaderFull}`,
+    `> ${L.dataPeriod} {{date}} · ${L.generatedAt} {{time}}`,
     '',
     `## ${L.secCluster}`,
     '',
     `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
+    '| :--- | ---: |',
     row(L.clusterStatus, 'cluster_status'),
     row(L.uptime, 'uptime'),
     row(L.threatDb, 'threat_db'),
@@ -1247,7 +1249,7 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     `## ${L.secOverview}`,
     '',
     `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
+    '| :--- | ---: |',
     row(L.requests, 'requests'),
     row(L.allowed, 'allowed'),
     row(L.logged, 'logged'),
@@ -1258,7 +1260,7 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     `## ${L.secSecurity}`,
     '',
     `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
+    '| :--- | ---: |',
     row(L.blocked, 'blocked'),
     row(L.attackTop, 'attack_top'),
     row(L.cc, 'cc_triggered'),
@@ -1272,7 +1274,7 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     `## ${L.secCert}`,
     '',
     `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
+    '| :--- | ---: |',
     row(L.certStatus, 'cert_status'),
     '',
     `**${L.certExpiring}**`,
@@ -1281,7 +1283,7 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     `## ${L.secIntegrations}`,
     '',
     `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
+    '| :--- | ---: |',
     row(L.apiCalls, 'api_calls'),
     row(L.mcpCalls, 'mcp_calls'),
     row(L.taskStatus, 'task_status'),
@@ -1290,9 +1292,10 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     `## ${L.secAuth}`,
     '',
     `| ${L.metricHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
+    '| :--- | ---: |',
     row(L.loginStatus, 'login_status'),
     '',
+    '---',
     '> {{brand}}',
   ].join('\n')
   const line = (label: string, key: string): string => `${label}${c}{{${key}}}`

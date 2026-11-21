@@ -118,8 +118,7 @@ export default {
       },
       daily: {
         itemsLabel: 'Included modules',
-        modulesHint: 'Pick daily content by module (whole module as a group)',
-        modulesHintTemplate: 'Channels with a saved custom body template render that template instead and ignore this selection',
+        modulesHint: 'Pick daily content by module (whole module as a group); channels with a saved custom body template render that template instead and ignore this selection',
         formatLabel: 'Channel format',
         editTemplate: 'Edit template',
         contentTemplate: 'Content template',

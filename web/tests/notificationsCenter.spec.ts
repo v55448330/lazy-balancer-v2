@@ -262,6 +262,15 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.match(nc, /:readonly="tplMode === 'daily' && tplDailyMode === 'modules'"/, '模块拼装模式编辑器必须只读')
   assert.match(nc, /modeModulesPreviewHint/, '模块拼装预览提示必须在位')
   assert.match(nc, /seedDailyModes/, '弹窗打开必须按存量/显式值播种渲染模式')
+  // 每日摘要行描述统一 .form-hint（与发送至/投递时间同色 #6b7280），
+  // 单行不分拆（2026-11-22 用户裁定：两行且 form-tip-line 色浅一档=不统一）
+  assert.ok(!/form-tip-line.*modulesHint/.test(nc), '模块描述不得用 form-tip-line（色与行标准不一致）')
+  assert.match(nc, /<div class="form-hint">\{\{ t\('app\.notification\.daily\.modulesHint'\) \}\}<\/div>/, '模块描述=单行 form-hint 标准样式')
+  // QQ 日报预置=内置模板镜像：每日报告标题/数据周期前缀/对齐分隔行/尾部分节线
+  assert.match(nc, /`# \$\{L\.dailyHeaderFull\}`/, '预置标题用内置形态（每日报告）')
+  assert.match(nc, /`> \$\{L\.dataPeriod\} \{\{date\}\} · \$\{L\.generatedAt\} \{\{time\}\}`/, '预置头部带数据周期前缀')
+  assert.equal((nc.match(/'\| :--- \| ---: \|',/g) || []).length, 6, '预置六段表分隔行对齐内置')
+  assert.match(nc, /'---',\n    '> \{\{brand\}\}',/, '预置尾部分节线+品牌引用（镜像内置）')
   // 消息卡：主题变量 + designGuard 高度 token 保持
   assert.match(nc, /\.tpl-md-preview \{ background: var\(--el-fill-color-light\)/, '预览画布必须用主题变量')
   assert.ok(!/\.tpl-md-preview[^\n]*#f9fafb/.test(nc), '预览样式禁硬编码 hex')

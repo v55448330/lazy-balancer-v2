@@ -125,8 +125,7 @@ export default {
       },
       daily: {
         itemsLabel: '包含模块',
-        modulesHint: '按模块勾选日报内容（模块内项目整组包含）',
-        modulesHintTemplate: '已保存自定义正文模板的通道改用模板渲染，不受此处勾选裁剪',
+        modulesHint: '按模块勾选日报内容（模块内项目整组包含）；已保存自定义正文模板的通道改用模板渲染，不受此处勾选裁剪',
         formatLabel: '通道格式',
         editTemplate: '编辑模板',
         contentTemplate: '内容模板',
