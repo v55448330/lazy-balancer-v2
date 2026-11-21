@@ -102,7 +102,7 @@ func wrapEmailHTML(msg Message, subject, body string, ts time.Time) string {
 		`<div style="background:#f8fafc;border:1px solid #eef2f7;padding:16px;font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">` + inner + `</div>` +
 		fmt.Sprintf(`<table style="width:100%%;font-size:12px;margin-top:18px;border-collapse:collapse;">%s</table>`, meta) +
 		`</div>` +
-		fmt.Sprintf(`<p style="text-align:center;font-size:11px;color:#94a3b8;margin:16px 0;">此邮件由 %s 通知中心自动发送 · %s</p></div>`, brand, stamp)
+		fmt.Sprintf(`<p style="text-align:center;font-size:11px;color:#94a3b8;margin:16px 0;">此邮件由 %s 通知中心自动发送</p></div>`, brand)
 }
 
 func (s emailSender) Test(ctx context.Context, targetJSON string) error {

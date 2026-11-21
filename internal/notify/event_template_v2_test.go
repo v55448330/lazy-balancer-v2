@@ -40,6 +40,16 @@ func TestDefaultEventTemplateQQ_compactLayout(t *testing.T) {
 	if !strings.Contains(tpl, "> {{body}}") {
 		t.Fatalf("QQ 模板正文须用 > 引用分组（markdown 元素）: %q", tpl)
 	}
+	// 终版（第五轮追加）：标题独立（级别入来源区）、正文/来源区分隔线、署名只留品牌
+	if strings.Contains(tpl, "{{title}} · {{level}}") || strings.Contains(tpl, "🔔 {{title}} ·") {
+		t.Fatalf("标题不得混排级别（正文主角凸显）: %q", tpl)
+	}
+	if !strings.Contains(tpl, "────────────") {
+		t.Fatalf("正文区与来源区须有分隔线: %q", tpl)
+	}
+	if !strings.HasSuffix(tpl, "—— {{brand}}") {
+		t.Fatalf("署名只留品牌（时间已在来源区，去重）: %q", tpl)
+	}
 	for _, ph := range []string{"{{title}}", "{{level}}", "{{body}}", "{{event_title}}", "{{node}}", "{{time}}", "{{brand}}"} {
 		if !strings.Contains(tpl, ph) {
 			t.Fatalf("QQ 模板缺占位符 %s: %q", ph, tpl)

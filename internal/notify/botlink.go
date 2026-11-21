@@ -9,7 +9,6 @@ package notify
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -188,12 +187,10 @@ func formatBotText(msg Message) string {
 	return b.String()
 }
 
-// brandFooter 消息署名（品牌+时间），统一附加于机器人文本/邮件。
+// brandFooter 消息署名（只留品牌；时间已在详情区呈现，署名带时间是重复）。
 func brandFooter(ts time.Time) string {
-	if ts.IsZero() {
-		ts = time.Now()
-	}
-	return fmt.Sprintf("—— %s · %s", BrandName(), ts.Format("2006-01-02 15:04"))
+	_ = ts
+	return "—— " + BrandName()
 }
 
 // formatBotTextWithTemplate 通道内容模板渲染（style_config.content_template；

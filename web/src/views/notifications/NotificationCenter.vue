@@ -858,17 +858,19 @@ const defaultTplFor = (typ: string, lang: TplLang): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
     [[L.event, '{{event_title}}'], [L.node, '{{node}}'], [L.time, '{{time}}']],
     L.signature)
-  // QQ 事件预置（2026-11-22 第五轮修正）：## 标题+引用分组（markdown 富文本）
+  // QQ 事件预置（2026-11-22 第五轮终版）：标题独立、正文引用凸显、
+  // 分隔线隔开来源区、署名只留品牌。
   if (typ === 'qq') return [
-    `## 🔔 {{title}} · {{level}}`,
+    `## 🔔 {{title}}`,
     '',
     '> {{body}}',
-    '>',
-    `> ${L.event}${L.colon}{{event_title}}`,
-    `> ${L.node}${L.colon}{{node}}`,
-    `> ${L.time}${L.colon}{{time}}`,
     '',
-    '—— {{brand}} · {{time}}',
+    '────────────',
+    `${L.event}${L.colon}{{event_title}}`,
+    `${L.node}${L.colon}{{node}}`,
+    `${L.time}${L.colon}{{time}} · {{level}}`,
+    '',
+    '—— {{brand}}',
   ].join('\n')
   return [
     '【{{title}}】（{{level}}）',
@@ -880,7 +882,7 @@ const defaultTplFor = (typ: string, lang: TplLang): string => {
     `${L.event}${L.colon}{{event_title}}`,
     `${L.node}${L.colon}{{node}}`,
     `${L.time}${L.colon}{{time}}`,
-    '—— {{brand}} · {{time}}',
+    '—— {{brand}}',
   ].join('\n')
 }
 const resetTplToDefault = (): void => {
@@ -1307,7 +1309,7 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     '| --- | --- |',
     row(L.loginStatus, 'login_status'),
     '',
-    '> {{brand}} · {{time}}',
+    '> {{brand}}',
   ].join('\n')
   const line = (label: string, key: string): string => `${label}${c}{{${key}}}`
   return [
@@ -1353,7 +1355,7 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     line(L.wxBackup, 'backup_status'),
     line(L.wxLogin, 'login_status'),
     '',
-    '—— {{brand}} · {{time}}',
+    '—— {{brand}}',
   ].join('\n')
 }
 // 通道模式预置（日报）：机器人=分节日报模板；email=统一 HTML 卡片（日报版式）；

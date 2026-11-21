@@ -166,11 +166,12 @@ func templateDate(msg Message, ts time.Time) string {
 func defaultEventTemplate(typ string) string {
 	switch typ {
 	case "qq":
-		// markdown 版式（2026-11-22 第五轮修正）：## 标题（# 过大是头重脚轻
-		// 根源）+ > 引用正文与详情行分组——保留富文本元素但单层不分节。
-		return "## 🔔 {{title}} · {{level}}\n\n> {{body}}\n>\n> 事件：{{event_title}}\n> 节点：{{node}}\n> 时间：{{time}}\n\n—— {{brand}} · {{time}}"
+		// markdown 版式（2026-11-22 第五轮终版）：## 标题独立成行（正文才是
+		// 主角）；正文引用块凸显；分隔线隔开正文区与消息来源区（事件/节点/
+		// 时间/级别），署名只留品牌（时间在来源区已有，去重）。
+		return "## 🔔 {{title}}\n\n> {{body}}\n\n────────────\n事件：{{event_title}}\n节点：{{node}}\n时间：{{time}} · {{level}}\n\n—— {{brand}}"
 	case "wx_clawbot":
-		return "【{{title}}】（{{level}}）\n────────────\n{{body}}\n────────────\n事件：{{event_title}}\n节点：{{node}}\n时间：{{time}}\n—— {{brand}} · {{time}}"
+		return "【{{title}}】\n────────────\n{{body}}\n────────────\n事件：{{event_title}}\n节点：{{node}}\n时间：{{time}} · {{level}}\n\n—— {{brand}}"
 	}
 	return ""
 }

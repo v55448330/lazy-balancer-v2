@@ -767,7 +767,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			}
 			b.WriteString(`</table></div>`)
 		}
-		fmt.Fprintf(&b, `<p style="margin:8px 0 18px;color:#94a3b8;font-size:11px;text-align:center;">此邮件由 %s 通知中心自动发送 · %s</p></div></div>`, html.EscapeString(brand), now)
+		fmt.Fprintf(&b, `<p style="margin:8px 0 18px;color:#94a3b8;font-size:11px;text-align:center;">此邮件由 %s 通知中心自动发送</p></div></div>`, html.EscapeString(brand))
 		return b.String()
 	case "markdown":
 		// QQ 原生 markdown 支持 #/## 标题、**加粗**、> 引用、- 列表（官方文档），
@@ -798,7 +798,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 				b.WriteString(lists.String() + "\n")
 			}
 		}
-		fmt.Fprintf(&b, "---\n> %s · %s\n", brand, now)
+		fmt.Fprintf(&b, "---\n> %s\n", brand)
 		return b.String()
 	default: // text（微信 iLink 纯文本协议；无 markdown 标记，多值独立行）
 		var b strings.Builder
