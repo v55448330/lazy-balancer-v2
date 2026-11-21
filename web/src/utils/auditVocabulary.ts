@@ -1,8 +1,11 @@
 // 审计日志 Action/Resource 枚举词条单源（audit-i18n 方案 C · 第 1 步）。
 //
 // 键=audit_log 库值（后端 zh 枚举原样入库，见 internal/db/audit.go 写点侧口径），
-// 值=词条后缀（en 母本在 locales/en/common.ts 的 app.auditActions / app.auditResources；
-// zh 母本与库值同文——zh 原样展示，词条仅承载 en 翻译）。
+// 值=词条后缀。zh/en 两侧都是真实词条（locales/{zh,en}/common.ts 的
+// app.auditActions / app.auditResources），渲染两侧都走词条解析——不是「zh 原样
+// 直出」：动作族 zh 条目目前与库值同文（spec 钉死 zh=库值），对象族 zh 已本地化
+// （family id 如 backup 不可直出）；新增枚举仍须两侧登记，漏登记回落库值原文
+// （en 界面即出中文/原始 id）。
 //
 // 渲染契约（AuditLog.vue 消费）：
 //   - 表内命中 → tSafe 解析词条；键缺失/未解析 → 回落库值原文（混存期旧行 zh 原样，
@@ -82,6 +85,7 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '恢复排队': 'recoveryQueued',
   '重新排队': 'requeued',
   '重新签发': 'reissued',
+  '停止重签': 'reissueStopped',
   '触发签发': 'issueTriggered',
   '部署失败': 'deployFailed',
   '恢复': 'recovered',

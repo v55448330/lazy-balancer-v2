@@ -2,14 +2,14 @@
 //
 // 后端 audit_log 的 action/resource 是 zh 枚举库值（internal/db/audit.go 写点侧
 // 口径），前端 utils/auditVocabulary.ts 以「库值 → 词条后缀」表承载 en 渲染映射
-// （zh 母本与库值同文 ⇒ zh 原样）。本文件四件事：
+// （zh/en 两侧都走真实词条：动作族 zh 条目=库值，对象族 zh 已本地化）。本文件四件事：
 //
 //   1) 枚举集完整性（正钉）：全仓扫描 Go 写点（recordAudit / RecordAuditLog /
 //      recordSystemAudit(Once) 的字面量 + FormatAuditAction 的返回字面量 +
 //      audit_vocabulary_test.go 已核清动态装配族的取值），任一动作/对象未入
 //      前端词条表即红——新增写点漏词条在门禁层暴露，不再静默渲染原样。
 //   2) 词条双语言齐备（正钉）：表内每个词条后缀在 en/zh common.ts 双侧存在，
-//      zh 值恒等于库值（「zh 原样」契约）；存量词（安全审计）在表内且当前代码
+//      动作族 zh 值=库值、对象族 zh 已本地化（非 en 同值）；存量词（安全审计）在表内且当前代码
 //      不产出（复活即红）。
 //   3) 渲染接入钉：AuditLog.vue 的动作标签/对象列/两个筛选下拉全部经词条函数
 //      渲染且筛选 value 保持库值原样（过滤参数不变）；列宽语言策略在位。

@@ -323,3 +323,67 @@ func TestSystemListNames_singleSourceAcrossPackages(t *testing.T) {
 		}
 	}
 }
+
+// DEFPOL153-001：名单未被启用策略引用时 tryIPListHotPathApply 返回 false 落
+// 全量链——全量链的 txApplyFinish 必须带 Notify，否则「未引用名单」的增/删/
+// 条目改写零通知（热路径分支早已发）。
+func TestIPListFullChainFallback_publishesNotify(t *testing.T) {
+	withIsolatedGlobal(t) // 本函数体直写 notifyPublish seam（守卫按函数体扫描）
+	f := newHotPathIPListFixture(t)
+	var mu sync.Mutex
+	var events []notify.Event
+	oldPublish := notifyPublish
+	notifyPublish = func(evt notify.Event) {
+		mu.Lock()
+		events = append(events, evt)
+		mu.Unlock()
+	}
+	t.Cleanup(func() { notifyPublish = oldPublish })
+
+	// 运行配置基线（与名单无关的规则）：全量链 render+比对可收敛。
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled)
+		VALUES ('lb-plain','plain','http','plain.example.test',8080,'weighted_round_robin',1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES ('lb-plain','127.0.0.1',9002,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	if err := f.h.caddyService.GenerateAndApplyConfig(); err != nil {
+		t.Fatalf("首次应用: %v", err)
+	}
+	res, err := db.DB.Exec(`INSERT INTO security_ip_lists (name, category, entries) VALUES ('未引用名单','测试','[]')`)
+	if err != nil {
+		t.Fatalf("seed list: %v", err)
+	}
+	listID, _ := res.LastInsertId()
+
+	expectEvent := func(step, action string) {
+		t.Helper()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(events) != 1 {
+			t.Fatalf("%s 后事件=%+v want 1 条 EvtIPListChanged", step, events)
+		}
+		evt := events[0]
+		if evt.Type != notify.EvtIPListChanged || evt.Fields["2"] != action || evt.Fields["3"] != "未引用名单" {
+			t.Fatalf("%s 事件=%+v want %s（未引用名单）", step, evt, action)
+		}
+		events = nil
+	}
+
+	if rec := f.postJSON(fmt.Sprintf("/security/ip-lists/%d/ips", listID), map[string]any{"value": "198.51.100.7"}); rec.Code != http.StatusOK {
+		t.Fatalf("追加 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	expectEvent("追加", "变更了条目")
+
+	if rec := f.postJSON(fmt.Sprintf("/security/ip-lists/%d/remove-ip", listID), map[string]any{"value": "198.51.100.7"}); rec.Code != http.StatusOK {
+		t.Fatalf("移除 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	expectEvent("移除", "变更了条目")
+
+	// 条目覆盖式更新同族（同一 finishTxApply 回退位，动作与热路径同参数）。
+	if rec := f.putJSON(fmt.Sprintf("/security/ip-lists/%d", listID), map[string]any{"entries": `[{"value":"198.51.100.9","remark":""}]`}); rec.Code != http.StatusOK {
+		t.Fatalf("条目改写 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	expectEvent("条目改写", "更新了")
+}

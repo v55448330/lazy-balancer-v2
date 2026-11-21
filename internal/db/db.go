@@ -7049,7 +7049,6 @@ func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem
 		// 它们当用户同名行重复创建。
 		if err := markLegacyDefaultPoliciesTx(tx); err != nil {
 			return err
-		}
 		// 1) 用户地址列表：按名复用，缺失创建（空条目）。列表侧维持按名匹配
 		// （风险低：reset 从不动列表；同名=同一意图，策略引用语义不变）。
 		listIDs := make(map[string]int64, len(defaultIPListSeeds))

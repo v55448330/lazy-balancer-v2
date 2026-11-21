@@ -4,7 +4,9 @@ import { isCaddyApplyDegraded } from '@/utils/bulkApplyResult'
 
 interface SaveResultLike {
   message?: string
-  /** 后端 message_key 透传（稳定语义键，语言无关）；退化 200 恒为 k_de8cc6aa。 */
+  /** 后端 message_key 透传（稳定语义键，语言无关）。退化 200 是双键集：
+   *  k_de8cc6aa=通用写端点；k_7d87740a=安全策略/默认策略 apply（重载失败）。
+   *  判定单源在 utils/bulkApplyResult.isCaddyApplyDegraded，勿按单键硬编码。 */
   messageKey?: string
 }
 
