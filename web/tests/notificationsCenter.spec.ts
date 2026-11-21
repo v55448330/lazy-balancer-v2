@@ -265,14 +265,17 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   // 消息卡：主题变量 + designGuard 高度 token 保持
   assert.match(nc, /\.tpl-md-preview \{ background: var\(--el-fill-color-light\)/, '预览画布必须用主题变量')
   assert.ok(!/\.tpl-md-preview[^\n]*#f9fafb/.test(nc), '预览样式禁硬编码 hex')
-  assert.match(nc, /\.tpl-md-preview hr \{ border: none; border-top: 1px solid var\(--el-border-color-lighter\)/, '分节 hr 须主题变量')
+  assert.match(nc, /\.tpl-md-preview :deep\(hr\) \{ border: none; border-top: 1px solid var\(--el-border-color-lighter\)/, '分节 hr 须主题变量')
   // 设计规范：直角对齐，预览样式禁 border-radius（2026-11-22 用户纠偏）
   const mdPreviewCss = nc.split('\n').filter(l => l.includes('.tpl-md-preview')).join('\n')
   assert.ok(!/border-radius/.test(mdPreviewCss), '预览样式禁用圆角（直角对齐设计规范）')
   // 表格网格必须可见（lighter 边框实测近不可见）+ 标题层级可辨（18/15/14）
-  assert.match(nc, /\.tpl-md-preview th, \.tpl-md-preview td \{ border: 1px solid var\(--el-border-color\); padding: 6px 12px;/, '表格边框须用可见档位（非 lighter）')
+  assert.match(nc, /\.tpl-md-preview :deep\(th\), \.tpl-md-preview :deep\(td\) \{ border: 1px solid var\(--el-border-color\); padding: 6px 12px;/, '表格边框须用可见档位（非 lighter）')
   // marked 层级（# → h1）：18/16/14 递减可辨
-  assert.match(nc, /\.tpl-md-preview h1 \{ font-size: 18px/, 'h1 层级 18px')
-  assert.match(nc, /\.tpl-md-preview h2 \{ font-size: 16px/, 'h2 层级 16px')
-  assert.match(nc, /\.tpl-md-preview h3 \{ font-size: 14px/, 'h3 层级 14px')
+  assert.match(nc, /\.tpl-md-preview :deep\(h1\) \{ font-size: 18px/, 'h1 层级 18px')
+  assert.match(nc, /\.tpl-md-preview :deep\(h2\) \{ font-size: 16px/, 'h2 层级 16px')
+  assert.match(nc, /\.tpl-md-preview :deep\(h3\) \{ font-size: 14px/, 'h3 层级 14px')
+  // v-html 子元素无组件 data-v 属性——scoped 后代选择器（.tpl-md-preview <el>）永不匹配，
+  // 样式静默失效（2026-11-22 三轮「预览无变化」根因）。后代样式必须 :deep。
+  assert.ok(!/\.tpl-md-preview (h[1-6]|p|ul|ol|li|table|th|td|blockquote|code|pre|hr|a|em|strong|tbody)[^{]*\{/.test(nc), '预览 v-html 后代样式必须 :deep（scoped 直写永不匹配）')
 })

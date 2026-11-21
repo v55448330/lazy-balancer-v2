@@ -1667,31 +1667,31 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
    GitHub 风格排版节奏（标题梯度+下划线/段落韵律/列表缩进/斑马纹表格/
    引用条/代码底色），直角对齐设计规范（禁 border-radius），主题变量随明暗。 */
 .tpl-md-preview { background: var(--el-fill-color-light); padding: 16px; font-size: 13px; line-height: 1.75; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); height: 360px; max-height: 46vh; overflow: auto; }
-.tpl-md-preview h1 { font-size: 18px; font-weight: 600; margin: 6px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--el-border-color-lighter); }
-.tpl-md-preview h2 { font-size: 16px; font-weight: 600; margin: 14px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter); }
-.tpl-md-preview h3 { font-size: 14px; font-weight: 600; margin: 12px 0 8px; }
-.tpl-md-preview h4 { font-size: 13px; font-weight: 600; margin: 10px 0 6px; }
-.tpl-md-preview h5, .tpl-md-preview h6 { font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
-.tpl-md-preview p { margin: 6px 0; }
-.tpl-md-preview strong { font-weight: 600; }
-.tpl-md-preview em { color: var(--el-text-color-regular); }
-.tpl-md-preview a { color: var(--el-color-primary); text-decoration: none; }
-.tpl-md-preview a:hover { text-decoration: underline; }
-.tpl-md-preview ul, .tpl-md-preview ol { margin: 6px 0; padding-left: 22px; }
-.tpl-md-preview li { margin: 3px 0; }
-.tpl-md-preview li > ul, .tpl-md-preview li > ol { margin: 2px 0; }
-.tpl-md-preview hr { border: none; border-top: 1px solid var(--el-border-color-lighter); margin: 12px 0; }
-.tpl-md-preview blockquote { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); margin: 10px 0; padding: 6px 14px; color: var(--el-text-color-secondary); }
-.tpl-md-preview blockquote p { margin: 2px 0; }
-.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; background: var(--el-fill-color-blank); }
-.tpl-md-preview th, .tpl-md-preview td { border: 1px solid var(--el-border-color); padding: 6px 12px; }
+.tpl-md-preview :deep(h1) { font-size: 18px; font-weight: 600; margin: 6px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.tpl-md-preview :deep(h2) { font-size: 16px; font-weight: 600; margin: 14px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.tpl-md-preview :deep(h3) { font-size: 14px; font-weight: 600; margin: 12px 0 8px; }
+.tpl-md-preview :deep(h4) { font-size: 13px; font-weight: 600; margin: 10px 0 6px; }
+.tpl-md-preview :deep(h5), .tpl-md-preview :deep(h6) { font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
+.tpl-md-preview :deep(p) { margin: 6px 0; }
+.tpl-md-preview :deep(strong) { font-weight: 600; }
+.tpl-md-preview :deep(em) { color: var(--el-text-color-regular); }
+.tpl-md-preview :deep(a) { color: var(--el-color-primary); text-decoration: none; }
+.tpl-md-preview :deep(a:hover) { text-decoration: underline; }
+.tpl-md-preview :deep(ul), .tpl-md-preview :deep(ol) { margin: 6px 0; padding-left: 22px; }
+.tpl-md-preview :deep(li) { margin: 3px 0; }
+.tpl-md-preview :deep(li ul), .tpl-md-preview :deep(li ol) { margin: 2px 0; }
+.tpl-md-preview :deep(hr) { border: none; border-top: 1px solid var(--el-border-color-lighter); margin: 12px 0; }
+.tpl-md-preview :deep(blockquote) { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); margin: 10px 0; padding: 6px 14px; color: var(--el-text-color-secondary); }
+.tpl-md-preview :deep(blockquote p) { margin: 2px 0; }
+.tpl-md-preview :deep(table) { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; background: var(--el-fill-color-blank); }
+.tpl-md-preview :deep(th), .tpl-md-preview :deep(td) { border: 1px solid var(--el-border-color); padding: 6px 12px; }
 /* 表头/斑马纹用可辨档位：fill-color-light(#f5f7fa) 与 lighter(#fafafa) 对白底
    差 2-5/255 人眼不可辨（用户两轮反馈表格存在感不足），升 dark/regular。 */
-.tpl-md-preview th { background: var(--el-fill-color-dark); font-weight: 600; }
-.tpl-md-preview tbody tr:nth-child(even) td { background: var(--el-fill-color-light); }
-.tpl-md-preview code { background: var(--el-fill-color); padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.tpl-md-preview pre { background: var(--el-fill-color); padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
-.tpl-md-preview pre code { background: none; padding: 0; font-size: 12px; }
+.tpl-md-preview :deep(th) { background: var(--el-fill-color-dark); font-weight: 600; }
+.tpl-md-preview :deep(tbody tr:nth-child(even) td) { background: var(--el-fill-color-light); }
+.tpl-md-preview :deep(code) { background: var(--el-fill-color); padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.tpl-md-preview :deep(pre) { background: var(--el-fill-color); padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
+.tpl-md-preview :deep(pre code) { background: none; padding: 0; font-size: 12px; }
 .tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
 .daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
