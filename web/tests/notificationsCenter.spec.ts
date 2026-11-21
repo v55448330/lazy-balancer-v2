@@ -266,4 +266,7 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.match(nc, /\.tpl-md-preview \{ background: var\(--el-fill-color-light\)/, '预览画布必须用主题变量')
   assert.ok(!/\.tpl-md-preview[^\n]*#f9fafb/.test(nc), '预览样式禁硬编码 hex')
   assert.match(nc, /\.tpl-md-preview hr \{ border: none; border-top: 1px solid var\(--el-border-color-lighter\)/, '分节 hr 须主题变量')
+  // 设计规范：直角对齐，预览样式禁 border-radius（2026-11-22 用户纠偏）
+  const mdPreviewCss = nc.split('\n').filter(l => l.includes('.tpl-md-preview')).join('\n')
+  assert.ok(!/border-radius/.test(mdPreviewCss), '预览样式禁用圆角（直角对齐设计规范）')
 })

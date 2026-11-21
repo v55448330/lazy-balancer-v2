@@ -1664,8 +1664,9 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-hints .form-tip-line { margin-top: 0; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; height: 360px; max-height: 46vh; overflow: auto; }
 /* Markdown 预览=消息卡形态（2026-11-22 用户裁定 CSS 方案）：画布底色上
-   标题层级+留白呼吸感，表格/引用/代码落在白卡上，主题变量随明暗。 */
-.tpl-md-preview { background: var(--el-fill-color-light); padding: 14px; font-size: 13px; line-height: 1.7; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; height: 360px; max-height: 46vh; overflow: auto; }
+   标题层级+留白呼吸感，表格/引用/代码落在白卡上，主题变量随明暗。
+   直角对齐设计规范（禁 border-radius）。 */
+.tpl-md-preview { background: var(--el-fill-color-light); padding: 14px; font-size: 13px; line-height: 1.7; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); height: 360px; max-height: 46vh; overflow: auto; }
 .tpl-md-preview h2 { font-size: 17px; font-weight: 600; margin: 4px 0 10px; }
 .tpl-md-preview h3 { font-size: 16px; font-weight: 600; margin: 2px 0 10px; }
 .tpl-md-preview h4 { font-size: 14px; font-weight: 600; margin: 2px 0 8px; }
@@ -1674,11 +1675,11 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-md-preview ul { margin: 6px 0; padding-left: 18px; }
 .tpl-md-preview li { margin: 3px 0; color: var(--el-text-color-regular); }
 .tpl-md-preview hr { border: none; border-top: 1px solid var(--el-border-color-lighter); margin: 10px 0; }
-.tpl-md-preview blockquote { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); border-radius: 0 6px 6px 0; margin: 10px 0 2px; padding: 4px 12px; color: var(--el-text-color-secondary); }
-.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; background: var(--el-fill-color-blank); border-radius: 6px; overflow: hidden; }
+.tpl-md-preview blockquote { border-left: 3px solid var(--el-border-color); background: var(--el-fill-color-blank); margin: 10px 0 2px; padding: 4px 12px; color: var(--el-text-color-secondary); }
+.tpl-md-preview table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; background: var(--el-fill-color-blank); overflow: hidden; }
 .tpl-md-preview th, .tpl-md-preview td { border: 1px solid var(--el-border-color-lighter); padding: 5px 10px; text-align: left; }
 .tpl-md-preview th { background: var(--el-fill-color); font-weight: 600; }
-.tpl-md-preview code { background: var(--el-fill-color); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; }
+.tpl-md-preview code { background: var(--el-fill-color); padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 12px; }
 .tpl-html-preview, .daily-html-preview { height: 360px; max-height: 46vh; width: 100%; border: 0; }
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
 .daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
