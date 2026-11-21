@@ -214,6 +214,23 @@ func renderBotMessage(tpl string, msg Message, ts time.Time, typ string) string 
 	if msg.dailyTemplatesSuppressed() {
 		tpl = ""
 	}
+	// QQ 日报自定义模板：多值变量（TOP IP/路径/临期证书/节点摘要）展开为
+	// 语义表格（模板提供上下文标签，变量只出表格本体）——与内置模板同族
+	// 设计；微信（纯文本）与其他通道保持原始多行值，不注入 markdown 标记。
+	if msg.EventType == EvtDailyReport && typ == "qq" && msg.Fields != nil {
+		fields := make(map[string]string, len(msg.Fields))
+		for k, v := range msg.Fields {
+			fields[k] = v
+		}
+		for _, k := range []string{"top_ips", "top_paths", "cert_expiring", "nodes_summary"} {
+			if v, ok := fields[k]; ok {
+				if md, ok2 := mdMultiValueTable(k, "", v); ok2 {
+					fields[k] = strings.TrimRight(md, "\n")
+				}
+			}
+		}
+		msg.Fields = fields
+	}
 	if strings.TrimSpace(tpl) == "" && msg.EventType != EvtDailyReport {
 		tpl = defaultEventTemplate(typ)
 	}

@@ -6,6 +6,7 @@ package notify
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func richValues() map[string]string {
@@ -117,5 +118,35 @@ func TestRenderDailyMarkdown_multiValueFallbackOnBadLine(t *testing.T) {
 	}
 	if !strings.Contains(got, "**各节点摘要**") || !strings.Contains(got, "- bad-node：数据损坏") {
 		t.Fatalf("回退形态必须保留加粗标签+列表:\n%s", got)
+	}
+}
+
+// 自定义模板（QQ markdown）的多值日报变量同样出语义表格（2026-11-22 用户
+// 裁定：模板里 {{top_ips}}/{{cert_expiring}}/{{nodes_summary}} 不能是裸行——
+// 与内置模板同族设计）。模板提供上下文标签，变量只展开表格本体。
+func TestBotDailyTemplate_multiValueVarsAsTables(t *testing.T) {
+	msg := Message{EventType: EvtDailyReport, Title: "每日日报", Body: "成品",
+		Fields: map[string]string{
+			"top_ips":       "45.33.32.9 ×321\n1.2.3.4 ×120",
+			"cert_expiring": "a.com · 2026-11-25",
+			"nodes_summary": "slave-a：请求 22014 · 拦截 156 · 独立IP 402",
+			"requests":      "1200",
+		}}
+	tpl := "**TOP 攻击源 IP**\n{{top_ips}}\n**临期证书明细**\n{{cert_expiring}}\n**各节点摘要**\n{{nodes_summary}}\n请求 {{requests}}"
+	got := renderBotMessage(tpl, msg, time.Unix(0, 0), "qq")
+	for _, want := range []string{
+		"| 攻击源 IP | 次数 |", "| 45.33.32.9 | 321 |",
+		"| 域名 | 到期日 |", "| a.com | 2026-11-25 |",
+		"| 节点 | 请求 | 拦截 | 独立IP | 备注 |", "| slave-a | 22014 | 156 | 402 | — |",
+		"请求 1200",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("自定义模板多值变量缺表格 %q:\n%s", want, got)
+		}
+	}
+	// 微信（纯文本协议）不得注入 markdown 表格标记
+	gotWx := renderBotMessage(tpl, msg, time.Unix(0, 0), "wx_clawbot")
+	if strings.Contains(gotWx, "| 域名 |") || strings.Contains(gotWx, "| ---") {
+		t.Fatalf("微信通道不得注入 markdown 表格:\n%s", gotWx)
 	}
 }

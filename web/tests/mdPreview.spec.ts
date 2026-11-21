@@ -48,3 +48,19 @@ test('回归：标题层级与代码 span', () => {
   assert.match(html, /<h3[^>]*>三级<\/h3>/)
   assert.match(html, /<code>code<\/code>/)
 })
+
+test('日报多值变量表格化（与后端 mdMultiValueTable 同口径）', async () => {
+  const { dailyMultiValueMd } = await import('../src/utils/mdPreview.ts')
+  const ips = dailyMultiValueMd('top_ips', '45.33.32.9 ×321\n1.2.3.4 ×120')
+  assert.match(ips ?? '', /\| 攻击源 IP \| 次数 \|\n\| --- \| ---: \|\n\| 45\.33\.32\.9 \| 321 \|/)
+  const certs = dailyMultiValueMd('cert_expiring', 'a.com · 2026-11-25')
+  assert.match(certs ?? '', /\| 域名 \| 到期日 \|\n\| --- \| ---: \|\n\| a\.com \| 2026-11-25 \|/)
+  const nodes = dailyMultiValueMd('nodes_summary', 'slave-a：请求 22014 · 拦截 156 · 独立IP 402\nslave-b：请求 9821 · 拦截 12 · 独立IP 210 · TOP 规则 SQLi')
+  assert.match(nodes ?? '', /\| 节点 \| 请求 \| 拦截 \| 独立IP \| 备注 \|/)
+  assert.match(nodes ?? '', /\| slave-b \| 9821 \| 12 \| 210 \| TOP 规则 SQLi \|/)
+  assert.match(nodes ?? '', /\| slave-a \| 22014 \| 156 \| 402 \| — \|/)
+  // 样例空格形态（× 前带空格）同样解析；坏行返回 null（预览回退原值）
+  assert.match(dailyMultiValueMd('top_ips', '45.33.32.9 × 321') ?? '', /\| 45\.33\.32\.9 \| 321 \|/)
+  assert.equal(dailyMultiValueMd('nodes_summary', 'bad：数据损坏'), null)
+  assert.equal(dailyMultiValueMd('requests', '1200'), null)
+})

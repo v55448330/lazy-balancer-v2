@@ -188,10 +188,10 @@
               <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
               <!-- 大模块勾选（2026-11-21 裁定：项目粒度太细）——模块=项目稳定分组，
                    勾=整组入 items，取消=整组移除；存储仍是 items[]（渲染契约不变）。 -->
-              <el-checkbox-group :model-value="dailyModuleChecked" size="small" class="notif-pick-group daily-items" @update:model-value="toggleDailyModule">
-                <el-checkbox v-for="mod in dailyModules" :key="mod.id" :value="mod.id" border size="small">{{ mod.emoji }} {{ mod.label }}</el-checkbox>
-              </el-checkbox-group>
-              <div class="tpl-hints">
+              <div class="daily-ch-select">
+                <el-checkbox-group :model-value="dailyModuleChecked" size="small" class="notif-pick-group daily-items" @update:model-value="toggleDailyModule">
+                  <el-checkbox v-for="mod in dailyModules" :key="mod.id" :value="mod.id" border size="small">{{ mod.emoji }} {{ mod.label }}</el-checkbox>
+                </el-checkbox-group>
                 <div class="form-tip-line">{{ t('app.notification.daily.modulesHint') }}</div>
                 <div class="form-tip-line">{{ t('app.notification.daily.modulesHintTemplate') }}</div>
               </div>
@@ -450,7 +450,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import DeliveryLog from './DeliveryLog.vue'
-import { mdToHtml } from '@/utils/mdPreview'
+import { mdToHtml, dailyMultiValueMd } from '@/utils/mdPreview'
 import { formatDate } from '@/utils/date'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
@@ -936,7 +936,11 @@ const previewText = computed(() => {
     .replace(/\{\{time\}\}/g, '2026-11-18 09:00')
     .replace(/\{\{brand\}\}/g, 'Lazy Balancer')
   if (tplMode.value === 'daily' && tplActiveChannel.value?.type !== 'webhook') {
-    for (const [k, v] of Object.entries(dailySampleValues)) text = text.split(`{{${k}}}`).join(v)
+    for (const [k, v] of Object.entries(dailySampleValues)) {
+      // QQ（markdown）多值变量展开语义表格（与实际投递同口径）；其余格式回退原始多行值
+      const md = tplEditorLang.value === 'markdown' ? dailyMultiValueMd(k, v) : null
+      text = text.split(`{{${k}}}`).join(md ?? v)
+    }
   }
   return text
 })
