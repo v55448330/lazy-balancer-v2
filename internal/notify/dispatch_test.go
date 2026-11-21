@@ -251,9 +251,8 @@ func TestDispatchTemplateRenderAndUnknownEventDropped(t *testing.T) {
 	if err := database.QueryRow(`SELECT body FROM notification_deliveries WHERE event_type=?`, EvtLoginSuccess).Scan(&body); err != nil {
 		t.Fatal(err)
 	}
-	// 2026-11-22 用户裁定（第三轮）：主节点本地事件带「主节点(ip:port)」标签；
-	// 测试未装配出站探测，回退「主节点(本机)」。
-	want := "用户 alice 于 2026-01-02 03:04:05 登录（10.1.1.1）（节点 主节点(本机)）"
+	// 2026-11-22 第五轮：正文不再追加节点后缀（详情区已呈现，去重）。
+	want := "用户 alice 于 2026-01-02 03:04:05 登录（10.1.1.1）"
 	if body != want {
 		t.Fatalf("模板参数序渲染错位:\n got %q\nwant %q", body, want)
 	}

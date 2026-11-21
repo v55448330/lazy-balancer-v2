@@ -22,9 +22,9 @@ func renderBody(e catalogEntry, evt Event) string {
 	if len(args) > 0 {
 		body = fmt.Sprintf(e.BodyFormat, trimArgs(e.BodyFormat, args)...)
 	}
-	if evt.Node != "" {
-		body += "（节点 " + evt.Node + "）"
-	}
+	// 节点信息不再追加正文后缀（2026-11-22 第五轮裁定）：结构化详情区
+	// （QQ 模板 {{node}} 行/邮件卡片节点行/微信默认模板节点行）已呈现，
+	// 双份重复且长标签在 pre-wrap 下换行产生怪异双括号。
 	return body
 }
 

@@ -785,7 +785,6 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
   zh: {
     emailDailyTitle: '{{title}}（{{date}}）',
     signature: '此邮件由 {{brand}} 通知中心自动发送 · {{time}}',
-    eventDetail: '📋 事件详情',
     fieldHeader: '项目', valueHeader: '内容',
     level: '级别', event: '事件', node: '节点', time: '时间', date: '日期',
     dailyHeader: '📊 {{brand}} 日报', generatedAt: '生成于',
@@ -805,7 +804,6 @@ const TPL_LABELS: Record<TplLang, Record<string, string>> = {
   en: {
     emailDailyTitle: '{{title}} ({{date}})',
     signature: 'Sent automatically by {{brand}} Notification Center · {{time}}',
-    eventDetail: '📋 Event details',
     fieldHeader: 'Field', valueHeader: 'Value',
     level: 'Level', event: 'Event', node: 'Node', time: 'Time', date: 'Date',
     dailyHeader: '📊 {{brand}} Daily Report', generatedAt: 'Generated at',
@@ -860,28 +858,26 @@ const defaultTplFor = (typ: string, lang: TplLang): string => {
     '    <div style="font-size:14px;line-height:1.7;color:#334155;white-space:pre-wrap;">{{body}}</div>',
     [[L.event, '{{event_title}}'], [L.node, '{{node}}'], [L.time, '{{time}}']],
     L.signature)
+  // QQ 事件预置（2026-11-22 第五轮）：紧凑单层——加粗标题+级别→正文→
+  // 分隔线→详情行→署名；无 # 大标题与分节标题（头重脚轻）。
   if (typ === 'qq') return [
-    '# 🔔 {{title}}',
+    '**🔔 {{title}}** · {{level}}',
     '',
-    '> {{body}}',
+    '{{body}}',
     '',
-    `## ${L.eventDetail}`,
-    '',
-    `| ${L.fieldHeader} | ${L.valueHeader} |`,
-    '| --- | --- |',
-    `| ${L.level} | {{level}} |`,
-    `| ${L.event} | {{event_title}} |`,
-    `| ${L.node} | {{node}} |`,
-    `| ${L.time} | {{time}} |`,
-    '',
-    '> {{brand}} · {{time}}',
+    '────────────',
+    `${L.event}${L.colon}{{event_title}}`,
+    `${L.node}${L.colon}{{node}}`,
+    `${L.time}${L.colon}{{time}}`,
+    '—— {{brand}}',
   ].join('\n')
   return [
-    '【{{title}}】',
+    '【{{title}}】（{{level}}）',
     '────────────',
     '{{body}}',
     '────────────',
-    `${L.level}${L.colon}{{level}}`,
+    `${L.event}${L.colon}{{event_title}}`,
+    `${L.node}${L.colon}{{node}}`,
     `${L.event}${L.colon}{{event_title}}`,
     `${L.node}${L.colon}{{node}}`,
     `${L.time}${L.colon}{{time}}`,

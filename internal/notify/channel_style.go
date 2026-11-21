@@ -166,9 +166,11 @@ func templateDate(msg Message, ts time.Time) string {
 func defaultEventTemplate(typ string) string {
 	switch typ {
 	case "qq":
-		return "# 🔔 {{title}}\n\n> {{body}}\n\n## 📋 事件详情\n\n| 项目 | 内容 |\n| --- | --- |\n| 级别 | {{level}} |\n| 事件 | {{event_title}} |\n| 节点 | {{node}} |\n| 时间 | {{time}} |\n\n> {{brand}} · {{time}}"
+		// 紧凑单层（2026-11-22 第五轮）：加粗标题+级别 → 正文 → 分隔线 →
+		// 详情行（事件/节点/时间）→ 署名。无 # 大标题、无分节标题（头重脚轻）。
+		return "**🔔 {{title}}** · {{level}}\n\n{{body}}\n\n────────────\n事件：{{event_title}}\n节点：{{node}}\n时间：{{time}}\n—— {{brand}}"
 	case "wx_clawbot":
-		return "【{{title}}】\n────────────\n{{body}}\n────────────\n级别：{{level}}\n事件：{{event_title}}\n时间：{{time}}\n—— {{brand}} · {{time}}"
+		return "【{{title}}】（{{level}}）\n────────────\n{{body}}\n────────────\n事件：{{event_title}}\n节点：{{node}}\n时间：{{time}}\n—— {{brand}} · {{time}}"
 	}
 	return ""
 }
