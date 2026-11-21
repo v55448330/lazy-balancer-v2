@@ -1667,9 +1667,10 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
    标题层级+留白呼吸感，表格/引用/代码落在白卡上，主题变量随明暗。
    直角对齐设计规范（禁 border-radius）。 */
 .tpl-md-preview { background: var(--el-fill-color-light); padding: 14px; font-size: 13px; line-height: 1.7; color: var(--el-text-color-primary); border: 1px solid var(--el-border-color-lighter); height: 360px; max-height: 46vh; overflow: auto; }
-.tpl-md-preview h2 { font-size: 18px; font-weight: 600; margin: 4px 0 12px; }
-.tpl-md-preview h3 { font-size: 15px; font-weight: 600; margin: 2px 0 10px; }
-.tpl-md-preview h4 { font-size: 14px; font-weight: 600; margin: 2px 0 8px; }
+.tpl-md-preview h1 { font-size: 18px; font-weight: 600; margin: 4px 0 12px; }
+.tpl-md-preview h2 { font-size: 16px; font-weight: 600; margin: 2px 0 10px; }
+.tpl-md-preview h3 { font-size: 14px; font-weight: 600; margin: 2px 0 8px; }
+.tpl-md-preview h4 { font-size: 13px; font-weight: 600; margin: 2px 0 6px; }
 .tpl-md-preview p { margin: 4px 0; }
 .tpl-md-preview strong { font-weight: 600; }
 .tpl-md-preview ul { margin: 6px 0; padding-left: 18px; }

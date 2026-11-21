@@ -271,6 +271,8 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.ok(!/border-radius/.test(mdPreviewCss), '预览样式禁用圆角（直角对齐设计规范）')
   // 表格网格必须可见（lighter 边框实测近不可见）+ 标题层级可辨（18/15/14）
   assert.match(nc, /\.tpl-md-preview th, \.tpl-md-preview td \{ border: 1px solid var\(--el-border-color\); padding: 6px 12px;/, '表格边框须用可见档位（非 lighter）')
-  assert.match(nc, /\.tpl-md-preview h2 \{ font-size: 18px/, 'h2 层级 18px')
-  assert.match(nc, /\.tpl-md-preview h3 \{ font-size: 15px/, 'h3 层级 15px（与 h2 拉开可辨差距）')
+  // marked 层级（# → h1）：18/16/14 递减可辨
+  assert.match(nc, /\.tpl-md-preview h1 \{ font-size: 18px/, 'h1 层级 18px')
+  assert.match(nc, /\.tpl-md-preview h2 \{ font-size: 16px/, 'h2 层级 16px')
+  assert.match(nc, /\.tpl-md-preview h3 \{ font-size: 14px/, 'h3 层级 14px')
 })
