@@ -37,6 +37,10 @@ func TestMCPToolSpecs_cover_registeredGinRoutes(t *testing.T) {
 // 无机制迫使决策者考虑 MCP 暴露——本清单 + 双向断言补上：新增无工具路由必须
 // 在此登记豁免理由（或补工具）；清单项不再注册时测试同样报错，防清单腐化。
 var mcpUncoveredRoutes = map[string]string{
+	// —— 集群内部机器接口（2026-11-22 集中汇聚）：仅从节点持集群令牌调用，
+	//    MCP 认证为 API Key（用户身份）且目标为同一节点自身——Agent 无场景。
+	"POST /api/v1/cluster/events/report":     "从节点事件上报：集群令牌认证的机器接口，MCP 以 API Key 认证且无集群令牌来源",
+	"POST /api/v1/cluster/node-stats/report": "从节点日报统计上报：同上，集群令牌认证机器接口",
 	// —— 威胁大屏（前端全屏可视化专用；Agent 侧 get_security_overview +
 	//    list_security_events 已覆盖同等数据面，专用工具冗余）——
 	"GET /api/v1/security/overview/threat-screen":              "威胁大屏聚合（24h 总量/拦截率/限流/活跃源/国家计数 Top5）：前端全屏可视化数据源；Agent 可用 get_security_overview/list_security_events 等价获取",

@@ -52,16 +52,20 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	// AuditClassification 要求每条写路由显式分类（intentionalSkip 断言
 	// IsAuditedWriteRoute 命中本表），删除将落入「默认分类」漂移告警。MCP 写
 	// 操作审计由内部转发重入的 REST 层各自显式记录承担。
-	"POST /api/v1/mcp":                      AuditPolicySkip,
-	"POST /api/v1/users":                    AuditPolicyExplicit,
-	"PUT /api/v1/users/:id":                 AuditPolicyExplicit,
-	"PUT /api/v1/users/:id/status":          AuditPolicyExplicit,
-	"POST /api/v1/users/:id/reset-password": AuditPolicyExplicit,
-	"DELETE /api/v1/users/:id":              AuditPolicyExplicit,
-	"PATCH /api/v1/users/me":                AuditPolicyExplicit,
-	"POST /api/v1/users/me/api-keys":        AuditPolicyExplicit,
-	"PATCH /api/v1/users/me/api-keys/:id":   AuditPolicyExplicit,
-	"DELETE /api/v1/users/me/api-keys/:id":  AuditPolicyExplicit,
+	"POST /api/v1/mcp": AuditPolicySkip,
+	// 集群事件/统计上报（2026-11-22 集中汇聚）：从节点机器接口（集群令牌
+	// 认证），不属运维用户写操作；投递/统计落库的可见性由通知中心与日报承担。
+	"POST /api/v1/cluster/events/report":     AuditPolicySkip,
+	"POST /api/v1/cluster/node-stats/report": AuditPolicySkip,
+	"POST /api/v1/users":                     AuditPolicyExplicit,
+	"PUT /api/v1/users/:id":                  AuditPolicyExplicit,
+	"PUT /api/v1/users/:id/status":           AuditPolicyExplicit,
+	"POST /api/v1/users/:id/reset-password":  AuditPolicyExplicit,
+	"DELETE /api/v1/users/:id":               AuditPolicyExplicit,
+	"PATCH /api/v1/users/me":                 AuditPolicyExplicit,
+	"POST /api/v1/users/me/api-keys":         AuditPolicyExplicit,
+	"PATCH /api/v1/users/me/api-keys/:id":    AuditPolicyExplicit,
+	"DELETE /api/v1/users/me/api-keys/:id":   AuditPolicyExplicit,
 	// 通知中心订阅/投递/设置（handler 显式留痕，中间件不复记）。
 	"PUT /api/v1/notification/subscriptions":          AuditPolicyExplicit,
 	"POST /api/v1/notification/deliveries/:id/resend": AuditPolicyExplicit,
