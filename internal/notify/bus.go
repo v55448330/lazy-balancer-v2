@@ -71,6 +71,12 @@ func Publish(evt Event) {
 		}
 		return
 	}
+	// 主节点/单机本地事件补节点标识（2026-11-22 用户裁定：通知里只有从节点
+	// 事件带节点信息，主节点事件 Node 恒空不可辨识）——非转发路径才会走到
+	// 这里，转发事件由主端以认证节点名落 Node。
+	if evt.Node == "" {
+		evt.Node = "master"
+	}
 	select {
 	case queue <- evt:
 	default:

@@ -251,7 +251,8 @@ func TestDispatchTemplateRenderAndUnknownEventDropped(t *testing.T) {
 	if err := database.QueryRow(`SELECT body FROM notification_deliveries WHERE event_type=?`, EvtLoginSuccess).Scan(&body); err != nil {
 		t.Fatal(err)
 	}
-	want := "用户 alice 于 2026-01-02 03:04:05 登录（10.1.1.1）"
+	// 2026-11-22 用户裁定：主节点本地事件也带节点标识（master），正文带节点后缀。
+	want := "用户 alice 于 2026-01-02 03:04:05 登录（10.1.1.1）（节点 master）"
 	if body != want {
 		t.Fatalf("模板参数序渲染错位:\n got %q\nwant %q", body, want)
 	}

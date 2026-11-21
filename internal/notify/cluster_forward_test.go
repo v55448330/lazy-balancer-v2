@@ -307,3 +307,24 @@ func TestClusterForward_usesInjectedTransport(t *testing.T) {
 		t.Fatal("未使用注入传输（自签主节点下必然握手失败）")
 	}
 }
+
+// 主节点/单机本地事件必须带节点标识（用户裁定 2026-11-22：主节点事件此前
+// Node 恒空，通知里只有从节点事件有节点信息）——非转发路径入队前补「master」。
+func TestPublish_masterLocalEventsCarryNodeLabel(t *testing.T) {
+	overrideClusterForwardRole(t, true, "http://unused", "") // 主节点：本地入队
+	q := newQueueOnly(t)
+
+	Publish(Event{Type: EvtCaddyApplyFailed, Fields: map[string]string{"1": "m", "2": "d"}})
+
+	if len(q) != 1 {
+		t.Fatalf("入队=%d，want 1", len(q))
+	}
+	if got := (<-q).Node; got != "master" {
+		t.Fatalf("本地事件 Node=%q，want master（主节点事件须可辨识来源）", got)
+	}
+	// 已带 Node 的事件不被覆盖（转发/显式标注语义保留）
+	Publish(Event{Type: EvtCaddyApplyFailed, Node: "custom", Fields: map[string]string{"1": "m", "2": "d"}})
+	if got := (<-q).Node; got != "custom" {
+		t.Fatalf("显式 Node 被覆盖=%q，want custom", got)
+	}
+}
