@@ -179,6 +179,9 @@ func TestClusterMachineEndpoints_documentMachineTokenScheme(t *testing.T) {
 		"GET /cluster/sync/waf-files":        "clusterToken",
 		"POST /cluster/registration/confirm": "clusterToken",
 		"POST /cluster/nodes/report":         "clusterToken",
+		// 集群集中汇聚（2026-11-22）：从节点事件/统计上报机器接口。
+		"POST /cluster/events/report":     "clusterToken",
+		"POST /cluster/node-stats/report": "clusterToken",
 	}
 
 	// 行为面：有效 JWT（bearerAuth 凭证）对机器接口恒 401。
