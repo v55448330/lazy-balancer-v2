@@ -42,6 +42,8 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   // 重新签发（证书重签，与「续签」同族的风险操作）——安全网：后端新动作
   // 落库即渲染为 warning，不必等色调映射补词。
   '重新签发': 'warning',
+  // 停止重签（SAN 不覆盖达上限后停止自动重签——需人工介入，warning 提示）。
+  '停止重签': 'warning',
   '重试': 'warning',
   '签发限流': 'warning',
   '切换': 'warning',

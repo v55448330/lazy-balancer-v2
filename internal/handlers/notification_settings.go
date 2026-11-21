@@ -193,7 +193,10 @@ func (h *Handlers) TestSMTPSettings(c *gin.Context) {
 	if !guardConfiguredJSONBody(c) {
 		return
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 	var draft *notify.SMTPDraft

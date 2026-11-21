@@ -23,6 +23,11 @@ type Message struct {
 	Time      time.Time
 	Node      string
 	Fields    map[string]string
+	// ContentFormat 已渲染正文的实际格式（"html"/"markdown"/"text"/"json"；
+	// 空=未标注）。日报按通道渲染时由派发侧写入（renderDailyForChannelFormat），
+	// 邮件通道据此决定 Content-Type——只有 html 渲染可按 text/html 发送
+	// （NOTIF153-02：markdown/text 的未转义内容不得进 HTML 上下文）。
+	ContentFormat string
 }
 
 // testNotificationMessage 通道「测试」按钮共用的测试消息。

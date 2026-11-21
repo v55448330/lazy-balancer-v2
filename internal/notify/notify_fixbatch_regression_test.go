@@ -1,9 +1,10 @@
 package notify
 
-// audit152 修复批回归（notify 域）：聚合器锁外读、日报按用户 send_time 分槽、
-// 昨日窗口本地日历日、认证计数按日分桶、邮件正文转义、MCP 推送前置通道过滤、
-// 峰值请求差分、自动封禁窗口口径、TOP 攻击源去重、配置读错误上抛、API 密钥
-// 到期时间宽容解析。
+// audit152/153 修复批回归（notify 域）：聚合器锁外读与首条单发、日报按用户
+// send_time 分槽（含宽限届满/is_test 水位）、昨日窗口本地日历日、认证计数按日
+// 分桶（含时区变更清理边界）、邮件正文转义与日报 Content-Type 跟随渲染格式、
+// MCP 推送前置通道过滤、峰值请求差分（含首样本无基线）、自动封禁窗口口径、
+// TOP 攻击源去重、配置读错误上抛、API 密钥到期时间宽容解析（含 UTC 换算）。
 //
 // 测试顺序说明：本文件不使用 t.Parallel——其中若干用例改写 time.Local /
 // db.DB / 推送 hook 等包级状态，必须独占执行。
@@ -11,6 +12,8 @@ package notify
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -174,6 +177,33 @@ func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 	resetBlockedStateForTest(t)
 }
 
+// TestRecordBlockedEventFirstOnlyPublishPerWindow 无并发、可观测断言：同一窗口
+// 内只有首条拦截立即发布一次（后续进聚合），窗口 flush 再追加一条汇总。
+// 旧实现的锁外首条判定在「flush 置 nil / 窗口轮换」竞态下会重发首条——本用例
+// 与 TestRecordBlockedEventNoUnlockedRead（需 -race 才有 RED 证据）互补：
+// 后者是压测，本用例是确定性的行为钉（NOTIF153-10）。
+func TestRecordBlockedEventFirstOnlyPublishPerWindow(t *testing.T) {
+	resetBlockedStateForTest(t)
+	ensureBusStoppedForTest(t) // queue=nil：Publish 走丢弃计数，可观测「发布了几条」
+	before := DroppedCount()
+	RecordBlockedEvent("r1", func(Event) {})
+	RecordBlockedEvent("r1", func(Event) {})
+	RecordBlockedEvent("r2", func(Event) {})
+	if got := DroppedCount() - before; got != 1 {
+		t.Fatalf("同窗口三次拦截发布 %d 条, want 1（仅首条立即告警）", got)
+	}
+	flushBlockedWindow()
+	if got := DroppedCount() - before; got != 2 {
+		t.Fatalf("窗口 flush 后累计发布 %d 条, want 2（首条 + 汇总）", got)
+	}
+	// flush 已清空窗口：再次 flush 无发布。
+	flushBlockedWindow()
+	if got := DroppedCount() - before; got != 2 {
+		t.Fatalf("空窗口 flush 发布了事件（累计 %d 条, want 2）", got)
+	}
+	resetBlockedStateForTest(t)
+}
+
 func resetBlockedStateForTest(t *testing.T) {
 	t.Helper()
 	blockedMu.Lock()
@@ -223,6 +253,29 @@ func TestDeliverDailyForAllScheduledPerUserSlot(t *testing.T) {
 	}
 	if got := dailyRows(t, 11); got != 1 {
 		t.Fatalf("10:00 不应重复投递用户 11，得 %d 份", got)
+	}
+
+	// 宽限届满（now-slot > 5min）不再追溯：11 的 09:00 槽在 09:06 必须跳过
+	// （NOTIF153-11 未覆盖分支）。
+	at906 := time.Date(2026, 11, 20, 9, 6, 0, 0, time.Local)
+	if _, err := DeliverDailyForAll(ctx, at906); err != nil {
+		t.Fatalf("09:06 定时日报: %v", err)
+	}
+	if got := dailyRows(t, 11); got != 1 {
+		t.Fatalf("超宽限槽被补发：用户 11 份数=%d, want 1", got)
+	}
+
+	// is_test=1 的测试发送不压槽水位：用户 13 的 09:00 槽前只有一次测试发送，
+	// 定时轮仍须真实投递（dailySlotDue 的水位只认 is_test=0）。
+	mustExec(t, db.DB, `INSERT INTO notification_daily (user_id, config) VALUES (13, '{"enabled":true,"send_time":"09:00"}')`)
+	mustExec(t, db.DB, `INSERT INTO notification_deliveries
+		(user_id, event_type, level, title, body, status, attempts, is_test, created_at)
+		VALUES (13, ?, 'info', '每日日报（测试）', '{}', 'sent', 1, 1, '2026-11-20 09:00:00')`, EvtDailyReport)
+	if _, err := DeliverDailyForAll(ctx, time.Date(2026, 11, 20, 9, 1, 0, 0, time.Local)); err != nil {
+		t.Fatalf("09:01 定时日报: %v", err)
+	}
+	if got := dailyRows(t, 13); got != 1 {
+		t.Fatalf("is_test 测试发送压住了槽水位：用户 13 定时投递份数=%d, want 1", got)
 	}
 
 	// 手动触发（管理端「立即发送全员日报」）保持全员：不受 send_time 槽约束。
@@ -312,9 +365,49 @@ func TestAuthCountersBucketByDate(t *testing.T) {
 	if ok != 0 || fail != 2 || mfa != 0 {
 		t.Fatalf("今日桶=%d/%d/%d, want 0/2/0", ok, fail, mfa)
 	}
-	// 有界：只保留今天+昨天，前天的桶被清理。
-	if _, _, _ = readAuthCounters("2026-11-18"); authCountersDaysLen() > 2 {
-		t.Fatalf("认证计数桶未收敛（%d 桶 > 2）", authCountersDaysLen())
+	// 有界：只保留昨天及更晚的桶（更早的桶被清理），且昨日桶内容不被次日
+	// 写入改动（此前用 `_, _, _ = readAuthCounters(...)` 空语句，昨日桶在次日
+	// 写入后是否仍完整从未被断言）。
+	if ok2, fail2, mfa2 := readAuthCounters("2026-11-19"); ok2 != 2 || fail2 != 1 || mfa2 != 1 {
+		t.Fatalf("次日写入后昨日桶=%d/%d/%d, want 2/1/1（不得被清理/覆盖）", ok2, fail2, mfa2)
+	}
+	if got := authCountersDaysLen(); got != 2 {
+		t.Fatalf("认证计数桶数=%d, want 2（今天+昨天；更早桶已清理）", got)
+	}
+}
+
+// TestAuthCountersTimezoneShiftKeepsNewerBucket 清理边界（NOTIF153 P3 计数桶
+// 跨时区）：设置页切时区会让本地日期标签整体前移——在「旧时区今天」写入的桶
+// 在新时区下标签是明天，旧实现的 {date, date-1} 白名单会把它当陈旧数据删掉，
+// 昨日/当日报告读数从 0 起算。保留 ≥昨天（含未来标签）后桶不再丢失。
+func TestAuthCountersTimezoneShiftKeepsNewerBucket(t *testing.T) {
+	authCounters.mu.Lock()
+	authCounters.days = nil
+	authCounters.mu.Unlock()
+	t.Cleanup(func() {
+		authCounters.mu.Lock()
+		authCounters.days = nil
+		authCounters.mu.Unlock()
+	})
+	// 东八区 11-20 00:30 → 桶 "2026-11-20"。
+	withLocalLocation(t, testLocShanghai(t))
+	noteAuthEventAt(EvtLoginSuccess, time.Date(2026, 11, 20, 0, 30, 0, 0, time.Local))
+	noteAuthEventAt(EvtLoginSuccess, time.Date(2026, 11, 20, 0, 40, 0, 0, time.Local))
+	// 切到 UTC-10（跨日西移）：同一时刻本地标签回退到 "2026-11-19"。
+	honolulu, err := time.LoadLocation("Pacific/Honolulu")
+	if err != nil {
+		t.Fatalf("load Pacific/Honolulu: %v", err)
+	}
+	withLocalLocation(t, honolulu)
+	noteAuthEventAt(EvtLoginFailed, time.Date(2026, 11, 19, 20, 0, 0, 0, time.Local))
+	if ok, _, _ := readAuthCounters("2026-11-20"); ok != 2 {
+		t.Fatalf("时区西移后新时区下「明天」标签桶被删（成功计数=%d, want 2）", ok)
+	}
+	if _, fail, _ := readAuthCounters("2026-11-19"); fail != 1 {
+		t.Fatalf("新时区下的今天桶失败计数=%d, want 1", fail)
+	}
+	if got := authCountersDaysLen(); got != 2 {
+		t.Fatalf("桶数=%d, want 2（未来标签桶保留，仍受有界约束）", got)
 	}
 }
 
@@ -332,16 +425,25 @@ func TestParseAPIKeyExpiryDriverForms(t *testing.T) {
 		{"2026-11-19 16:00:00", "2026-11-19 16:00:00"},       // 历史裸墙钟（按 UTC）
 		{"2026-11-19T16:00:00Z", "2026-11-19 16:00:00"},      // RFC3339
 		{"2026-11-19T16:00:00", "2026-11-19 16:00:00"},       // 无时区 T 形态
-		{"2026-11-19 16:00:00.000+08:00", ""},                // 带时区→换算 UTC 校验（见下）
+		// 带偏移必须按偏移换算 UTC（16:00+08:00 = 08:00Z）。此前该用例 wantUTC=""
+		// 只断「解析成功」，带偏移值被解析成错误时区仍全绿（NOTIF153-12）。
+		{"2026-11-19 16:00:00.000+08:00", "2026-11-19 08:00:00"},
 	}
 	for _, c := range cases {
 		got, ok := parseAPIKeyExpiry(c.raw)
 		if !ok {
 			t.Fatalf("解析失败：%q", c.raw)
 		}
-		if c.wantUTC != "" && got.UTC().Format(dailyTimeLayout) != c.wantUTC {
+		if got.UTC().Format(dailyTimeLayout) != c.wantUTC {
 			t.Fatalf("%q → %s, want UTC %s", c.raw, got.UTC().Format(dailyTimeLayout), c.wantUTC)
 		}
+	}
+	// 裸墙钟按 UTC 解释（与旧实现 time.Parse 语义一致，防存量数据到期日漂移）：
+	// 位置必须是 UTC，而不是进程本地时区。
+	if got, ok := parseAPIKeyExpiry("2026-11-19 16:00:00"); !ok {
+		t.Fatalf("裸墙钟解析失败")
+	} else if got.Location() != time.UTC || !got.Equal(time.Date(2026, 11, 19, 16, 0, 0, 0, time.UTC)) {
+		t.Fatalf("裸墙钟=%s（loc=%v），want 2026-11-19T16:00:00Z", got, got.Location())
 	}
 	if _, ok := parseAPIKeyExpiry("不是时间"); ok {
 		t.Fatalf("垃圾输入不应解析成功")
@@ -402,6 +504,79 @@ func TestWrapEmailHTMLEscapesEventBody(t *testing.T) {
 	if !strings.Contains(got, "&lt;a href=") || !strings.Contains(got, "&lt;script&gt;") {
 		t.Fatalf("事件正文应转义为实体：\n%s", got)
 	}
+}
+
+// ---- NOTIF153-02 日报邮件 Content-Type 跟随实际渲染格式 --------------------
+
+// TestEmailDailyReportContentTypeFollowsRenderedFormat 日报格式选成 markdown/
+// text/json 时，正文里的未转义 '<script>' 只能以 text/plain 发送；只有实际
+// 渲染格式为 html 才按 text/html。格式来源与 renderDailyForChannelFormat
+// 同源（经 Message.ContentFormat 传到 Sender）。
+func TestEmailDailyReportContentTypeFollowsRenderedFormat(t *testing.T) {
+	cases := []struct {
+		name       string
+		format     string
+		wantCT     string
+		wantScript bool // 正文应原样含 <script>（text/plain 上下文里是字面文本）
+	}{
+		{name: "markdown 日报按纯文本发送", format: "markdown", wantCT: "text/plain; charset=UTF-8", wantScript: true},
+		{name: "json 日报按纯文本发送", format: "json", wantCT: "text/plain; charset=UTF-8"},
+		{name: "html 日报按 text/html 发送", format: "html", wantCT: "text/html; charset=UTF-8"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			newNotifySettingsDB(t)
+			srv := newFakeSMTPServer(t)
+			host, port, _ := net.SplitHostPort(srv.addr())
+			if err := SetSettings(map[string]string{
+				KeySMTPHost: host, KeySMTPPort: port, KeySMTPFrom: "lb@example.com",
+			}); err != nil {
+				t.Fatalf("写入 SMTP 设置失败: %v", err)
+			}
+			payload := `{"date":"2026-11-20","items":["top_ips"],"values":{"top_ips":"<script>alert(1)</script>"},"formats":{"email":"` + tc.format + `"}}`
+			body, format := renderDailyForChannelFormat(Message{EventType: EvtDailyReport, Body: payload}, "email", "")
+			if format != tc.format {
+				t.Fatalf("渲染格式=%q, want %q（格式决序单源）", format, tc.format)
+			}
+			if err := sendToChannel(context.Background(), "email", `{"email":"ops@example.com"}`,
+				Message{EventType: EvtDailyReport, Level: "info", Title: "每日日报", Body: body, ContentFormat: format}); err != nil {
+				t.Fatalf("sendToChannel(email): %v", err)
+			}
+			_, _, data := srv.capture()
+			if !strings.Contains(data, "Content-Type: "+tc.wantCT) {
+				t.Fatalf("Content-Type ≠ %q：\n%s", tc.wantCT, data)
+			}
+			decoded := decodeMailBodyForTest(t, data)
+			if tc.wantScript && !strings.Contains(decoded, "<script>alert(1)</script>") {
+				t.Fatalf("纯文本日报正文丢失原始内容（应原样保留为字面文本）：\n%s", decoded)
+			}
+			if tc.format != "html" && strings.Contains(data, "Content-Type: text/html") {
+				t.Fatalf("非 html 日报被按 HTML 发送（注入面重新打开）")
+			}
+		})
+	}
+}
+
+// decodeMailBodyForTest 取 RFC822 正文（首个空行后 base64）解码还原。
+func decodeMailBodyForTest(t *testing.T, data string) string {
+	t.Helper()
+	var b64 strings.Builder
+	inBody := false
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if inBody && line != "" {
+			b64.WriteString(line)
+			continue
+		}
+		if line == "" {
+			inBody = true
+		}
+	}
+	body, err := base64.StdEncoding.DecodeString(b64.String())
+	if err != nil {
+		t.Fatalf("正文 base64 解码失败: %v", err)
+	}
+	return string(body)
 }
 
 // ---- NOTIF-152-06 MCP 推送前置通道过滤 ------------------------------------
@@ -479,6 +654,32 @@ func TestCollectDailyDataPeakQPSFromCounterDiff(t *testing.T) {
 	}
 	if d.PeakQPS != 60 {
 		t.Fatalf("峰值请求/窗=%d, want 60（相邻全局采样差分最大值）", d.PeakQPS)
+	}
+}
+
+// TestCollectDailyDataPeakQPSFirstSampleWithoutBaseline 窗口首样本无窗口前基线
+// 时不产增量：累计计数器首样本的值本身跨越窗口之前的历史，计入即为假峰值
+// （NOTIF153 P3 峰值差分首样本基线；生产逻辑已按此实现，此前无测试覆盖）。
+func TestCollectDailyDataPeakQPSFirstSampleWithoutBaseline(t *testing.T) {
+	withLocalLocation(t, testLocShanghai(t))
+	newDailyTestDBs(t)
+	seeds := []struct {
+		ts  string
+		val int64
+	}{
+		{"2026-11-18 16:00:00", 130}, // 窗口首样本：无基线 → 不产增量
+		{"2026-11-18 16:00:30", 190}, // +60
+		{"2026-11-18 16:01:00", 10},  // /load 归零：+10（取当前值）
+	}
+	for _, s := range seeds {
+		mustExec(t, db.MetricsDB, `INSERT INTO metrics_history (rule_id, timestamp, requests_total) VALUES (NULL, ?, ?)`, s.ts, s.val)
+	}
+	d, err := CollectDailyData(context.Background(), time.Date(2026, 11, 20, 9, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatalf("CollectDailyData: %v", err)
+	}
+	if d.PeakQPS != 60 {
+		t.Fatalf("峰值请求/窗=%d, want 60（首样本不产增量；不得把累计值 130 当峰值）", d.PeakQPS)
 	}
 }
 

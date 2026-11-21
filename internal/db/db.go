@@ -1838,13 +1838,6 @@ func runMigrations() error {
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
 		return err
 	}
-	// 默认策略身份标记自愈（2026-11-21 audit152）：is_default_policy 列引入前
-	// 创建/备份恢复的默认策略行为 0——按「种子名 + [默认规则] 描述前缀」
-	// 幂等补标，否则 apply/catalog 会把真默认当用户行、重复创建同名策略。
-	// 只读探测门 + 命中才写（收敛库启动零写，同 ensureSetupAdminFlagAtStartup）。
-	if err := backfillDefaultPolicyMarkers(); err != nil {
-		return fmt.Errorf("failed to backfill default policy markers: %w", err)
-	}
 	// 保护目标自愈：users 重建/存量迁移可能留下「无标记」状态，按「最低 id
 	// 的启用管理员」补标（空库/无启用管理员时零命中，不阻断启动）。
 	// 经只读探测门 + 单一写事务（收敛库启动零写，见 ensureSetupAdminFlagAtStartup）。
@@ -2323,6 +2316,16 @@ func runMigrations() error {
 				return fmt.Errorf("failed to backfill security_policies.policy_type: %w", err)
 			}
 		}
+	}
+
+	// 默认策略身份标记自愈（2026-11-21 audit152）：is_default_policy 列引入前
+	// 创建/备份恢复的默认策略行为 0——按「种子名 + [默认规则] 描述前缀 +
+	// policy_type 与种子一致」幂等补标，否则 apply/catalog 会把真默认当用户行、
+	// 重复创建同名策略。必须晚于上方 policy_type 回填（DEFPOL153-005 收紧谓词
+	// 消费阶段型；旧库行在补型前 ptype=''，先跑会漏标到下次启动）。
+	// 只读探测门 + 命中才写（收敛库启动零写，同 ensureSetupAdminFlagAtStartup）。
+	if err := BackfillDefaultPolicyMarkers(); err != nil {
+		return fmt.Errorf("failed to backfill default policy markers: %w", err)
 	}
 
 	// 同一恢复通道对 users/api_keys/path_rules/cert_jobs 的
@@ -6954,12 +6957,14 @@ func policyRefsValid(q tableQuerier, policyID int64) (bool, error) {
 	return true, nil
 }
 
-// backfillDefaultPolicyMarkers 幂等补标 is_default_policy：种子名 + 种子描述
-// 前缀「[默认规则]」的存量行视为默认策略（列引入前的 apply 产物与旧备份
-// 恢复行）。用户自建同名行不带该前缀、不补标——防误伤优先，false-negative
-// （描述被用户改掉的真默认行）只会让 apply 多建一条默认行，绝不会删除用户行。
+// BackfillDefaultPolicyMarkers 幂等补标 is_default_policy：种子名 + 种子描述
+// 前缀「[默认规则]」+ policy_type 与种子一致的存量行视为默认策略（列引入前
+// 的 apply 产物与旧备份恢复行）。用户自建同名行不带该前缀、不补标——防误伤
+// 优先；false-negative（描述被用户改掉、或阶段型漂移的真默认行）只会让
+// apply 多建一条默认行，绝不会删除用户行。导出供导入提交后补标（旧备份不带
+// is_default_policy 列时同样需要；接线在导入收尾，见 config_backup）。
 // 只读探测零命中即返回（收敛库启动零写）。
-func backfillDefaultPolicyMarkers() error {
+func BackfillDefaultPolicyMarkers() error {
 	pending, err := countLegacyDefaultPolicyRows(DB)
 	if err != nil {
 		return err
@@ -6981,21 +6986,22 @@ func countLegacyDefaultPolicyRows(q tableQuerier) (int, error) {
 	return pending, err
 }
 
-// legacyDefaultPolicyWhere 是补标谓词：种子名 + 种子描述前缀（参数顺序=
-// 前缀两次（substr 长度与比较值）+ 种子名单）。
+// legacyDefaultPolicyWhere 是补标谓词：种子名 + 种子描述前缀 + policy_type
+// 与种子一致（同名同前缀但阶段型不符的行不误标，DEFPOL153-005）。参数顺序=
+// 前缀两次（substr 长度与比较值）+ 每种子（名、阶段型）对——与
+// defaultPolicySeeds 的顺序严格同序。
 func legacyDefaultPolicyWhere() string {
-	names := make([]string, 0, len(defaultPolicySeeds))
-	for _, sd := range defaultPolicySeeds {
-		names = append(names, sd.name)
+	conds := make([]string, 0, len(defaultPolicySeeds))
+	for range defaultPolicySeeds {
+		conds = append(conds, "(name=? AND policy_type=?)")
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
-	return `is_default_policy=0 AND substr(COALESCE(description,''),1,length(?))=? AND name IN (` + placeholders + `)`
+	return `is_default_policy=0 AND substr(COALESCE(description,''),1,length(?))=? AND (` + strings.Join(conds, " OR ") + `)`
 }
 
 func legacyDefaultPolicyMarkArgs() []any {
 	args := []any{defaultPolicySeedDescPrefix, defaultPolicySeedDescPrefix}
 	for _, sd := range defaultPolicySeeds {
-		args = append(args, sd.name)
+		args = append(args, sd.name, sd.ptype)
 	}
 	return args
 }
@@ -7028,7 +7034,8 @@ func ApplyDefaultSecurityPolicies(actorID int64) ([]DefaultApplyItem, error) {
 
 // ApplyDefaultSecurityPoliciesReset 重新创建（用户裁定 2026-11-21）：全部默认
 // 策略（is_default_policy=1）删除重建（恢复默认字段值，绑定迁移到新 id，
-// status=rebuilt）；地址列表不动（保留用户条目），用户自建同名策略不动。
+// status=rebuilt）；删除按「名 + 本列」覆盖全部命中行（历史重复默认行一并
+// 收敛为一行）；地址列表不动（保留用户条目），用户自建同名策略不动。
 // 用于「全部已存在」时的重置默认策略入口。
 func ApplyDefaultSecurityPoliciesReset(actorID int64) ([]DefaultApplyItem, error) {
 	return applyDefaultSecurityPolicies(actorID, true)
@@ -7105,8 +7112,11 @@ func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem
 			}
 			var oldBindings []boundRule
 			rebuild := false
-			// 身份匹配 = 名 + is_default_policy=1：用户自建同名行不匹配。
-			err := tx.QueryRow(`SELECT id, COALESCE(enabled,1) FROM security_policies WHERE name=? AND is_default_policy=1`, sd.name).Scan(&existingID, &existingEnabled)
+			// 身份匹配 = 名 + is_default_policy=1：用户自建同名行不匹配。历史
+			// 脏态可能有同名默认行多条（旧版本重复创建）——任一启用行即按启用
+			// 处理（排序取启用行优先、id 序稳定），避免把仍有生效行的策略误判
+			// disabled 而跳过修复。
+			err := tx.QueryRow(`SELECT id, COALESCE(enabled,1) FROM security_policies WHERE name=? AND COALESCE(is_default_policy,0)=1 ORDER BY COALESCE(enabled,1) DESC, id LIMIT 1`, sd.name).Scan(&existingID, &existingEnabled)
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 				// create
@@ -7118,8 +7128,14 @@ func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem
 					return fmt.Errorf("validate refs of %q: %w", sd.name, verr)
 				}
 				switch {
-				case reset || !valid:
-					rows, qerr := tx.Query(`SELECT rule_caddy_id, COALESCE(rank,0) FROM security_policy_bindings WHERE policy_id=?`, existingID)
+				// 用户禁用优先于引用已脏（LNK153-P2-01）：disabled 的默认策略
+				// 即使引用的列表被删也不重建不改写（保留用户意图），仅 reset
+				// 恢复——与目录 status 判定序一致（disabled 压过 dirty）。
+				case reset || (existingEnabled != 0 && !valid):
+					// 删除覆盖全部同名默认行（不只选中的单行，DEFPOL153-002）：
+					// 历史重复默认行随重建一并收敛；绑定从全部命中行捕获迁移。
+					rows, qerr := tx.Query(`SELECT rule_caddy_id, COALESCE(rank,0) FROM security_policy_bindings
+						WHERE policy_id IN (SELECT id FROM security_policies WHERE name=? AND COALESCE(is_default_policy,0)=1)`, sd.name)
 					if qerr != nil {
 						return fmt.Errorf("read bindings of %q: %w", sd.name, qerr)
 					}
@@ -7136,14 +7152,14 @@ func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem
 						return fmt.Errorf("iterate bindings of %q: %w", sd.name, e)
 					}
 					rows.Close()
-					if _, derr := tx.Exec(`DELETE FROM security_policies WHERE id=?`, existingID); derr != nil {
+					if _, derr := tx.Exec(`DELETE FROM security_policies WHERE name=? AND COALESCE(is_default_policy,0)=1`, sd.name); derr != nil {
 						return fmt.Errorf("clean dirty policy %q: %w", sd.name, derr)
 					}
 					status = "rebuilt"
 					rebuild = true
 				case existingEnabled == 0:
-					// 用户禁用的默认策略：保留原貌（不改写用户意图）；
-					// 重置路径（reset）已在上分支重建恢复。
+					// 用户禁用的默认策略：保留原貌（不改写用户意图，即使引用
+					// 已脏也不重建）；重置路径（reset）已在上分支重建恢复。
 					status = "disabled"
 				default:
 					status = "exists"

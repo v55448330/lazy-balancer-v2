@@ -149,7 +149,8 @@ func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []de
 		}
 		// 传 chMsg 保留事件模板渲染结果（非日报原样透传 chMsg.Body）；
 		// 此前传 msg 会把事件模板渲染覆盖回目录原始正文（事件模板不生效根因）。
-		chMsg.Body = renderDailyForChannel(chMsg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
+		// ContentFormat=实际渲染格式：邮件通道据此决定 Content-Type（NOTIF153-02）。
+		chMsg.Body, chMsg.ContentFormat = renderDailyForChannelFormat(chMsg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
 		styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
 		sendStart := time.Now()
 		sendErr := sendToChannel(ctx, ch.Type, styledTarget, chMsg)

@@ -7,6 +7,7 @@ package handlers
 // 停用行保留更新者/时间，GET 以 enabled/disabled 披露该三态。
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 
@@ -18,6 +19,35 @@ import (
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
+
+// subscriptionExecer 抽象停用写的执行面（事务 *sql.Tx 或全局 *sql.DB）。
+type subscriptionExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// disableSubscriptionRow 停用 user×event 订阅（opt-out 显式行）。
+// 无行时 UPDATE 影响 0 行——不建行等于静默无操作：目录 DefaultSub=true 的
+// 事件仍按默认兜底投递，用户「关掉默认订阅组」在投递侧毫无效果
+// （audit153 EVTCERT153-01）。因此 0 行时补建 enabled=0 的显式行，让用户
+// 意志（opt-out）在 subscribersFor 的停用分支生效；min_level 留空串（停用
+// 态级别对投递无意义）。actor=操作者（管理员代管时与 user_id 不同）。
+func disableSubscriptionRow(execer subscriptionExecer, uid int64, eventType string, actor int64) error {
+	res, err := execer.Exec(`UPDATE notification_subscriptions SET enabled=0, updated_at=datetime('now'), updated_by=? WHERE user_id=? AND event_type=?`, actor, uid, eventType)
+	if err != nil {
+		return err
+	}
+	if affected, err := res.RowsAffected(); err != nil {
+		return err
+	} else if affected > 0 {
+		return nil
+	}
+	// 探测与插入之间的并发建行由 UPSERT 兜住（只置停用，不清既有级别/模板）。
+	_, err = execer.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, enabled, updated_at, updated_by)
+		VALUES (?,?,'','',0,datetime('now'),?)
+		ON CONFLICT(user_id, event_type) DO UPDATE SET enabled=0, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
+		uid, eventType, actor)
+	return err
+}
 
 // ListNotificationCatalog GET /notification/catalog——事件目录全量（含分组）。
 func (h *Handlers) ListNotificationCatalog(c *gin.Context) {
@@ -48,10 +78,17 @@ func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 		var row subRow
 		var enabled int
 		if err := rows.Scan(&eventType, &row.minLevel, &row.bodyTemplate, &enabled); err != nil {
-			continue
+			// 行读取失败必须 fail-visible：静默跳行会让停用行回退成「默认态」，
+			// 用户看到的订阅矩阵与真实投递口径分叉（EVTCERT153-03 同族）。
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
+			return
 		}
 		row.enabled = enabled != 0
 		explicit[eventType] = row
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
+		return
 	}
 
 	catalog := notify.CatalogExport()
@@ -137,8 +174,9 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 	defer tx.Rollback()
 	for _, op := range ops {
 		if op.minLevel == "" {
-			// 取消订阅=停用行（保留更新者/时间；投递侧按 enabled=0 过滤并 opt-out 默认兜底）。
-			if _, err := tx.Exec(`UPDATE notification_subscriptions SET enabled=0, updated_at=datetime('now'), updated_by=? WHERE user_id=? AND event_type=?`, uid, uid, op.eventType); err != nil {
+			// 取消订阅=停用行（保留更新者/时间；无行时补建 opt-out 行，否则
+			// 默认订阅兜底会让「关闭」静默失效）。
+			if err := disableSubscriptionRow(tx, uid, op.eventType, uid); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
 				return
 			}

@@ -5952,7 +5952,7 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "CRS规则库", "自动更新已"+enabledStateLabel(autoUpdate))
-	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateCRSAutoUpdate")}})
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "自动更新开关"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -6110,7 +6110,7 @@ func (h *Handlers) UpdateCRSSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "CRS规则库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
-	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateCRSSchedule")}})
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "定时设置"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -6270,7 +6270,7 @@ func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_7d87740a", services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_7d87740a"})
 		return
 	}
-	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "SetIP2RegionV6Enabled")}})
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "IPv6 开关"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -6317,7 +6317,7 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "IP数据库", "自动更新已"+enabledStateLabel(autoUpdate))
-	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateIP2RegionAutoUpdate")}})
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "自动更新开关"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
@@ -6329,7 +6329,7 @@ func (h *Handlers) UpdateIP2RegionSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "IP数据库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
-	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": fmt.Sprintf("%s", "UpdateIP2RegionSchedule")}})
+	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "定时设置"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 

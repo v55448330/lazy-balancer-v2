@@ -132,8 +132,27 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 		clusterError(c, http.StatusBadGateway, "从节点不可达或响应异常", err)
 		return
 	}
-	notify.Publish(notify.Event{Type: notify.EvtClusterServiceControl, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("节点 %d（%s）", nodeID, issued.NodeName), "3": req.Action, "4": "成功"}})
+	notify.Publish(notify.Event{Type: notify.EvtClusterServiceControl, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("节点 %d（%s）", nodeID, issued.NodeName), "3": clusterServiceActionLabel(req.Action), "4": "成功"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
+}
+
+// clusterServiceActionLabel 服务控制动作码→中文操作名（事件正文单源）：
+// 通知正文不得直出内部动作码（start_caddy/restart_app 对收件人无意义）。
+// 未知码原样返回（fail-visible：上游已由 IsValidClusterServiceAction 拦截，
+// 未知值只可能来自未来新增动作的漏映射，原样可见比静默空串更可排障）。
+func clusterServiceActionLabel(action string) string {
+	switch action {
+	case models.ClusterServiceActionStartCaddy:
+		return "启动 Caddy"
+	case models.ClusterServiceActionStopCaddy:
+		return "停止 Caddy"
+	case models.ClusterServiceActionRestartCaddy:
+		return "重启 Caddy"
+	case models.ClusterServiceActionRestartApp:
+		return "重启面板应用"
+	default:
+		return action
+	}
 }
 
 func (h *Handlers) callClusterServiceControl(ctx context.Context, baseURL, action, ticket, operator string) (string, error) {

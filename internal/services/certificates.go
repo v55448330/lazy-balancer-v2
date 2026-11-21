@@ -1493,14 +1493,16 @@ func backfillIssuedCertExpiry(ctx context.Context) (int, error) {
 //
 // 处置：转 queued 重新签发（视同待续期），由 stranded 补扫/队列接管。与
 // requeueLostMaterialCertJob「材料不可用→回到签发」同取向；队列未就绪时
-// 不动作（用户停止签发=有意形态，恢复后下一周期收敛）。逐行写前过
+// 不动作（用户停止签发=有意形态，恢复后下一周期收敛）。重排不清零
+// renewal_attempts（每次 +1 计预算），达上限后按 failed 落库停止自动重签
+// （「CA 始终返回错误域名集合」不再每个对账周期白烧订单）。逐行写前过
 // certReconcileWriteGate（从节点零写）。读/迭代失败上抛（fail-visible，
 // 与 sweepOrphanedCertJobs 同口径）。
 func reconcileUncoveredIssuedCertJobs(ctx context.Context) (int, error) {
 	qm := GetCAQueueManager()
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT j.id, j.rule_id, COALESCE(j.domain,''), COALESCE(j.ca_provider_id,0),
-		       COALESCE(r.domain,''), COALESCE(j.cert_pem,'')
+		       COALESCE(r.domain,''), COALESCE(j.cert_pem,''), COALESCE(j.renewal_attempts,0)
 		FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.status='issued' AND COALESCE(j.cert_pem,'')<>''
@@ -1517,11 +1519,13 @@ func reconcileUncoveredIssuedCertJobs(ctx context.Context) (int, error) {
 		caProviderID int
 		ruleDomain   string
 		certPEM      string
+		// attempts=renewal_attempts：SAN 重签预算（见处置循环的上限分支）。
+		attempts int
 	}
 	var candidates []uncoveredCandidate
 	for rows.Next() {
 		var candidate uncoveredCandidate
-		if err := rows.Scan(&candidate.id, &candidate.ruleID, &candidate.jobDomain, &candidate.caProviderID, &candidate.ruleDomain, &candidate.certPEM); err != nil {
+		if err := rows.Scan(&candidate.id, &candidate.ruleID, &candidate.jobDomain, &candidate.caProviderID, &candidate.ruleDomain, &candidate.certPEM, &candidate.attempts); err != nil {
 			rows.Close()
 			Logf("error", "cert reconcile: scan issued job failed: %v", err)
 			return 0, fmt.Errorf("读取待复核 SAN 覆盖的证书任务行: %w", err)
@@ -1540,8 +1544,11 @@ func reconcileUncoveredIssuedCertJobs(ctx context.Context) (int, error) {
 		if err := ctx.Err(); err != nil {
 			return requeued, errors.Join(sweepErr, fmt.Errorf("SAN 覆盖复核被中止: %w", err))
 		}
-		// 域名对不上=孤儿（不是「不覆盖」），交给 sweepOrphanedCertJobs 的
-		// 禁用通道，避免把旧域任务重签成下一份错材料。
+		// 域名对不上=孤儿（不是「不覆盖」）——本通道跳过，避免把旧域任务重签
+		// 成下一份错材料。错域 issued 行不在 sweepOrphanedCertJobs 的收口面
+		//（JobIsTerminal 过滤掉 issued，见该函数注释）：退役属主是规则改域的
+		// 主路径（UpdateRule→retireCertJobsForDomain），本复核只处理「任务域
+		// 与规则域一致但材料 SAN 不覆盖」的形态。
 		if !certJobRuleApplicable(true, candidate.ruleDomain, candidate.jobDomain) {
 			continue
 		}
@@ -1555,15 +1562,47 @@ func reconcileUncoveredIssuedCertJobs(ctx context.Context) (int, error) {
 		if qm == nil || qm.IsJobActive(candidate.id) {
 			continue
 		}
+		// SAN 重签上限：renewal_attempts 是重签预算（与 CA 失败预算共用同一列，
+		// 本通道重排时不清零、每次 +1；issued 成功终态的归零只发生在材料覆盖
+		// 的签发，本通道恰是「材料不覆盖」形态）。达到 cert_renewal_attempts
+		// 上限后停止自动重签——否则「CA 始终返回错误域名集合」的材料每个 6h
+		// 对账周期都被重新排队，白烧 CA 订单/DNS 挑战且永不收敛。落 failed
+		// 终态：与「达上限仅手动重试可达」的既有口径一致（续期扫描的 cap 分支
+		// 只 warn 不重排），用户在证书列表可见原因；from=['issued'] 不触发
+		// 「签发失败」通知（certJobOutcomeNotifies 对 from 含 issued 的 failed
+		// 不发——这是材料/CA 域名集合问题，不是一次签发失败）。
+		if candidate.attempts >= getCertRenewalAttempts() {
+			if gateErr := certReconcileWriteGate(ctx); gateErr != nil {
+				Logf("warn", "cert reconcile: SAN 不覆盖重签达上限后停止重签前写门拦截（job=%d）: %v", candidate.id, gateErr)
+				return requeued, errors.Join(sweepErr, gateErr)
+			}
+			message := fmt.Sprintf("已签发证书连续 %d 次不覆盖当前域名，停止自动重签（请检查 CA 提供商与规则域名后手动重试）", candidate.attempts)
+			failErr := transitionJob(db.DB, candidate.id, []string{"issued"}, "failed", map[string]any{
+				"message":            message,
+				"ca_available_after": nil,
+			})
+			if failErr != nil {
+				if errors.Is(failErr, ErrJobTransitionConflict) {
+					continue
+				}
+				sweepErr = errors.Join(sweepErr, fmt.Errorf("停止重签不覆盖域名的任务 %d: %w", candidate.id, failErr))
+				Logf("error", "cert reconcile: fail uncovered job %d after attempt cap: %v", candidate.id, failErr)
+				continue
+			}
+			RecordAuditLog("system", "停止重签", "证书任务", FormatAuditDetail(AuditJobPart(candidate.id), AuditRulePart(candidate.ruleID), AuditSourcePart("san_mismatch")), "")
+			continue
+		}
 		if gateErr := certReconcileWriteGate(ctx); gateErr != nil {
 			Logf("warn", "cert reconcile: SAN 不覆盖重签前写门拦截（job=%d）: %v", candidate.id, gateErr)
 			return requeued, errors.Join(sweepErr, gateErr)
 		}
 		_, changed, enqueueErr := qm.EnqueueIfActive(candidate.caProviderID, candidate.id, candidate.ruleID, candidate.jobDomain, func() (int, bool, error) {
 			// 域守卫单源：复核与迁移之间规则可能改域/停用。
+			// renewal_attempts 不清零（+1 计一次 SAN 重签）——清零会让上限判定
+			// 永远从 1 重新开始（重签上限失效）。
 			return requeueCertJobGuarded(candidate.id, []string{"issued"}, candidate.jobDomain, map[string]any{
 				"message":            "已签发证书不覆盖当前域名，重新排队签发",
-				"renewal_attempts":   0,
+				"renewal_attempts":   candidate.attempts + 1,
 				"ca_available_after": nil,
 				"last_error_code":    nil,
 			})
@@ -2059,6 +2098,12 @@ func certJobRuleApplicable(ruleBound bool, ruleDomain, jobDomain string) bool {
 // sweepOrphanedCertJobs 禁用规则已不再引用的非终态证书任务（域名迁移/规则停用/删除后
 // 遗留，启动恢复 requeueNonTerminalCertJobs 只在重启时处理一次），随 6 小时对账巡检执行，
 // 避免孤儿任务滞留到重启或被 waiting_ca 重排队白白签发。
+//
+// 收口面如实：只处理**非终态**行（JobIsTerminal 过滤，issued/failed/disabled
+// 均跳过）——已签发（issued）行即使规则改域/删除也不在本扫描的禁用面，退役
+// 属主是规则改域主路径（UpdateRule→retireCertJobsForDomain）；「材料 SAN
+// 不覆盖当前域名」的 issued 行由 reconcileUncoveredIssuedCertJobs 复核重签
+// （仅限任务域与规则域一致的适用行）。本扫描不得被当作 issued 错域行的兜底。
 // 读/迭代失败必须上抛（fail-visible）——此前只 Logf + return 0，对账轮摘要
 // 仍写「孤儿清理 0 个」，任务监控无法区分「一致」与「扫描失败」。
 func sweepOrphanedCertJobs(ctx context.Context) (int, error) {

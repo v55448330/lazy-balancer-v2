@@ -877,6 +877,12 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 		session.commitIndeterminate = true
 		return &importCoordinatorError{phase: importPhaseCommit, err: session.abort(err), action: session.action}
 	}
+	// 导入旧备份（无 is_default_policy 列）后立即补标：目录/apply 的身份判定
+	// 依赖该标记，运行时补一次避免「显示未创建」窗口（apply/重启也自愈，此处
+	// 消除显示误导）。失败不否决导入（数据已提交），留日志。
+	if err := db.BackfillDefaultPolicyMarkers(); err != nil {
+		services.Logf("warn", "导入后默认策略补标失败（下次 apply/重启自愈）: %v", err)
+	}
 	// 数据库已提交：WAF 文件保持导入后的状态，快照只服务回滚，丢弃。
 	if snapshot := session.wafSnapshot; snapshot != nil {
 		session.wafSnapshot = nil

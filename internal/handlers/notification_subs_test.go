@@ -37,6 +37,7 @@ func newNotificationTestRouter(h *Handlers, uid int64, role string) *gin.Engine 
 	r.GET("/notification/settings", h.GetNotificationSettings)
 	r.PUT("/notification/settings", h.UpdateNotificationSettings)
 	r.POST("/notification/daily/trigger", h.TriggerNotificationDaily)
+	r.POST("/notification/settings/smtp-test", h.TestSMTPSettings)
 	return r
 }
 
@@ -133,7 +134,7 @@ func TestNotificationSubscriptions_upsertReadbackAndDefaults(t *testing.T) {
 		t.Fatalf("cert.failed 初始行=%v", row)
 	}
 
-	// PUT：UPSERT 两行 + 空级别（删行语义，本就无行=无操作）。
+	// PUT：UPSERT 两行 + 空级别（=停用；无行用户补建 opt-out 行）。
 	body := `{"items":[{"event_type":"cert.failed","min_level":"warn"},{"event_type":"notify.channel_down","min_level":"info"},{"event_type":"auth.login_success","min_level":""}]}`
 	if status, out = doNotifyRequest(t, r, http.MethodPut, "/notification/subscriptions", body); status != http.StatusOK || out["code"].(float64) != 0 {
 		t.Fatalf("PUT status=%d body=%v", status, out)
@@ -145,9 +146,15 @@ func TestNotificationSubscriptions_upsertReadbackAndDefaults(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT min_level FROM notification_subscriptions WHERE user_id=7 AND event_type='notify.channel_down'`).Scan(&minLevel); err != nil || minLevel != "info" {
 		t.Fatalf("notify.channel_down 落库 min_level=%q err=%v, want info", minLevel, err)
 	}
-	var count int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=7 AND event_type='auth.login_success'`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("空级别不应产生显式行: count=%d err=%v", count, err)
+	// 空级别=停用：无行用户必须补建 opt-out 行（enabled=0, min_level 空串）。
+	// 若只 UPDATE，0 行影响=静默无操作，目录默认订阅兜底会让「关闭」在投递
+	// 侧失效（EVTCERT153-01）。
+	var count, enabled int
+	if err := db.DB.QueryRow(`SELECT COUNT(*), COALESCE(MAX(enabled),-1) FROM notification_subscriptions WHERE user_id=7 AND event_type='auth.login_success'`).Scan(&count, &enabled); err != nil || count != 1 || enabled != 0 {
+		t.Fatalf("空级别应补建停用行: count=%d enabled=%d err=%v, want 1/0", count, enabled, err)
+	}
+	if err := db.DB.QueryRow(`SELECT min_level FROM notification_subscriptions WHERE user_id=7 AND event_type='auth.login_success'`).Scan(&minLevel); err != nil || minLevel != "" {
+		t.Fatalf("停用行 min_level=%q err=%v, want 空串", minLevel, err)
 	}
 
 	// 回读：显式行 subscribed=true；未订阅行保持默认态。
@@ -158,8 +165,8 @@ func TestNotificationSubscriptions_upsertReadbackAndDefaults(t *testing.T) {
 		t.Fatalf("cert.failed 回读=%v, want subscribed/min_level=warn", row)
 	}
 	row = notifySubRow(t, data, "auth.login_success")
-	if row["subscribed"] != false || row["default_subscribed"] != false {
-		t.Fatalf("auth.login_success 回读=%v, want 默认关", row)
+	if row["subscribed"] != false || row["enabled"] != false || row["disabled"] != true || row["default_subscribed"] != false {
+		t.Fatalf("auth.login_success 回读=%v, want 停用 opt-out 行（不得回默认可投递态）", row)
 	}
 
 	// 二次 UPSERT 同事件=更新而非重复行。

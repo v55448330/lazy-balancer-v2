@@ -240,6 +240,11 @@ func issuedFinalizeFields(extra map[string]any) map[string]any {
 // 钉「事务内迁移不在提交前发布通知」（见 transitionJobDeferringNotification）。
 var certJobOutcomeNotifier = notifyCertJobOutcome
 
+// certJobOutcomeEventPublisher 事件发布测试缝（生产恒 notify.Publish）：
+// notifyCertJobOutcome 的取名失败回退分支需要在不启动分发循环的前提下钉住
+// 「事件仍然发布」，注入点收敛在此。
+var certJobOutcomeEventPublisher = notify.Publish
+
 func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, fields map[string]any) error {
 	if err := transitionJobUpdate(tx, id, from, to, fields, "", nil); err != nil {
 		return err
@@ -332,11 +337,18 @@ func transitionJobUpdate(tx jobTransitionExecutor, id int, from []string, to str
 
 // notifyCertJobOutcome 证书签发终态通知（jobstate 单点覆盖全部转换路径——
 // 签发/恢复/续签/部署完成）。
+//
+// 取名失败回退任务 id（fail-visible 但不丢事件）：行被并发删除/读故障时，
+// 此前直接 return 会把一次真实终态变化静默吞掉（用户永远收不到「签发失败」，
+// 而库态已变）。事件正文用「证书任务 #id」占位，留 warn 便于排障。
 func notifyCertJobOutcome(jobID int, status string, message any) {
-	var domain string
-	if err := db.DB.QueryRow("SELECT COALESCE(domain,'') FROM cert_jobs WHERE id=?", jobID).Scan(&domain); err != nil {
-		Logf("warn", "证书任务通知读取域名失败（job=%d status=%s）: %v", jobID, status, err)
-		return
+	var readDomain string
+	if err := db.DB.QueryRow("SELECT COALESCE(domain,'') FROM cert_jobs WHERE id=?", jobID).Scan(&readDomain); err != nil {
+		Logf("warn", "证书任务通知读取域名失败（job=%d status=%s），回退任务 id 发布: %v", jobID, status, err)
+	}
+	domain := readDomain
+	if strings.TrimSpace(domain) == "" {
+		domain = fmt.Sprintf("证书任务 #%d", jobID)
 	}
 	msg, _ := message.(string)
 	eventType := notify.EvtCertIssued
@@ -345,5 +357,5 @@ func notifyCertJobOutcome(jobID int, status string, message any) {
 		eventType = notify.EvtCertFailed
 		fields = map[string]string{"1": domain, "2": msg}
 	}
-	notify.Publish(notify.Event{Type: eventType, Fields: fields})
+	certJobOutcomeEventPublisher(notify.Event{Type: eventType, Fields: fields})
 }

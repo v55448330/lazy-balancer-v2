@@ -857,6 +857,12 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	disabledConflicts := disableConvertedRuleConflicts(validRules)
+	// 并发 fast-fail（EVTCERT153-02）：与 V2 入口同位——挂验证链之后、会话
+	// 开始之前。验证失败型载荷（400）不受在途会话清理窗口误伤；真并发会话
+	// 在此 409 fast-fail，不再静默阻塞在会话锁上等前端超时。
+	if rejectConcurrentConfigImport(c, "导入") {
+		return
+	}
 	ctx := c.Request.Context()
 	session, err := h.beginConfigImport(c, ctx, "导入")
 	if err != nil {

@@ -426,6 +426,20 @@ func TestAPIDocRoutes_importQueuePartialContract(t *testing.T) {
 	if !containsRouteError(route.Errors, "409") {
 		t.Fatalf("V1 import errors=%v, want certificate queue drain 409", route.Errors)
 	}
+	// 入口并发 fast-fail（EVTCERT153-02）：已有导入/还原会话进行中同为 409，
+	// 文档必须与实现同步披露（两种 409 语义不同：队列排空 vs 会话占用）。
+	hasImportInProgress := false
+	for _, routeError := range route.Errors {
+		if strings.HasPrefix(routeError, "409 import_in_progress") {
+			hasImportInProgress = true
+		}
+	}
+	if !hasImportInProgress {
+		t.Fatalf("V1 import errors=%v, want 409 import_in_progress（并发会话 fast-fail）", route.Errors)
+	}
+	if !strings.Contains(route.Description, "会话进行中") {
+		t.Fatalf("V1 import description lacks concurrent-session 409 contract: %s", route.Description)
+	}
 	for _, field := range []string{"partial", "warnings", "disabled_conflicts"} {
 		if !strings.Contains(route.Response, field) {
 			t.Fatalf("V1 import response missing %s: %s", field, route.Response)

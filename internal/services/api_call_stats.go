@@ -52,6 +52,11 @@ func RecordRESTAPICallStart(keyName, method, path, ip string) APICallToken {
 	}
 	apiCallRing = append(apiCallRing, rec)
 	if len(apiCallRing) > apiCallRingSize {
+		// 环形裁剪（有界内存取舍）：被挤出的旧记录若请求尚未结束（token 回写
+		// 前已被裁），RecordRESTAPICallStatus 将定位不到行而成为空操作——该
+		// 请求在当日聚合里按占位 200 计、其 ≥400 状态不入错误计数。error_rate
+		// 因此是**低估面**（窗口 200 条远大于典型并发，只有「后续 200 个请求
+		// 都完成回写仍未结束」的长尾请求会丢状态码；不得据此认为错误率恒精确）。
 		apiCallRing = apiCallRing[len(apiCallRing)-apiCallRingSize:]
 	}
 	// 当日聚合只保留今日+昨日：日期键按天累积（长期运行下无界增长），
@@ -66,6 +71,7 @@ func RecordRESTAPICallStart(keyName, method, path, ip string) APICallToken {
 }
 
 // pruneAPICallDayLocked 删除早于「昨日」的日期键（保留今日与昨日）。
+// 调用方必须持 apiCallMu（后缀 Locked 的契约；测试同样在锁内调用）。
 func pruneAPICallDayLocked(now time.Time) {
 	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 	for d := range apiCallDay {

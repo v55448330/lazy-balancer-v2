@@ -199,6 +199,8 @@ func captureHandlerGlobalSeams() map[string]any {
 		"rollbackLeakedTx": handlerGlobalPointer(rollbackLeakedTx),
 		// 安全写收尾事件发布缝（热路径/默认策略批量 apply 的事件发布入口）。
 		"notifyPublish": handlerGlobalPointer(notifyPublish),
+		// 自动封禁「安全库就绪」探测缝（ban_effective 与渲染面同源；缺库=不生效）。
+		"autobanSecurityLibsReady": handlerGlobalPointer(autobanSecurityLibsReady),
 		// 归属地富化查询缝。
 		"enrichIPLocationLookup": handlerGlobalPointer(enrichIPLocationLookup),
 		// 认证缝。

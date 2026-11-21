@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/notify"
@@ -121,5 +122,60 @@ func TestHandleIngestHuman_uriTruncatedToPipelineCap(t *testing.T) {
 	}
 	if len(stored) > 8192+64 {
 		t.Fatalf("uri 落库 %d 字节，超出 8KiB 上限+标记", len(stored))
+	}
+}
+
+// ClipHumanEventField 单源裁剪：UTF-8 边界回退、上限内零改动（不追加标记）。
+func TestClipHumanEventField_runeBoundary(t *testing.T) {
+	if got, clipped := ClipHumanEventField("1.2.3.4", HumanEventClientIPCapBytes); clipped || got != "1.2.3.4" {
+		t.Fatalf("上限内值被改动: got=%q clipped=%v", got, clipped)
+	}
+	// 3 字节字符使 64 字节上限落在字符中间。
+	got, clipped := ClipHumanEventField(strings.Repeat("界", 30), HumanEventClientIPCapBytes)
+	if !clipped {
+		t.Fatal("超限值必须报告 clipped=true")
+	}
+	if len(got) == 0 || len(got) > HumanEventClientIPCapBytes {
+		t.Fatalf("裁剪后 len=%d, want (0,%d]", len(got), HumanEventClientIPCapBytes)
+	}
+	if !utf8.ValidString(got) || strings.Trim(got, "界") != "" {
+		t.Fatalf("裁剪必须回退到 UTF-8 边界: %q", got)
+	}
+}
+
+// 人机直写通道的 client_ip/rule_id/method 无上限会污染事件日志与自动封禁
+// 身份键：摄入时按单源上限裁剪（不追加标记，保持身份可比较性）后落库。
+func TestHandleIngestHuman_clipsIdentityFields(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	h := &SecurityEventsIPCServer{}
+	ts := time.Now().UnixMilli()
+	longIP := "2001:db8::" + strings.Repeat("a", 90)
+	longRule := strings.Repeat("r", 200)
+	longMethod := strings.Repeat("M", 40)
+	body := fmt.Sprintf(`[{"ts":%d,"rule_id":%q,"client_ip":%q,"method":%q,"uri":"/clip","kind":"challenge"}]`, ts, longRule, longIP, longMethod)
+	req := httptest.NewRequest(http.MethodPost, services.SecurityEventsIPCIngestHumanPath, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var ip, ruleID, method string
+	if err := db.MetricsDB.QueryRow(`SELECT client_ip, rule_caddy_id, method FROM security_events WHERE event_type='human' AND uri='/clip'`).
+		Scan(&ip, &ruleID, &method); err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	if len(ip) == 0 || len(ip) > HumanEventClientIPCapBytes {
+		t.Fatalf("client_ip len=%d, want (0,%d]", len(ip), HumanEventClientIPCapBytes)
+	}
+	if len(ruleID) == 0 || len(ruleID) > HumanEventRuleIDCapBytes {
+		t.Fatalf("rule_caddy_id len=%d, want (0,%d]", len(ruleID), HumanEventRuleIDCapBytes)
+	}
+	if len(method) == 0 || len(method) > HumanEventMethodCapBytes {
+		t.Fatalf("method len=%d, want (0,%d]", len(method), HumanEventMethodCapBytes)
+	}
+	for name, value := range map[string]string{"client_ip": ip, "rule_caddy_id": ruleID, "method": method} {
+		if !utf8.ValidString(value) {
+			t.Fatalf("%s 裁剪产物必须是合法 UTF-8: %q", name, value)
+		}
 	}
 }

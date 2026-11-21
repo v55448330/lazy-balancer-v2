@@ -165,13 +165,21 @@ func (h *Handlers) GetDailyTargets(c *gin.Context) {
 	}
 	var userIDs []int64
 	var usernames []string
+	skipped := 0
 	for rows.Next() {
 		var id int64
 		var name string
-		if rows.Scan(&id, &name) == nil {
-			userIDs = append(userIDs, id)
-			usernames = append(usernames, name)
+		if err := rows.Scan(&id, &name); err != nil {
+			skipped++
+			continue
 		}
+		userIDs = append(userIDs, id)
+		usernames = append(usernames, name)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+		return
 	}
 	rows.Close()
 
@@ -183,19 +191,29 @@ func (h *Handlers) GetDailyTargets(c *gin.Context) {
 		}{}}
 		chRows, err := db.DB.Query(`SELECT type, name FROM notification_channels
 			WHERE user_id=? AND enabled=1 ORDER BY id`, id)
-		if err == nil {
-			for chRows.Next() {
-				var ct, cn string
-				if chRows.Scan(&ct, &cn) == nil {
-					t.Channels = append(t.Channels, struct {
-						Type string `json:"type"`
-						Name string `json:"name"`
-					}{Type: ct, Name: cn})
-				}
-			}
-			chRows.Close()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+			return
 		}
+		for chRows.Next() {
+			var ct, cn string
+			if err := chRows.Scan(&ct, &cn); err != nil {
+				// 跳过坏行但计数披露（data.partial），不静默吞掉目标通道。
+				skipped++
+				continue
+			}
+			t.Channels = append(t.Channels, struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			}{Type: ct, Name: cn})
+		}
+		if err := chRows.Err(); err != nil {
+			chRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+			return
+		}
+		chRows.Close()
 		targets = append(targets, t)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"targets": targets}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"targets": targets, "skipped": skipped, "partial": skipped > 0}})
 }

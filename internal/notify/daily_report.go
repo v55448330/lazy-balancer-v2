@@ -25,9 +25,10 @@ const dailyReportTaskID = "notification-daily-report"
 // dailyTimeLayout 库内墙钟串布局（各库统一秒级、无时区后缀）。
 const dailyTimeLayout = "2006-01-02 15:04:05"
 
-// dailySlotGrace 用户 send_time 槽的到期宽限：引擎 tick 抖动/启动补跑允许迟到
-// 数分钟仍按该槽投递；超出宽限不追溯（昨日摘要跨天已无意义）。
-const dailySlotGrace = 5 * time.Minute
+// DailySlotGrace 用户 send_time 槽的到期宽限：引擎 tick 抖动/启动补跑允许迟到
+// 数分钟仍按该槽投递；超出宽限不追溯（昨日摘要跨天已无意义）。排程侧
+// （services.nextDailyReportSlot）与投递侧（dailySlotDue）共用本单源。
+const DailySlotGrace = 5 * time.Minute
 
 // DailyLocation 日报「本地日历日」时区单源（services 启动装配注入
 // CurrentLocation——与全站配置时区/task_runs 墙钟同源；未注入=进程 TZ）。
@@ -270,7 +271,7 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 // 兜底（与 GetDailyConfig 默认槽一致；AllDailySendTimes 会跳过非法槽）。
 func dailySlotDue(userID int64, cfg DailyConfig, now time.Time, loc *time.Location) bool {
 	slot := dailySlotAt(now, cfg.SendTime, loc)
-	if now.Before(slot) || now.Sub(slot) > dailySlotGrace {
+	if now.Before(slot) || now.Sub(slot) > DailySlotGrace {
 		return false
 	}
 	var n int
@@ -538,10 +539,21 @@ func RenderDaily(data DailyData, items []string, format string) string {
 // renderDailyForChannel 投递派发时的按通道格式渲染（deliverOne 挂钩）：
 // body 为日报数据载荷 JSON→用户 per-channel 配置优先，缺省自动映射
 // （webhook=JSON、email=HTML、QQ=markdown、微信=纯文本、未知=text）；
-// 非日报事件原样透传。
+// 非日报事件原样透传。不关心格式的调用方（模板链路/测试）用本入口；
+// 需要 Content-Type 决序的派发侧用 renderDailyForChannelFormat。
 func renderDailyForChannel(msg Message, channelType, styleFormat string) string {
+	body, _ := renderDailyForChannelFormat(msg, channelType, styleFormat)
+	return body
+}
+
+// renderDailyForChannelFormat 同 renderDailyForChannel，并返回正文实际采用的
+// 渲染格式（"html"/"markdown"/"text"/"json"；非日报/载荷损坏回空串=未知）。
+// 派发侧把它写入 Message.ContentFormat，邮件通道据此决定 Content-Type
+// （NOTIF153-02：只有 html 渲染可按 text/html 发送；text/markdown/json 必须
+// text/plain，否则日报值里的 '<script>' 会被邮件客户端当 HTML 执行）。
+func renderDailyForChannelFormat(msg Message, channelType, styleFormat string) (string, string) {
 	if msg.EventType != EvtDailyReport {
-		return msg.Body
+		return msg.Body, ""
 	}
 	var payload struct {
 		Date    string            `json:"date"`
@@ -550,26 +562,30 @@ func renderDailyForChannel(msg Message, channelType, styleFormat string) string 
 		Formats map[string]string `json:"formats"`
 	}
 	if err := json.Unmarshal([]byte(msg.Body), &payload); err != nil || payload.Date == "" {
-		return msg.Body // 载荷解析失败回退原文（fail-visible，不静默吞）
+		return msg.Body, "" // 载荷解析失败回退原文（fail-visible，不静默吞）
 	}
-	// 机器人日报格式协议固定（QQ=markdown 表格、微信=纯文本），不受用户/通道
-	// 配置覆盖（§14）；非机器人按 日报页配置 > 通道样式 > 自动映射。
-	format := ""
+	// 机器人日报格式协议固定（QQ=markdown 表格、微信=纯文本），不受用户/
+	// 通道配置覆盖（§14）；非机器人按 日报页配置 > 通道样式 > 自动映射。
+	format := dailyChannelFormat(payload.Formats, channelType, styleFormat)
+	return renderDailyFromValues(payload.Date, payload.Values, payload.Items, format), format
+}
+
+// dailyChannelFormat 日报格式决序单源（渲染与邮件 Content-Type 共用）：
+// 机器人协议固定；其余 日报页配置 > 通道样式 > 自动映射。
+func dailyChannelFormat(payloadFormats map[string]string, channelType, styleFormat string) string {
 	switch channelType {
 	case "qq":
-		format = "markdown"
+		return "markdown"
 	case "wx_clawbot":
-		format = "text"
-	default:
-		format = payload.Formats[channelType]
-		if format == "" {
-			format = styleFormat
-		}
-		if format == "" {
-			format = DefaultFormatForChannel(channelType)
-		}
+		return "text"
 	}
-	return renderDailyFromValues(payload.Date, payload.Values, payload.Items, format)
+	if format := payloadFormats[channelType]; format != "" {
+		return format
+	}
+	if styleFormat != "" {
+		return styleFormat
+	}
+	return DefaultFormatForChannel(channelType)
 }
 
 // DailyFieldsFromBody 解析日报载荷→模板变量映射（含 date），供内容模板

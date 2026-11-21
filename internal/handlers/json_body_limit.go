@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"lazy-balancer-v2/internal/apimsg"
@@ -33,8 +36,10 @@ func configuredRequestBodyBytes() int64 {
 }
 
 // guardConfiguredJSONBody 与 guardAuthJSONBody 同构：ContentLength 预检 413 +
-// MaxBytesReader 包装（chunked/未知长度读中途掐断走 binding 400 分支）。
-// 上限取「请求体大小」配置项，供未设独立上限的写/读探测端点统一使用；
+// MaxBytesReader 包装 + **预读一次 body**（chunked/未知长度超限只能在读时
+// 发现：留给调用方的 ShouldBindJSON 会把超限错误一并折成 400，与预检 413
+// 文案分叉）。预读失败即回 413/400 并中止；成功则回填 body 供 binding 照常
+// 消费。上限取「请求体大小」配置项，供未设独立上限的写/读探测端点统一使用；
 // 返回 false 时调用方立即 return。
 func guardConfiguredJSONBody(c *gin.Context) bool {
 	limit := configuredRequestBodyBytes()
@@ -43,5 +48,18 @@ func guardConfiguredJSONBody(c *gin.Context) bool {
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			// 与 ContentLength 预检同文案：同一「请求体过大」事实不分读法。
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
+			return false
+		}
+		// 读失败（连接中断/传输错误）：该批不可解析，与 binding 失败同口径 400。
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		return false
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	return true
 }

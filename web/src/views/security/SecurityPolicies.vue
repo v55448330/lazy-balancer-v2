@@ -1188,7 +1188,8 @@ const defaultsRunning = computed(() => defaultsPhase.value === 'running')
 const defaultsCatalog = ref<DefaultCatalog | null>(null)
 const defaultsItems = ref<DefaultApplyItem[]>([])
 // 应用失败态：失败即完成态（phase=done，弹框可关），但结果区必须显性区分
-// 「全部成功」——否则 done 态会冒充成功（后端 500 只带回已建项，缺项即失败项）。
+// 「全部成功」——单事务失败整体回滚且失败信封不带已建项，故失败面呈现
+// 「状态未知」而非穷举名单（见 utils/defaultPolicyApply.failedDefaultNames）。
 const defaultsApplyFailed = ref(false)
 const defaultsExpanded = ref(new Set<string>())
 const toggleDefaultsRow = (key: string): void => {

@@ -1686,16 +1686,25 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 
 		// REST 调用采集（API 接入页接入统计 REST 列数据源；MCP 路径
 		// 排除——已有专属统计；JWT-only 请求不计入，与「密钥资产」口径一致）。
-		// 入环返回本请求 token，请求结束后凭 token 回写——并发下不能按环形尾
-		// 回写（尾记录可能属于另一个在途/已完成请求）。
 		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
-			token := services.RecordRESTAPICallStart(keyName, c.Request.Method, c.Request.URL.Path, c.ClientIP())
-			c.Next()
-			services.RecordRESTAPICallStatus(token, c.Writer.Status())
+			instrumentRESTAPICall(c, keyName)
 			return
 		}
 		c.Next()
 	}
+}
+
+// instrumentRESTAPICall 入环 + 请求结束后按 token 回写真实状态码。并发下不能
+// 按环形尾回写（尾记录可能属于另一个在途/已完成请求）。回写走 defer：处理器
+// panic 沿 gin 恢复链展开时同样执行（否则该请求永久停在占位 200）。
+// 已知边界：gin Recovery 在外层写 500，defer 读到的状态码可能仍是占位值——
+// 回写保证的是「记录不再悬挂」，不是 panic 一定计 5xx。
+func instrumentRESTAPICall(c *gin.Context, keyName string) {
+	token := services.RecordRESTAPICallStart(keyName, c.Request.Method, c.Request.URL.Path, c.ClientIP())
+	// 必须闭包延迟求值：defer 直接写实参会立刻求值（读到占位 200），
+	// 回写就成了恒占位形同虚设。
+	defer func() { services.RecordRESTAPICallStatus(token, c.Writer.Status()) }()
+	c.Next()
 }
 
 // sensitiveExportGetRoutes 与写操作同敏感级的导出类 GET（2026-09-24 用户裁定：

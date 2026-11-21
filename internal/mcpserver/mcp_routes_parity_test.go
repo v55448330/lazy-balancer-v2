@@ -165,8 +165,8 @@ var mcpUncoveredRoutes = map[string]string{
 	// —— 通知中心（订阅/投递/通道为「当前会话用户」自助语义；设置与日报触发
 	//    为管理员 Web 控制台低频操作；通知消费在用户侧通道完成，Agent 无收件场景）——
 	"GET /api/v1/notification/catalog":                "事件目录只读参考（订阅矩阵 UI 数据源；无 Agent 消费场景）",
-	"GET /api/v1/notification/subscriptions":          "JWT 会话专属：当前会话用户订阅矩阵自助读取",
-	"PUT /api/v1/notification/subscriptions":          "JWT 会话专属：当前会话用户订阅自助批量设置（min_level UPSERT/删行回默认）",
+	"GET /api/v1/notification/subscriptions":          "JWT 会话专属：当前会话用户订阅矩阵自助读取（三态：启用行=订阅、停用行=显式 opt-out、无行=目录默认兜底）",
+	"PUT /api/v1/notification/subscriptions":          "JWT 会话专属：当前会话用户订阅自助批量设置（启用行 UPSERT；min_level 空串=停用，无行用户补建 opt-out 行使默认兜底不再投递）",
 	"GET /api/v1/notification/deliveries":             "JWT 会话专属：当前用户投递流水（?all=1 管理员排障视角为 Web 控制台语义）",
 	"POST /api/v1/notification/deliveries/:id/resend": "投递重发：属主本人自助重试动作；Agent 无通知收件场景",
 	"GET /api/v1/notification/channels":               "JWT 会话专属：当前用户通知通道列表（管理员全平台元数据为 Web 控制台语义）",

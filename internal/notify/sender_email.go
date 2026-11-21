@@ -57,7 +57,16 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	// 日报渲染底座产出 HTML，须 text/html；事件邮件缺省（无正文模板且非显式 text）
 	// 用内联样式 HTML 卡片（品牌+时间），与全站精美裁定同口径；显式 text 才纯文本。
 	defaultHTML := cfg.BodyTemplate == "" && cfg.BodyFormat != "text" && msg.EventType != EvtDailyReport
-	htmlBody := cfg.BodyFormat == "html" || msg.EventType == EvtDailyReport || defaultHTML
+	htmlBody := cfg.BodyFormat == "html" || defaultHTML
+	if msg.EventType == EvtDailyReport {
+		// NOTIF153-02：日报 Content-Type 跟随**实际渲染格式**（派发侧
+		// renderDailyForChannelFormat 写入 ContentFormat，与渲染决序同源）。
+		// 只有 html 渲染可按 text/html 原样发送；text/markdown/json 产物
+		// 必须 text/plain——否则日报值里的 '<script>' 等未转义内容会被邮件
+		// 客户端当 HTML 执行。ContentFormat 未知（载荷损坏回退原文/直调
+		// Sender）按纯文本 fail-closed。
+		htmlBody = msg.ContentFormat == "html"
+	}
 	if htmlBody && msg.EventType != EvtDailyReport && cfg.BodyTemplate == "" {
 		body = wrapEmailHTML(msg, subject, body, ts)
 	}
@@ -67,7 +76,8 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 // wrapEmailHTML 事件邮件统一精美卡片：深色品牌头+级别徽章+标题+accent 条+
 // 浅色正文面板+事件/节点/时间元信息网格+署名。与日报卡片同族。
 // 正文一律转义：事件正文来自目录模板/外部输入（IP、UA、规则名），原样拼进
-// HTML 即注入面；日报受控 HTML 载荷走 htmlBody 分支、不经本函数。
+// HTML 即注入面；日报受控 HTML 载荷走 htmlBody 分支、不经本函数——且只有
+// 实际渲染格式为 html 的日报才按 text/html 发送（NOTIF153-02）。
 func wrapEmailHTML(msg Message, subject, body string, ts time.Time) string {
 	stamp := ts.Format("2006-01-02 15:04")
 	inner := html.EscapeString(body)

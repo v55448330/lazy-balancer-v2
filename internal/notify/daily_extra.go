@@ -32,7 +32,8 @@ type authDayCount struct {
 
 // authCounters 按「本地日历日」分桶的认证事件计数（Publish 累加；进程内）。
 // 按日分桶而非单日覆盖：日报在次日读「昨日」桶，旧实现的单日重置会让跨零点
-// 后的读数把昨日统计清零（两日相互覆盖）。只保留今天与昨天两个桶（有界）。
+// 后的读数把昨日统计清零（两日相互覆盖）。有界=只保留昨天及更晚的桶（删除
+// 早于昨天的标签；时区变更带来的「未来」桶最多偏移一天，见 noteAuthEventAt）。
 var authCounters struct {
 	mu   sync.Mutex
 	days map[string]authDayCount
@@ -70,10 +71,17 @@ func noteAuthEventAt(typ string, at time.Time) {
 		c.mfa++
 	}
 	authCounters.days[date] = c
-	// 有界：日报只读昨日，保留今天+昨天即可（长跑进程不随天数无限增长）。
+	// 有界：日报只读昨日，保留昨天及更晚的桶即可（长跑进程不随天数无限增长）。
+	// 不按「恰好 {date, date-1}」白名单删：时区变更（设置页切时区）会让本地
+	// 日期标签整体前移——旧实现会把原时区下的「今天」桶（新时区下标签是明天）
+	// 当陈旧数据删掉，昨日报告读数从 0 起算。保留 ≥ 昨天（含「未来」标签桶）
+	// 只截断更早的桶；偏移最大一天，次日自然落到昨天/今天再被清理，仍然有界。
 	prev := previousDailyDate(date)
+	if prev == "" {
+		return
+	}
 	for d := range authCounters.days {
-		if d != date && d != prev {
+		if d < prev {
 			delete(authCounters.days, d)
 		}
 	}

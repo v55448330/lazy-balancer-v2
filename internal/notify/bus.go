@@ -113,8 +113,18 @@ func dispatch(evt Event) {
 		insertDeliveryPending(uid, evt)
 		// MCP 实时推送与通道投递同源过滤：显式空选接收通道（channel_ids='[]'，
 		// 用户裁定「全不选=不订阅」）的用户不再收推送——旧实现无条件推送，
-		// 用户关掉全部通道后仍被 MCP 会话打扰。MCP 不是独立通道行，选择面里
-		// 只有「显式空选」这一态可判定。
+		// 用户关掉全部通道后仍被 MCP 会话打扰。
+		//
+		// 过滤模型限制（P3 记录，非缺陷）：MCP 不是通道行，选择面里只有「显式
+		// 空选」这一态可判定。以下形态仍会推送，属模型边界：
+		//   ① 订阅行的 channel_ids 为空串/未设置 = 「未选择=全部通道」，MCP 视同
+		//      在列（MCP 会话本身不落 notification_channels，无法逐通道核对）；
+		//   ② 账号下所有通道都被停用（行仍在但 enabled=0）——投递 Daemon 侧会
+		//      按启用通道裁掉全部投递，但本处只看选择面，MCP 推送仍到达；
+		//   ③ 事件级最小级别/模板过滤不作用于推送管道（推送载荷即目录原始
+		//      标题/正文），模板定制只影响通道投递。
+		// 需要「完全不收」时用显式空选（②口径的根治）或关闭 MCP 实时推送开关
+		// （notify.mcp_enabled，mcpserver 侧整体短路）。
 		if subscriptionChannelSelectionFor(uid, evt.Type).explicitEmpty {
 			continue
 		}

@@ -681,8 +681,11 @@ const securityEventsTransactionIndexSQL = `CREATE UNIQUE INDEX idx_security_even
 // 发现重复时不再 WARN+跳过（跳过期间 INSERT OR IGNORE 失去
 // 唯一约束兜底，offset 重建/轮转补采会把重复事件重新入库并重复喂
 // autoban/rollup）——改为启动期一次性去重：每个非空 transaction_id 保留
-// 最早行（MIN(id)，即首次摄取的事件），删除其余重复行后照常建索引，摄取
-// 幂等链自启动起恒成立。空串与 NULL 不属于索引约束域，不受影响。
+// 最后插入行（MAX(id)，与下方 DELETE 实现同口径），删除其余重复行后照常
+// 建索引，摄取幂等链自启动起恒成立。空串与 NULL 不属于索引约束域，不受影响。
+// 保留最后插入行不等价于运行期「后到拦截覆盖先到检测」的改判语义——迁移前
+// 重复行的检测顺序无法从库内推断（id 序只是插入序），本函数只承诺保留最后
+// 插入行（如实口径见下方去重分支注释）。
 // securityEventsTransactionIndexScans / Skips 启动期查重路径的观测计数：
 // Scans=真正执行了全表 GROUP BY 查重的次数（每库一次），Skips=命中
 // sqlite_master 唯一索引直接跳过的次数（每次重启 +1）。仅测试消费。

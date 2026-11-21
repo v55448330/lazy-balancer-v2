@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	sqlite "github.com/glebarez/go-sqlite"
 
@@ -111,6 +112,30 @@ func securityEventsIngestErrorRetryable(err error) bool {
 		}
 	}
 	return false
+}
+
+// 人机事件直写字段上限（单源导出）：client_ip/rule_id/method 由 IPC 写侧
+// 直接投递原始值、绕过 WAF 管线（管线路已按头/体/URI/rule_msg 截断），无上限
+// 时一条人机行可携带任意长身份/方法串污染事件日志、按规则归因与自动封禁
+// 身份键。上限取远大于合法值的宽松界，且**不追加截断标记**——IP/规则 id 追加
+// 标记会破坏身份可比较性（与 uri/rule_msg 的可见标记口径不同）。
+const (
+	HumanEventClientIPCapBytes = 64
+	HumanEventRuleIDCapBytes   = 128
+	HumanEventMethodCapBytes   = 16
+)
+
+// ClipHumanEventField 人机事件字段裁剪单源（按 UTF-8 边界回退，不追加标记）；
+// 返回裁剪后值与是否发生裁剪（调用方据此 warn 留痕，不静默改值）。
+func ClipHumanEventField(value string, capBytes int) (string, bool) {
+	if len(value) <= capBytes {
+		return value, false
+	}
+	cut := capBytes
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut], true
 }
 
 // humanEventAttribution 人机事件归属（rule/policy 快照）。挑战事件由
@@ -206,6 +231,22 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		if row.Ts <= 0 || strings.TrimSpace(row.ClientIP) == "" {
 			services.Logf("warn", "安全事件 IPC 人机事件缺少 ts/client_ip，跳过不落库: kind=%q rule_id=%s ip=%q ts=%d", row.Kind, row.RuleID, row.ClientIP, row.Ts)
 			continue
+		}
+		// 直写字段上限（单源见 HumanEvent*CapBytes）：身份/方法串无上限会污染
+		// 事件日志与自动封禁身份键；裁剪留痕（不静默改值）。
+		clipped := false
+		if v, ok := ClipHumanEventField(row.ClientIP, HumanEventClientIPCapBytes); ok {
+			row.ClientIP, clipped = v, true
+		}
+		if v, ok := ClipHumanEventField(row.RuleID, HumanEventRuleIDCapBytes); ok {
+			row.RuleID, clipped = v, true
+		}
+		if v, ok := ClipHumanEventField(row.Method, HumanEventMethodCapBytes); ok {
+			row.Method, clipped = v, true
+		}
+		if clipped {
+			services.Logf("warn", "安全事件 IPC 人机事件字段超限已裁剪（client_ip≤%d/rule_id≤%d/method≤%d 字节）: kind=%q ip=%s rule_id=%s",
+				HumanEventClientIPCapBytes, HumanEventRuleIDCapBytes, HumanEventMethodCapBytes, row.Kind, row.ClientIP, row.RuleID)
 		}
 		accepted = append(accepted, row)
 	}

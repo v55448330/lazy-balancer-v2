@@ -1742,7 +1742,9 @@ func snapshotActiveUpdateStatus(status string) bool {
 //     NOT NULL 新列不得把兼容载荷变成整条 apply 失败；
 //   - 派生列 policy_type/trust_detection/ip_whitelist_enabled 按落库形态
 //     （字符串/INTEGER 0-1）写入行——apply 在 INSERT 时计算，哈希侧必须同形，
-//     否则同一行两侧字节不等。
+//     否则同一行两侧字节不等；
+//   - is_default_policy 缺失/nil→int64(0)（滚动升级旧快照缺键与落库值收敛，
+//     见字段处置处注释）。
 func normalizeSnapshotPolicyRow(p map[string]interface{}) {
 	if toFloat64(p["anomaly_threshold"]) <= 0 {
 		p["anomaly_threshold"] = int64(db.DefaultAnomalyThreshold)
@@ -1778,6 +1780,13 @@ func normalizeSnapshotPolicyRow(p map[string]interface{}) {
 		}
 	}
 	p["policy_type"] = InferSnapshotPolicyType(p)
+	// is_default_policy 缺失/nil 归一为 0：滚动升级窗口内旧主节点快照不带该
+	// 键（或手工快照显式 null），apply 写侧经 policyIsDefault 回退 0 落库——
+	// 哈希输入若不归一，缺键/nil 与落库后读回的 0 编码不同，主从 security 节
+	// 哈希恒不等（每轮重放 + 强制重载）。
+	if p["is_default_policy"] == nil {
+		p["is_default_policy"] = int64(0)
+	}
 	p["trust_detection"] = boolToSnapshotInteger(snapshotTrustDetection(p))
 	if policyWhitelistEnabled(p) {
 		p["ip_whitelist_enabled"] = int64(1)

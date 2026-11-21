@@ -278,3 +278,36 @@ func TestRequeueStalePendingMarksDead(t *testing.T) {
 		t.Fatalf("重投兜底口径错：dead=%d pending=%d（期望 1/1：超龄判 dead、近期留队）", dead, pending)
 	}
 }
+
+// 目录默认订阅事件的 opt-out：停用行（enabled=0）必须压过默认兜底。
+// 写侧在无行时补建这类行（handlers.disableSubscriptionRow），投递侧这里钉住
+// 「补建后确实不再投递」——否则「关闭默认订阅组」只是 UI 假象。
+func TestDispatchDisabledRowOptsOutOfDefaultSet(t *testing.T) {
+	resetNotifyBusForTest(t)
+	database := newNotifyTestDB(t)
+	if _, err := database.Exec(`INSERT INTO notification_channels (user_id, type, target) VALUES (1, 'webhook', 'http://x')`); err != nil {
+		t.Fatal(err)
+	}
+	Start()
+
+	// warn 事件（登录失败，DefaultSub=true）：无显式行 → 默认集投递。
+	Publish(Event{Type: EvtLoginFailed, Fields: map[string]string{"1": "root", "2": "认证失败", "3": "10.0.0.9"}})
+	rows := deliveryRows(t, database, EvtLoginFailed, 1)
+	if _, ok := rows[1]; !ok {
+		t.Fatalf("默认集用户未收到 pending 行: %v", rows)
+	}
+
+	// 用户关掉该事件：写侧补建的停用行（min_level 空串）。
+	if _, err := database.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, enabled) VALUES (1, ?, '', 0)`, EvtLoginFailed); err != nil {
+		t.Fatal(err)
+	}
+	Publish(Event{Type: EvtLoginFailed, Fields: map[string]string{"1": "root", "2": "认证失败", "3": "10.0.0.9"}})
+	time.Sleep(300 * time.Millisecond)
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=1 AND event_type=?`, EvtLoginFailed).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("停用后投递行数=%d, want 1（opt-out 行必须阻止默认兜底再投递）", count)
+	}
+}

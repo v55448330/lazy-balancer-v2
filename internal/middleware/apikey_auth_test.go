@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"lazy-balancer-v2/internal/models"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
@@ -313,3 +315,5 @@ func TestAPIKeyAuthRejectsDisabledKey(t *testing.T) {
 		t.Fatalf("status = %d, want 401", recorder.Code)
 	}
 }
+
+		instrumentRESTAPICall(c, "probe-key")

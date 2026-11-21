@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -1781,6 +1782,40 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: successMessage})
 }
 
+// caddyLifecycleFailureReasonBytes 启停/重启失败事件原因摘要的字节上限：
+// 事件正文取 err（或应用失败 note）前 60 字节——原文含 exec/admin 地址等长
+// 细节，完整文本仍由 5xx 响应/审计/日志承载，通知只给可判断方向的摘要。
+const caddyLifecycleFailureReasonBytes = 60
+
+// truncateCaddyLifecycleReason 按 UTF-8 边界把原因文本裁到上限内（不追加
+// 标记：摘要是「失败：...」的整体短句，标记反而污染正文）。
+func truncateCaddyLifecycleReason(text string) string {
+	if len(text) <= caddyLifecycleFailureReasonBytes {
+		return text
+	}
+	cut := caddyLifecycleFailureReasonBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
+}
+
+// caddyLifecycleFailureResult 启停/重启失败事件的结果参数（第三参）：
+// 「失败：<原因摘要>」——此前恒为裸「失败」，收件人无法从通知判断是
+// admin 不可达、exec 退出码还是配置应用未生效。
+func caddyLifecycleFailureResult(err error) string {
+	if err == nil {
+		return "失败"
+	}
+	return "失败：" + truncateCaddyLifecycleReason(err.Error())
+}
+
+// caddyLifecycleApplyFailureResult 启停成功但配置应用未生效分支的结果参数：
+// 保留既有短语并附 note（=「Caddy 已启动」+ 失败原因）摘要。
+func caddyLifecycleApplyFailureResult(note string) string {
+	return "失败（配置应用未生效）：" + truncateCaddyLifecycleReason(note)
+}
+
 func (h *Handlers) StartCaddy(c *gin.Context) {
 	// 导入窗口 fast-fail（与 ReloadCaddy 同门，且必须在取 caddyOpMu 之前）：
 	// 导入全程持锁，排队请求会在导入提交后才执行——启停按陈旧意图落地。
@@ -1793,6 +1828,7 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
 		// 失败同样是可用性事实（此前只在成功时发事件——启停通知永远「成功」）。
 		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": "失败"}})
+		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": caddyLifecycleFailureResult(err)}})
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
 		return
 	}

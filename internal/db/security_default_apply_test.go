@@ -626,31 +626,39 @@ func TestPolicyRefsValid_blankRefsAreLegalEmpty(t *testing.T) {
 }
 
 // 存量默认策略（is_default_policy 列引入前创建）按「[默认规则] 描述前缀 +
-// 种子名」回填标记；用户同名但无前缀行不标记。
+// 种子名 + policy_type 与种子一致」回填标记；用户同名但无前缀行不标记，
+// 同名同前缀但阶段型不符的行同样不标记（DEFPOL153-005 收紧谓词）。
 func TestBackfillDefaultPolicyMarkers_marksOnlySeedDescPrefix(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
 		t.Fatalf("create tables: %v", err)
 	}
 	applyDefaultPoliciesFixture(t)
-	if _, err := database.Exec(`INSERT INTO security_policies (name,description,is_default_policy) VALUES ('信任名单','[默认规则] 引用「信任名单地址列表」','0')`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (name,description,policy_type,is_default_policy) VALUES ('信任名单','[默认规则] 引用「信任名单地址列表」','stage0','0')`); err != nil {
 		t.Fatalf("seed legacy default: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policies (name,description,is_default_policy) VALUES ('威胁情报拦截','用户自建','0')`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (name,description,policy_type,is_default_policy) VALUES ('威胁情报拦截','用户自建','stage1','0')`); err != nil {
 		t.Fatalf("seed user policy: %v", err)
 	}
-	if err := backfillDefaultPolicyMarkers(); err != nil {
+	// 同名 + 同前缀但阶段型与种子不符（种子 stage1）：收紧谓词后不得标记。
+	if _, err := database.Exec(`INSERT INTO security_policies (name,description,policy_type,is_default_policy) VALUES ('手动黑名单','[默认规则] 伪造同名行','stage3','0')`); err != nil {
+		t.Fatalf("seed mismatched policy: %v", err)
+	}
+	if err := BackfillDefaultPolicyMarkers(); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	var legacyMarked, userMarked int
+	var legacyMarked, userMarked, mismatchedMarked int
 	if err := database.QueryRow(`SELECT is_default_policy FROM security_policies WHERE name='信任名单'`).Scan(&legacyMarked); err != nil {
 		t.Fatalf("read legacy: %v", err)
 	}
 	if err := database.QueryRow(`SELECT is_default_policy FROM security_policies WHERE name='威胁情报拦截'`).Scan(&userMarked); err != nil {
 		t.Fatalf("read user: %v", err)
 	}
-	if legacyMarked != 1 || userMarked != 0 {
-		t.Fatalf("legacy=%d user=%d want 1/0", legacyMarked, userMarked)
+	if err := database.QueryRow(`SELECT is_default_policy FROM security_policies WHERE name='手动黑名单'`).Scan(&mismatchedMarked); err != nil {
+		t.Fatalf("read mismatched: %v", err)
+	}
+	if legacyMarked != 1 || userMarked != 0 || mismatchedMarked != 0 {
+		t.Fatalf("legacy=%d user=%d mismatched=%d want 1/0/0", legacyMarked, userMarked, mismatchedMarked)
 	}
 }
 

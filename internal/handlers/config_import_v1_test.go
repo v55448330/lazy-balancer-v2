@@ -771,3 +771,29 @@ func TestImportV1ConfigSurvivesRequestCancellationAfterSessionStarts(t *testing.
 		t.Fatalf("status=%d body=%s, want import to finish on session context", response.Code, response.Body.String())
 	}
 }
+
+// 已有导入会话持锁：V1 入口也必须 409 fast-fail（EVTCERT153-02）——此前只有
+// V2 挂 rejectConcurrentConfigImport，v1 请求会静默阻塞在会话锁上。
+func TestImportV1Config_rejectsConcurrentImport(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+
+	configImportBeginMu.Lock()
+	defer configImportBeginMu.Unlock()
+
+	// 载荷须过验证链（探针在验证后、会话开始前）。
+	backup := `{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"v1-concurrent","protocol":true,"listen":18443,"server_name":"v1.example.test","status":true,"upstream_list":[1]}}]},"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}}`
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409（已有导入进行中）", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "配置导入进行中") {
+		t.Fatalf("body=%s, want 导入进行中文案", response.Body.String())
+	}
+}

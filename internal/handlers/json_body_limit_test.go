@@ -38,13 +38,17 @@ func TestGuardConfiguredJSONBody(t *testing.T) {
 		})
 		return r
 	}
-	serve := func(body string, contentLength int64) int {
+	serveRecorder := func(t *testing.T, body string, contentLength int64) *httptest.ResponseRecorder {
+		t.Helper()
 		request := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 		request.ContentLength = contentLength
 		response := httptest.NewRecorder()
 		mount().ServeHTTP(response, request)
-		return response.Code
+		return response
+	}
+	serve := func(body string, contentLength int64) int {
+		return serveRecorder(t, body, contentLength).Code
 	}
 	big := `{"k":"` + strings.Repeat("a", 2<<20) + `"}` // ≈2MB
 
@@ -58,9 +62,21 @@ func TestGuardConfiguredJSONBody(t *testing.T) {
 			t.Fatalf("status=%d, want 200", code)
 		}
 	})
-	t.Run("chunked 读中途超限走 binding 400", func(t *testing.T) {
-		if code := serve(big, -1); code != http.StatusBadRequest {
-			t.Fatalf("status=%d, want 400（MaxBytesReader 掐断 → binding 错误）", code)
+	t.Run("chunked 超限 413（与预检同文案）", func(t *testing.T) {
+		// ContentLength=-1 的 chunked 体：预检跳过后由 MaxBytesReader 预读
+		// 掐断——必须与 ContentLength 预检同状（413），不得被调用方的
+		// binding 400 分支吞掉（同一「请求体过大」事实不分读法）。
+		rec := serveRecorder(t, big, -1)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status=%d, want 413（chunked 超限）", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"code":413`) {
+			t.Fatalf("body=%s, want 413 响应体", rec.Body.String())
+		}
+	})
+	t.Run("chunked 未超限放行（预读后 body 可被 binding 消费）", func(t *testing.T) {
+		if code := serve(`{"k":"v"}`, -1); code != http.StatusOK {
+			t.Fatalf("status=%d, want 200（预读回填 body 后 binding 正常）", code)
 		}
 	})
 	t.Run("配置 0 回退默认 128MB", func(t *testing.T) {

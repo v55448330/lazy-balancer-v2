@@ -208,3 +208,75 @@ func TestGetNotificationRules_stableOrder(t *testing.T) {
 		}
 	}
 }
+
+// 全新用户停用默认订阅组：组内每个事件都必须补建 opt-out 行，否则
+// subscribersFor 的默认兜底继续投递（EVTCERT153-01）。
+func TestUpdateNotificationRule_disableWithoutRowCreatesOptOutRows(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gid := certGroupID(t)
+	groupEvents := 0
+	for _, e := range notify.CatalogExport() {
+		if "group:"+e.Group == gid {
+			groupEvents++
+		}
+	}
+	if groupEvents == 0 {
+		t.Fatal("证书组事件数为 0")
+	}
+	assertAllDisabled := func(uid int64) {
+		t.Helper()
+		var total, enabled int
+		if err := db.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(enabled),0) FROM notification_subscriptions WHERE user_id=?`, uid).Scan(&total, &enabled); err != nil {
+			t.Fatalf("读订阅行: %v", err)
+		}
+		if total != groupEvents || enabled != 0 {
+			t.Fatalf("user=%d 订阅行 total=%d enabled=%d, want %d/0（opt-out 行必须覆盖组内全部事件）", uid, total, enabled, groupEvents)
+		}
+	}
+
+	// 路径一：显式 enabled=false。
+	r7 := newRulesTestRouter(h, 7, "user")
+	status, out := doNotifyRequest(t, r7, http.MethodPost, "/notification/rules/"+gid, `{"enabled":false}`)
+	if status != http.StatusOK || out["code"].(float64) != 0 {
+		t.Fatalf("停用 status=%d body=%v", status, out)
+	}
+	assertAllDisabled(7)
+	status, out = doNotifyRequest(t, r7, http.MethodGet, "/notification/rules", "")
+	if status != http.StatusOK {
+		t.Fatalf("rules status=%d body=%v", status, out)
+	}
+	if enabled, _ := findRule(t, out["data"].(map[string]any), gid)["enabled"].(bool); enabled {
+		t.Fatalf("组内全停用后聚合视图 enabled 应为 false")
+	}
+
+	// 路径二：事件选择清空（events=[]）——同族停用写。
+	r8 := newRulesTestRouter(h, 8, "user")
+	status, out = doNotifyRequest(t, r8, http.MethodPost, "/notification/rules/"+gid, `{"events":[]}`)
+	if status != http.StatusOK || out["code"].(float64) != 0 {
+		t.Fatalf("events=[] status=%d body=%v", status, out)
+	}
+	assertAllDisabled(8)
+}
+
+// 聚合读失败必须 fail-visible（500），不得静默降级为空规则/丢日报卡片。
+func TestGetNotificationRules_failsVisibleWhenAggregateReadBreaks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		table string
+	}{
+		{"subscriptions", "notification_subscriptions"},
+		{"daily", "notification_daily"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			r := newRulesTestRouter(h, 7, "user")
+			if _, err := db.DB.Exec(`DROP TABLE ` + tc.table); err != nil {
+				t.Fatalf("drop %s: %v", tc.table, err)
+			}
+			status, _ := doNotifyRequest(t, r, http.MethodGet, "/notification/rules", "")
+			if status != http.StatusInternalServerError {
+				t.Fatalf("聚合读故障 status=%d, want 500（不得静默返回空规则）", status)
+			}
+		})
+	}
+}

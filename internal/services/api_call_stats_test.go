@@ -143,7 +143,9 @@ func TestAPICallDay_prunesBeyondYesterday(t *testing.T) {
 		apiCallMu.Unlock()
 	})
 
+	apiCallMu.Lock()
 	pruneAPICallDayLocked(now)
+	apiCallMu.Unlock()
 
 	apiCallMu.Lock()
 	defer apiCallMu.Unlock()
@@ -155,5 +157,45 @@ func TestAPICallDay_prunesBeyondYesterday(t *testing.T) {
 	}
 	if _, ok := apiCallDay[yesterday]; !ok {
 		t.Fatalf("昨日键被清: %v", apiCallDay)
+	}
+}
+
+// 环形裁剪的低估面（有界内存取舍，见 api_call_stats.go 裁剪处注释）：
+// 请求在回写前被挤出窗口 → 回写成为空操作，当日 error_rate 按占位 200 计。
+// 本用例把该行为钉成**已知契约**（不是 bug 修复）：窗口满后旧 token 的 5xx
+// 不得改写任何记录、不得补记错误计数，且新记录不受影响。
+func TestRecordRESTAPICallStatus_trimmedTokenWritebackIsNoop(t *testing.T) {
+	apiCallMu.Lock()
+	savedRing, savedDay := apiCallRing, apiCallDay
+	apiCallRing, apiCallDay = nil, map[string][2]int64{}
+	apiCallMu.Unlock()
+	t.Cleanup(func() {
+		apiCallMu.Lock()
+		apiCallRing, apiCallDay = savedRing, savedDay
+		apiCallMu.Unlock()
+	})
+
+	trimmedTok := RecordRESTAPICallStart("probe-key", "GET", "/api/v1/trimmed", "10.0.0.11")
+	for i := 0; i < apiCallRingSize; i++ {
+		RecordRESTAPICallStart("probe-key", "GET", fmt.Sprintf("/api/v1/filler-%d", i), "10.0.0.11")
+	}
+	// 已被挤出窗口：回写不得改写任何记录/错误计数。
+	RecordRESTAPICallStatus(trimmedTok, 500)
+
+	apiCallMu.Lock()
+	ringLen := len(apiCallRing)
+	today := apiCallDay[time.Now().Format("2006-01-02")]
+	apiCallMu.Unlock()
+	if ringLen != apiCallRingSize {
+		t.Fatalf("ring=%d, want %d（裁剪后恒为容量）", ringLen, apiCallRingSize)
+	}
+	if today[1] != 0 {
+		t.Fatalf("今日错误计数=%d, want 0（被裁剪请求的 5xx 回写是空操作——低估面）", today[1])
+	}
+	statuses := recentStatusByPath(GetRESTCallOverview())
+	for path := range statuses {
+		if path == "/api/v1/trimmed" {
+			t.Fatalf("被裁剪记录仍在最近调用面: %v", statuses)
+		}
 	}
 }

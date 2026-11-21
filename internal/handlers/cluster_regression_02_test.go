@@ -176,3 +176,23 @@ func TestRegisterClusterNode_keepsAccessURLMatchingObservedSourceIP(t *testing.T
 		t.Fatalf("access_url=%q, want the self-declared address persisted for a direct peer", accessURL)
 	}
 }
+
+// EvtClusterServiceControl 正文第三参必须是中文操作名（单源 helper）：
+// 动作码 start_caddy/restart_app 对收件人无意义；四个受控动作逐一钉住，
+// 未知码原样返回（上游 IsValidClusterServiceAction 已拦截，漏映射可排障）。
+func TestClusterServiceActionLabel_mapsAllControlledActions(t *testing.T) {
+	cases := map[string]string{
+		models.ClusterServiceActionStartCaddy:   "启动 Caddy",
+		models.ClusterServiceActionStopCaddy:    "停止 Caddy",
+		models.ClusterServiceActionRestartCaddy: "重启 Caddy",
+		models.ClusterServiceActionRestartApp:   "重启面板应用",
+	}
+	for action, want := range cases {
+		if got := clusterServiceActionLabel(action); got != want {
+			t.Fatalf("label(%q)=%q, want %q", action, got, want)
+		}
+	}
+	if got := clusterServiceActionLabel("future_action"); got != "future_action" {
+		t.Fatalf("未知动作 label=%q, want 原样返回", got)
+	}
+}

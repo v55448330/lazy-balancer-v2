@@ -340,19 +340,50 @@ func TestNotificationEventParamAndBranchGuards(t *testing.T) {
 		}
 		return i
 	}
+	// applyBranchOf 锚定「配置应用未生效」分支体（note 判定到成功发布之间），
+	// 证明该分支自身发事件，而不是被同一函数里别处的事件计数掩盖。
+	applyBranchOf := func(t *testing.T, body, where string) {
+		t.Helper()
+		noteIdx := idx(t, body, "caddyApplyNoteLocked()", where)
+		successIdx := idx(t, body[noteIdx:], `"3": "成功"`, where) + noteIdx
+		if successIdx <= noteIdx {
+			t.Fatalf("%s 应用未生效分支顺序异常", where)
+		}
+		branch := body[noteIdx:successIdx]
+		if !strings.Contains(branch, "notify.EvtCaddyLifecycle") {
+			t.Fatalf("%s 的 apply-failure 分支必须发启停事件（通知不得只报成功）", where)
+		}
+		if !strings.Contains(branch, "caddyLifecycleApplyFailureResult(note)") {
+			t.Fatalf("%s 的 apply-failure 事件第三参必须带原因摘要（caddyLifecycleApplyFailureResult）", where)
+		}
+	}
 
 	caddy := srcOf(t, "caddy.go")
+	// 精确计数：启动=启动失败+应用未生效+成功 3 处；重启=停止失败+启动失败+
+	// 应用未生效+成功 4 处；停止=失败+成功 2 处。漏发/多发都会让用户收到
+	// 与实际不符的启停通知，故用等值而非下限。
 	start := bodyOf(t, caddy, "func (h *Handlers) StartCaddy(")
-	if count(start, "notify.EvtCaddyLifecycle") < 2 || !strings.Contains(start, `"3": "失败"`) {
-		t.Fatalf("StartCaddy 必须成功+失败双分支发事件（失败结果=失败）")
+	if got := count(start, "notify.EvtCaddyLifecycle"); got != 3 {
+		t.Fatalf("StartCaddy 启停事件=%d 处, want 3（失败/应用未生效/成功）", got)
 	}
+	if !strings.Contains(start, "caddyLifecycleFailureResult(err)") {
+		t.Fatalf("StartCaddy 启动失败事件第三参必须带原因摘要（caddyLifecycleFailureResult）")
+	}
+	applyBranchOf(t, start, "StartCaddy")
 	restart := bodyOf(t, caddy, "func (h *Handlers) RestartCaddy(")
-	if count(restart, "notify.EvtCaddyLifecycle") < 3 || !strings.Contains(restart, `"3": "失败"`) {
-		t.Fatalf("RestartCaddy 三条失败路径与成功路径都要发事件")
+	if got := count(restart, "notify.EvtCaddyLifecycle"); got != 4 {
+		t.Fatalf("RestartCaddy 启停事件=%d 处, want 4（停止失败/启动失败/应用未生效/成功）", got)
 	}
+	if !strings.Contains(restart, "caddyLifecycleFailureResult(err)") {
+		t.Fatalf("RestartCaddy 失败事件第三参必须带原因摘要（caddyLifecycleFailureResult）")
+	}
+	applyBranchOf(t, restart, "RestartCaddy")
 	stop := bodyOf(t, caddy, "func (h *Handlers) StopCaddy(")
-	if count(stop, "notify.EvtCaddyLifecycle") < 2 || !strings.Contains(stop, `"3": "失败"`) {
-		t.Fatalf("StopCaddy 失败分支也要发事件")
+	if got := count(stop, "notify.EvtCaddyLifecycle"); got != 2 {
+		t.Fatalf("StopCaddy 启停事件=%d 处, want 2（失败/成功）", got)
+	}
+	if !strings.Contains(stop, "caddyLifecycleFailureResult(err)") {
+		t.Fatalf("StopCaddy 失败事件第三参必须带原因摘要（caddyLifecycleFailureResult）")
 	}
 
 	tm := srcOf(t, "taskmonitor.go")
@@ -371,10 +402,16 @@ func TestNotificationEventParamAndBranchGuards(t *testing.T) {
 
 	keys := srcOf(t, "apikeys.go")
 	upd := bodyOf(t, keys, "func updateAPIKeyStatus(")
-	condIdx := idx(t, upd, "*req.IsEnabled != (beforeEnabled == 1)", "apikeys.go:updateAPIKeyStatus")
+	// 锚发布行：条件在函数里出现两次（审计 delta 与发布守卫），首个 Index 会
+	// 把审计侧条件误当发布守卫（恒早于发布、断言空转）。取**最后一处**条件
+	// 并钉其与发布紧邻（同一 if 块内、中间不得早退），真实守卫被删即红。
 	pubIdx := idx(t, upd, "notify.EvtAPIKeyToggled", "apikeys.go:updateAPIKeyStatus")
-	if condIdx > pubIdx {
-		t.Fatalf("API Key 启停事件必须受「真实翻转」条件约束（条件出现在发布之后）")
+	condIdx := strings.LastIndex(upd[:pubIdx], "*req.IsEnabled != (beforeEnabled == 1)")
+	if condIdx < 0 {
+		t.Fatalf("apikeys.go:updateAPIKeyStatus 发布前的真实翻转守卫缺失")
+	}
+	if between := upd[condIdx:pubIdx]; strings.Contains(between, "return") {
+		t.Fatalf("API Key 启停事件发布与守卫之间出现早退——事件不再受同一 if 块约束")
 	}
 
 	backup := srcOf(t, "autobackup.go")
@@ -383,5 +420,34 @@ func TestNotificationEventParamAndBranchGuards(t *testing.T) {
 	failIdx := idx(t, run, "notify.EvtBackupFailed", "autobackup.go:RunAutoBackupOnce")
 	if lockIdx > failIdx {
 		t.Fatalf("TryLock 必须早于 backup.failed 发布登记——争用是「未执行」不是「备份失败」")
+	}
+}
+
+// 日报目标通道查询失败必须 500（EVTCERT153-11）：此前 chRows 查询 err 被
+// 静默跳过，目标用户显示为零通道而运维无从察觉。
+func TestGetDailyTargets_failsVisibleWhenChannelReadBreaks(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT OR REPLACE INTO users (id, username, password_hash, role) VALUES (1, 'alice', 'x', 'user')`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT OR REPLACE INTO notification_daily (user_id, config) VALUES (1, '{"enabled":true}')`); err != nil {
+		t.Fatalf("seed daily: %v", err)
+	}
+	if _, err := db.DB.Exec(`DROP TABLE notification_channels`); err != nil {
+		t.Fatalf("drop channels: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("user_id", 1)
+		c.Set("role", "admin")
+		c.Set("username", "tester")
+		c.Next()
+	})
+	r.GET("/notification/daily/targets", h.GetDailyTargets)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/notification/daily/targets", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（通道读故障不得静默显示零通道）", rec.Code, rec.Body.String())
 	}
 }

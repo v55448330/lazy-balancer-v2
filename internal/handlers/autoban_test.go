@@ -28,6 +28,8 @@ import (
 // 名单写路径经 finishTxApply，需要可用 caddyService）。
 func newAutobanTestEnv(t *testing.T) *gin.Engine {
 	t.Helper()
+	// 本夹具写 autobanSecurityLibsReady 缝（见下方 stub）——写侧隔离登记。
+	withIsolatedGlobal(t)
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize: %v", err)
@@ -43,6 +45,12 @@ func newAutobanTestEnv(t *testing.T) *gin.Engine {
 	}))
 	t.Cleanup(fakeCaddy.Close)
 	gin.SetMode(gin.TestMode)
+	// 安全库就绪探测测试缝：测试环境不落 CRS/xdb 目录，默认按就绪处理
+	//（封禁生效的库门由 TestAutobanStatus_securityLibsMissingIsIneffective
+	// 单独钉住）。不 stub 会让每条链路判据都因缺库恒 false。
+	oldLibsProbe := autobanSecurityLibsReady
+	autobanSecurityLibsReady = func() (bool, bool) { return true, true }
+	t.Cleanup(func() { autobanSecurityLibsReady = oldLibsProbe })
 	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
 	router := gin.New()
 	router.GET("/security/autoban", h.GetAutobanConfig)
@@ -470,6 +478,54 @@ func TestAutobanStatus_banMissingDistinguishesLink(t *testing.T) {
 			t.Fatalf("ban_missing=%q want empty", got)
 		}
 	})
+}
+
+// 安全库缺失（CRS 树/IP2Region 库）时渲染层整条丢弃安全链（deny 段不生成）：
+// 链路引用/绑定齐备也不算生效——ban_effective=false 且 ban_missing=libs
+// （最上游缺失环节，提示去更新安全库而不是改策略）。
+func TestAutobanStatus_securityLibsMissingIsIneffective(t *testing.T) {
+	withIsolatedGlobal(t) // 本用例体直写 autobanSecurityLibsReady 缝
+	router := newAutobanTestEnv(t)
+	seedAutobanListEntries(t, `[{"value":"198.51.100.8"}]`)
+	listID := autobanPresetID(t)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,enabled,ip_acl_enabled,ip_acl_mode,ip_acl_list_refs) VALUES ('ban-libs',1,1,'deny',?)`, fmt.Sprintf("[%d]", listID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyID, _ := res.LastInsertId()
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_libs','libs','http','libs.test',8080,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_libs','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_libs',?)`, policyID); err != nil {
+		t.Fatal(err)
+	}
+	// 覆盖 newAutobanTestEnv 的「就绪」stub：缺 IP2Region 库即缺库。
+	oldProbe := autobanSecurityLibsReady
+	autobanSecurityLibsReady = func() (bool, bool) { return true, false }
+	t.Cleanup(func() { autobanSecurityLibsReady = oldProbe })
+
+	response := getRequest(t, router, "/security/autoban/status")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			BanEffective bool   `json:"ban_effective"`
+			BanMissing   string `json:"ban_missing"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.BanEffective {
+		t.Fatal("缺安全库时 ban_effective 必须 false（deny 段未进运行配置）")
+	}
+	if payload.Data.BanMissing != "libs" {
+		t.Fatalf("ban_missing=%q, want libs", payload.Data.BanMissing)
+	}
 }
 
 // autobanListReferenced / autobanBanEffectiveIP 的 fail-closed 构造不变量：

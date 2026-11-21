@@ -1122,6 +1122,9 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "更新",
+		// 全量链回退（未引用名单/热路径不接管）同样必须发事件——此前只有
+		// 热路径 txApplyFinish 带 Notify，回退分支静默零通知（DEFPOL153-001）。
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了", "3": name}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s，%d 条）", name, id, len(entries)),
 		SuccessMsg:  apimsg.T(c, "k_b754105d"), MessageKey: "k_b754105d",
 		Data: applyData,
@@ -1409,6 +1412,8 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
+		// 全量链回退必须发事件（与上方热路径同参数，DEFPOL153-001）。
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "变更了条目", "3": listName}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）追加 IP %s（%s，现共 %d 条）", listName, id, req.Value, actionLabel, len(entries)),
 		SuccessMsg:  apimsg.T(c, "k_a4443bc4"), MessageKey: "k_a4443bc4",
 		Data: gin.H{"added": true},
@@ -1544,6 +1549,8 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
+		// 全量链回退必须发事件（与上方热路径同参数，DEFPOL153-001）。
+		Notify:      &notify.Event{Type: notify.EvtIPListChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "变更了条目", "3": listName}},
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）移除 IP %s（现共 %d 条）", listName, id, req.Value, len(kept)),
 		SuccessMsg:  apimsg.T(c, "k_90c73fde"), MessageKey: "k_90c73fde",
 		Data: gin.H{"removed": true},

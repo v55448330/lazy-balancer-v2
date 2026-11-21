@@ -310,8 +310,15 @@ func (h *Handlers) autobanListReferenced(preset autobanPresetListState) bool {
 	return services.IPListsReferencedByEnabledPolicy([]int{int(preset.id)})
 }
 
-// autobanBanEffectiveIP IP 级通道封禁是否真正生效：预置名单存在且
-// 含未到期条目，并被至少一个「启用 + IP 访问控制启用 + deny 模式」的策略在
+// autobanSecurityLibsReady 安全库就绪探测（测试缝；生产=services.SecurityLibraryStatus）。
+// 缺库时渲染层整体跳过安全链（含 IP ACL deny 段，见 services/caddy.go
+// securityLibsOK 门与 l4_security_render.go 同款门）——封禁实际不生效，
+// ban_effective 必须与渲染面同源。
+var autobanSecurityLibsReady = services.SecurityLibraryStatus
+
+// autobanBanEffectiveIP IP 级通道封禁是否真正生效：安全库齐备（CRS 规则树 +
+// IP2Region 库；缺库时渲染层整条丢弃安全链，deny 段不生成 → 名单命中不拦），
+// 且预置名单被至少一个「启用 + IP 访问控制启用 + deny 模式」的策略在
 // ip_acl_list_refs 中引用，且该策略已绑定到「启用 + 至少一个启用上游」的
 // 已发布规则。HTTP 与 TCP（L4）规则都在消费面：L4 渲染把 deny 模式 ACL
 // 并集写成 IP 名单文件匹配器，命中断连（见 services/l4_security_render.go
@@ -327,6 +334,11 @@ func (h *Handlers) autobanListReferenced(preset autobanPresetListState) bool {
 func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 	if preset.id <= 0 {
 		return true
+	}
+	// 库门先于链路判据：缺库时 deny 段根本不进运行配置（见变量注释），
+	// 「引用+绑定+上游齐备」只说明链路就绪而非拦截生效。
+	if crsOK, ip2regionOK := autobanSecurityLibsReady(); !crsOK || !ip2regionOK {
+		return false
 	}
 	// 2026-11-21 用户裁定：名单为空≠功能未生效——封禁链路就绪（deny 引用+
 	// 绑定+启用规则+启用上游）即生效，写入名单即拦截；空名单不弹不生效黄条。
@@ -346,12 +358,18 @@ func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 	return count > 0
 }
 
-// autobanMissingLink 细分封禁链路缺失环节：policy=无启用 deny 策略引用名单
-// （提示创建/引用）；binding=策略就绪但未关联到启用 HTTP 规则+启用上游（提示
-// 关联规则）。查询失败返回空（fail-closed，黄条侧已有 ban_effective 兜底）。
+// autobanMissingLink 细分封禁链路缺失环节：libs=安全库缺失（CRS/IP2Region，
+// 渲染层整条跳过安全链——与 ban_effective 库门同源）；policy=无启用 deny
+// 策略引用名单（提示创建/引用）；binding=策略就绪但未关联到启用 HTTP 规则+
+// 启用上游（提示关联规则）。查询失败返回空（fail-closed，黄条侧已有
+// ban_effective 兜底）。
 func (h *Handlers) autobanMissingLink(preset autobanPresetListState) string {
 	if preset.id <= 0 {
 		return ""
+	}
+	// 库缺失是最上游的缺失环节：修策略/绑定都不解决「安全链根本没渲染」。
+	if crsOK, ip2regionOK := autobanSecurityLibsReady(); !crsOK || !ip2regionOK {
+		return "libs"
 	}
 	var policyReady int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies p
