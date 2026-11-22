@@ -89,15 +89,9 @@ test('设计守卫：通知面标准（描述类/分区竖条/弹框体高度/�
   assert.match(nc, /<DialogSectionHeader :title="tplEditorLabel" \/>/, '内容模板分区标题带竖条')
   // 弹框体高度上限（append-to-body 用全局类）
   assert.match(nc, /\.rule-edit-dialog \.el-dialog__body \{ max-height: calc\(100vh - \d+px\); overflow-y: auto; overflow-x: hidden; \}/, '模板弹框体必须限高滚动')
-  assert.match(nc, /\.daily-preview-dialog \.el-dialog__body \{ max-height: calc\(100vh - \d+px\)/, '日报预览弹框体必须限高')
-  // 预览固定高度 + 禁横向滚动
+  // 预览固定高度（2026-11-22 裁定：独立日报预览弹框下线，预览统一收敛到编辑消息模板弹框）
   assert.match(nc, /height: 360px; max-height: 46vh/, '预览区必须固定高度')
-  // 单滚动契约（2026-11-22 裁定：双层滚动条）：弹框体 overflow hidden+flex 列，
-  // 唯一滚动=daily-preview-body（flex:1 min-height:0），内层铺满不单独滚。
-  assert.match(nc, /\.daily-preview-dialog :deep\(\.el-dialog__body\) \{ max-height: calc\(100vh - 240px\); overflow: hidden; display: flex; flex-direction: column; \}/, '日报预览弹框体不得再滚（单滚动）')
-  assert.match(nc, /\.daily-preview-dialog \.daily-preview-body \{ flex: 1; min-height: 0; height: auto; \}/, '唯一滚动容器=daily-preview-body')
-  assert.match(nc, /\.daily-preview-body \.tpl-preview, \.daily-preview-body \.tpl-md-preview, \.daily-preview-body \.daily-html-preview \{ height: 100%; max-height: none;/, '内层面板铺满不单独滚动')
-  assert.match(nc, /\.daily-preview-body \{ height: 420px; max-height: 46vh; overflow-y: auto; overflow-x: hidden;/, 'daily-preview-body 保留自身滚动语义（flex 覆写作用域限定弹框内）')
+  assert.ok(!/daily-preview-dialog/.test(nc), '独立日报预览弹框已下线（不得残留弹框类）')
   // bordered 多选隐藏勾选对号
   assert.match(nc, /\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__inner \{ display: none; \}/, 'bordered 多选必须隐藏勾选对号')
   // 卡头保存为实体按钮（非 link）

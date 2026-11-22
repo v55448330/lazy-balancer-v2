@@ -182,8 +182,18 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 var styleReservedPlaceholders = map[string]bool{"date": true, "title": true, "body": true,
 	"level": true, "event": true, "time": true, "node": true, "brand": true, "event_title": true}
 
-var botReservedPlaceholders = map[string]bool{"title": true, "body": true,
-	"level": true, "event": true, "time": true, "node": true, "brand": true, "event_title": true}
+// botReservedPlaceholders 由 style 集派生（唯一差异=date：机器人模板不收日期
+// 变量）——此前两份字面量各自维护，增键必漏一侧。
+var botReservedPlaceholders = func() map[string]bool {
+	m := make(map[string]bool, len(styleReservedPlaceholders))
+	for k := range styleReservedPlaceholders {
+		if k == "date" {
+			continue
+		}
+		m[k] = true
+	}
+	return m
+}()
 
 // dailyFieldKeys 日报载荷 Fields 中可作文本变量的键（排除渲染器已内置键；
 // 确定性排序便于测试与排查）。
@@ -249,7 +259,7 @@ func renderBotMessage(tpl string, msg Message, ts time.Time, typ string) string 
 		}
 		for _, k := range []string{"top_ips", "top_paths", "cert_expiring", "nodes_summary"} {
 			if v, ok := fields[k]; ok {
-				if md, ok2 := mdMultiValueTable(k, "", v); ok2 {
+				if md, ok2 := mdMultiValueTable(k, v); ok2 {
 					// 前后各留一空行：模板里标签行紧跟变量时，表格与标签/
 					// 相邻块粘连会被解析器互相吞并（表头变数据行）。
 					fields[k] = "\n" + strings.TrimRight(md, "\n") + "\n"

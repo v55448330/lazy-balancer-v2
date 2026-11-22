@@ -111,10 +111,13 @@ const emitSave = () => {
  * 保持自身高度、只在行内垂直居中，不被拉伸变形。 */
 .schedule-editor__controls { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
 .schedule-editor__days { flex: 1 1 220px; min-width: 180px; }
-/* height:auto 必须显式覆盖 el-input 的固定 height（否则 align-self:stretch
- * 对显式高度的 flex item 无效，时间框仍是 32px）。 */
+/* 两侧 wrapper 都必须拉伸到行高：此前只拉了时间框（el-input__wrapper
+ * height:100%），星期多选的 el-select__wrapper 仍是最小 32px——肉眼即
+ * 「时间框更高、左侧更矮」的错位（2026-11-22 用户两轮截图纠偏）。
+ * height:auto 显式覆盖 el-input 固定 height，否则 stretch 对显式高度无效。 */
 .schedule-editor__time { width: 110px; align-self: stretch; height: auto; }
-.schedule-editor__time :deep(.el-input__wrapper) { height: 100%; min-height: 32px; }
+.schedule-editor__days :deep(.el-select__wrapper),
+.schedule-editor__time :deep(.el-input__wrapper) { height: 100%; min-height: 32px; align-items: center; }
 .schedule-editor__controls > .el-button { align-self: center; }
 .schedule-editor__tip { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.6; }
 .schedule-editor__tip--error { color: var(--el-color-danger); }

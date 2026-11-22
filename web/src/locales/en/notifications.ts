@@ -153,9 +153,7 @@ export default {
         itemsRequired: 'Select at least one daily report item',
         saveDailyConfirm: 'Save the daily digest items, target channels and send time?',
         formatSaveConfirm: 'Save the daily render format for this channel type?',
-        previewTitle: 'Daily report preview',
         previewEmpty: 'No preview content',
-        previewBuiltinNote: 'Preview renders the built-in template (same source as the "Modules" selection); channels using a custom template deliver that template instead',
       },
       tabs: {
         credentials: 'Email credentials',
@@ -230,7 +228,6 @@ export default {
       noChannelsHint: "No enabled channels — create one in Channels first",
       channelUntestedHint: 'Channel not test-passed; test it in Channels first',
       previewRender: "Rendered",
-      previewSource: "Source",
       distByChannelTitle: "Deliveries by channel (7 days)",
       distRateTitle: "Success rate by type (7 days)",
       distByEventTitle: "Top 10 events (7 days)",

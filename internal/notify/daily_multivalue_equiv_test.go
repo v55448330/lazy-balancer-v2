@@ -39,7 +39,7 @@ func TestMDMultiValueTableMatchesFrontendFixture(t *testing.T) {
 		t.Fatal("跨栈夹具为空")
 	}
 	for i, tc := range cases {
-		got, ok := mdMultiValueTable(tc.Key, "", tc.Value)
+		got, ok := mdMultiValueTable(tc.Key, tc.Value)
 		if tc.Expected == nil {
 			if ok {
 				t.Errorf("夹具第 %d 行（%s %q）：期望整项回退（ok=false），实际产出 %q", i+1, tc.Key, tc.Value, got)

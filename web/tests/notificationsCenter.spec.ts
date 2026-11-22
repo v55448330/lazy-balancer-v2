@@ -272,7 +272,8 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.match(saveBlock, /full\.style_config = JSON\.stringify\(style\)/, '保存成功后本地状态必须回写（重开弹框/后续计划读到新样式）')
   assert.doesNotMatch(nc, /savingTplChannelId/, '单 tab 保存态已退役')
   assert.match(nc, /templateInactiveHint/, '内置模板模式提示词必须与开关一致')
-  assert.match(nc, /previewBuiltinNote/, '日报预览必须说明内置模板口径')
+  assert.match(nc, /modeModulesPreviewHint/, '内置模板预览必须带只读口径说明（编辑弹框内）')
+  assert.match(nc, /const format = tplActiveFormat\.value \|\| 'markdown'/, '内置模板预览格式必须取当前通道实际格式（webhook=json/email=html）')
   assert.match(nc, /const moduleLabel = \(mod: \{ id: string; label: string \}\)/, '模块名必须经词条映射（缺键回落后端 label）')
   assert.match(nc, /:readonly="tplMode === 'daily' && tplDailyMode === 'modules'"/, '模块拼装模式编辑器必须只读')
   assert.match(nc, /modeModulesPreviewHint/, '模块拼装预览提示必须在位')
@@ -330,7 +331,6 @@ test('通知中心全源码接线：REST 端点全量 + 预览防抖 + 模板单
   // 预览渲染管线：marked+DOMPurify 全文解析必须防抖（同步 computed 会逐键重解析）
   assert.match(nc, /const tplPreviewHtml = shallowRef\(mdToHtml\(previewText\.value\)\)/, '模板预览首帧立即渲染')
   assert.match(nc, /watchDebounced\(previewText, \(raw: string\) => \{ tplPreviewHtml\.value = mdToHtml\(raw\) \}/, '模板预览必须防抖')
-  assert.match(nc, /watchDebounced\(dailyPreviewText, \(raw: string\) => \{ dailyPreviewHtml\.value = mdToHtml\(raw\) \}/, '日报预览必须防抖')
   assert.ok(!/const tplPreviewHtml = computed\(/.test(nc), '预览渲染不得回退同步 computed')
   // 事件缺省模板单源：SFC 不自写字符串（zh 逐字等价由跨栈夹具 + utils 钉）
   assert.match(nc, /return defaultEventTpl\(typ, lang\)/, '事件缺省模板必须委托 utils/eventDefaultTemplates')
@@ -341,13 +341,10 @@ test('通知中心全源码接线：REST 端点全量 + 预览防抖 + 模板单
 // 值静默覆盖前一处（预览高度 360→300、弹框体 240→100dvh），无人知道最终值。
 test('通知中心样式块：同选择器单声明 + 死类清零', () => {
   const nc = code('src/views/notifications/NotificationCenter.vue')
-  // 行首锚定：后代作用域覆写（.daily-preview-body .tpl-…）是合法的单条窄覆写，
-  // 不构成同选择器重复声明。
+  // 行首锚定：后代作用域覆写是合法的单条窄覆写，不构成同选择器重复声明。
   const declCount = (selector: RegExp): number => (nc.match(selector) || []).length
   assert.equal(declCount(/^\.tpl-html-preview \{/gm), 1, '.tpl-html-preview 只允许一条声明')
-  assert.equal(declCount(/^\.daily-html-preview \{/gm), 1, '.daily-html-preview 只允许一条声明')
   assert.equal(declCount(/^\.rule-edit-dialog :deep\(\.el-dialog__body\) \{/gm), 1, '模板弹框体只允许一条 scoped 声明')
-  assert.equal(declCount(/^\.daily-preview-dialog :deep\(\.el-dialog__body\) \{/gm), 1, '日报预览弹框体只允许一条 scoped 声明')
   assert.equal(declCount(/^\.notif-level-head \{/gm), 1, '级别段标题只允许一条声明')
   assert.equal(declCount(/^\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__label \{/gm), 1, 'bordered 标签只允许一条声明')
   // 死类：模板从未使用（tpl-section-head 仍在用，仅其子标签类残留）

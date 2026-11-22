@@ -173,7 +173,6 @@
                 </template>
                 <el-button size="small" link type="primary" @click="openDailyTpl">{{ t('app.notification.daily.editTemplate') }}</el-button>
                 <el-button size="small" link type="primary" :loading="testingDaily" @click="testDaily">{{ t('app.notification.daily.testSend') }}</el-button>
-                <el-button size="small" link type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
                 <el-switch v-model="dailyRule.enabled" size="small" @change="toggleRule(dailyRule)" />
               </div>
             </div>
@@ -416,28 +415,6 @@
       </template>
     </el-dialog>
 
-    <!-- 日报预览弹窗（卡片预览与通道格式预览共用；html=sandbox iframe，其余纯文本 pre） -->
-    <el-dialog v-model="dailyPreviewVisible" append-to-body class="dialog-body-inset daily-preview-dialog" width="min(680px, 92vw)" top="6vh">
-      <template #header>
-        <DialogHeader :icon="Calendar" :title="t('app.notification.daily.previewTitle')" :subtitle="dailyPreviewSource" tone="primary" />
-      </template>
-      <div v-if="!dailyPreviewFmtLocked" class="daily-preview-toolbar">
-        <el-radio-group v-model="dailyPreviewFmt" size="small" @change="renderDailyPreview">
-          <el-radio-button v-for="f in dailyPreviewFormatOptions" :key="f.value" :value="f.value">{{ f.label }}</el-radio-button>
-        </el-radio-group>
-      </div>
-      <!-- 预览口径说明：端点只吃 items+format（内置模板渲染）；模板模式通道的
-           实际投递以通道模板为准——不说明会被误读为「投递就是这样」。 -->
-      <div class="form-tip-line daily-preview-note">{{ t('app.notification.daily.previewBuiltinNote') }}</div>
-      <div class="daily-preview-body">
-        <iframe v-if="dailyPreviewFmt === 'html'" class="daily-html-preview" sandbox="" :srcdoc="dailyPreviewText" :title="t('app.notification.daily.previewTitle')" />
-        <div v-else-if="dailyPreviewFmt === 'markdown'" v-loading="dailyPreviewLoading" class="tpl-md-preview" v-html="dailyPreviewHtml"></div>
-        <pre v-else v-loading="dailyPreviewLoading" class="tpl-preview">{{ dailyPreviewText || t('app.notification.daily.previewEmpty') }}</pre>
-      </div>
-      <template #footer>
-        <el-button @click="dailyPreviewVisible = false">{{ t('app.notification.rules.cancel') }}</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -1558,38 +1535,14 @@ const testRule = async (rule: Rule): Promise<void> => {
   } finally { testingRuleId.value = null }
 }
 
-// ===== 日报预览弹窗（卡片预览与通道格式预览共用；html=sandbox iframe 渲染） =====
-const dailyPreviewVisible = ref(false)
-const dailyPreviewText = ref('')
-const dailyPreviewFmt = ref('markdown')
 // 预览 Markdown 渲染防抖（与 useDebouncedHighlight 同思路）：模板编辑器每次
 // 键入都会触发 marked+DOMPurify 全文解析，同步 computed 下大模板（HTML 卡片/
 // 六段表格）在键入期反复整篇重解析造成卡顿。首帧立即渲染，其后按 160ms 停顿 /
 // 500ms 封顶落一次——预览是阅读面，短暂延迟不损失可读性。
 const tplPreviewHtml = shallowRef(mdToHtml(previewText.value))
 watchDebounced(previewText, (raw: string) => { tplPreviewHtml.value = mdToHtml(raw) }, { debounce: 160, maxWait: 500 })
-const dailyPreviewHtml = shallowRef(mdToHtml(dailyPreviewText.value))
-watchDebounced(dailyPreviewText, (raw: string) => { dailyPreviewHtml.value = mdToHtml(raw) }, { debounce: 160, maxWait: 500 })
-const dailyPreviewSource = ref('')
-const dailyPreviewLoading = ref(false)
-const dailyPreviewFmtLocked = ref(false) // 机器人预览格式随协议固定（隐藏切换器）
-const dailyPreviewFormatOptions = ['markdown', 'text', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
-
-const fetchDailyPreview = async (format: string): Promise<void> => {
-  dailyPreviewLoading.value = true
-  try {
-    const res = await request.post<{ data?: { content: string; format: string } }>('/notification/daily/preview', {
-      items: dailyRule.value?.items,
-      format,
-    })
-    dailyPreviewText.value = res.data?.content ?? ''
-    dailyPreviewFmt.value = res.data?.format || format
-  } catch (e) { console.error(e) } finally { dailyPreviewLoading.value = false }
-}
-
-// 弹框内切换格式即时重渲
-const renderDailyPreview = (): void => { void fetchDailyPreview(dailyPreviewFmt.value) }
-// 模板弹框内置模板预览：与日报预览弹框同一端点（items=当前「包含模块」勾选，
+// 模板弹框内置模板预览（2026-11-22 裁定：独立「日报预览」弹框下线——
+// 预览统一收敛到编辑消息模板弹框）：同一端点（items=当前「包含模块」勾选，
 // format=当前通道渲染格式）。切换模式/通道/tab 时按需重拉。
 const tplBuiltinPreviewText = ref('')
 const tplBuiltinPreviewFmt = ref('markdown')
@@ -1599,7 +1552,9 @@ const fetchTplBuiltinPreview = async (): Promise<void> => {
   if (tplMode.value !== 'daily' || tplDailyMode.value !== 'modules') return
   tplBuiltinPreviewLoading.value = true
   try {
-    const format = tplFixedFormat.value || 'markdown'
+    // 格式=当前通道的**实际**渲染格式（webhook=json / email=html / 机器人协议固定）——
+    // 此前误用 fixedDailyFormat 使其恒落 text，webhook/邮件内置预览成纯文本。
+    const format = tplActiveFormat.value || 'markdown'
     const res = await request.post<{ data?: { content: string; format: string } }>('/notification/daily/preview', {
       items: dailyRule.value?.items,
       format,
@@ -1608,18 +1563,8 @@ const fetchTplBuiltinPreview = async (): Promise<void> => {
     tplBuiltinPreviewFmt.value = res.data?.format || format
   } catch (e) { console.error(e) } finally { tplBuiltinPreviewLoading.value = false }
 }
-watch([() => tplMode.value, () => tplDailyMode.value, () => tplChannelTab.value], () => { void fetchTplBuiltinPreview() })
+watch([() => tplMode.value, () => tplDailyMode.value, () => tplChannelTab.value, () => tplActiveFormat.value], () => { void fetchTplBuiltinPreview() })
 
-// 卡片预览：昨日真实数据（默认 markdown）
-const previewDaily = (): void => {
-  if (dailyPreviewLoading.value) return
-  dailyPreviewSource.value = ''
-  dailyPreviewFmt.value = 'markdown'
-  dailyPreviewFmtLocked.value = false
-  dailyPreviewText.value = ''
-  dailyPreviewVisible.value = true
-  void fetchDailyPreview('markdown')
-}
 
 onMounted(() => {
   void fetchRules(true)
@@ -1717,18 +1662,10 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-md-preview :deep(code) { background: var(--el-fill-color); padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .tpl-md-preview :deep(pre) { background: var(--el-fill-color); padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
 .tpl-md-preview :deep(pre code) { background: none; padding: 0; font-size: 12px; }
-/* HTML 预览 iframe（固定高度+不超 46vh；.daily-preview-body 内统一覆盖为撑满
-   容器）。模板弹框 300px、日报预览弹框 340px——单规则各持最终生效值。 */
+/* HTML 预览 iframe（模板弹框预览专用；独立日报预览弹框已下线）。 */
 .tpl-html-preview { width: 100%; height: 300px; max-height: 46vh; border: 1px solid #e5e7eb; background: #fff; }
-.daily-html-preview { width: 100%; height: 340px; max-height: 46vh; border: 1px solid #e5e7eb; background: #fff; }
 /* 弹框体限高（scoped 形态；append-to-body 的实际生效规则见下方全局块同名类） */
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
-/* 日报预览=单滚动（2026-11-22 裁定：各类预览双层滚动条）：弹框体不定高低滚，
-   唯一滚动容器=daily-preview-body（flex:1 min-height:0），内层面板铺满不单独滚动。 */
-.daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow: hidden; display: flex; flex-direction: column; }
-.daily-preview-dialog .daily-preview-note { flex: none; }
-.daily-preview-dialog .daily-preview-body { flex: 1; min-height: 0; height: auto; }
-.daily-preview-body .tpl-preview, .daily-preview-body .tpl-md-preview, .daily-preview-body .daily-html-preview { height: 100%; max-height: none; margin: 0; }
 /* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
 .tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
 .tpl-preview-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; border-bottom: none; }
@@ -1749,7 +1686,6 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .daily-warn-slot { min-height: 38px; }
 .daily-warn-slot .info-note-bar { margin: 0; }
 /* 日报预览弹窗 */
-.daily-preview-toolbar { margin-bottom: 10px; }
 /* 模板长度计数：右对齐贴编辑器；超限红字+info-note-bar 明示（保存侧同口径拦截） */
 .tpl-length-row { display: flex; justify-content: flex-end; margin-top: 4px; }
 .tpl-length-row .form-hint { margin-top: 0; font-variant-numeric: tabular-nums; }
@@ -1778,11 +1714,6 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .notif-level-section.is-warn .notif-level-head::before { background: var(--el-color-warning, #e6a23c); }
 .notif-level-section.is-info .notif-level-head::before { background: var(--el-color-primary, #409eff); }
 .rule-edit-dialog .el-dialog__body { max-height: calc(100vh - 300px); overflow-y: auto; overflow-x: hidden; }
-.daily-preview-dialog .el-dialog__body { max-height: calc(100vh - 280px); overflow-y: auto; overflow-x: hidden; }
-.daily-preview-body { height: 420px; max-height: 46vh; overflow-y: auto; overflow-x: hidden; border: 1px solid #eef2f7; }
-.daily-preview-note { margin: 8px 10px; }
-.daily-preview-body iframe { display: block; width: 100%; height: 100%; border: 0; }
-.daily-preview-body .daily-html-preview, .daily-preview-body .tpl-preview, .daily-preview-body .tpl-md-preview { height: 100%; max-height: none; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
 .daily-items .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
 .daily-items .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }

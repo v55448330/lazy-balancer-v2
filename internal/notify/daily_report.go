@@ -839,7 +839,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			var tbl, lists strings.Builder
 			for _, r := range rows {
 				if strings.Contains(r[1], "\n") {
-					if md, ok := mdMultiValueTable(r[2], r[0], r[1]); ok {
+					if md, ok := mdMultiValueTable(r[2], r[1]); ok {
 						// 标签与表格间、相邻块间必须空行：粘连时 markdown 解析器把
 						// 下一块的标签行/表头/分隔行吞成上一表的正文行（2026-11-22
 						// 用户实测攻击路径表头变数据行）。
@@ -896,7 +896,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 // 的日报样式设计）：节点摘要=节点/请求/拦截/独立IP/备注；TOP 攻击源/路径=
 // 名目/次数（右对齐）；临期证书=域名/到期日。任何行解析失败整项回退 ok=false
 // （fail-safe，不半表半列表）。转义：单元格内管道符会破坏表格，替换为全角。
-func mdMultiValueTable(item, label, value string) (string, bool) {
+func mdMultiValueTable(item, value string) (string, bool) {
 	cell := func(x string) string { return strings.ReplaceAll(x, "|", "｜") }
 	lines := strings.Split(value, "\n")
 	switch item {
@@ -947,7 +947,6 @@ func mdMultiValueTable(item, label, value string) (string, bool) {
 		}
 		return b.String(), true
 	}
-	_ = label
 	return "", false
 }
 

@@ -90,7 +90,6 @@ const NON_LOG_VHTML_FACES = [
   'src/components/SyntaxHighlight.vue#highlighted',
   'src/components/layout/AppLayout.vue#footerHtml',
   'src/views/notifications/NotificationCenter.vue#tplPreviewHtml',
-  'src/views/notifications/NotificationCenter.vue#dailyPreviewHtml',
   'src/views/notifications/NotificationCenter.vue#tplBuiltinPreviewHtml',
 ] as const
 

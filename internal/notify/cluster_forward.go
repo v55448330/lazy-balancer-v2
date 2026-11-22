@@ -106,15 +106,17 @@ func setClusterForwardRoleDetectorForTest(fn func() (bool, string, string, strin
 
 // shouldForwardClusterEvent 从节点判定（每次直读角色，无缓存——见
 // clusterForwarder 注释）+ 事件级过滤：仅转发目录内事件（带外键不入上报面）。
-func shouldForwardClusterEvent(evt Event) bool {
+// shouldForwardClusterEvent 返回是否转发 + 角色快照（快照随 job 传给 worker，
+// 每事件只探测一次）。
+func shouldForwardClusterEvent(evt Event) (bool, clusterForwardRoleInfo) {
 	if _, ok := catalogByID(evt.Type); !ok {
-		return false // 目录外事件不上报（与本地投递同门）
+		return false, clusterForwardRoleInfo{} // 目录外事件不上报（与本地投递同门）
 	}
-	isMaster, _, _, _, err := clusterForwardRole()
+	isMaster, masterURL, token, nodeName, err := clusterForwardRole()
 	if err != nil || isMaster {
-		return false // 探测失败=保守按主节点（不转发，本地正常处理）
+		return false, clusterForwardRoleInfo{} // 探测失败=保守按主节点（不转发，本地正常处理）
 	}
-	return true
+	return true, clusterForwardRoleInfo{masterURL: masterURL, token: token, nodeName: nodeName}
 }
 
 // ── 转发队列：异步、有界、单 worker ──
@@ -123,10 +125,19 @@ func shouldForwardClusterEvent(evt Event) bool {
 // （既不丢事件，也不阻塞调用方）。
 const clusterForwardQueueSize = 256 // 有界队列（溢出落盘，非丢弃）
 
+// clusterForwardRoleInfo 角色探测快照（入队时取一次，worker 复用——此前
+// shouldForward 与 forwardEventToMaster 各探测一次，每事件 2 次 SELECT）。
+type clusterForwardRoleInfo struct {
+	masterURL string
+	token     string
+	nodeName  string
+}
+
 // clusterForwardJob 队列条目。done 仅测试排空同步用（生产恒 nil）：worker
-// 串行处理，关闭 done 即代表此前入队的事件都已落定。
+// 串行处理，关闭 done 即代表此前入队的事件都已落定。role=入队时的角色快照。
 type clusterForwardJob struct {
 	evt  Event
+	role clusterForwardRoleInfo
 	done chan struct{}
 }
 
@@ -158,7 +169,7 @@ func clusterForwardLoop(ch chan clusterForwardJob) {
 			close(job.done)
 			continue
 		}
-		if err := forwardEventToMaster(job.evt); err != nil {
+		if err := forwardEventToMasterWithRole(job.evt, job.role); err != nil {
 			spoolClusterEvent(job.evt)
 		}
 	}
@@ -189,7 +200,7 @@ func drainClusterForwardQueueOnStop() {
 
 // enqueueClusterForward 入队（满则落盘）。Origin/Hop 在入队时定稿，spool 重传
 // 与即时转发携带同一防回荡标记。
-func enqueueClusterForward(evt Event) {
+func enqueueClusterForward(evt Event, role clusterForwardRoleInfo) {
 	if evt.Origin == "" {
 		evt.Origin = LocalNodeName()
 	}
@@ -201,7 +212,7 @@ func enqueueClusterForward(evt Event) {
 	}
 	ch := clusterForwardQueue()
 	select {
-	case ch <- clusterForwardJob{evt: evt}:
+	case ch <- clusterForwardJob{evt: evt, role: role}:
 	default:
 		spoolClusterEvent(evt) // 队列满：落盘重传（不阻塞事件源、不丢事件）
 	}
@@ -213,6 +224,20 @@ func forwardEventToMaster(evt Event) error {
 	isMaster, masterURL, token, nodeName, _ := clusterForwardRole()
 	if isMaster || masterURL == "" || token == "" {
 		return fmt.Errorf("转发条件不成立（master=%v url=%q）", isMaster, masterURL)
+	}
+	return forwardEventToMasterWithRole(evt, clusterForwardRoleInfo{masterURL: masterURL, token: token, nodeName: nodeName})
+}
+
+// forwardEventToMasterWithRole 用入队时角色快照转发（队列 worker 路径：不再
+// 二次探测；快照为空时回退实时探测——spool 重传/测试直调形态）。
+func forwardEventToMasterWithRole(evt Event, role clusterForwardRoleInfo) error {
+	masterURL, token, nodeName := role.masterURL, role.token, role.nodeName
+	if masterURL == "" || token == "" {
+		isMaster, mu, tk, nn, _ := clusterForwardRole()
+		if isMaster || mu == "" || tk == "" {
+			return fmt.Errorf("转发条件不成立（master=%v url=%q）", isMaster, mu)
+		}
+		masterURL, token, nodeName = mu, tk, nn
 	}
 	origin, hop := evt.Origin, evt.Hop
 	if origin == "" {

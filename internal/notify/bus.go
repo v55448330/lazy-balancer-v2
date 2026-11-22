@@ -75,14 +75,14 @@ func Publish(evt Event) {
 	if evt.Time.IsZero() {
 		evt.Time = time.Now()
 	}
-	if shouldForwardClusterEvent(evt) {
+	if forward, role := shouldForwardClusterEvent(evt); forward {
 		// 防回荡（两从节点互指 master_url 时若无标记会无限转圈）：已转过一次
 		// 的事件（Hop>=1）与起源为本机的事件在本节点不再外发。
 		if evt.Hop >= 1 || (evt.Origin != "" && evt.Origin == LocalNodeName()) {
 			log.Printf("INFO: notify 集群转发终止事件 %s（hop=%d origin=%q 已到达转发终点），本地丢弃", evt.Type, evt.Hop, evt.Origin)
 			return
 		}
-		enqueueClusterForward(evt) // 异步：绝不阻塞事件源
+		enqueueClusterForward(evt, role) // 异步：绝不阻塞事件源
 		return
 	}
 	// 主节点/单机本地事件补节点标识（2026-11-22 用户裁定：通知里只有从节点
@@ -137,6 +137,7 @@ func dispatch(evt Event) {
 		log.Printf("WARN: notify 查询订阅者失败（事件 %s 本轮未投递）: %v", evt.Type, err)
 		return
 	}
+	selections := subscriptionChannelSelectionsFor(evt.Type, userIDs)
 	for _, uid := range userIDs {
 		insertDeliveryPending(uid, evt)
 		// MCP 实时推送与通道投递同源过滤：显式空选接收通道（channel_ids='[]'，
@@ -153,7 +154,7 @@ func dispatch(evt Event) {
 		//      标题/正文），模板定制只影响通道投递。
 		// 需要「完全不收」时用显式空选（②口径的根治）或关闭 MCP 实时推送开关
 		// （notify.mcp_enabled，mcpserver 侧整体短路）。
-		if subscriptionChannelSelectionFor(uid, evt.Type).explicitEmpty {
+		if selections[uid].explicitEmpty {
 			continue
 		}
 		firePushHooks(uid, Message{EventType: evt.Type, Level: string(evt.Level), Title: evt.Title, Body: evt.Body})

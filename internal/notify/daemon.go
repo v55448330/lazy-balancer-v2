@@ -325,6 +325,60 @@ func subscriptionTemplateFor(userID int64, eventType string) string {
 	return tpl
 }
 
+// subscriptionChannelSelectionsFor 批量版本（dispatch 热路径）：一次
+// `event_type=? AND user_id IN (…)` 查询替代逐用户单查（N+1）。缺行用户
+// 不出现在返回 map 中，调用方按零值（=默认订阅语义）处理。
+func subscriptionChannelSelectionsFor(eventType string, userIDs []int64) map[int64]channelSelection {
+	out := make(map[int64]channelSelection, len(userIDs))
+	if len(userIDs) == 0 || db.DB == nil {
+		return out
+	}
+	ph := make([]string, len(userIDs))
+	args := make([]any, 0, len(userIDs)+1)
+	args = append(args, eventType)
+	for i, uid := range userIDs {
+		ph[i] = "?"
+		args = append(args, uid)
+	}
+	rows, err := db.DB.Query(`SELECT user_id, COALESCE(channel_ids,''), COALESCE(channel_templates,'')
+		FROM notification_subscriptions WHERE event_type=? AND user_id IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var uid int64
+		var idsRaw, tplRaw string
+		if err := rows.Scan(&uid, &idsRaw, &tplRaw); err != nil {
+			continue
+		}
+		sel := channelSelection{ids: map[int64]bool{}, templates: map[int64]string{}}
+		if idsRaw != "" {
+			var ids []int64
+			if json.Unmarshal([]byte(idsRaw), &ids) == nil {
+				if len(ids) == 0 {
+					sel.explicitEmpty = true
+				}
+				for _, id := range ids {
+					sel.ids[id] = true
+				}
+			}
+		}
+		if tplRaw != "" {
+			var m map[string]string
+			if json.Unmarshal([]byte(tplRaw), &m) == nil {
+				for k, v := range m {
+					if id, err := strconv.ParseInt(k, 10, 64); err == nil && v != "" {
+						sel.templates[id] = v
+					}
+				}
+			}
+		}
+		out[uid] = sel
+	}
+	return out
+}
+
 // channelSelection 订阅的通道选择三态：explicitEmpty=显式 '[]'（不投递）；
 // ids 非空=仅选定通道；两者皆否=全部启用通道（默认订阅语义）。
 type channelSelection struct {

@@ -160,9 +160,7 @@ export default {
         itemsRequired: '请至少选择一个日报项目',
         saveDailyConfirm: '确认保存每日摘要的包含项目、目标通道与投递时间？',
         formatSaveConfirm: '确认保存该通道类型的日报渲染格式？',
-        previewTitle: '日报预览',
         previewEmpty: '暂无预览内容',
-        previewBuiltinNote: '预览按「内置模板」渲染（与「包含模块」勾选同口径）；使用自定义模板的通道实际投递以该通道模板为准',
       },
       tabs: {
         credentials: '邮件凭据',
@@ -237,7 +235,6 @@ export default {
       noChannelsHint: "暂无启用通道——请先在「通道管理」创建通道",
       channelUntestedHint: '该通道未测试通过，请先在「通道管理」测试',
       previewRender: "渲染预览",
-      previewSource: "源码",
       distByChannelTitle: "通道投递分布（7天）",
       distRateTitle: "类型成功率（7天）",
       distByEventTitle: "事件投递 TOP10（7天）",

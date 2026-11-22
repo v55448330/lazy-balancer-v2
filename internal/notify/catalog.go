@@ -181,11 +181,19 @@ func CatalogLookup(id string) bool {
 }
 
 // catalogByID 事件 ID → 目录条目。
-func catalogByID(id string) (catalogEntry, bool) {
+// catalogIndex 目录 O(1) 查找索引（catalog 切片保留给导出行序；每事件被
+// 多路调用，线性扫 ~60 条是白热路径开销）。
+var catalogIndex = func() map[string]catalogEntry {
+	m := make(map[string]catalogEntry, len(catalog))
 	for _, e := range catalog {
-		if e.ID == id {
-			return e, true
-		}
+		m[e.ID] = e
+	}
+	return m
+}()
+
+func catalogByID(id string) (catalogEntry, bool) {
+	if e, ok := catalogIndex[id]; ok {
+		return e, true
 	}
 	return catalogEntry{}, false
 }
