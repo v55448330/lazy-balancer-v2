@@ -201,7 +201,7 @@
               <span class="daily-label">{{ t('app.notification.rules.sendTo') }}</span>
               <div class="daily-ch-select">
                 <el-checkbox-group v-model="dailyDraft.channel_ids" size="small" class="notif-pick-group">
-                  <el-checkbox v-for="ch in channelOptions" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.enabled === false || ch.last_test_ok !== true" :title="channelPickTitle(ch)">
+                  <el-checkbox v-for="ch in channelOptions" :key="ch.id" :value="ch.id" border size="small"  :disabled="!channelSendable(ch)" :title="channelPickTitle(ch)">
                     {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
                   </el-checkbox>
                 </el-checkbox-group>
@@ -281,7 +281,7 @@
                   </template>
                   <div class="notif-pick-panel">
                     <el-checkbox-group v-model="ruleDraftOf(asRule(row)).channel_ids" size="small" class="notif-pick-group">
-                      <el-checkbox v-for="ch in channelOptions" :key="ch.id" :value="ch.id" border size="small" :disabled="ch.enabled === false || ch.last_test_ok !== true" :title="channelPickTitle(ch)">
+                      <el-checkbox v-for="ch in channelOptions" :key="ch.id" :value="ch.id" border size="small"  :disabled="!channelSendable(ch)" :title="channelPickTitle(ch)">
                         {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
                       </el-checkbox>
                     </el-checkbox-group>
@@ -394,8 +394,14 @@
           <el-collapse-item name="preview">
             <template #title><DialogSectionHeader :title="t('app.notification.rules.preview')" /></template>
             <!-- 上半部分即正文源码，预览区直接渲染：HTML iframe / Markdown 渲染；不再提供源码切换。
-                 日报模块拼装模式无模板可预览——提示最终形态由「包含模块」勾选决定。 -->
-            <pre v-if="tplMode === 'daily' && tplDailyMode === 'modules'" class="tpl-preview">{{ t('app.notification.daily.modeModulesPreviewHint') }}</pre>
+                 日报内置模板模式：预览同一端点（/notification/daily/preview）渲染内置成品——
+                 与「日报预览」弹框同源（2026-11-22 裁定：预览就该在本弹框里，不再外移提示）。 -->
+            <template v-if="tplMode === 'daily' && tplDailyMode === 'modules'">
+              <div class="form-tip-line">{{ t('app.notification.daily.modeModulesPreviewHint') }}</div>
+              <iframe v-if="tplBuiltinPreviewFmt === 'html'" class="tpl-html-preview" sandbox="" :srcdoc="tplBuiltinPreviewText" :title="t('app.notification.rules.preview')" />
+              <div v-else-if="tplBuiltinPreviewFmt === 'markdown'" v-loading="tplBuiltinPreviewLoading" class="tpl-md-preview" v-html="tplBuiltinPreviewHtml"></div>
+              <pre v-else v-loading="tplBuiltinPreviewLoading" class="tpl-preview">{{ tplBuiltinPreviewText || t('app.notification.daily.previewEmpty') }}</pre>
+            </template>
             <iframe v-else-if="tplEditorLang === 'markup'" class="tpl-html-preview" sandbox="" :srcdoc="previewText" :title="t('app.notification.rules.preview')" />
             <div v-else-if="tplEditorLang === 'markdown'" class="tpl-md-preview" v-html="tplPreviewHtml"></div>
             <pre v-else class="tpl-preview">{{ previewText }}</pre>
@@ -470,7 +476,7 @@ const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 const activeTab = ref('overview')
 
-interface RuleChannel { id: number; type: string; name: string; last_test_ok?: boolean; enabled?: boolean }
+interface RuleChannel { id: number; type: string; name: string; last_test_ok?: boolean; enabled?: boolean; session_ready?: boolean }
 interface Rule {
   id: string; trigger: string; title: string; events?: string[]
   event_titles?: Record<string, string>; event_levels?: Record<string, string>; min_level?: string; send_time?: string
@@ -519,11 +525,16 @@ const channelOptions = computed<RuleChannel[]>(() => {
 const hasDisabledChannels = computed(() => channelOptions.value.some(c => c.enabled === false))
 const channelPickTitle = (ch: RuleChannel): string | undefined =>
   ch.enabled === false ? t('app.notification.rules.channelDisabledHint')
-    : ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined
+    : ch.type === 'wx_clawbot' && ch.session_ready === false ? t('app.notification.channels.wxSessionStaleHint')
+      : ch.last_test_ok !== true ? t('app.notification.rules.channelUntestedHint') : undefined
 // 可选通道集=启用通道（channel_ids 缺省=全部启用通道）；停用通道从草稿移除，
 // 避免保存时把停用通道写回。基线同口径裁剪，禁用联动不产生伪脏草稿。
 const enabledChannelIds = (): number[] => channelOptions.value.filter(c => c.enabled !== false).map(c => c.id)
-const pruneChannelIds = (ids: number[]): number[] => ids.filter(id => channelOptions.value.find(c => c.id === id)?.enabled !== false)
+// 可发送就绪（2026-11-22 用户裁定）：微信会话失效（会话待刷新）后不再允许
+// 选择/发送——选择显示自动取消，直到重新绑定且会话就绪后恢复可选。
+const channelSendable = (ch: RuleChannel): boolean =>
+  ch.enabled !== false && ch.last_test_ok === true && !(ch.type === 'wx_clawbot' && ch.session_ready === false)
+const pruneChannelIds = (ids: number[]): number[] => ids.filter(id => { const c = channelOptions.value.find(x => x.id === id); return !!c && channelSendable(c) })
 const baselineChannelIds = (ids?: number[]): number[] => pruneChannelIds(ids ?? enabledChannelIds())
 const eventCatalog = ref<CatalogEvent[]>([])
 // 行事件选项=该行所属 catalog 分组的事件（group: 端点按组写订阅）；
@@ -1411,6 +1422,7 @@ const openDailyTpl = async (): Promise<void> => {
   tplTexts.value = drafts
   seedDailyModes()
   tplChannelTab.value = tplTabChannels.value.length ? String(tplTabChannels.value[0].id) : ''
+  void fetchTplBuiltinPreview()
   tplPreviewOpen.value = []
   tplDialogVisible.value = true
 }
@@ -1577,6 +1589,26 @@ const fetchDailyPreview = async (format: string): Promise<void> => {
 
 // 弹框内切换格式即时重渲
 const renderDailyPreview = (): void => { void fetchDailyPreview(dailyPreviewFmt.value) }
+// 模板弹框内置模板预览：与日报预览弹框同一端点（items=当前「包含模块」勾选，
+// format=当前通道渲染格式）。切换模式/通道/tab 时按需重拉。
+const tplBuiltinPreviewText = ref('')
+const tplBuiltinPreviewFmt = ref('markdown')
+const tplBuiltinPreviewLoading = ref(false)
+const tplBuiltinPreviewHtml = computed(() => mdToHtml(tplBuiltinPreviewText.value))
+const fetchTplBuiltinPreview = async (): Promise<void> => {
+  if (tplMode.value !== 'daily' || tplDailyMode.value !== 'modules') return
+  tplBuiltinPreviewLoading.value = true
+  try {
+    const format = tplFixedFormat.value || 'markdown'
+    const res = await request.post<{ data?: { content: string; format: string } }>('/notification/daily/preview', {
+      items: dailyRule.value?.items,
+      format,
+    })
+    tplBuiltinPreviewText.value = res.data?.content ?? ''
+    tplBuiltinPreviewFmt.value = res.data?.format || format
+  } catch (e) { console.error(e) } finally { tplBuiltinPreviewLoading.value = false }
+}
+watch([() => tplMode.value, () => tplDailyMode.value, () => tplChannelTab.value], () => { void fetchTplBuiltinPreview() })
 
 // 卡片预览：昨日真实数据（默认 markdown）
 const previewDaily = (): void => {
@@ -1691,7 +1723,12 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .daily-html-preview { width: 100%; height: 340px; max-height: 46vh; border: 1px solid #e5e7eb; background: #fff; }
 /* 弹框体限高（scoped 形态；append-to-body 的实际生效规则见下方全局块同名类） */
 .rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
-.daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow-y: auto; }
+/* 日报预览=单滚动（2026-11-22 裁定：各类预览双层滚动条）：弹框体不定高低滚，
+   唯一滚动容器=daily-preview-body（flex:1 min-height:0），内层面板铺满不单独滚动。 */
+.daily-preview-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 240px); overflow: hidden; display: flex; flex-direction: column; }
+.daily-preview-dialog .daily-preview-note { flex: none; }
+.daily-preview-dialog .daily-preview-body { flex: 1; min-height: 0; height: auto; }
+.daily-preview-body .tpl-preview, .daily-preview-body .tpl-md-preview, .daily-preview-body .daily-html-preview { height: 100%; max-height: none; margin: 0; }
 /* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
 .tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
 .tpl-preview-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; border-bottom: none; }

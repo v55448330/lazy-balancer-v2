@@ -54,10 +54,35 @@ type NotificationRule struct {
 
 // RuleChannel 规则关联的通道摘要。
 type RuleChannel struct {
-	ID         int64  `json:"id"`
-	Type       string `json:"type"`
-	Name       string `json:"name"`
-	LastTestOK bool   `json:"last_test_ok"`
+	ID           int64  `json:"id"`
+	Type         string `json:"type"`
+	Name         string `json:"name"`
+	LastTestOK   bool   `json:"last_test_ok"`
+	SessionReady bool   `json:"session_ready"` // wx 会话上下文就绪（在线≠就绪；失效=会话待刷新）
+}
+
+// sanitizeRuleChannelIDs 规则保存时的通道就绪清洗（2026-11-22 用户裁定）：
+// 剔除已停用/不存在的通道与「微信会话未就绪」（会话待刷新）的通道——
+// 失效微信通道自动取消选择，不再允许发送；重新绑定就绪后用户可再选。
+// 返回保序子集；显式空数组语义由调用方保留（'[]' 不经过此处）。
+func sanitizeRuleChannelIDs(database interface{ QueryRow(string, ...any) *sql.Row }, userID int64, ids []int64) []int64 {
+	if len(ids) == 0 {
+		return ids
+	}
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		var typ, target string
+		var enabled bool
+		err := database.QueryRow(`SELECT type, COALESCE(target,''), COALESCE(enabled,1) FROM notification_channels WHERE id=? AND user_id=?`, id, userID).Scan(&typ, &target, &enabled)
+		if err != nil || !enabled {
+			continue
+		}
+		if typ == "wx_clawbot" && !notify.WxSessionReady(target) {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // GetNotificationRules GET /notification/rules——聚合当前用户的全部通知规则。
@@ -73,7 +98,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	}
 
 	// 1. 读取用户全部通道
-	chRows, err := db.DB.Query(`SELECT id, type, name, COALESCE(last_test_ok,0) FROM notification_channels
+	chRows, err := db.DB.Query(`SELECT id, type, name, COALESCE(last_test_ok,0), COALESCE(target,'') FROM notification_channels
 		WHERE user_id=? AND enabled=1 ORDER BY id`, uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
@@ -82,10 +107,14 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	var allChannels []RuleChannel
 	for chRows.Next() {
 		var ch RuleChannel
-		if err := chRows.Scan(&ch.ID, &ch.Type, &ch.Name, &ch.LastTestOK); err != nil {
+		var target string
+		if err := chRows.Scan(&ch.ID, &ch.Type, &ch.Name, &ch.LastTestOK, &target); err != nil {
 			chRows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
 			return
+		}
+		if ch.Type == "wx_clawbot" {
+			ch.SessionReady = notify.WxSessionReady(target)
 		}
 		allChannels = append(allChannels, ch)
 	}
@@ -480,7 +509,12 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			if req.ChannelIDs != nil {
 				// 显式空数组='[]'=不投递任何通道（用户裁定）；非空=仅选定通道。
 				// 缺省键（nil）才沿用现值；'' 缺省态=全部启用通道（默认订阅）。
-				b, _ := json.Marshal(*req.ChannelIDs)
+				// 非空选择过就绪清洗：失效微信通道不落库（会话待刷新=发送被派发侧跳过）。
+				ids := *req.ChannelIDs
+				if len(ids) > 0 {
+					ids = sanitizeRuleChannelIDs(tx, uid, ids)
+				}
+				b, _ := json.Marshal(ids)
 				curIDs = string(b)
 			}
 			if req.ChannelTemplates != nil {

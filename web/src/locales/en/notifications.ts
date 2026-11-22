@@ -144,7 +144,7 @@ export default {
         modeTemplate: 'Custom template',
         modeModulesHint: "Built-in template assembles the report from the 'Modules' checkboxes; stored custom template is kept but inactive",
         modeTemplateHint: 'Custom template takes over the full report layout; all daily variables available',
-        modeModulesPreviewHint: "No custom preview for the built-in template — final form follows the 'Modules' checkboxes; use 'Daily preview' to inspect.",
+        modeModulesPreviewHint: "Built-in template preview (read-only): rendered from the 'Modules' checkboxes, same source as 'Daily preview'.",
 
         bodyTemplateTooLong: 'Body template too long (≤4000 chars)',
         testSend: 'Test send',

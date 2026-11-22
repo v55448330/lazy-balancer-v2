@@ -103,7 +103,7 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.events"/, '事件列必须为浮层多选（绑定行草稿）')
   assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.channel_ids"/, '发送至列必须为浮层多选（绑定行草稿）')
   assert.match(text, /<el-checkbox[^>]*border size="small"/, '多选组必须为 bordered 复选组')
-  assert.match(text, /:disabled="ch\.enabled === false \|\| ch\.last_test_ok !== true"/, '未测试/停用通道禁选')
+  assert.match(text, /:disabled="!channelSendable\(ch\)"/, '未测试/停用/会话待刷新通道禁选（channelSendable 单源）')
   // 每日摘要独立卡片（不混事件规则表格）+ 三字段卡内联编辑
   assert.match(text, /daily-card/, '每日摘要必须独立卡片')
   assert.match(text, /el-time-select v-model="dailyDraft\.send_time"/, '投递时间必须卡内联编辑')
@@ -341,14 +341,27 @@ test('通知中心全源码接线：REST 端点全量 + 预览防抖 + 模板单
 // 值静默覆盖前一处（预览高度 360→300、弹框体 240→100dvh），无人知道最终值。
 test('通知中心样式块：同选择器单声明 + 死类清零', () => {
   const nc = code('src/views/notifications/NotificationCenter.vue')
+  // 行首锚定：后代作用域覆写（.daily-preview-body .tpl-…）是合法的单条窄覆写，
+  // 不构成同选择器重复声明。
   const declCount = (selector: RegExp): number => (nc.match(selector) || []).length
-  assert.equal(declCount(/\.tpl-html-preview \{/g), 1, '.tpl-html-preview 只允许一条声明')
-  assert.equal(declCount(/\.daily-html-preview \{/g), 1, '.daily-html-preview 只允许一条声明')
-  assert.equal(declCount(/\.rule-edit-dialog :deep\(\.el-dialog__body\) \{/g), 1, '模板弹框体只允许一条 scoped 声明')
-  assert.equal(declCount(/\.daily-preview-dialog :deep\(\.el-dialog__body\) \{/g), 1, '日报预览弹框体只允许一条 scoped 声明')
-  assert.equal(declCount(/\.notif-level-head \{/g), 1, '级别段标题只允许一条声明')
-  assert.equal(declCount(/\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__label \{/g), 1, 'bordered 标签只允许一条声明')
+  assert.equal(declCount(/^\.tpl-html-preview \{/gm), 1, '.tpl-html-preview 只允许一条声明')
+  assert.equal(declCount(/^\.daily-html-preview \{/gm), 1, '.daily-html-preview 只允许一条声明')
+  assert.equal(declCount(/^\.rule-edit-dialog :deep\(\.el-dialog__body\) \{/gm), 1, '模板弹框体只允许一条 scoped 声明')
+  assert.equal(declCount(/^\.daily-preview-dialog :deep\(\.el-dialog__body\) \{/gm), 1, '日报预览弹框体只允许一条 scoped 声明')
+  assert.equal(declCount(/^\.notif-level-head \{/gm), 1, '级别段标题只允许一条声明')
+  assert.equal(declCount(/^\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__label \{/gm), 1, 'bordered 标签只允许一条声明')
   // 死类：模板从未使用（tpl-section-head 仍在用，仅其子标签类残留）
   assert.ok(!/tpl-section-label/.test(nc), '死类 .tpl-section-label 必须清零')
   assert.ok(!/tpl-preview-mode/.test(nc), '死类 .tpl-preview-mode 必须清零')
+})
+
+test('微信会话失效=规则禁用且取消选择（2026-11-22 用户裁定）', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  assert.match(nc, /session_ready\?: boolean/, 'RuleChannel 必须携带 session_ready')
+  assert.match(nc, /const channelSendable = \(ch: RuleChannel\): boolean =>/, '就绪判定必须单源')
+  assert.match(nc, /ch\.type === 'wx_clawbot' && ch\.session_ready === false/, '就绪判定必须排除会话待刷新的微信通道')
+  assert.ok(!/last_test_ok !== true" :title/.test(nc), 'picker 禁用不得再手写旧条件（须走 channelSendable）')
+  assert.match(nc, /disabled="!channelSendable\(ch\)"/, '两处选择面必须统一走 channelSendable')
+  assert.match(nc, /pruneChannelIds = \(ids: number\[\]\): number\[\] => ids\.filter\(id => \{ const c = channelOptions\.value\.find/, '显示层必须自动取消失效通道选择（prune 单源）')
+  assert.match(nc, /wxSessionStaleHint/, '失效原因必须可提示')
 })

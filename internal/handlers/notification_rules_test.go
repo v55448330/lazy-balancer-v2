@@ -152,6 +152,12 @@ func TestAdminNotificationOverview_userScopeAndTypeDist(t *testing.T) {
 func TestUpdateNotificationRule_adminWriteOwnership(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gid := certGroupID(t)
+	// 选择通道必须真实存在且可发送（2026-11-22 通道就绪清洗不变量）：
+	// 本用例主题=代管写入归属，通道存在性由本夹具满足。
+	if _, err := db.DB.Exec(`INSERT INTO notification_channels (id, user_id, type, name, target, enabled, last_test_ok)
+		VALUES (42, 7, 'email', 'e42', '{"email":"a@b.c"}', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
 	// 管理员（uid=1）在 user 7 视角保存：必须写 user 7，不得写管理员自己
 	rAdmin := newRulesTestRouter(h, 1, "admin")
 	status, out := doNotifyRequest(t, rAdmin, http.MethodPost, "/notification/rules/"+gid+"?user_id=7", `{"enabled":true,"channel_ids":[42]}`)

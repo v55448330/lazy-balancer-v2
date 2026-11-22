@@ -151,7 +151,7 @@ export default {
         modeTemplate: '自定义模板',
         modeModulesHint: '内置模板按「包含模块」勾选拼装；已存自定义模板保留但不生效',
         modeTemplateHint: '自定义模板独占整份日报版式，全部日报变量可放置',
-        modeModulesPreviewHint: '内置模板无自定义预览——最终形态由日报页「包含模块」勾选决定，可用「日报预览」查看。',
+        modeModulesPreviewHint: '内置模板预览（只读）：按日报页「包含模块」勾选渲染，与「日报预览」同源。',
 
         bodyTemplateTooLong: '正文模板过长（≤4000 字符）',
         testSend: '测试发送',

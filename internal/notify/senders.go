@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -44,6 +45,24 @@ type Message struct {
 // 事件消息不受影响。
 func (m Message) dailyTemplatesSuppressed() bool {
 	return m.EventType == EvtDailyReport && m.DailyModuleMode
+}
+
+// RegisterSenderForTest 测试用通道替换（注册表同名覆盖走后复原）。
+func RegisterSenderForTest(t *testing.T, typ string, s Sender) {
+	t.Helper()
+	sendersMu.Lock()
+	old, had := senders[typ]
+	senders[typ] = s
+	sendersMu.Unlock()
+	t.Cleanup(func() {
+		sendersMu.Lock()
+		if had {
+			senders[typ] = old
+		} else {
+			delete(senders, typ)
+		}
+		sendersMu.Unlock()
+	})
 }
 
 // testNotificationMessage 通道「测试」按钮共用的测试消息。

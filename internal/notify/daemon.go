@@ -130,10 +130,24 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 // sendToChannels 逐通道渲染+发送（失败重试 1 次）+结果落行。deliverOne 与
 // 规则测试共用：模板优先级链=事件×通道模板 > 事件级模板 > 通道样式 > 默认。
 // deliveryID=0 时不落结果行（测试发送不污染投递统计）。
+// wxSessionReadyForDelivery 微信会话就绪判定（测试可覆写）。会话待刷新
+// （iLink 上下文过期/从未建立）时不再尝试发送——见 sendToChannels 守卫。
+var wxSessionReadyForDelivery = WxSessionReady
+
 func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []deliveryTarget, channelTpls map[int64]string, msg Message) ([]string, bool) {
 	var errs []string
 	sentAny := false
 	for _, ch := range channels {
+		// 通道就绪门（2026-11-22 用户裁定）：微信会话失效后不再允许发送，
+		// 跳过并留可见原因（投递记录可见），直到重新绑定且会话就绪。
+		if ch.Type == "wx_clawbot" && !wxSessionReadyForDelivery(ch.Target) {
+			reason := "微信会话未就绪（会话待刷新，已跳过发送）；请让该微信先给机器人发消息重建会话，或重新扫码绑定"
+			errs = append(errs, ch.Type+": "+reason)
+			if deliveryID > 0 {
+				recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "failed", reason, 0)
+			}
+			continue
+		}
 		chMsg := msg
 		chName := ch.Name
 		if chName == "" {

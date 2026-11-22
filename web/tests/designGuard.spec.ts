@@ -92,7 +92,12 @@ test('设计守卫：通知面标准（描述类/分区竖条/弹框体高度/�
   assert.match(nc, /\.daily-preview-dialog \.el-dialog__body \{ max-height: calc\(100vh - \d+px\)/, '日报预览弹框体必须限高')
   // 预览固定高度 + 禁横向滚动
   assert.match(nc, /height: 360px; max-height: 46vh/, '预览区必须固定高度')
-  assert.match(nc, /\.daily-preview-body \{ height: 420px; max-height: 46vh; overflow-y: auto; overflow-x: hidden;/, '日报预览固定同高且无横向滚动')
+  // 单滚动契约（2026-11-22 裁定：双层滚动条）：弹框体 overflow hidden+flex 列，
+  // 唯一滚动=daily-preview-body（flex:1 min-height:0），内层铺满不单独滚。
+  assert.match(nc, /\.daily-preview-dialog :deep\(\.el-dialog__body\) \{ max-height: calc\(100vh - 240px\); overflow: hidden; display: flex; flex-direction: column; \}/, '日报预览弹框体不得再滚（单滚动）')
+  assert.match(nc, /\.daily-preview-dialog \.daily-preview-body \{ flex: 1; min-height: 0; height: auto; \}/, '唯一滚动容器=daily-preview-body')
+  assert.match(nc, /\.daily-preview-body \.tpl-preview, \.daily-preview-body \.tpl-md-preview, \.daily-preview-body \.daily-html-preview \{ height: 100%; max-height: none;/, '内层面板铺满不单独滚动')
+  assert.match(nc, /\.daily-preview-body \{ height: 420px; max-height: 46vh; overflow-y: auto; overflow-x: hidden;/, 'daily-preview-body 保留自身滚动语义（flex 覆写作用域限定弹框内）')
   // bordered 多选隐藏勾选对号
   assert.match(nc, /\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__inner \{ display: none; \}/, 'bordered 多选必须隐藏勾选对号')
   // 卡头保存为实体按钮（非 link）
