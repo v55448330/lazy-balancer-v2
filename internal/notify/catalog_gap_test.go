@@ -13,12 +13,11 @@ func TestNewEventTypesHavePublishSites(t *testing.T) {
 	// 键=常量名（源码搜索词），值=事件 ID（目录断言用）
 	newEvents := map[string]string{
 		"EvtCaddyLifecycle":         EvtCaddyLifecycle,
-		"EvtAdminTLSChanged":        EvtAdminTLSChanged,
 		"EvtOIDCChanged":            EvtOIDCChanged,
 		"EvtAutoBackupChanged":      EvtAutoBackupChanged,
 		"EvtNotificationCfgChanged": EvtNotificationCfgChanged,
 		"EvtClusterSettingsChanged": EvtClusterSettingsChanged,
-		"EvtCAProviderChanged":      EvtCAProviderChanged,
+		"EvtCertConfigChanged":      EvtCertConfigChanged,
 		"EvtPolicyChanged":          EvtPolicyChanged,
 		"EvtIPListChanged":          EvtIPListChanged,
 		"EvtCustomRuleChanged":      EvtCustomRuleChanged,
@@ -61,7 +60,8 @@ func TestNewEventTypesHavePublishSites(t *testing.T) {
 	// 统一发布 helper：常量只在 notify 包内使用（handler/services 调用 helper），
 	// 发布点守卫按 helper 名核对，避免把「封装」误判为「无发布点」。
 	publishTokens := map[string]string{
-		"EvtLibUpdated": "PublishLibUpdateResult", // 四库手动/自动统一终态事件
+		"EvtLibUpdated":        "PublishLibUpdateResult", // 四库手动/自动统一终态事件
+		"EvtCertConfigChanged": "publishCertConfigChanged",
 	}
 	for evt, id := range newEvents {
 		token := evt

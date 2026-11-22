@@ -17,6 +17,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/services/dnsproviders"
 )
@@ -364,7 +365,16 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 		services.Logf("error", "CreateCertificateConfig: 读取新配置 ID 失败（审计将记为 0）: %v", idErr)
 	}
 	recordAudit(c, "创建", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, req.DNSProvider, fmt.Sprintf("启用：%t", enabled)))
+	publishCertConfigChanged(c, "创建了 DNS 配置", fmt.Sprintf("%s（%s）", name, req.DNSProvider))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Config created", Data: gin.H{"id": id}})
+}
+
+// publishCertConfigChanged 免费证书域配置变更统一事件（CA 提供商 / DNS 配置 /
+// 证书基础配置）：不再逐项拆事件，规则列表只有一个「免费证书配置变更」。
+func publishCertConfigChanged(c *gin.Context, action, target string) {
+	notify.Publish(notify.Event{Type: notify.EvtCertConfigChanged, Fields: map[string]string{
+		"1": c.GetString("username"), "2": action, "3": target,
+	}})
 }
 
 const certificateConfigMaxListedReferences = 5
@@ -668,6 +678,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	}
 	committed = true
 	recordAudit(c, "更新", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+	publishCertConfigChanged(c, "更新了 DNS 配置", fmt.Sprintf("配置 %d：%s", id, strings.Join(changed, "、")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated"})
 }
 
@@ -734,6 +745,7 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "删除", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, provider))
+	publishCertConfigChanged(c, "删除了 DNS 配置", fmt.Sprintf("%s（%s）", name, provider))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config deleted"})
 }
 

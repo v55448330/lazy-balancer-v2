@@ -309,7 +309,12 @@ func TestWriteEndpointsPublishNotificationEvents(t *testing.T) {
 		{"apikeys.go", "func updateAPIKeyStatus(", "EvtAPIKeyToggled"},
 		{"mfa.go", "func (h *Handlers) MFAResetByAdmin(", "EvtMFAChanged"},
 		{"auth_oidc.go", "func (h *Handlers) OIDCSettingsDelete(", "EvtOIDCChanged"},
-		{"caproviders.go", "func (h *Handlers) UpdateCAProvider(", "EvtCAProviderChanged"},
+		{"caproviders.go", "func (h *Handlers) UpdateCAProvider(", "publishCertConfigChanged"},
+		{"certificates.go", "func (h *Handlers) CreateCertificateConfig(", "publishCertConfigChanged"},
+		{"certificates.go", "func (h *Handlers) UpdateCertificateConfig(", "publishCertConfigChanged"},
+		{"certificates.go", "func (h *Handlers) DeleteCertificateConfig(", "publishCertConfigChanged"},
+		{"caddy.go", "func (h *Handlers) UpdateConfig(", "publishCertConfigChanged"},
+		{"admintls.go", "func (h *Handlers) UpdateAdminTLS(", "EvtGlobalChanged"},
 	}
 	cache := map[string]string{}
 	for _, tc := range cases {
@@ -319,8 +324,14 @@ func TestWriteEndpointsPublishNotificationEvents(t *testing.T) {
 			cache[tc.file] = src
 		}
 		body := bodyOf(t, src, tc.anchor)
-		if !strings.Contains(body, "notify."+tc.evt) {
-			t.Errorf("%s:%s 未发布 notify.%s——该写操作会静默漏发通知", tc.file, tc.anchor, tc.evt)
+		needle := "notify." + tc.evt
+		if !strings.HasPrefix(tc.evt, "Evt") {
+			// 小写=handler 内统一发布 helper（如 publishCertConfigChanged），
+			// helper 自身在 notify 包内发目录事件，调用点不写 notify. 前缀。
+			needle = tc.evt
+		}
+		if !strings.Contains(body, needle) {
+			t.Errorf("%s:%s 未调用 %s——该写操作会静默漏发通知", tc.file, tc.anchor, needle)
 		}
 	}
 }

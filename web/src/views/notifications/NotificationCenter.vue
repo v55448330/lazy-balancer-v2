@@ -260,7 +260,9 @@
                       <div v-for="sec in eventLevelSections(asRule(row))" :key="sec.level" class="notif-level-section" :class="`is-${sec.level}`">
                         <div class="notif-level-head">{{ t(`app.notification.subs.levels.${sec.level}`) }}</div>
                         <div class="notif-level-items">
-                          <el-checkbox v-for="ev in sec.events" :key="ev" :value="ev" border size="small">{{ eventTitle(asRule(row), ev) }}</el-checkbox>
+                          <el-tooltip v-for="ev in sec.events" :key="ev" :content="eventDescription(asRule(row), ev)" placement="top" :show-after="250">
+                            <el-checkbox :value="ev" border size="small">{{ eventTitle(asRule(row), ev) }}</el-checkbox>
+                          </el-tooltip>
                         </div>
                       </div>
                     </el-checkbox-group>
@@ -463,7 +465,7 @@ interface Rule {
   items?: string[]; formats?: Record<string, string>
 }
 // 事件目录行（rules 端点返回；内联事件选项数据源，按 group 分组）
-interface CatalogEvent { id: string; title: string; level: string; group: string }
+interface CatalogEvent { id: string; title: string; level: string; group: string; description?: string }
 
 // 事件可读标题多语言：优先当前语言 eventTitles 映射（tm 原始对象索引，键含点号
 // 不走 t 路径解析），回退后端 catalog title，再回退事件键。禁止裸键展示。
@@ -472,6 +474,11 @@ const eventTitle = (row: Rule, ev: string): string => {
   if (hasOwn(m, ev)) return m[ev]
   const titles = row.event_titles
   return (titles && hasOwn(titles, ev) ? titles[ev] : '') || ev
+}
+
+const eventDescription = (rule: Rule, ev: string): string => {
+  const found = eventCatalog.value.find(e => e.id === ev)
+  return found?.description || eventTitle(rule, ev)
 }
 const eventGroup = (group: string): string => {
   const m = (tm('app.notification.eventGroups') || {}) as Record<string, string>

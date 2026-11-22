@@ -560,7 +560,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		certPart,
 		services.AuditResultPart("success"),
 	))
-	notify.Publish(notify.Event{Type: notify.EvtAdminTLSChanged, Fields: map[string]string{"1": c.GetString("username")}})
+	notify.Publish(notify.Event{Type: notify.EvtGlobalChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "管理接口 TLS"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_fc8d003f"), MessageKey: "k_fc8d003f"})
 	// 改走统一重启触发器（restartProcess，见 system.go）——与集群同步的
 	// Admin TLS 热切换同一优雅停机信号；测试环境回退 exitProcess。

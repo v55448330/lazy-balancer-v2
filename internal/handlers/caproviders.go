@@ -11,7 +11,6 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
-	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -228,7 +227,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	if caName == "" {
 		caName = fmt.Sprintf("提供商 %d", id)
 	}
-	notify.Publish(notify.Event{Type: notify.EvtCAProviderChanged, Fields: map[string]string{"1": c.GetString("username"), "2": caName}})
+	publishCertConfigChanged(c, "更新了 CA 提供商", caName)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4d941fb6"), MessageKey: "k_4d941fb6"})
 }
 

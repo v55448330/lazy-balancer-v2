@@ -61,12 +61,11 @@ const (
 	EvtAPIKeyExpiryWarning    = "apikey.expiry_warning"    // API 密钥临期预警
 	// ── 2026-11-21 用户裁定「全部都做」：写操作通知事件查漏补缺（T1+T2 全量）──
 	EvtCaddyLifecycle         = "cfg.caddy_lifecycle"           // Caddy 启动/停止/重启
-	EvtAdminTLSChanged        = "cfg.admin_tls_changed"         // 管理接口 TLS 配置
 	EvtOIDCChanged            = "cfg.oidc_changed"              // OIDC 单点登录配置（动作参数）
 	EvtAutoBackupChanged      = "cfg.auto_backup_changed"       // 自动备份设置
 	EvtNotificationCfgChanged = "cfg.notification_changed"      // 通知投递设置
 	EvtClusterSettingsChanged = "cfg.cluster_settings_changed"  // 集群设置
-	EvtCAProviderChanged      = "cfg.ca_provider_changed"       // CA 提供商
+	EvtCertConfigChanged      = "cert.config_changed"           // 免费证书域配置（CA/DNS/续期等）
 	EvtPolicyChanged          = "sec.policy_changed"            // 安全策略 CRUD/绑定/解绑/批量/拆分/默认策略（动作参数）
 	EvtIPListChanged          = "sec.ip_list_changed"           // IP 名单 CRUD/条目增删（动作参数）
 	EvtCustomRuleChanged      = "sec.custom_rule_changed"       // 自定义安全规则 CRUD
@@ -152,12 +151,11 @@ var catalog = []catalogEntry{
 	// ——结果为自由文本，启动/停止失败同样发本事件，失败时传「失败：<原因摘要>」
 	//（发布点见 handlers/caddy.go；模板本身不区分成功/失败措辞）。
 	{EvtCaddyLifecycle, LevelWarn, true, "Caddy 服务启停", "用户 %s %s Caddy 服务（%s）"},
-	{EvtAdminTLSChanged, LevelInfo, false, "Admin TLS 配置变更", "用户 %s 更新了管理接口 TLS 配置"},
 	{EvtOIDCChanged, LevelInfo, false, "OIDC 配置变更", "用户 %s %s了 OIDC 单点登录配置"},
 	{EvtAutoBackupChanged, LevelInfo, false, "自动备份设置变更", "用户 %s 更新了自动备份设置"},
 	{EvtNotificationCfgChanged, LevelInfo, false, "通知设置变更", "用户 %s 更新了通知投递设置"},
 	{EvtClusterSettingsChanged, LevelInfo, false, "集群设置变更", "用户 %s 更新了集群设置"},
-	{EvtCAProviderChanged, LevelInfo, false, "CA 提供商变更", "用户 %s 更新了 CA 提供商「%s」"},
+	{EvtCertConfigChanged, LevelInfo, false, "免费证书配置变更", "用户 %s %s（%s）"},
 	{EvtPolicyChanged, LevelWarn, true, "安全策略变更", "用户 %s %s（策略：%s）"},
 	{EvtIPListChanged, LevelInfo, false, "IP 名单变更", "用户 %s %s（名单：%s）"},
 	{EvtCustomRuleChanged, LevelInfo, false, "自定义规则变更", "用户 %s %s（规则：%s）"},
@@ -212,6 +210,7 @@ type CatalogItem struct {
 	Level             string `json:"level"`
 	DefaultSubscribed bool   `json:"default_subscribed"`
 	Group             string `json:"group"`
+	Description       string `json:"description"`
 }
 
 // catalogGroup 事件 ID 前缀 → 分组名（与 REST 契约约定的七个分组对齐；
@@ -243,6 +242,7 @@ func CatalogExport() []CatalogItem {
 			Level:             string(e.Level),
 			DefaultSubscribed: e.DefaultSub,
 			Group:             catalogGroup(e.ID),
+			Description:       catalogDescription(e.ID),
 		})
 	}
 	return out

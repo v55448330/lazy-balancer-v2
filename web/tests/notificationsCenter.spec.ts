@@ -379,3 +379,14 @@ test('投递记录展开行：通道标签/描述/耗时垂直居中', () => {
   assert.match(log, /\.ch-expand-row \{[^}]*min-height:\s*24px/, '展开行最小高度与标签一致')
   assert.doesNotMatch(log, /\.ch-expand-error \{[^}]*padding-top/, '错误描述不得用 padding-top 冒充居中')
 })
+
+test('事件订阅浮层与通道配置项 hover 必带说明（避免只凭标题猜测）', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  assert.match(nc, /interface CatalogEvent \{[^}]*description/, 'CatalogEvent 必须携带后端 description')
+  assert.match(nc, /const eventDescription = \(rule: Rule, ev: string\)/, '事件说明必须单源取值')
+  assert.match(nc, /:content="eventDescription\(asRule\(row\), ev\)"/, '事件选项必须挂 hover 说明')
+  const cards = code('src/views/notifications/ChannelCards.vue')
+  for (const key of ['helpName', 'helpType', 'helpTarget', 'helpMethod', 'helpHeaders', 'helpSubject', 'helpBodyFormat']) {
+    assert.match(cards, new RegExp(`help${key.replace(/^help/, '')}`), `通道配置项 ${key} 缺少 hover 说明`)
+  }
+})

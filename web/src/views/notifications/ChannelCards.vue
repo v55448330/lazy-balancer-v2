@@ -108,10 +108,10 @@
       </template>
       <DialogSectionHeader :title="t('app.notification.channels.configSection')" />
       <el-form :label-width="$flw('110px')" :disabled="saving">
-        <el-form-item :label="t('app.notification.channels.name')">
+        <el-form-item :label="t('app.notification.channels.name')" :title="t('app.notification.channels.helpName')">
           <el-input v-model="drawerForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
         </el-form-item>
-        <el-form-item :label="t('app.notification.channels.colType')">
+        <el-form-item :label="t('app.notification.channels.colType')" :title="t('app.notification.channels.helpType')">
           <el-radio-group v-if="!editTarget" v-model="drawerForm.type">
             <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">
               {{ typeLabel(typ) }}<span v-if="typ === 'wx_clawbot'" class="ch-beta-badge">{{ t('app.notification.channels.betaBadge') }}</span>
@@ -119,7 +119,7 @@
           </el-radio-group>
           <span v-else>{{ typeLabel(drawerForm.type) }}</span>
         </el-form-item>
-        <el-form-item v-if="drawerForm.type === 'webhook' || drawerForm.type === 'email'" :label="targetLabel(drawerForm.type)">
+        <el-form-item v-if="drawerForm.type === 'webhook' || drawerForm.type === 'email'" :label="targetLabel(drawerForm.type)" :title="t('app.notification.channels.helpTarget')">
           <el-input v-model="drawerForm.targetValue" :placeholder="targetPlaceholder(drawerForm.type)" />
         </el-form-item>
         <template v-else>
@@ -165,7 +165,7 @@
         <DialogSectionHeader :title="t('app.notification.channels.transportSection')" class="ch-form-section" />
         <el-form :label-width="$flw('110px')" :disabled="saving">
           <template v-if="drawerForm.type === 'webhook'">
-            <el-form-item :label="t('app.notification.channels.styleMethod')">
+            <el-form-item :label="t('app.notification.channels.styleMethod')" :title="t('app.notification.channels.helpMethod')">
               <div class="field-col">
                 <el-radio-group v-model="styleForm.method" size="small">
                   <el-radio-button value="POST">POST</el-radio-button>
@@ -174,7 +174,7 @@
                 <div class="form-hint">{{ t('app.notification.channels.styleMethodHint') }}</div>
               </div>
             </el-form-item>
-            <el-form-item :label="t('app.notification.channels.styleHeaders')" class="headers-form-item">
+            <el-form-item :label="t('app.notification.channels.styleHeaders')" class="headers-form-item" :title="t('app.notification.channels.helpHeaders')">
               <div class="header-rows">
                 <div v-for="(row, i) in headerRows" :key="i" class="header-row">
                   <el-select v-model="row.name" size="small" filterable allow-create default-first-option :placeholder="t('app.notification.channels.styleHeaderName')" class="header-name">
@@ -191,10 +191,10 @@
             </el-form-item>
           </template>
           <template v-else>
-            <el-form-item :label="t('app.notification.channels.styleSubjectTpl')">
+            <el-form-item :label="t('app.notification.channels.styleSubjectTpl')" :title="t('app.notification.channels.helpSubject')">
               <el-input v-model="styleForm.subject_template" :placeholder="t('app.notification.channels.styleSubjectPlaceholder')" />
             </el-form-item>
-            <el-form-item :label="t('app.notification.channels.styleBodyFormat')">
+            <el-form-item :label="t('app.notification.channels.styleBodyFormat')" :title="t('app.notification.channels.helpBodyFormat')">
               <el-radio-group v-model="styleForm.body_format" size="small">
                 <el-radio-button value="text">{{ t('app.notification.channels.styleFormatText') }}</el-radio-button>
                 <el-radio-button value="html">{{ t('app.notification.channels.styleFormatHtml') }}</el-radio-button>
