@@ -582,7 +582,7 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 			out[k] = sv
 		case "daily_mode":
 			// 日报渲染模式（前端保存无条件携带）：白名单外一律 400——此前该
-			// 键不在校验表，保存日报模板恒 400（FE154-P1-01 后端半边）。
+			// 键不在校验表，保存日报模板恒 400（后端半边）。
 			if sv != "modules" && sv != "template" {
 				return "", errors.New("daily_mode 仅支持 modules/template")
 			}

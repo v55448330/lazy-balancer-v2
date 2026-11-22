@@ -121,7 +121,7 @@ func TestRenderDailyMarkdown_multiValueFallbackOnBadLine(t *testing.T) {
 	}
 }
 
-// NOTIF154-P3-02：空值项目四格式真正省略（不渲染「各节点摘要」空行）。
+// 空值项目四格式真正省略（不渲染「各节点摘要」空行）。
 // 单机默认配置下 nodes_summary 恒空——旧实现每份日报都带一行空标签。
 func TestRenderDailyOmitsEmptyValuesAllFormats(t *testing.T) {
 	values := map[string]string{
@@ -153,7 +153,7 @@ func TestRenderDailyOmitsEmptyValuesAllFormats(t *testing.T) {
 	}
 }
 
-// NOTIF154-P3-05：多值表格 fail-safe 回退分支也必须留块间空行——坏行项
+// 多值表格 fail-safe 回退分支也必须留块间空行——坏行项
 // （回退列表）与良行项（表格）相邻时，下一块标签/表头不得被上一块吞并。
 func TestRenderDailyMarkdown_fallbackBlockSeparated(t *testing.T) {
 	values := map[string]string{

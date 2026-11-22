@@ -28,7 +28,7 @@ type subscriptionExecer interface {
 // disableSubscriptionRow 停用 user×event 订阅（opt-out 显式行）。
 // 无行时 UPDATE 影响 0 行——不建行等于静默无操作：目录 DefaultSub=true 的
 // 事件仍按默认兜底投递，用户「关掉默认订阅组」在投递侧毫无效果
-// （audit153 EVTCERT153-01）。因此 0 行时补建 enabled=0 的显式行，让用户
+// 。因此 0 行时补建 enabled=0 的显式行，让用户
 // 意志（opt-out）在 subscribersFor 的停用分支生效；min_level 留空串（停用
 // 态级别对投递无意义）。actor=操作者（管理员代管时与 user_id 不同）。
 func disableSubscriptionRow(execer subscriptionExecer, uid int64, eventType string, actor int64) error {
@@ -79,7 +79,7 @@ func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 		var enabled int
 		if err := rows.Scan(&eventType, &row.minLevel, &row.bodyTemplate, &enabled); err != nil {
 			// 行读取失败必须 fail-visible：静默跳行会让停用行回退成「默认态」，
-			// 用户看到的订阅矩阵与真实投递口径分叉（EVTCERT153-03 同族）。
+			// 用户看到的订阅矩阵与真实投递口径分叉（同族）。
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
 			return
 		}

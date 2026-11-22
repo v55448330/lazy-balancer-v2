@@ -230,7 +230,7 @@ func TestEmailSenderTargetValidation(t *testing.T) {
 	}
 }
 
-// NOTIF154-P2-01：事件模板已全量渲染（TemplateApplied）时，邮件主题模板
+// 事件模板已全量渲染（TemplateApplied）时，邮件主题模板
 // 必须走窄渲染器——只替换元信息占位符，「[告警] {{title}}」组合不得被整篇
 // markdown 正文顶替（此前 subject_template 复用正文渲染器，主题变成多行全文）。
 func TestEmailSubjectTemplate_templateAppliedNarrowRender(t *testing.T) {
@@ -273,7 +273,7 @@ func TestEmailSubjectTemplate_templateAppliedNarrowRender(t *testing.T) {
 // emailHTMLBody 契约（2026-11-22 残留交互修复）：事件模板已全量渲染
 // （TemplateApplied）的正文是 markdown 文本——邮件不得再包 HTML 卡片
 // （卡片标题/徽章/元信息与模板自身布局视觉重复），也不得进 HTML 上下文
-// （NOTIF153-02 同源纪律），一律 text/plain 原文直发，显式 html 格式不破例。
+// （同源纪律），一律 text/plain 原文直发，显式 html 格式不破例。
 func TestEmailHTMLBody_templateAppliedPlainText(t *testing.T) {
 	tplApplied := Message{EventType: "cfg.caddy_apply_failed", TemplateApplied: true,
 		Body: "## 🔔 标题\n---\n**正文**"}
@@ -304,7 +304,7 @@ func TestEmailHTMLBody_templateAppliedPlainText(t *testing.T) {
 	if emailHTMLBody("", "", Message{EventType: EvtDailyReport, ContentFormat: "text"}) {
 		t.Fatal("日报 text 渲染必须 text/plain（fail-closed）")
 	}
-	// NOTIF154-P3-06：日报模板模式（有正文模板）Content-Type 纳入 body_format
+	// 日报模板模式（有正文模板）Content-Type 纳入 body_format
 	// ——显式 html 必须 text/html（旧实现只看模块渲染格式，HTML 模板被当
 	// text/plain 发出）；显式 text 必须 text/plain。
 	if !emailHTMLBody("<p>{{requests}}</p>", "html", Message{EventType: EvtDailyReport, ContentFormat: "text"}) {

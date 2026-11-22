@@ -1,9 +1,9 @@
 package notify
 
-// 角色探测单次契约（PRES154-P3-04 性能项收尾）：入队路径此前
+// 角色探测单次契约（性能项收尾）：入队路径此前
 // shouldForwardClusterEvent 与 forwardEventToMaster 各探测一次（每事件 2 次
 // SELECT）；现在快照随 job 传递，每事件恒 1 次。基线钉（钉既有正确行为，
-// 按 R-1 豁免 RED；RED 证据=audit154 审计实读的两处探测点）。
+// 按 R-1 豁免 RED；RED 证据= 审计实读的两处探测点）。
 
 import (
 	"testing"

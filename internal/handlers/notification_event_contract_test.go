@@ -1,14 +1,14 @@
 package handlers
 
-// audit152 通知事件契约钉测（真实 SQLite + 直连 handler）：
-//   - FE-152-01：规则伪行的 events=「已启用订阅子集」，组内全量选项仍在
+// 通知事件契约钉测（真实 SQLite + 直连 handler）：
+// -：规则伪行的 events=「已启用订阅子集」，组内全量选项仍在
 //     event_titles 键集；无启用行=[]（不是 null）。
-//   - SYSH-152-02：订阅矩阵三态（启用行/停用行/无行）与 min_level 口径。
-//   - SYSH-152-01：GET /notification/daily/targets 非管理员按本人收窄（此前
+// -：订阅矩阵三态（启用行/停用行/无行）与 min_level 口径。
+// -：GET /notification/daily/targets 非管理员按本人收窄（此前
 //     拼了 WHERE 却没传参 → 恒 500）。
-//   - SYSH-152-17：API Key 启停事件只在启用态真实翻转时发布。
-//   - SYSH-152-15：写端点 → 通知事件的机械映射（源码级，抓「静默漏发」）。
-//   - SYSH-152-10：备份单飞抢锁必须早于失败通知登记（结构守卫）。
+// -：API Key 启停事件只在启用态真实翻转时发布。
+// -：写端点 → 通知事件的机械映射（源码级，抓「静默漏发」）。
+// -：备份单飞抢锁必须早于失败通知登记（结构守卫）。
 
 import (
 	"encoding/json"
@@ -423,7 +423,7 @@ func TestNotificationEventParamAndBranchGuards(t *testing.T) {
 	}
 }
 
-// 日报目标通道查询失败必须 500（EVTCERT153-11）：此前 chRows 查询 err 被
+// 日报目标通道查询失败必须 500：此前 chRows 查询 err 被
 // 静默跳过，目标用户显示为零通道而运维无从察觉。
 func TestGetDailyTargets_failsVisibleWhenChannelReadBreaks(t *testing.T) {
 	h := newBackupTestHandlers(t)

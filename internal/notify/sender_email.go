@@ -49,7 +49,7 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	if cfg.SubjectTemplate != "" {
 		if msg.TemplateApplied {
 			// 事件模板已全量渲染：Body 是整篇正文，主题只能走窄渲染器
-			// （否则「[告警] {{title}}」被整篇 markdown 顶替，NOTIF154-P2-01）。
+			// （否则「[告警] {{title}}」被整篇 markdown 顶替）。
 			subject = renderSubjectTemplate(cfg.SubjectTemplate, msg, ts)
 		} else {
 			subject = renderStyleTemplate(cfg.SubjectTemplate, msg, ts)
@@ -76,12 +76,14 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 // emailHTMLBody 邮件 Content-Type 决策（单源）：
 //   - TemplateApplied：事件模板已全量渲染，正文是 markdown 文本——不得再包
 //     HTML 卡片（卡片标题/徽章/元信息与模板自身布局视觉重复），也不得进
-//     HTML 上下文（NOTIF153-02 同源纪律），一律 text/plain 原文直发，显式
-//     html 格式不破例（模板产物不是 HTML）。
-//   - 日报：跟随实际渲染格式 ContentFormat（派发侧写入，未知按纯文本
-//     fail-closed）。
-//   - 事件缺省（无正文模板且非显式 text）：HTML 卡片（全站精美同口径）；
-//     通道正文模板存在时只有显式 html 才 text/html。
+//
+// HTML 上下文（同源纪律），一律 text/plain 原文直发，显式
+//
+//	  html 格式不破例（模板产物不是 HTML）。
+//	- 日报：跟随实际渲染格式 ContentFormat（派发侧写入，未知按纯文本
+//	  fail-closed）。
+//	- 事件缺省（无正文模板且非显式 text）：HTML 卡片（全站精美同口径）；
+//	  通道正文模板存在时只有显式 html 才 text/html。
 func emailHTMLBody(bodyTemplate, bodyFormat string, msg Message) bool {
 	if msg.TemplateApplied {
 		return false
@@ -89,7 +91,7 @@ func emailHTMLBody(bodyTemplate, bodyFormat string, msg Message) bool {
 	if msg.EventType == EvtDailyReport {
 		// 模板模式（通道正文模板生效）：Content-Type 纳入 body_format——用户
 		// 显式声明 HTML 模板时必须 text/html（旧实现只看模块渲染格式，
-		// HTML 模板可能以 text/plain 发出，NOTIF154-P3-06）；显式 text 反向
+		// HTML 模板可能以 text/plain 发出）；显式 text 反向
 		// 收紧。模块拼装模式（模板被抑制）忽略 body_format，仍跟随实际渲染
 		// 格式 ContentFormat（未知按纯文本 fail-closed）。
 		if bodyTemplate != "" && !msg.dailyTemplatesSuppressed() {
@@ -112,7 +114,7 @@ func emailHTMLBody(bodyTemplate, bodyFormat string, msg Message) bool {
 // 浅色正文面板+事件/节点/时间元信息网格+署名。与日报卡片同族。
 // 正文一律转义：事件正文来自目录模板/外部输入（IP、UA、规则名），原样拼进
 // HTML 即注入面；日报受控 HTML 载荷走 htmlBody 分支、不经本函数——且只有
-// 实际渲染格式为 html 的日报才按 text/html 发送（NOTIF153-02）。
+// 实际渲染格式为 html 的日报才按 text/html 发送。
 func wrapEmailHTML(msg Message, subject, body string, ts time.Time) string {
 	stamp := ts.Format("2006-01-02 15:04")
 	inner := html.EscapeString(body)

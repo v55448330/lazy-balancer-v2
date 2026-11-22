@@ -1,6 +1,6 @@
 package notify
 
-// audit152/153 修复批回归（notify 域）：聚合器锁外读与首条单发、日报按用户
+// 修复批回归（notify 域）：聚合器锁外读与首条单发、日报按用户
 // send_time 分槽（含宽限届满/is_test 水位）、昨日窗口本地日历日、认证计数按日
 // 分桶（含时区变更清理边界）、邮件正文转义与日报 Content-Type 跟随渲染格式、
 // MCP 推送前置通道过滤、峰值请求差分（含首样本无基线）、自动封禁窗口口径、
@@ -145,7 +145,7 @@ func ensureBusStoppedForTest(t *testing.T) {
 	droppedCount.Store(0)
 }
 
-// ---- NOTIF-152-01 聚合器：首个拦截判定必须在锁内 --------------------------
+// ---- 聚合器：首个拦截判定必须在锁内 --------------------------
 
 // TestRecordBlockedEventNoUnlockedRead 并发摄取 + 窗口 flush：旧实现在 Unlock
 // 之后读 blockedCurrent.count——flush 已把指针置 nil（nil 解引用）或轮换到
@@ -187,7 +187,7 @@ func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 // 内只有首条拦截立即发布一次（后续进聚合），窗口 flush 再追加一条汇总。
 // 旧实现的锁外首条判定在「flush 置 nil / 窗口轮换」竞态下会重发首条——本用例
 // 与 TestRecordBlockedEventNoUnlockedRead（需 -race 才有 RED 证据）互补：
-// 后者是压测，本用例是确定性的行为钉（NOTIF153-10）。
+// 后者是压测，本用例是确定性的行为钉。
 // 发布器曾是形参（publish func(Event)）但从未被调用——本用例传 no-op 仍观察到
 // 真实发布；该死缝已删除，断言只能经包级总线状态（DroppedCount）建立。
 func TestRecordBlockedEventFirstOnlyPublishPerWindow(t *testing.T) {
@@ -212,7 +212,7 @@ func TestRecordBlockedEventFirstOnlyPublishPerWindow(t *testing.T) {
 	resetBlockedStateForTest(t)
 }
 
-// NOTIF154-P3-01：cross-midnight 槽——23:58 槽的 5 分钟宽限窗跨零点，次日
+// cross-midnight 槽——23:58 槽的 5 分钟宽限窗跨零点，次日
 // 00:02 排程按昨日槽触发；投递侧 dailySlotDue 必须用同一槽（此前按今日
 // 23:58 判定为未到期 → 0 投递并在宽限窗内重复空跑）。
 func TestDailySlotCandidateCrossMidnight(t *testing.T) {
@@ -254,7 +254,7 @@ func TestDeliverDailyForAllCrossMidnightSlot(t *testing.T) {
 	}
 }
 
-// SEC154-P3-01：聚合文案按窗口实际跨度生成——ticker 相位与首个事件无关，
+// 聚合文案按窗口实际跨度生成——ticker 相位与首个事件无关，
 // 窗口可能只开启几秒，固定断言「5 分钟内」会夸大攻击持续时间。
 func TestBlockedAggregateBodyUsesActualWindowSpan(t *testing.T) {
 	short := &blockedWindowState{start: time.Now().Add(-2 * time.Second), count: 80,
@@ -283,7 +283,7 @@ func resetBlockedStateForTest(t *testing.T) {
 	blockedMu.Unlock()
 }
 
-// ---- NOTIF-152-02 日报 per-user send_time 分槽 ------------------------------
+// ---- 日报 per-user send_time 分槽 ------------------------------
 
 // TestDeliverDailyForAllScheduledPerUserSlot 定时路径（ctx 带日报任务 ID）只投
 // 各自 send_time 槽到期的用户；手动触发（无任务 ID）保持全员强发。
@@ -328,7 +328,7 @@ func TestDeliverDailyForAllScheduledPerUserSlot(t *testing.T) {
 	}
 
 	// 宽限届满（now-slot > 5min）不再追溯：11 的 09:00 槽在 09:06 必须跳过
-	// （NOTIF153-11 未覆盖分支）。
+	// （未覆盖分支）。
 	at906 := time.Date(2026, 11, 20, 9, 6, 0, 0, time.Local)
 	if _, err := DeliverDailyForAll(ctx, at906); err != nil {
 		t.Fatalf("09:06 定时日报: %v", err)
@@ -370,7 +370,7 @@ func dailyRows(t *testing.T, userID int64) int {
 	return n
 }
 
-// ---- NOTIF-152-03 昨日窗口=本地日历日 --------------------------------------
+// ---- 昨日窗口=本地日历日 --------------------------------------
 
 // TestCollectDailyDataLocalCalendarDay 09:00（+08:00）采集昨日：窗口必须是本地
 // 日历日 [11-19 00:00, 11-20 00:00) 半开区间，而不是 UTC 截断日。
@@ -406,7 +406,7 @@ func TestCollectDailyDataLocalCalendarDay(t *testing.T) {
 	}
 }
 
-// ---- NOTIF-152-04 认证计数按日分桶（跨日不覆盖） ---------------------------
+// ---- 认证计数按日分桶（跨日不覆盖） ---------------------------
 
 // TestAuthCountersBucketByDate 同一进程内跨两天累加：昨日桶在次日仍可读，
 // 日报读昨日标签不会被今天的事件清零/覆盖。
@@ -489,7 +489,7 @@ func authCountersDaysLen() int {
 	return len(authCounters.days)
 }
 
-// ---- LNK-task-152-01 API 密钥到期时间宽容解析 ----------------------------
+// ---- API 密钥到期时间宽容解析 ----------------------------
 
 func TestParseAPIKeyExpiryDriverForms(t *testing.T) {
 	cases := []struct{ raw, wantUTC string }{
@@ -498,7 +498,7 @@ func TestParseAPIKeyExpiryDriverForms(t *testing.T) {
 		{"2026-11-19T16:00:00Z", "2026-11-19 16:00:00"},      // RFC3339
 		{"2026-11-19T16:00:00", "2026-11-19 16:00:00"},       // 无时区 T 形态
 		// 带偏移必须按偏移换算 UTC（16:00+08:00 = 08:00Z）。此前该用例 wantUTC=""
-		// 只断「解析成功」，带偏移值被解析成错误时区仍全绿（NOTIF153-12）。
+		// 只断「解析成功」，带偏移值被解析成错误时区仍全绿。
 		{"2026-11-19 16:00:00.000+08:00", "2026-11-19 08:00:00"},
 	}
 	for _, c := range cases {
@@ -545,7 +545,7 @@ func TestAPIKeyExpiryDaysCalendarCeil(t *testing.T) {
 	}
 }
 
-// ---- SYSH-152-14 GetDailyConfig 错误上抛 ----------------------------------
+// ---- GetDailyConfig 错误上抛 ----------------------------------
 
 func TestGetDailyConfigDistinguishesErrors(t *testing.T) {
 	// 表缺失=真实读失败，必须上抛（旧实现把任何错误都当「无行=默认」）。
@@ -564,7 +564,7 @@ func TestGetDailyConfigDistinguishesErrors(t *testing.T) {
 	}
 }
 
-// ---- NOTIF-152-05 事件邮件正文一律转义 ------------------------------------
+// ---- 事件邮件正文一律转义 ------------------------------------
 
 func TestWrapEmailHTMLEscapesEventBody(t *testing.T) {
 	body := `外部输入 <a href="http://evil.example/x">点我</a> <script>alert(1)</script>`
@@ -578,7 +578,7 @@ func TestWrapEmailHTMLEscapesEventBody(t *testing.T) {
 	}
 }
 
-// ---- NOTIF153-02 日报邮件 Content-Type 跟随实际渲染格式 --------------------
+// ---- 日报邮件 Content-Type 跟随实际渲染格式 --------------------
 
 // TestEmailDailyReportContentTypeFollowsRenderedFormat 日报格式选成 markdown/
 // text/json 时，正文里的未转义 '<script>' 只能以 text/plain 发送；只有实际
@@ -651,7 +651,7 @@ func decodeMailBodyForTest(t *testing.T, data string) string {
 	return string(body)
 }
 
-// ---- NOTIF-152-06 MCP 推送前置通道过滤 ------------------------------------
+// ---- MCP 推送前置通道过滤 ------------------------------------
 
 // TestDispatchSkipsPushForExplicitEmptyChannels 显式空选接收通道（channel_ids='[]'）
 // 的用户不再收 MCP 实时推送（与通道投递同源三态）；普通订阅用户照常推送。
@@ -695,7 +695,7 @@ func TestDispatchSkipsPushForExplicitEmptyChannels(t *testing.T) {
 	}
 }
 
-// ---- NOTIF-152-08 峰值请求=窗口差分（非累计计数器原值） --------------------
+// ---- 峰值请求=窗口差分（非累计计数器原值） --------------------
 
 func TestCollectDailyDataPeakQPSFromCounterDiff(t *testing.T) {
 	withLocalLocation(t, testLocShanghai(t))
@@ -755,7 +755,7 @@ func TestCollectDailyDataPeakQPSFirstSampleWithoutBaseline(t *testing.T) {
 	}
 }
 
-// ---- NOTIF-152-09 自动封禁次数：窗口上界 + 与 UI 同源 ---------------------
+// ---- 自动封禁次数：窗口上界 + 与 UI 同源 ---------------------
 
 func TestCollectDailyDataAutobanUsesAuditWindow(t *testing.T) {
 	withLocalLocation(t, testLocShanghai(t))
@@ -782,7 +782,7 @@ func TestCollectDailyDataAutobanUsesAuditWindow(t *testing.T) {
 	}
 }
 
-// ---- NOTIF-152-10 top_ip 出清单 + 存量配置容错 ----------------------------
+// ---- top_ip 出清单 + 存量配置容错 ----------------------------
 
 func TestDailyItemsDropLegacyTopIP(t *testing.T) {
 	for _, id := range DailyItemIDs {
@@ -808,7 +808,7 @@ func TestDailyItemsDropLegacyTopIP(t *testing.T) {
 	}
 }
 
-// ---- LNK-task-152-01 API 密钥到期时间宽容解析 ----------------------------
+// ---- API 密钥到期时间宽容解析 ----------------------------
 
 // TestCheckAPIKeyExpiryParsesDriverTimezoneForm glebarez 驱动读 DATETIME 列回来
 // 的形态是「2026-11-19 16:00:00+00:00」（带时区后缀）；旧解析只试裸布局与

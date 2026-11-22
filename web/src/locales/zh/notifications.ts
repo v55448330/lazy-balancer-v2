@@ -53,7 +53,7 @@ export default {
         'notify.channel_recovered': '通知通道恢复',
         'task.failed': '定时任务失败',
         'apikey.expiry_warning': 'API 密钥临期',
-        // audit153 FE153-01：2026-11-21 查漏补缺批 24 类写操作通知（catalog.go 同位）
+        // 2026-11-21 查漏补缺批 24 类写操作通知（catalog.go 同位）
         'cfg.caddy_lifecycle': 'Caddy 服务启停',
         'cfg.admin_tls_changed': 'Admin TLS 配置变更',
         'cfg.oidc_changed': 'OIDC 配置变更',

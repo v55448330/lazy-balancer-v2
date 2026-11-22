@@ -426,7 +426,7 @@ func TestAPIDocRoutes_importQueuePartialContract(t *testing.T) {
 	if !containsRouteError(route.Errors, "409") {
 		t.Fatalf("V1 import errors=%v, want certificate queue drain 409", route.Errors)
 	}
-	// 入口并发 fast-fail（EVTCERT153-02）：已有导入/还原会话进行中同为 409，
+	// 入口并发 fast-fail：已有导入/还原会话进行中同为 409，
 	// 文档必须与实现同步披露（两种 409 语义不同：队列排空 vs 会话占用）。
 	hasImportInProgress := false
 	for _, routeError := range route.Errors {

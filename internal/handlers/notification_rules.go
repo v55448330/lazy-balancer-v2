@@ -156,7 +156,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		FROM notification_subscriptions WHERE user_id=?`, uid)
 	if err != nil {
 		// 聚合读失败必须 500：静默降级为空规则会让「已停用/已配置」在 UI 上
-		// 看起来像未配置，用户保存后反而覆盖真实配置（audit153 EVTCERT153-03）。
+		// 看起来像未配置，用户保存后反而覆盖真实配置。
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
 		return
 	}
@@ -256,7 +256,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 
 	// 3. 日报规则（恒呈现：停用态也显示卡片，允许重新启用与配置；
 	// GetDailyConfig 无行返回默认启用配置，err 仅 DB 故障时非 nil——DB 故障
-	// 必须 500，静默丢卡片同样属于聚合读失真（EVTCERT153-03）
+	// 必须 500，静默丢卡片同样属于聚合读失真
 	dailyCfg, err := notify.GetDailyConfig(uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取日报配置失败", err)})
@@ -265,7 +265,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	{
 		// 日报目标通道= sys.daily_report 订阅行 channel_ids 三态（与事件规则同口径）。
 		// 无行=缺省（全部启用通道）；DB 故障/列损坏必须 500——静默降级会把
-		// 「显式空选=不投递」误显示为全部通道（EVTCERT153-03 同族）。
+		// 「显式空选=不投递」误显示为全部通道（同族）。
 		var dailyIDs, dailyAt string
 		var dailyBy int64
 		err := db.DB.QueryRow(`SELECT COALESCE(channel_ids,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, notify.EvtDailyReport).Scan(&dailyIDs, &dailyAt, &dailyBy)
@@ -605,7 +605,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
-// requireNotifyMaster 通知测试发送的主节点门（NOTIF154-P3-03）：从节点不存在
+// requireNotifyMaster 通知测试发送的主节点门：从节点不存在
 // pending 消费方（投递 Daemon 仅主节点运行），放行=API 成功但消息永不投递的
 // 假成功。角色读脱离客户端生命周期（与 requireMasterNode 同口径：请求 ctx
 // 已取消不得误报成角色查询失败），查询失败响亮 500。

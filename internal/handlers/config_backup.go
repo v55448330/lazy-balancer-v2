@@ -6407,7 +6407,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if threatFileReconcile {
 		wafFilePhase = true
 	}
-	// 并发 fast-fail（LNK-cfgbak-152-03）：挂验证链之后、会话开始之前——
+	// 并发 fast-fail：挂验证链之后、会话开始之前——
 	// 验证失败型载荷（400）不受在途会话清理窗口误伤（会话锁要到提交后异步
 	// 清理结束才释放，入口处探测会把「上一导入已完成响应、清理仍在途」的
 	// 顺序导入误判为并发）；真并发会话仍在此 409 fast-fail，不再静默阻塞。

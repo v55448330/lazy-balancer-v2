@@ -1212,7 +1212,7 @@ func defaultApplyNotifyEvents(username string, items []db.DefaultApplyItem, rese
 // 2026-11-20 第五轮：启动不再自动播种，面板按钮驱动；脏引用删除重建；
 // reset=全部默认策略删除重建）。
 //
-// 写路径纪律（audit152）：
+// 写路径纪律：
 //   - 导入窗口内 409 fast-fail（全量替代表会被导入覆盖/阻塞）；
 //   - 请求体走统一大小门，空 body 兼容、畸形 JSON 400（不得静默丢弃 reset）；
 //   - 全程持 caddyOpMu（与 finishTxApply 同序：库写与 Caddy 应用串行，

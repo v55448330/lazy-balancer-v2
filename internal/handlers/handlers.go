@@ -597,7 +597,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		}
 		if f.Notify != nil {
 			// 与热路径/默认策略 apply 同口径走 notifyPublish 缝（单一发布口，
-			// 测试可捕获；DEFPOL153-001 全量链回退事件由此落）。
+			// 测试可捕获； 全量链回退事件由此落）。
 			publishTxApplyNotify(f)
 		}
 		c.JSON(status, msg)

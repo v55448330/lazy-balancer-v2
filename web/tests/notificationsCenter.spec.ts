@@ -309,7 +309,7 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.ok(!/\.tpl-md-preview (h[1-6]|p|ul|ol|li|table|th|td|blockquote|code|pre|hr|a|em|strong|tbody)[^{]*\{/.test(nc), '预览 v-html 后代样式必须 :deep（scoped 直写永不匹配）')
 })
 
-// 全源码接线钉（TQ154-P3-01 补齐）：此前 spec 只按主题分块抽断言，REST 端点
+// 全源码接线钉（补齐）：此前 spec 只按主题分块抽断言，REST 端点
 // 与渲染管线存在「漏钉」区（趋势/总览/日报测试/日报预览/规则写端点只在函数名
 // 断言里被间接覆盖，端点改名/路径漂移无人发现）。本用例把 NotificationCenter
 // 的**全部** request.* 消费面与预览渲染管线逐条钉住，新增断点必须同步登记。
@@ -337,7 +337,7 @@ test('通知中心全源码接线：REST 端点全量 + 预览防抖 + 模板单
   assert.ok(!nc.includes('levelB'), '事件标签词已收敛到事件模板单源（SFC 残留即双源）')
 })
 
-// 样式块去重与死类清理（PRES154-P3-01/02）：同一选择器重复声明曾让后出现的
+// 样式块去重与死类清理：同一选择器重复声明曾让后出现的
 // 值静默覆盖前一处（预览高度 360→300、弹框体 240→100dvh），无人知道最终值。
 test('通知中心样式块：同选择器单声明 + 死类清零', () => {
   const nc = code('src/views/notifications/NotificationCenter.vue')

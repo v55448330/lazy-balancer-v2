@@ -216,7 +216,7 @@ func TestGetNotificationRules_stableOrder(t *testing.T) {
 }
 
 // 全新用户停用默认订阅组：组内每个事件都必须补建 opt-out 行，否则
-// subscribersFor 的默认兜底继续投递（EVTCERT153-01）。
+// subscribersFor 的默认兜底继续投递。
 func TestUpdateNotificationRule_disableWithoutRowCreatesOptOutRows(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gid := certGroupID(t)

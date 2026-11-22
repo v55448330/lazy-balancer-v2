@@ -358,7 +358,7 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
 	}
 	tone := parseFrontendAuditTone(t, data, frontendAuditToneSource)
-	// 当前单源登记 77 条（+audit153 停止重签）；
+	// 当前单源登记 77 条（+ 停止重签）；
 	// 等值门同时拦截整表漏解析与未经审查的新增/删除。
 	const registeredExceptionCount = 77
 	if len(tone.exceptions) != registeredExceptionCount {

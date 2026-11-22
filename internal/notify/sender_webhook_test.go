@@ -102,7 +102,7 @@ func TestWebhookSenderZeroTimeAndNilFields(t *testing.T) {
 	}
 }
 
-// NOTIF154-P2-02：事件模板已全量渲染（TemplateApplied）时载荷必须与默认分支
+// 事件模板已全量渲染（TemplateApplied）时载荷必须与默认分支
 // 同 schema（level/level_label/time/node/title/body/fields），且零值 Time 同样
 // 以发送时刻兜底——此前该分支直格式化 msg.Time 且只带 5 键，接收端拿到
 // 0001-01-01 时间戳、title/fields 缺失。

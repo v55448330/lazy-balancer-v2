@@ -47,7 +47,7 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 	if msg.TemplateApplied {
 		// 事件模板已全量渲染：Body 即最终消息。载荷与默认分支同 schema
 		// （level/level_label/time/node/title/body/fields），time 用与默认分支
-		// 同源的零值兜底（NOTIF154-P2-02：此前只带 5 键且直格式化 msg.Time，
+		// 同源的零值兜底（此前只带 5 键且直格式化 msg.Time，
 		// 接收端恒拿到 0001-01-01 时间戳、title/fields 静默缺失）。
 		var err error
 		payload, err = json.Marshal(map[string]any{

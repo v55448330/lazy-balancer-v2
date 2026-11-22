@@ -156,7 +156,7 @@ func renderStyleTemplateHTML(tpl string, msg Message, ts time.Time) string {
 // renderSubjectTemplate 邮件主题窄渲染器：只替换元信息占位符
 // （title/level/event/time/node/brand/date/event_title），**不替换 {{body}}**。
 // TemplateApplied 时 Body 是整篇最终正文，主题模板若沿用通用渲染器会把多行
-// markdown 全文顶进主题（NOTIF154-P2-01）；保留 {{body}} 字面量供用户自查。
+// markdown 全文顶进主题；保留 {{body}} 字面量供用户自查。
 func renderSubjectTemplate(tpl string, msg Message, ts time.Time) string {
 	if !strings.Contains(tpl, "{{") {
 		return tpl

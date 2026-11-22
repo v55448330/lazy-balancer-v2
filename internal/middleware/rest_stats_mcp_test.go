@@ -1,6 +1,6 @@
 package middleware
 
-// MW154-P3-02：MCP 内部回环转发到 REST 的子调用不得计入 REST 接入统计
+// MCP 内部回环转发到 REST 的子调用不得计入 REST 接入统计
 // （与 api_call_stats「MCP 路由不记入」口径一致；否则与 mcp_tool_stats 双记）。
 
 import (

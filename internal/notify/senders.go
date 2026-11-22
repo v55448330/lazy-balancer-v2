@@ -28,7 +28,7 @@ type Message struct {
 	// ContentFormat 已渲染正文的实际格式（"html"/"markdown"/"text"/"json"；
 	// 空=未标注）。日报按通道渲染时由派发侧写入（renderDailyForChannelFormat），
 	// 邮件通道据此决定 Content-Type——只有 html 渲染可按 text/html 发送
-	// （NOTIF153-02：markdown/text 的未转义内容不得进 HTML 上下文）。
+	// （markdown/text 的未转义内容不得进 HTML 上下文）。
 	ContentFormat string
 	// TemplateApplied 事件级/事件×通道模板已在派发侧完成**全量布局渲染**——
 	// Body 即最终消息，通道样式模板（机器人 content_template/邮件 body_template/

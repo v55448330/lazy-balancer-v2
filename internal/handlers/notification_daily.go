@@ -1,6 +1,6 @@
 package handlers
 
-// 日报配置/预览/手动触发 REST（audit151 方案：日报从订阅矩阵拆出为独立
+// 日报配置/预览/手动触发 REST（方案：日报从订阅矩阵拆出为独立
 // 区块——启用/时间/项目定制/投递格式/预览；定时与管理员触发共用
 // notify.DeliverDailyForAll 单源）。
 

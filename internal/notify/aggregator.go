@@ -94,7 +94,7 @@ func flushBlockedWindow() {
 // blockedAggregateEvent 汇总事件（纯函数，便于钉测文案）。窗口跨度用实际
 // time.Since(w.start)：全局 ticker 的相位与首个事件无关（窗口可能在 tick 前
 // 几秒才开启），固定写「5 分钟内」会把几秒的爆发夸大成 5 分钟持续攻击
-// （SEC154-P3-01）。
+// 。
 func blockedAggregateEvent(w *blockedWindowState) Event {
 	level := LevelInfo
 	warnAt, criticalAt := BlockedThresholds()

@@ -192,7 +192,7 @@ var DailyItemLabels = map[string]string{
 
 // GetDailyConfig 读单用户配置（无行=默认：启用+全项目+09:00+markdown）。
 // 查询失败必须上抛：把「库坏了」伪装成「无配置」会让日报静默改回默认项目/时间，
-// 用户看到的覆盖范围变化与真实故障无法区分（SYSH-152-14）。
+// 用户看到的覆盖范围变化与真实故障无法区分。
 func GetDailyConfig(userID int64) (DailyConfig, error) {
 	cfg := DailyConfig{UserID: userID, Enabled: true, SendTime: "09:00",
 		Items: append([]string{}, DailyItemIDs...), Formats: map[string]string{}}
@@ -301,7 +301,7 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 // dailySlotDue 定时路径判定：该用户 send_time 槽已到期且在宽限窗内，
 // 且本槽尚未投递过（同槽重入/重复 tick 不重复发）。槽语义与排程侧
 // （services.dailyReportSlotAt）共用 DailySlotCandidate 单源——23:5x 槽的
-// 宽限窗跨零点时，排程按昨日槽触发，投递侧也必须认昨日槽（NOTIF154-P3-01）。
+// 宽限窗跨零点时，排程按昨日槽触发，投递侧也必须认昨日槽。
 func dailySlotDue(userID int64, cfg DailyConfig, now time.Time, loc *time.Location) bool {
 	slot, ok := DailySlotCandidate(now, cfg.SendTime, loc)
 	if !ok {
@@ -322,7 +322,7 @@ func dailySlotDue(userID int64, cfg DailyConfig, now time.Time, loc *time.Locati
 // 槽 ≤ now 且落在 DailySlotGrace 宽限内，含昨日同一时刻（宽限窗跨零点）。
 // 排程侧（services.dailyReportSlotAt）与投递侧（dailySlotDue）共用本单源，
 // 两处判定不允许各自实现（23:58 槽在次日 00:02 排程触发而投递侧按今日
-// 23:58 判未到期 → 0 投递 + 宽限窗内重复空跑，NOTIF154-P3-01）。
+// 23:58 判未到期 → 0 投递 + 宽限窗内重复空跑）。
 func DailySlotCandidate(now time.Time, sendTime string, loc *time.Location) (time.Time, bool) {
 	if loc == nil {
 		loc = time.Local
@@ -716,7 +716,7 @@ func renderDailyForChannel(msg Message, channelType, styleFormat string) string 
 // renderDailyForChannelFormat 同 renderDailyForChannel，并返回正文实际采用的
 // 渲染格式（"html"/"markdown"/"text"/"json"；非日报/载荷损坏回空串=未知）。
 // 派发侧把它写入 Message.ContentFormat，邮件通道据此决定 Content-Type
-// （NOTIF153-02：只有 html 渲染可按 text/html 发送；text/markdown/json 必须
+// （只有 html 渲染可按 text/html 发送；text/markdown/json 必须
 // text/plain，否则日报值里的 '<script>' 会被邮件客户端当 HTML 执行）。
 func renderDailyForChannelFormat(msg Message, channelType, styleFormat string) (string, string) {
 	if msg.EventType != EvtDailyReport {
@@ -907,7 +907,7 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 					} else {
 						// 解析失败（未知形态/数据损坏行）：整项回退加粗标签+列表。
 						// 块间空行与表格分支同口径——粘连时下一块标签会被
-						// markdown 解析器吞成上一块的列表项/表行（NOTIF154-P3-05）。
+						// markdown 解析器吞成上一块的列表项/表行。
 						fmt.Fprintf(&lists, "**%s**\n\n", r[0])
 						for _, ln := range strings.Split(r[1], "\n") {
 							fmt.Fprintf(&lists, "- %s\n", ln)
@@ -1015,7 +1015,7 @@ var nodesSummaryLine = regexp.MustCompile(`^([^：]+)：请求 (\d+) · 拦截 (
 
 // secRows 节内启用项目→[label,value] 行（空节省略）。空值项目整项省略：
 // 单机默认配置的 nodes_summary、无攻击时的 top_ips 等不得渲染空行
-// （NOTIF154-P3-02：注释一直承诺渲染层省略，实现此前仍出空标签行）。
+// （注释一直承诺渲染层省略，实现此前仍出空标签行）。
 func secRows(items []string, enabled map[string]bool, label, val func(string) string) [][3]string {
 	var rows [][3]string
 	for _, it := range items {

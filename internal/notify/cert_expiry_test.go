@@ -1,6 +1,6 @@
 package notify
 
-// CERT154-P2-01：证书临期预警发布器（cert.expiry_warning）钉测：
+// 证书临期预警发布器（cert.expiry_warning）钉测：
 // 参数序契约（1=域名 2=到期日 3=剩余天数）/ 每证书每去重窗一次 /
 // 续期后到期时刻变化可再次预警 / 空域名回退任务 id。
 

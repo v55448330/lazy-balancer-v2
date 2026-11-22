@@ -1,6 +1,6 @@
 package handlers
 
-// audit152 默认策略 apply 的 handler 级契约：响应形状、事件发布、导入窗口
+// 默认策略 apply 的 handler 级契约：响应形状、事件发布、导入窗口
 // 409、畸形请求体 400、apply 失败 500（单事务→零部分进度）、热路径事件。
 
 import (
@@ -266,7 +266,7 @@ func TestGetDefaultPolicyCatalog_dbFailure500(t *testing.T) {
 	}
 }
 
-// SECH-152-01：名单被启用策略引用时走投影热路径——事件必须照常发布
+// 名单被启用策略引用时走投影热路径——事件必须照常发布
 // （热路径此前静默丢弃 txApplyFinish.Notify）。
 func TestIPListHotPath_publishesNotify(t *testing.T) {
 	withIsolatedGlobal(t) // 本函数体直写 notifyPublish seam（守卫按函数体扫描）
@@ -324,7 +324,7 @@ func TestSystemListNames_singleSourceAcrossPackages(t *testing.T) {
 	}
 }
 
-// DEFPOL153-001：名单未被启用策略引用时 tryIPListHotPathApply 返回 false 落
+// 名单未被启用策略引用时 tryIPListHotPathApply 返回 false 落
 // 全量链——全量链的 txApplyFinish 必须带 Notify，否则「未引用名单」的增/删/
 // 条目改写零通知（热路径分支早已发）。
 func TestIPListFullChainFallback_publishesNotify(t *testing.T) {

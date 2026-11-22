@@ -1,4 +1,4 @@
-// audit153 FE153-01 跨栈对表：internal/notify/catalog.go 是事件目录唯一事实源，
+// 跨栈对表：internal/notify/catalog.go 是事件目录唯一事实源，
 // 前端 eventTitles（zh/en）只是它的展示投影。缺词条=通知中心显示裸事件 ID；
 // 多词条=无发布点的臆造键。双向钉死（缺/多均红），zh 标题必须与 Go TitleFormat
 // 同文（zh 母本不是「随便起的中文名」）。

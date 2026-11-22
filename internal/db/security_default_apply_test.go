@@ -391,7 +391,7 @@ func jsonInt(v int64) string {
 	return string(b)
 }
 
-// ── audit152 SECH-152-03：默认策略身份守卫（按名匹配→按名+is_default_policy）──
+// ── 默认策略身份守卫（按名匹配→按名+is_default_policy）──
 
 // applyDefaultPoliciesFixture 建库并跑迁移，返回 *sql.DB 位置。
 func applyDefaultPoliciesFixture(t *testing.T) {
@@ -627,7 +627,7 @@ func TestPolicyRefsValid_blankRefsAreLegalEmpty(t *testing.T) {
 
 // 存量默认策略（is_default_policy 列引入前创建）按「[默认规则] 描述前缀 +
 // 种子名 + policy_type 与种子一致」回填标记；用户同名但无前缀行不标记，
-// 同名同前缀但阶段型不符的行同样不标记（DEFPOL153-005 收紧谓词）。
+// 同名同前缀但阶段型不符的行同样不标记（收紧谓词）。
 func TestBackfillDefaultPolicyMarkers_marksOnlySeedDescPrefix(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
@@ -662,7 +662,7 @@ func TestBackfillDefaultPolicyMarkers_marksOnlySeedDescPrefix(t *testing.T) {
 	}
 }
 
-// 种子契约（SVC-152-02/03/07）：CRS 组剔除基础设施组 49/59、组数文案与列表
+// 种子契约：CRS 组剔除基础设施组 49/59、组数文案与列表
 // 一致；CC 种子启用会话异常检测；sys: 引用取单源名单名。
 func TestDefaultPolicySeeds_contract(t *testing.T) {
 	threatNames := ThreatSystemLists()
@@ -806,7 +806,7 @@ func TestApplyDefaultSecurityPolicies_legacyRowHealedInTx(t *testing.T) {
 	}
 }
 
-// LNK153-P2-01：非 reset 时「用户禁用」先于「引用已脏」判定——disabled 的
+// 非 reset 时「用户禁用」先于「引用已脏」判定——disabled 的
 // 默认策略即使引用断了也不重建不改写（仅 reset 恢复）；目录同序（disabled
 // 压过 dirty），两处口径必须一致，否则 apply 与预览态自相矛盾。
 func TestApplyDefaultSecurityPolicies_disabledDirtyPolicyNotRebuilt(t *testing.T) {
@@ -877,7 +877,7 @@ func TestApplyDefaultSecurityPolicies_disabledDirtyPolicyNotRebuilt(t *testing.T
 	}
 }
 
-// DEFPOL153-002：reset 删除覆盖全部同名默认行（不只选中的单个 id），绑定从
+// reset 删除覆盖全部同名默认行（不只选中的单个 id），绑定从
 // 全部命中行迁移——历史重复默认行（旧版本重复创建）随重置收敛为一行。
 func TestApplyDefaultSecurityPolicies_resetCollapsesDuplicateDefaultRows(t *testing.T) {
 	database := openMigrationTestDB(t)

@@ -1,12 +1,12 @@
 package services
 
-// audit153（NOTIF153-01/04）回归：通知日报排程槽语义。
+// 回归：通知日报排程槽语义。
 //
 // 引擎契约（internal/taskengine/engine.go Scheduled 分支）：求值后立即判定
 // due = now.After(槽)；NextSlotFn 返回未来槽永远不会触发。因此槽函数必须
 // 「宽限窗内返回最近的已到期槽（≤now），否则返回下一个未来槽」。旧实现以
 // now+1min 为基准取未来槽，槽前 30s 前导窗的第一次重算就把当日槽推到次日，
-// due 恒 false —— 定时日报永不投递（NOTIF153-01）。
+// due 恒 false —— 定时日报永不投递。
 //
 // 第二个用例用真实引擎 tick 驱动：fake 时钟取 real-90s、send_time 由它派生
 // （槽=该分钟边界，必然 ≤real now 且在宽限内），从而确定性验证「到点触发」
@@ -108,7 +108,7 @@ func TestDailyReportSlotSemantics(t *testing.T) {
 	}
 }
 
-// TestNextDailyReportSlotUsesConfiguredTimezone NOTIF153-04：槽数学必须与
+// TestNextDailyReportSlotUsesConfiguredTimezone：槽数学必须与
 // 投递侧 dailySlotDue 用同一配置时区，而不是进程 TZ。
 func TestNextDailyReportSlotUsesConfiguredTimezone(t *testing.T) {
 	tokyo := mustLoadLoc(t, "Asia/Tokyo")
@@ -122,7 +122,7 @@ func TestNextDailyReportSlotUsesConfiguredTimezone(t *testing.T) {
 	}
 }
 
-// TestNotificationDailyReportEngineFiresScheduledSlot 真实引擎驱动（NOTIF153-01
+// TestNotificationDailyReportEngineFiresScheduledSlot 真实引擎驱动
 // 的端到端钉）：Scheduled 任务经 tick 在到期槽触发一次，同一槽不重复投递。
 func TestNotificationDailyReportEngineFiresScheduledSlot(t *testing.T) {
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
@@ -169,7 +169,7 @@ func TestNotificationDailyReportEngineFiresScheduledSlot(t *testing.T) {
 }
 
 // TestScheduledFutureSlotDoesNotFire 引擎契约对照（旧实现的失败形态）：返回
-// 未来槽的 Scheduled 任务不得触发——这正是 NOTIF153-01 的根因形态。
+// 未来槽的 Scheduled 任务不得触发——这正是 的根因形态。
 func TestScheduledFutureSlotDoesNotFire(t *testing.T) {
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {

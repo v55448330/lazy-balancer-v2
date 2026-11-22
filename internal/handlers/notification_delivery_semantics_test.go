@@ -282,7 +282,7 @@ func TestNotificationStats_partialCountsAsSuccess(t *testing.T) {
 	}
 }
 
-// NOTIF154-P3-03：从节点「规则测试/日报测试」必须显式拒绝（403 master_required）。
+// 从节点「规则测试/日报测试」必须显式拒绝（403 master_required）。
 // 从节点不存在 pending 消费方（投递 Daemon 仅主节点运行），放行=API 成功但
 // 消息永不投递的假成功。
 func TestNotificationTestEndpointsRejectSlave(t *testing.T) {

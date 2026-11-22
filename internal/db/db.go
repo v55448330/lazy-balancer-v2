@@ -1413,7 +1413,7 @@ var newColumnsRegistry = map[string]string{
 	// + 排队等待秒数（0=自动取 CC 窗口；域 [0,300] 写侧钳位）。
 	"security_policies.cc_trigger_action": "TEXT NOT NULL DEFAULT 'challenge'",
 	"security_policies.cc_queue_wait_sec": "INTEGER NOT NULL DEFAULT 0",
-	// 默认策略身份列（2026-11-21 audit152 SECH-152-03）：1=面板「默认策略」
+	// 默认策略身份列（2026-11-21）：1=面板「默认策略」
 	// 创建/重建的行。apply/catalog/reset 按「名 + 本列」匹配——用户自建同名
 	// 策略不再被复用/删除/冒充 exists；reset 只删本列=1 行。存量行由
 	// BackfillDefaultPolicyMarkers 按「种子名 + [默认规则] 描述前缀 +
@@ -2334,10 +2334,10 @@ func runMigrations() error {
 		}
 	}
 
-	// 默认策略身份标记自愈（2026-11-21 audit152）：is_default_policy 列引入前
+	// 默认策略身份标记自愈（2026-11-21）：is_default_policy 列引入前
 	// 创建/备份恢复的默认策略行为 0——按「种子名 + [默认规则] 描述前缀 +
 	// policy_type 与种子一致」幂等补标，否则 apply/catalog 会把真默认当用户行、
-	// 重复创建同名策略。必须晚于上方 policy_type 回填（DEFPOL153-005 收紧谓词
+	// 重复创建同名策略。必须晚于上方 policy_type 回填（收紧谓词
 	// 消费阶段型；旧库行在补型前 ptype=''，先跑会漏标到下次启动）。
 	// 只读探测门 + 命中才写（收敛库启动零写，同 ensureSetupAdminFlagAtStartup）。
 	if err := BackfillDefaultPolicyMarkers(); err != nil {
@@ -2436,7 +2436,7 @@ func runMigrations() error {
 		// 与版本触发器均已摘除，存量值随列一并删除。
 		{"global_config", "autoban_nat_detection"},
 		{"global_config", "autoban_nat_fingerprint_threshold"},
-		// CC 全局阈值五列退役（2026-11-21 audit152 SVC-152-05）：CC 检测
+		// CC 全局阈值五列退役（2026-11-21）：CC 检测
 		// 开关/阈值已迁策略级 security_policies.cc_*（loadCCConfig 按启用策略
 		// 读取），global_config 同名列全仓零读零写（备份导出/导入按列存在性
 		// 过滤，旧备份携带的键自动跳过）。同 metrics_* 先例：fresh 库不建、
@@ -6820,8 +6820,8 @@ var defaultPolicySeeds = []defaultPolicySeed{
 		name: "基础 CC 防护", content: "突刺/4xx/多 UA 任一命中触发滑块挑战，通过后放行", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
 		ptype: "stage2", mode: "off",
 		humanMode: "auto", humanType: "slider", ccEnabled: 1,
-		// 文案宣称「多 UA」触发：会话异常检测必须随种子启用（audit152
-		// SVC-152-03——此前只开 cc_detect_enabled，多 UA 维度实际未生效）。
+		// 文案宣称「多 UA」触发：会话异常检测必须随种子启用
+		// ——此前只开 cc_detect_enabled，多 UA 维度实际未生效）。
 		ccSessionAnomaly: 1, ccSessionUAThreshold: DefaultCCSessionUAThreshold,
 		blockPageID: 9005, // services.builtinHumanVerifyPageID（滑块页，包私有故字面量）
 	},
@@ -6829,7 +6829,7 @@ var defaultPolicySeeds = []defaultPolicySeed{
 		name: "WAF 请求防护", content: "CRS 请求方向 15 组规则阻断，记录请求体", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
 		ptype: "stage3", mode: "blocking",
 		// 基础设施组 49（请求评估）/59（响应评估）由渲染与写侧强制包含/剥离，
-		// 种子不得再宣称（audit152 SVC-152-02）。
+		// 种子不得再宣称。
 		crsGroups: `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44"]`, logReqBody: 1,
 	},
 	{
@@ -6938,7 +6938,7 @@ func rowExists(q tableQuerier, query string, args ...any) (bool, error) {
 
 // policyRefsValid 校验策略两个 refs JSON 数组里的列表 id 全部存在。
 // 空串/空白 refs 视为合法空集（与渲染端 parseIPListRefsChecked 的
-// TrimSpace→空集 同口径，2026-11-21 audit152 LNK-def-152-009）；畸形 JSON
+// TrimSpace→空集 同口径，2026-11-21）；畸形 JSON
 // 判非法（数据问题而非库故障）；行缺失判非法；库故障上抛。
 func policyRefsValid(q tableQuerier, policyID int64) (bool, error) {
 	var wlRefs, aclRefs string
@@ -7003,7 +7003,7 @@ func countLegacyDefaultPolicyRows(q tableQuerier) (int, error) {
 }
 
 // legacyDefaultPolicyWhere 是补标谓词：种子名 + 种子描述前缀 + policy_type
-// 与种子一致（同名同前缀但阶段型不符的行不误标，DEFPOL153-005）。参数顺序=
+// 与种子一致（同名同前缀但阶段型不符的行不误标）。参数顺序=
 // 前缀两次（substr 长度与比较值）+ 每种子（名、阶段型）对——与
 // defaultPolicySeeds 的顺序严格同序。
 func legacyDefaultPolicyWhere() string {
@@ -7041,7 +7041,7 @@ func markLegacyDefaultPoliciesTx(tx *sql.Tx) error {
 const defaultPolicySeedDescPrefix = "[默认规则]"
 
 // ApplyDefaultSecurityPolicies 逐项创建/复用/重建默认地址列表与策略。
-// 单事务贯穿列表+策略+绑定迁移+悬空清理（audit152 LNK-def-152-003）：中途
+// 单事务贯穿列表+策略+绑定迁移+悬空清理：中途
 // 失败整体回滚，不留下半批默认行；并发调用由写锁互斥（handler 侧另持
 // caddyOpMu 串行化用户请求）。actorID 落 updated_by。
 func ApplyDefaultSecurityPolicies(actorID int64) ([]DefaultApplyItem, error) {
@@ -7144,11 +7144,11 @@ func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem
 					return fmt.Errorf("validate refs of %q: %w", sd.name, verr)
 				}
 				switch {
-				// 用户禁用优先于引用已脏（LNK153-P2-01）：disabled 的默认策略
+				// 用户禁用优先于引用已脏：disabled 的默认策略
 				// 即使引用的列表被删也不重建不改写（保留用户意图），仅 reset
 				// 恢复——与目录 status 判定序一致（disabled 压过 dirty）。
 				case reset || (existingEnabled != 0 && !valid):
-					// 删除覆盖全部同名默认行（不只选中的单行，DEFPOL153-002）：
+					// 删除覆盖全部同名默认行（不只选中的单行）：
 					// 历史重复默认行随重建一并收敛；绑定从全部命中行捕获迁移。
 					rows, qerr := tx.Query(`SELECT rule_caddy_id, COALESCE(rank,0) FROM security_policy_bindings
 						WHERE policy_id IN (SELECT id FROM security_policies WHERE name=? AND COALESCE(is_default_policy,0)=1)`, sd.name)

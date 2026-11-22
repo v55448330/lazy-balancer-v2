@@ -49,7 +49,7 @@ export default {
         'notify.channel_recovered': 'Channel recovered',
         'task.failed': 'Scheduled task failed',
         'apikey.expiry_warning': 'API key expiring',
-        // audit153 FE153-01: 24 write-operation events from the 2026-11-21 catalog batch
+        // 24 write-operation events from the 2026-11-21 catalog batch
         'cfg.caddy_lifecycle': 'Caddy service start/stop',
         'cfg.admin_tls_changed': 'Admin TLS configuration changed',
         'cfg.oidc_changed': 'OIDC configuration changed',

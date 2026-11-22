@@ -772,7 +772,7 @@ func TestImportV1ConfigSurvivesRequestCancellationAfterSessionStarts(t *testing.
 	}
 }
 
-// 已有导入会话持锁：V1 入口也必须 409 fast-fail（EVTCERT153-02）——此前只有
+// 已有导入会话持锁：V1 入口也必须 409 fast-fail——此前只有
 // V2 挂 rejectConcurrentConfigImport，v1 请求会静默阻塞在会话锁上。
 func TestImportV1Config_rejectsConcurrentImport(t *testing.T) {
 	h := newBackupTestHandlers(t)

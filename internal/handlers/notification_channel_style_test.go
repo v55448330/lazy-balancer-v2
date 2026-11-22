@@ -1,6 +1,6 @@
 package handlers
 
-// FE154-P1-01 后端半边：日报渲染模式开关（style_config.daily_mode）必须在
+// 后端半边：日报渲染模式开关（style_config.daily_mode）必须在
 // validateChannelStyle 白名单内，否则前端保存日报模板恒 400（E1 已复现）。
 
 import (

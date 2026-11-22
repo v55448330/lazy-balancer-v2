@@ -1,6 +1,6 @@
 package notify
 
-// HDL154-P3-06：live 即时上报也携带客户端幂等键（batch_id 全覆盖），且
+// live 即时上报也携带客户端幂等键（batch_id 全覆盖），且
 // live 失败转 spool 重传复用同一键——主节点按 batch_id 去重可抗「已处理但
 // 响应丢失」的重复投递。（去重窗口本身是主节点进程内 512 批次 FIFO，见
 // handlers/cluster_events_report.go 与 apidocs 端点说明。）

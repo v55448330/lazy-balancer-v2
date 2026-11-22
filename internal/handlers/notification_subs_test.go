@@ -148,7 +148,7 @@ func TestNotificationSubscriptions_upsertReadbackAndDefaults(t *testing.T) {
 	}
 	// 空级别=停用：无行用户必须补建 opt-out 行（enabled=0, min_level 空串）。
 	// 若只 UPDATE，0 行影响=静默无操作，目录默认订阅兜底会让「关闭」在投递
-	// 侧失效（EVTCERT153-01）。
+	// 侧失效。
 	var count, enabled int
 	if err := db.DB.QueryRow(`SELECT COUNT(*), COALESCE(MAX(enabled),-1) FROM notification_subscriptions WHERE user_id=7 AND event_type='auth.login_success'`).Scan(&count, &enabled); err != nil || count != 1 || enabled != 0 {
 		t.Fatalf("空级别应补建停用行: count=%d enabled=%d err=%v, want 1/0", count, enabled, err)
@@ -402,7 +402,7 @@ func TestNotificationDailyReportTrigger_adminOnlyAndAudit(t *testing.T) {
 }
 
 // SMTP 测试端点：请求体格式错误必须 400（此前 `_ = ShouldBindJSON` 吞错，
-// 坏载荷被当成「无草稿、测已保存配置」继续真实外发/握手——EVTCERT153-10）。
+// 坏载荷被当成「无草稿、测已保存配置」继续真实外发/握手——）。
 func TestTestSMTPSettings_malformedBodyIs400(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	adminRouter := newNotificationTestRouter(h, 1, "admin")

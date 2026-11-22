@@ -1,6 +1,6 @@
 package handlers
 
-// LNK153-P3-02：EvtLibSettingsChanged 的参数位 Fields["3"] 是通知正文模板
+// EvtLibSettingsChanged 的参数位 Fields["3"] 是通知正文模板
 // 「用户 %s 变更了%s（%s）」的第三参——必须是面向用户的中文短语，不得回落
 // 到处理函数英文名（如「UpdateCRSAutoUpdate」），英文标识符对用户无意义。
 // 源码级钉：覆盖 security.go + crawlerlib.go 的全部 7 个发布点（命中计数

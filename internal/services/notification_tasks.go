@@ -177,9 +177,9 @@ func registerNotificationTasks(te *taskengine.Engine) {
 //   - 否则返回下一个未来槽（最早一个，可跨日）。
 //
 // 早先实现以 now+1min 为基准取「下一个未来槽」：前导窗内第一次重算就把当日
-// 槽推到次日，due 恒 false——定时日报永不投递（audit153 NOTIF153-01）。
+// 槽推到次日，due 恒 false——定时日报永不投递。
 // 时区用全站配置时区（CurrentLocation，与投递侧 dailySlotDue 的 loc 同源）：
-// 容器 TZ≠配置时区时，槽与宽限必须按同一时区比较（NOTIF153-04）。
+// 容器 TZ≠配置时区时，槽与宽限必须按同一时区比较。
 // nextNodeStatsSlot 从节点统计上报槽（NextSlotFn 唯一实现）。
 //
 // 槽语义与 nextDailyReportSlot 同源：引擎求值后立即判定 due=now.After(槽)，
@@ -236,7 +236,7 @@ func nextDailyReportSlot(now time.Time) time.Time {
 // sendTimes 为全部启用用户 send_time 全集——槽域=运行域：Run 体按各用户
 // send_time 分桶（notify.DeliverDailyForAll），逐个时刻都必须被排程触发一次。
 // 到期槽判定复用 notify.DailySlotCandidate（跨零点宽限窗与投递侧 dailySlotDue
-// 同源，NOTIF154-P3-01）；本函数只额外推算「下一个未来槽」。
+// 同源）；本函数只额外推算「下一个未来槽」。
 func dailyReportSlotAt(now time.Time, sendTimes []string, loc *time.Location) time.Time {
 	n := now.In(loc)
 	valid := make([]string, 0, len(sendTimes))

@@ -26,7 +26,7 @@ import (
 	"lazy-balancer-v2/internal/notify"
 )
 
-// encryptForTest AES-256-GCM 加密（IV12B‖ct‖tag16B 的 base64）——与官方
+// encryptForTest 加密（IV 12B‖ct‖tag 16B 的 base64）——与官方
 // connector decryptSecret 互逆的测试向量构造器。
 func encryptForTest(key []byte, plain string) string {
 	block, _ := aes.NewCipher(key)

@@ -69,7 +69,7 @@ func SystemListRefKey(name string) string { return systemListRefPrefix + name }
 
 // ThreatSystemListRefKeys 返回内置威胁名单的 refs 键（"sys:"+可见名），
 // 顺序与 ThreatSystemLists 一致——默认策略种子经本函数取引用，消除名单名
-// 字面量双源（audit152 SVC-152-07）。
+// 字面量双源。
 func ThreatSystemListRefKeys() []string {
 	lists := ThreatSystemLists()
 	keys := make([]string, len(lists))
