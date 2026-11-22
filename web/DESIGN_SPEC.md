@@ -159,5 +159,29 @@
    - `tests/designGuard.spec.ts` — 通知面设计标准守卫（描述类/DialogSectionHeader/弹框体高度/预览固定高度/多选隐藏对号/表格填宽）。
    - `tests/notificationsCenter.spec.ts` — 交互契约（卡头保存、事件分区、浮层宽度/定位、语言切换、消息模板列删除等）。
    - `tests/ansiHtml.spec.ts` — 所有 v-html 面登记。
+   - `tests/layoutAlignment.spec.ts` — 输入框同高契约（32px 双壳/禁 :deep 锚组件根）与工具栏居中。
+   - §18 条款对应守卫：v-html scoped 直写拦截、同选择器单声明（行首锚定）、通道就绪 channelSendable 单源。
 4. 新增标准时：先加规范条款 + 机械断言，再改实现；无守卫的新约定视为未落地。
 5. 交付前视觉核验：浏览器 computed style/DOM 对照参考页（阴影/边框/直角/间距/高度），不凭代码推理。
+
+## 18. 增补裁定（2026-11-22 第七轮，scoped 深选择器/同行输入框同高/预览收敛/通道就绪门）
+1. **:deep 锚定必须用原生元素**：Element 组件根（el-time-picker/el-select 等）只透传 class、
+   **不带 scoped data-v 属性**——挂在 `.xxx[data-v]` 上的 `:deep()` 规则永不匹配（通知预览与定时更新
+   行多轮修复空转的共同根因）。组件内部元素的 scoped 覆写一律锚定**本组件模板里的原生容器**
+   （如 `.schedule-editor__controls`）再向下 `:deep(.el-input__wrapper)`。
+2. **v-html 后代样式必须 `:deep()`**：marked/prism 等注入的子元素不带组件 data-v，scoped 直写
+   （`.容器 子元素`）永不匹配；守卫见 `notificationsCenter.spec.ts`（v-html 面禁 scoped 直写）。
+3. **同行输入框严格同高**：同一行两个及以上输入控件，可见边框高度必须相等（用户裁定「不接受
+   一高一低」）。对齐基准=全局输入壳规则 `.el-input.el-input:not(--large) .el-input__wrapper`
+   （28px，特异性 (0,4,0)）与多选框自然高度（单行标签 32px）；覆写须 (0,4,0)+ 后源注入
+   （`.组件根 .行容器 :deep(.el-input__wrapper)` 形态，参照 RuleLibScheduleEditor 终版）。
+   验收=浏览器实测 `heightDelta=0 / centerDelta=0`，代码推理不算。
+4. **预览收敛在编辑弹框内**：消息模板的预览（自定义模板实时渲染 + 内置模板端点渲染）统一在
+   「编辑消息模板」弹框的预览区；不得另设独立预览弹框（已下线日报预览弹框）。预览格式跟随
+   弹框格式行的当前选择（`tplFormats`），不按通道类型猜。
+5. **通道就绪门**：微信会话失效（`session_ready=false`，会话待刷新）后：选择面禁用+失效原因
+   tooltip+已选自动取消（显示层 prune）；保存侧剔除（`sanitizeRuleChannelIDs`）；派发侧跳过并留
+   可见原因（不触网）。直到重新绑定且会话就绪。picker 数据源必须透传 `session_ready` 字段
+   （曾因映射丢字段整体失效）。
+6. **同选择器单声明 + 行首锚定**：同一选择器只允许一条声明（后值静默覆盖前值=不可维护）；
+   守卫统计用行首锚定（`^选择器 {`），后代作用域窄覆写（`.A .B {`）合法不算重复。
