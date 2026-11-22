@@ -105,6 +105,12 @@ func recentStatusByPath(ov RESTCallOverview) map[string]int {
 }
 
 func TestRESTCallOverview_trendSevenDays(t *testing.T) {
+	// 自播种：今日趋势点必须由本用例自己产生——依赖其它用例先写全局计数会
+	// 在乱序/单独运行时假红（test-all 乱序轮实测）。
+	for range 2 {
+		tok := RecordRESTAPICallStart("probe-key", "GET", "/api/v1/probe-trend", "10.0.0.1")
+		RecordRESTAPICallStatus(tok, 200)
+	}
 	ov := GetRESTCallOverview()
 	if len(ov.Trend) != 7 {
 		t.Fatalf("trend=%d 天, want 7", len(ov.Trend))
