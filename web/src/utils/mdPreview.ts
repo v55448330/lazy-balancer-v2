@@ -16,8 +16,33 @@ import DOMPurify from 'dompurify'
 
 marked.setOptions({ gfm: true, breaks: true })
 
+// 分隔线前补空行隔断（防 setext 二级标题）。必须跳过 fenced code 块：
+// 代码块里的 `---` 是代码正文（SQL 注释/配置分隔等），补空行会改写代码内容。
+// ``` / ~~~ 状态机：同字符、长度不短于开启围栏的行才闭合；围栏可带 info string。
+interface FenceState { char: string; length: number }
+const fenceOpen = (line: string): FenceState | null => {
+  const m = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
+  return m ? { char: m[1]![0]!, length: m[1]!.length } : null
+}
+const normalizeHr = (md: string): string => {
+  let fence: FenceState | null = null
+  const out: string[] = []
+  for (const line of md.split('\n')) {
+    if (fence) {
+      out.push(line)
+      const close = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line)
+      if (close && close[1]![0] === fence.char && close[1]!.length >= fence.length) fence = null
+      continue
+    }
+    const open = fenceOpen(line)
+    if (open) { fence = open; out.push(line); continue }
+    out.push(/^(?:-{3,}|\*{3,}|_{3,})[ \t]*$/.test(line) ? `\n${line}` : line)
+  }
+  return out.join('\n')
+}
+
 export const mdToHtml = (md: string): string => {
-  const normalized = md.replace(/^(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, m => `\n${m}`)
+  const normalized = normalizeHr(md)
   const raw = marked.parse(normalized) as string
   return DOMPurify.sanitize(raw, { FORBID_ATTR: ['style'], FORBID_TAGS: ['img'] }) as string
 }

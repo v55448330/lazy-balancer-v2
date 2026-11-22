@@ -20,6 +20,8 @@ export interface NotificationChannel {
   type: NotificationChannelType
   name: string
   target: string
+  /** true=target 已被后端脱敏（非属主视角）：编辑时不得回写 target。 */
+  target_masked: boolean
   enabled: boolean
   last_test_at: string
   last_test_ok: boolean

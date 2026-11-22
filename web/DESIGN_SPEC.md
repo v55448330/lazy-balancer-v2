@@ -160,6 +160,13 @@
    - `tests/notificationsCenter.spec.ts` — 交互契约（卡头保存、事件分区、浮层宽度/定位、语言切换、消息模板列删除等）。
    - `tests/ansiHtml.spec.ts` — 所有 v-html 面登记。
    - `tests/layoutAlignment.spec.ts` — 输入框同高契约（32px 双壳/禁 :deep 锚组件根）与工具栏居中。
+   - `tests/channelEdit.spec.ts` — target_masked 编辑不回写/占位提示/编辑体省略 target（§19-2）。
+   - `tests/channelHealth.spec.ts` — 复合健康态顺序：未验证早于验证失败（§19-3 同族判定口径）。
+   - `tests/deliveryLog.spec.ts` — 同通道多尝试只保留最新结果行（§19-5）。
+   - `tests/mdPreview.spec.ts` — fenced code 内 `---` 不隔断 + 日报摘要跨栈夹具（§19-1/4 前端侧）。
+   - `tests/channelStyleConfig.spec.ts` — 日报渲染模式跨键/不 trim 与后端同口径（§19-6）。
+   - `tests/securityLibraries.spec.ts` — 自动更新开关失败回滚完整行（§19-7）。
+   - `tests/frontendEdgeGuards.spec.ts` — TaskMonitor hasOwn / IP 查询提示 / 删除负下标（§19-8）。
    - §18 条款对应守卫：v-html scoped 直写拦截、同选择器单声明（行首锚定）、通道就绪 channelSendable 单源。
 4. 新增标准时：先加规范条款 + 机械断言，再改实现；无守卫的新约定视为未落地。
 5. 交付前视觉核验：浏览器 computed style/DOM 对照参考页（阴影/边框/直角/间距/高度），不凭代码推理。
@@ -185,3 +192,42 @@
    （曾因映射丢字段整体失效）。
 6. **同选择器单声明 + 行首锚定**：同一选择器只允许一条声明（后值静默覆盖前值=不可维护）；
    守卫统计用行首锚定（`^选择器 {`），后代作用域窄覆写（`.A .B {`）合法不算重复。
+
+## 19. 增补裁定（2026-11-22 第八轮，脱敏编辑/健康态/投递收敛/日报口径）
+1. **HTML 模板占位符转义纪律**：占位符值进入 HTML 上下文（`body_format=html` 的通道
+   正文模板、事件邮件卡片、日报 HTML 模块）必须先 `html.EscapeString` 再拼接——模板
+   字面量由用户声明结构，变量内容（正文/标题/IP/UA/规则名/品牌/日期）一律视为不可信
+   输入；非 HTML 格式（text/markdown/json）不得进入 HTML 上下文，`{{body}}` 在邮件
+   主题模板中保留字面量（防整篇正文顶进主题）。守卫：`internal/notify/
+   notify_semantics_hardening_test.go`（转义面）、`internal/notify/sender_email_test.go`
+   （Content-Type 跟随渲染格式）。
+2. **target_masked 编辑不回写**：通道列表 DTO 带 `target_masked`（true=后端已脱敏非属主
+   target）。编辑弹框必须置空目标输入框并给「已脱敏，重新输入完整目标」占位提示
+   （`targetMaskedPlaceholder`）；未重新输入时 PUT 体不得包含 `target`（后端保留原值），
+   输入后才按通道类型 target JSON 键提交。脱敏串展示不得二次切片。守卫：
+   `tests/channelEdit.spec.ts`。
+3. **通道选择=last_test_ok 且 sanitize 剔除已知失败**：规则/日报的通道选择面只允许
+   `enabled && last_test_ok===true && !(wx_clawbot && session_ready===false)`（`channelSendable`
+   单源）；已选通道失效时显示层 `pruneChannelIds` 自动取消，保存侧 `sanitizeRuleChannelIDs`
+   以服务端就绪事实剔除（含已知测试失败），派发侧跳过并留可见原因（不触网）。守卫：
+   `tests/notificationsCenter.spec.ts`。
+4. **日报摘要键=SlaveNodeLabel**：日报节点摘要（`nodes_summary`）与集群节点日报统计的归属键
+   必须使用 `notify.SlaveNodeLabel(name, ip, port)` 同形串（「从节点 name(ip:port)」，无
+   ip/port 退化为「从节点 name」）；前端 `dailyMultiValueMd` 与后端 `mdMultiValueTable`
+   共用跨栈夹具逐字对齐。守卫：`tests/mdPreview.spec.ts`（`fixtures/daily-multivalue-md.json`）
+   + `internal/notify/daily_template_mode_test.go`。
+5. **投递流水同通道只保留最新结果行**：一次投递的每次尝试都会追加同 `channel_id` 的
+   `notification_delivery_channels` 行；展示层按 `channel_id` 收敛（有 id 取最大 id，
+   无 id 依赖接口 `ORDER BY nc.id` 的后出现者），否则展开列表重复、成功/失败计数被
+   历史重试放大。守卫：`tests/deliveryLog.spec.ts`。
+6. **日报渲染模式与后端同口径**：`effectiveDailyMode` = 显式 `daily_mode` 优先；缺省
+   时 `payload_template`/`body_template`/`content_template` **任一非空串**即 template
+   （不按通道类型挑键、不 trim——后端判据 `Key == ""`）。守卫：
+   `tests/channelStyleConfig.spec.ts`。
+7. **规则库自动更新开关失败回滚用完整行**：回滚值必须取完整 `LibRow` 的 `autoUpdate`
+   （`restoreLibRow` 单源）；合成半行/未加载行的非布尔值回落 `false`，禁止把
+   `undefined` 写进展示态。守卫：`tests/securityLibraries.spec.ts`。
+8. **展示层查表/只读提示/删除下标防御**：任意字符串键查普通对象前必须 `hasOwn`
+   （原型链键不得渲染为函数）；只读操作（IP 名单查询）成功提示走 `ElMessage.success`，
+   不消费 MFA 宽限提示；按分页映射删除前必须拒绝负下标（`splice(-1)` 误删末条）。守卫：
+   `tests/frontendEdgeGuards.spec.ts`。

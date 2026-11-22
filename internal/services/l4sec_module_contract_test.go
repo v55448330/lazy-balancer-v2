@@ -16,7 +16,8 @@ func l4secModuleSource(t *testing.T) string {
 	t.Helper()
 	entries, err := os.ReadDir(l4SecModuleDir)
 	if err != nil {
-		t.Skipf("caddyl4sec 模块目录缺席（并行实现未落地）: %v", err)
+		// 目录缺失不是「可跳过」：跳过等于让模块契约守卫静默失效。
+		t.Fatalf("caddyl4sec 模块目录缺席（模块目录路径变更须同步本守卫）: %v", err)
 	}
 	var sb strings.Builder
 	for _, entry := range entries {

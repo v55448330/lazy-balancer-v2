@@ -126,8 +126,12 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 			// 时刻（排序/过期口径后移）。解析失败=零值，Publish 回退当前时刻。
 			Time: parseReportEventTime(one.Time),
 		}
+		// 级别白名单：任意字符串入总线会让 levelRank 查表得 0（=info），
+		// 订阅过滤静默失效。非法级别留空——Publish 回退目录级别。
 		if one.Level != "" {
-			evt.Level = notify.Level(one.Level)
+			if lvl := notify.Level(one.Level); lvl == notify.LevelInfo || lvl == notify.LevelWarn || lvl == notify.LevelCritical {
+				evt.Level = lvl
+			}
 		}
 		// 目录外事件在此静默丢弃（与本地 Publish 同门——错误响应会放大重试）
 		if notify.CatalogLookup(one.Type) {

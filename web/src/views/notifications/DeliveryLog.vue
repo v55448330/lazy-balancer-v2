@@ -132,6 +132,7 @@ import { ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { hasOwn } from '@/utils/hasOwn'
+import { latestChannelResults } from '@/utils/deliveryLog'
 import type {
   DeliveryStatus,
   NotificationDeliveriesResponse,
@@ -222,7 +223,12 @@ const fetchDeliveries = async (): Promise<void> => {
     if (statusFilter.value) params.set('status', statusFilter.value)
     const res = await request.get<NotificationDeliveriesResponse>(`/notification/deliveries?${params.toString()}`)
     if (seq === deliveriesRequestSeq) {
-      deliveries.value = res.data?.deliveries ?? []
+      // 同通道重试会追加多行结果（每次尝试一行）：装载即收敛为最新行，
+      // 否则展开列表重复、成功/失败计数被历史重试放大。
+      deliveries.value = (res.data?.deliveries ?? []).map(d => ({
+        ...d,
+        channels: latestChannelResults(d.channels ?? []),
+      }))
       total.value = res.data?.total ?? 0
       loadError.value = false
     }

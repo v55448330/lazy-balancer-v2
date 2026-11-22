@@ -149,7 +149,7 @@ func TestCertTicks_skippedRenewalScanIsVisibleAndManualPollStillRuns(t *testing.
 	}
 
 	// 手动巡检：无服务实例仍照常执行，且不得写「证书服务未运行」
-	if err := CertManualCheckOnce(); err != nil {
+	if err := CertManualCheckOnce(context.Background()); err != nil {
 		t.Fatalf("manual check without service: %v", err)
 	}
 	if data, err := os.ReadFile(taskengine.TaskLogPath("cert-manual-poll")); err == nil && strings.Contains(string(data), "证书服务未运行") {
@@ -383,7 +383,7 @@ func TestCertManualCheckOnce_propagates_query_failure(t *testing.T) {
 	}
 
 	// When
-	err := CertManualCheckOnce()
+	err := CertManualCheckOnce(context.Background())
 
 	// Then 1：读失败上抛（Run 随之返回 error → task_runs 失败终态）
 	if err == nil {
@@ -396,6 +396,21 @@ func TestCertManualCheckOnce_propagates_query_failure(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "巡检失败") {
 		t.Fatalf("失败轮任务日志缺失失败行: %q", string(data))
+	}
+}
+
+// 手动巡检必须消费引擎 ctx：取消后不得继续读表（停机/超时窗口内本轮应
+// 立即收尾，而不是跑完一整轮扫描）。
+func TestCertManualCheckOnce_honorsCanceledContext(t *testing.T) {
+	useCertSweepTickTestEnv(t)
+	resetCertificateServiceForTest(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := CertManualCheckOnce(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled（取消的 ctx 必须短路巡检查询）", err)
 	}
 }
 
@@ -523,7 +538,7 @@ func TestCertManualCheckOnce_runsWithoutCertificateService(t *testing.T) {
 	}
 
 	// When：无活动证书服务
-	if err := CertManualCheckOnce(); err != nil {
+	if err := CertManualCheckOnce(context.Background()); err != nil {
 		t.Fatalf("manual check without service: %v", err)
 	}
 

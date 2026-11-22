@@ -13,8 +13,10 @@ import "regexp"
 // 横幅、操作审计 detail 三处必须经本函数。服务端日志（运维可见）保留原文。
 
 // caddyAdminEndpointInError 匹配请求地址（*url.Error 的
-// `<Verb> "http://host:port/path": ...` 形态）。
-var caddyAdminEndpointInError = regexp.MustCompile(`(Post|Get|Put|Delete|Head|Patch) "(https?://[^"]*)"`)
+// `<Verb> "http://host:port/path": ...` 形态）。Verb 是请求方法原文——标准
+// 方法也可能以非 Title-case 形态出现（自定义客户端/代理），非标准方法更是
+// 任意 token，故按「字母 token」匹配而不再枚举标准方法。
+var caddyAdminEndpointInError = regexp.MustCompile(`([A-Za-z]+) "(https?://[^"]*)"`)
 
 // caddyAdminDialInError 匹配同一错误文本里紧随其后的拨号/解析地址形态
 // （`dial tcp 10.0.0.1:2019: connect: ...`、`dial tcp [::1]:2019: ...`），

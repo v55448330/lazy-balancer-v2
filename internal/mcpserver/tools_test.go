@@ -285,6 +285,17 @@ func TestSecurityBindingToolDescriptionsUseExecutionOrderSemantics(t *testing.T)
 	if !strings.Contains(setRuleSecurityPoliciesSchema, "执行序") {
 		t.Errorf("set_rule_security_policies schema 的 policy_ids 描述缺少执行序语义：%s", setRuleSecurityPoliciesSchema)
 	}
+	// 绑定上限实现为 10（handlers.maxBindingsPerRule；schema maxItems:10 已有
+	// 对表钉）：人读文案必须同口径，禁止残留旧值 8。
+	for _, name := range []string{"bind_security_policy", "set_rule_security_policies"} {
+		combined := toolDescription(byName[name])
+		if strings.Contains(combined, "8 条") || strings.Contains(combined, "max_8") {
+			t.Errorf("tool %q 人读文案仍宣称旧上限 8 条：%q", name, combined)
+		}
+		if !strings.Contains(combined, "10 条") {
+			t.Errorf("tool %q 人读文案未声明实际上限 10 条：%q", name, combined)
+		}
+	}
 }
 
 func containsString(values []string, target string) bool {

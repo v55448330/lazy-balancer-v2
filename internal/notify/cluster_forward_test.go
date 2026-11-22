@@ -323,7 +323,11 @@ func TestCollectNodesSummary_aggregatesPerNode(t *testing.T) {
 		('slave-c','slave','10.0.0.4',8000,1,'offline')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`INSERT INTO cluster_node_daily_stats (date,node,stats_json) VALUES ('2026-11-21','slave-a',?),('2026-11-21','slave-b',?)`, string(st1), string(st2)); err != nil {
+	// 种子键=生产写入键 SlaveNodeLabel（裸名种子与生产写入不同形，
+	// 会让读侧修好后仍「未上报」）。
+	labelA := SlaveNodeLabel("slave-a", "10.0.0.2", 8000)
+	labelB := SlaveNodeLabel("slave-b", "10.0.0.3", 8000)
+	if _, err := database.Exec(`INSERT INTO cluster_node_daily_stats (date,node,stats_json) VALUES ('2026-11-21',?,?),('2026-11-21',?,?)`, labelA, string(st1), labelB, string(st2)); err != nil {
 		t.Fatal(err)
 	}
 	got := collectNodesSummary(t.Context(), "2026-11-21")
@@ -354,7 +358,7 @@ func TestCollectNodesSummary_aggregatesPerNode(t *testing.T) {
 func TestCollectNodesSummary_singleMachineIgnoresOrphanStats(t *testing.T) {
 	database := newNotifySchemaDB(t)
 	if _, err := database.Exec(`INSERT INTO cluster_node_daily_stats (date,node,stats_json) VALUES
-		('2026-11-21','ghost','{"requests":1}')`); err != nil {
+		('2026-11-21',?,'{"requests":1}')`, SlaveNodeLabel("ghost", "10.0.0.9", 8000)); err != nil {
 		t.Fatal(err)
 	}
 	if got := collectNodesSummary(t.Context(), "2026-11-21"); got != "" {
@@ -741,6 +745,9 @@ func TestDiscardClusterForwardSpool_removesAllPending(t *testing.T) {
 func TestSpoolClusterEvent_logsWriteFailure(t *testing.T) {
 	dir := t.TempDir()
 	overrideForwardSpoolDir(t, dir)
+	// 未配置 master_url/token 时已改为「不落盘+留痕丢弃」；本用例要
+	// 覆盖的是写失败路径，故显式装配从节点角色与上报地址。
+	overrideClusterForwardRole(t, false, "http://127.0.0.1:1", "tok")
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}

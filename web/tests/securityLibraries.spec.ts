@@ -16,6 +16,7 @@ import {
   librarySourceHealthTag,
   libraryStatusLabel,
   libraryStatusTagType,
+  restoreLibRow,
   summarizeLibrarySources,
 } from '../src/utils/securityLibraries.ts'
 
@@ -266,4 +267,16 @@ test('多源聚合：缺省 version 键与空串同口径', () => {
   const summary = summarizeLibrarySources([{ update_status: 'idle' }])
   assert.equal(summary.latestVersion, '')
   assert.equal(summary.status, 'never')
+})
+
+// 自动更新开关失败回滚：IP 库 v4 源开关是全局自动更新开关的别位入口，
+// 此前模板传入合成半行 `{key,name}`（无 autoUpdate）——失败回滚把 undefined
+// 写进展示态，开关渲染成空值。回滚必须取完整行的 autoUpdate，缺列时显式 false。
+test('自动更新开关失败回滚：完整行取原值，半行缺列回落 false（不写 undefined）', () => {
+  assert.deepEqual(restoreLibRow({ key: 'ip2region', autoUpdate: false }, true), { key: 'ip2region', autoUpdate: true })
+  assert.deepEqual(restoreLibRow({ key: 'ip2region', autoUpdate: true }, false), { key: 'ip2region', autoUpdate: false })
+  // 合成半行（旧调用形态）：无 autoUpdate/previous——不得回滚出 undefined
+  assert.deepEqual(restoreLibRow({ key: 'ip2region' }, undefined), { key: 'ip2region', autoUpdate: false })
+  assert.deepEqual(restoreLibRow({ key: 'ip2region', autoUpdate: true }, undefined), { key: 'ip2region', autoUpdate: true },
+    'previous 缺失时回退行当前值')
 })

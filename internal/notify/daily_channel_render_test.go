@@ -2,7 +2,7 @@ package notify
 
 // 日报按通道格式渲染钉测（用户裁定「不同通道用不同样式」）：
 //   - 非日报事件原样透传（渲染挂钩不得影响其它事件）
-//   - 载荷解析失败回退原文（fail-visible）
+//   - 载荷解析失败回退可见占位（不直出坏数据原文）
 //   - 通道映射：webhook=JSON / email=HTML / qq=markdown / wx=纯文本 / 未知=text
 //   - items 裁剪在载荷侧已定（勾选项目之外不渲染）
 
@@ -25,8 +25,8 @@ func TestRenderDailyForChannel_nonDailyPassThrough(t *testing.T) {
 
 func TestRenderDailyForChannel_corruptPayloadFallsBack(t *testing.T) {
 	msg := Message{EventType: EvtDailyReport, Body: "not-json{{"}
-	if got := renderDailyForChannel(msg, "webhook", ""); got != "not-json{{" {
-		t.Fatalf("坏载荷未回退原文: %q", got)
+	if got := renderDailyForChannel(msg, "webhook", ""); !strings.Contains(got, "日报数据解析失败（详见任务日志）") || strings.Contains(got, "not-json") {
+		t.Fatalf("坏载荷应回退可见占位（不直出原文）: %q", got)
 	}
 }
 

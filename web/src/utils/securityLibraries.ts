@@ -206,3 +206,18 @@ export const scheduleEditUntouched = (
   edit.days.join() === (previous.days ?? []).join()
   && edit.time === ((previous.time ?? '') || '04:00')
 
+/**
+ * 自动更新开关失败回滚值：必须从**完整 LibRow**（含 autoUpdate）取值。
+ * IP 库 v4 源开关是全局自动更新开关的别位入口，历史实现传合成半行
+ * `{ key, name } as LibRow`——失败回滚把 undefined 写进展示态（开关空白）。
+ * 完整行缺 autoUpdate（未加载/半行）或 previous 非布尔时显式回落 false，
+ * 绝不把 undefined 透传给展示层。
+ */
+export const restoreLibRow = (
+  row: { readonly key: string; readonly autoUpdate?: boolean },
+  previous?: boolean,
+): { key: string; autoUpdate: boolean } => ({
+  key: row.key,
+  autoUpdate: typeof previous === 'boolean' ? previous : row.autoUpdate === true,
+})
+

@@ -3144,17 +3144,20 @@ func TeeTaskLogTime(taskID, level, stage, message string) {
 }
 
 func TeeTaskLogTimeContext(ctx context.Context, taskID, level, stage, message string) {
-	TeeTaskLogContext(ctx, taskID, engineLogTimeStr(), level, stage, message)
+	teeTaskLogContext(ctx, taskID, engineLogTimeStr(), level, stage, message)
 }
 
 // TeeTaskLog 无 ctx 变体为测试专供入口（生产日志 tee 单一入口是
 // TeeTaskLogTime/Context，services/tasklog.go 消费）；已登记
 // testonly_symbols_test.go AST 守卫清单，产品文件静默接线即红。
 func TeeTaskLog(taskID, timestamp, level, stage, message string) {
-	TeeTaskLogContext(context.Background(), taskID, timestamp, level, stage, message)
+	teeTaskLogContext(context.Background(), taskID, timestamp, level, stage, message)
 }
 
-func TeeTaskLogContext(ctx context.Context, taskID, timestamp, level, stage, message string) {
+// teeTaskLogContext 是日志 tee 的包内实现：跨包消费只经
+// TeeTaskLogTime/TeeTaskLogTimeContext/TeeTaskLog（test-only）三个导出入口，
+// 本函数不导出以免被当作公共 API 直接接线。
+func teeTaskLogContext(ctx context.Context, taskID, timestamp, level, stage, message string) {
 	path := TaskLogPath(taskID)
 	if path == "" {
 		return

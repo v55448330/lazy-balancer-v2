@@ -23,7 +23,7 @@ func TestCertTicks_nilDatabaseSkipsWithoutPanic(t *testing.T) {
 		}
 	})
 	t.Run("CertManualCheckOnce", func(t *testing.T) {
-		if err := CertManualCheckOnce(); !errors.Is(err, taskengine.ErrTaskSkipped) {
+		if err := CertManualCheckOnce(context.Background()); !errors.Is(err, taskengine.ErrTaskSkipped) {
 			t.Fatalf("err=%v, want ErrTaskSkipped（nil DB 必须跳过）", err)
 		}
 	})

@@ -431,6 +431,9 @@ func run() error {
 		// spool（补采在下次启动/引擎运行期完成），不得在 db.Close 后仍写库。
 		stopSecurityEventsIPCWithin(securityEventsIPC, shutdown)
 		stopTaskEngineWithin(shutdown) // M2:引擎统一收尾(摄取/看门狗/清理/生命周期 daemon)
+		// 通知总线停止（幂等）：停止分发循环并把集群转发队列剩余事件落 spool，
+		// 下次启动重传（事件未落库，不能静默丢）。必须在 db.Close 之前。
+		notify.Stop()
 		// 证书 worker 的等待有界（此前 Stop 自身无界阻塞、超时 select 不可达）。
 		lifecycle.ShutdownWithTimeout(shutdown.segment(acmeStopSegmentMax))
 	}()

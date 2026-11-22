@@ -66,7 +66,7 @@ func validateDailyItems(c *gin.Context, items []string) bool {
 func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 	uid := contextUserID(c)
 	var req struct {
-		Enabled  bool              `json:"enabled"`
+		Enabled  *bool             `json:"enabled"` // nil=缺省键，不得改动既有启用态
 		SendTime string            `json:"send_time"`
 		Items    []string          `json:"items"`
 		Formats  map[string]string `json:"formats"`
@@ -84,14 +84,30 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 	if !validateDailyItems(c, req.Items) {
 		return
 	}
-	cfg := notify.DailyConfig{UserID: uid, Enabled: req.Enabled, SendTime: req.SendTime,
-		Items: req.Items, Formats: req.Formats}
+	// 部分更新：以既有配置为基线，缺省键沿用现值——此前以零值构造整份
+	// 配置，任何只改 send_time/items 的请求都会把日报静默停用。
+	cfg, err := notify.GetDailyConfig(uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取日报配置失败", err)})
+		return
+	}
+	if req.Enabled != nil {
+		cfg.Enabled = *req.Enabled
+	}
+	// send_time 在入口已强制校验（空值恒 400），此处必非空。
+	cfg.SendTime = req.SendTime
+	if len(req.Items) > 0 {
+		cfg.Items = req.Items
+	}
+	if req.Formats != nil {
+		cfg.Formats = req.Formats
+	}
 	if err := notify.SaveDailyConfig(cfg); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
 		return
 	}
 	recordAudit(c, "修改", "通知日报", services.FormatAuditDetail(
-		fmt.Sprintf("启用=%v 时间=%s 项目数=%d", req.Enabled, req.SendTime, len(req.Items)), "", services.AuditResultPart("success")))
+		fmt.Sprintf("启用=%v 时间=%s 项目数=%d", cfg.Enabled, cfg.SendTime, len(cfg.Items)), "", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

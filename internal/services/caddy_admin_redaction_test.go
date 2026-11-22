@@ -39,6 +39,14 @@ func TestRedactCaddyAdminEndpoint_shapes(t *testing.T) {
 			deny:  []string{"caddy.internal.example"},
 		},
 		{
+			// *url.Error 的 Verb 取自请求方法原文：非标准方法（如 WebDAV/代理
+			// 自定义动词）或小写形态不得让引号内 URL 逃过脱敏。
+			name:  "小写/非标准方法",
+			input: `post "http://10.20.30.40:2019/load": dial tcp 10.20.30.40:2019: connect: connection refused`,
+			want:  []string{"<Caddy admin 端点>", "connection refused"},
+			deny:  []string{"10.20.30.40", "2019"},
+		},
+		{
 			name:  "无地址文本原样返回",
 			input: "Caddy 配置应用失败（旧配置已保留）：配置被拒绝",
 			want:  []string{"Caddy 配置应用失败（旧配置已保留）：配置被拒绝"},

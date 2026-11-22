@@ -598,7 +598,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		Category:    "证书", Kind: taskengine.KindPeriodic, RunsOn: taskengine.RoleMasterOnly,
 		IntervalFn: func() time.Duration { return 10 * time.Minute },
 		// 巡检读失败上抛（task_runs 失败终态），不再恒 return nil。
-		Run: func(rc taskengine.RunContext) error { return CertManualCheckOnce() },
+		Run: func(rc taskengine.RunContext) error { return CertManualCheckOnce(rc.Ctx) },
 	})
 
 	mustRegisterTask(te, taskengine.Descriptor{

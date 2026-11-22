@@ -155,7 +155,7 @@ func TestRuntimeLifecycle_StopACME_clearsActiveCertificateService(t *testing.T) 
 	// Then ②（交叉断言）：手动到期巡检不依赖实例，停机后照常执行——停机
 	// 不得把「手动证书即将到期」这条唯一信号一起关掉。
 	buf.Reset()
-	services.CertManualCheckOnce()
+	services.CertManualCheckOnce(context.Background())
 	if !strings.Contains(buf.String(), "TLS Certificate Check") {
 		t.Fatalf("manual expiry check must keep running after StopACME (independent of service instance), log=%q", buf.String())
 	}

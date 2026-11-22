@@ -42,7 +42,9 @@ func TestTCPBlockNotice_predicateCharsetMirroredInModule(t *testing.T) {
 	}
 	modSrc, err := os.ReadFile(caddyl4secHandlerSource)
 	if err != nil {
-		t.Skipf("caddyl4sec 模块源码缺席（并行实现未落地）: %v", err)
+		// 文件缺失不是「可跳过」：跳过等于让双侧口径守卫静默失效（模块源码
+		// 移走/改名后无人察觉），失败才是需要修的状态。
+		t.Fatalf("caddyl4sec 模块源码缺席（模块源码路径变更须同步本守卫）: %v", err)
 	}
 	svcPred := goRunePredicateExtract(t, string(svcSrc), "clampTCPNotice")
 	modPred := goRunePredicateExtract(t, string(modSrc), "validateBlockNotice")

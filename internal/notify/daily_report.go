@@ -48,6 +48,14 @@ func dailySlotScoped(ctx context.Context) bool {
 	return v
 }
 
+// dailyDataCollector 日报数据采集入口：采集结果与用户无关（同一轮全员共享
+// 一份），DeliverDailyForAll 惰性采集一次复用。命名独立于 CollectDailyData
+// 是为了给「只采集一次」留可替换观测点。
+// testseam: 用例替换后计数，验证多用户单轮只采集一次。
+var dailyDataCollector = func(ctx context.Context, now time.Time) (DailyData, error) {
+	return CollectDailyData(ctx, now)
+}
+
 func dailyLocation() *time.Location {
 	if DailyLocation != nil {
 		if loc := DailyLocation(); loc != nil {
@@ -254,6 +262,9 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 	scheduled := dailySlotScoped(ctx)
 	loc := dailyLocation()
 	rendered, skipped := 0, 0
+	var data DailyData
+	var dataErr error
+	collected := false
 	for _, u := range users {
 		cfg, err := GetDailyConfig(u)
 		if err != nil {
@@ -267,9 +278,14 @@ func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
 			skipped++
 			continue
 		}
-		data, err := CollectDailyData(ctx, now)
-		if err != nil {
-			taskLogWarn(ctx, "daily", "日报数据采集失败（user=%d）: %v", u, err)
+		if !collected {
+			data, dataErr = dailyDataCollector(ctx, now)
+			collected = true
+			if dataErr != nil {
+				taskLogWarn(ctx, "daily", "日报数据采集失败（本轮全员共用，后续用户同跳过）: %v", dataErr)
+			}
+		}
+		if dataErr != nil {
 			continue
 		}
 		if err := deliverDaily(u, cfg, data, now, false); err != nil {
@@ -450,6 +466,18 @@ type DailyData struct {
 	MFAFailed    int64
 }
 
+// scanDailyCount 采集单个计数指标：失败留痕（值保持零值）。采集是日报的
+// 数据面，静默吞错会让「昨日全是 0」与「查询坏了」无法区分。
+func scanDailyCount(ctx context.Context, conn *sql.DB, dest *int64, what, query string, args ...any) {
+	if conn == nil {
+		taskLogWarn(ctx, "daily", "日报采集失败（%s）: 数据库未装配", what)
+		return
+	}
+	if err := conn.QueryRowContext(ctx, query, args...).Scan(dest); err != nil {
+		taskLogWarn(ctx, "daily", "日报采集失败（%s）: %v", what, err)
+	}
+}
+
 // CollectDailyData 采集昨日摘要（全项目数据一次查询；未勾选项目由渲染层裁剪）。
 //
 // 时间口径（三库混存，必须按各自口径派生窗口，否则时区偏移会把昨日事件切出窗口）：
@@ -462,11 +490,11 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	d := DailyData{Date: day0.Format("2006-01-02")}
 	u0, u1 := day0.UTC().Format(dailyTimeLayout), day1.UTC().Format(dailyTimeLayout)
 	l0, l1 := day0.Format(dailyTimeLayout), day1.Format(dailyTimeLayout)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<?`, u0, u1).Scan(&d.Requests)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked'`, u0, u1).Scan(&d.Blocked)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='allowed'`, u0, u1).Scan(&d.Allowed)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='logged'`, u0, u1).Scan(&d.Logged)
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(DISTINCT client_ip) FROM security_events WHERE event_time>=? AND event_time<?`, u0, u1).Scan(&d.DistinctIPs)
+	scanDailyCount(ctx, db.MetricsDB, &d.Requests, "请求数", `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<?`, u0, u1)
+	scanDailyCount(ctx, db.MetricsDB, &d.Blocked, "拦截次数", `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked'`, u0, u1)
+	scanDailyCount(ctx, db.MetricsDB, &d.Allowed, "放行次数", `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='allowed'`, u0, u1)
+	scanDailyCount(ctx, db.MetricsDB, &d.Logged, "观察次数", `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='logged'`, u0, u1)
+	scanDailyCount(ctx, db.MetricsDB, &d.DistinctIPs, "独立 IP 数", `SELECT COUNT(DISTINCT client_ip) FROM security_events WHERE event_time>=? AND event_time<?`, u0, u1)
 	if e := db.MetricsDB.QueryRowContext(ctx, `SELECT rule_name FROM security_events WHERE event_time>=? AND event_time<? GROUP BY rule_name ORDER BY COUNT(*) DESC LIMIT 1`, u0, u1).Scan(&d.TopRule); e != nil {
 		d.TopRule = "无"
 	}
@@ -475,21 +503,23 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	// 汇总行携带数），窗口 [u0,u1) 上下界都有——旧口径查累犯表 last_ban_at>=f0
 	// 既无上界、也不含升级关闭（Escalation=off 不写累犯表）时的封禁。
 	d.Autobans = countAutobanBans(ctx, u0, u1)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status IN ('issued','wait_reschedule','downloading')`).Scan(&d.CertsActive)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status='failed'`).Scan(&d.CertsFailed)
+	scanDailyCount(ctx, db.DB, &d.CertsActive, "活跃证书数", `SELECT COUNT(*) FROM cert_jobs WHERE status IN ('issued','wait_reschedule','downloading')`)
+	scanDailyCount(ctx, db.DB, &d.CertsFailed, "失败证书数", `SELECT COUNT(*) FROM cert_jobs WHERE status='failed'`)
 	var master int
-	_ = db.DB.QueryRowContext(ctx, `SELECT COALESCE(is_master,1) FROM global_config WHERE id=1`).Scan(&master)
+	if err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(is_master,1) FROM global_config WHERE id=1`).Scan(&master); err != nil {
+		taskLogWarn(ctx, "daily", "日报采集失败（主从角色）: %v", err)
+	}
 	d.ClusterOK = master == 1
 	d.ClusterNote = map[bool]string{true: "正常（主节点）", false: "从节点/未启用"}[d.ClusterOK && master == 1]
 	// 流量：带宽（入+出）与峰值请求/采样窗。
 	var bw int64
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes_in+bytes_out),0) FROM metrics_history WHERE timestamp>=? AND timestamp<?`, u0, u1).Scan(&bw)
+	scanDailyCount(ctx, db.MetricsDB, &bw, "总带宽", `SELECT COALESCE(SUM(bytes_in+bytes_out),0) FROM metrics_history WHERE timestamp>=? AND timestamp<?`, u0, u1)
 	d.Bandwidth = formatBytes(bw)
 	d.PeakQPS = peakWindowRequests(ctx, u0, u1)
 	// 安全明细：TOP 攻击源 IP / TOP 路径（各 5）/ CC 触发。
 	d.TopIPs = joinLimitRows(topPairs(ctx, `SELECT client_ip, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY client_ip ORDER BY COUNT(*) DESC LIMIT 5`, u0, u1))
 	d.TopPaths = joinLimitRows(topPairs(ctx, `SELECT uri, COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND action='blocked' GROUP BY uri ORDER BY COUNT(*) DESC LIMIT 5`, u0, u1))
-	_ = db.MetricsDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND event_type='cc'`, u0, u1).Scan(&d.CCTriggered)
+	scanDailyCount(ctx, db.MetricsDB, &d.CCTriggered, "CC 触发次数", `SELECT COUNT(*) FROM security_events WHERE event_time>=? AND event_time<? AND event_type='cc'`, u0, u1)
 	// 证书临期明细：30 天内到期的已签发证书（域名+到期日）。
 	d.CertExpiring = certExpiringList(ctx, now)
 	// 系统运行：时长/威胁库版本/应用版本。
@@ -500,11 +530,11 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	if DailyRESTCalls != nil {
 		d.APICalls = DailyRESTCalls()
 	}
-	_ = db.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(calls),0) FROM mcp_tool_stats WHERE date=?`, d.Date).Scan(&d.MCPCalls)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='success'`, l0, l1).Scan(&d.TaskOK)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='failed'`, l0, l1).Scan(&d.TaskFailed)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='success'`, u0, u1).Scan(&d.BackupOK)
-	_ = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='failed'`, u0, u1).Scan(&d.BackupFailed)
+	scanDailyCount(ctx, db.DB, &d.MCPCalls, "MCP 调用", `SELECT COALESCE(SUM(calls),0) FROM mcp_tool_stats WHERE date=?`, d.Date)
+	scanDailyCount(ctx, db.DB, &d.TaskOK, "任务成功数", `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='success'`, l0, l1)
+	scanDailyCount(ctx, db.DB, &d.TaskFailed, "任务失败数", `SELECT COUNT(*) FROM task_runs WHERE started_at>=? AND started_at<? AND status='failed'`, l0, l1)
+	scanDailyCount(ctx, db.DB, &d.BackupOK, "备份成功数", `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='success'`, u0, u1)
+	scanDailyCount(ctx, db.DB, &d.BackupFailed, "备份失败数", `SELECT COUNT(*) FROM auto_backups WHERE created_at>=? AND created_at<? AND status='failed'`, u0, u1)
 	// 用户认证：昨日（日期标签同源）登录成功/失败/MFA 失败（Publish 累加）。
 	d.LoginOK, d.LoginFailed, d.MFAFailed = readAuthCounters(d.Date)
 	// 集群从节点昨日统计（2026-11-22 主节点集中汇聚；已批准从节点逐行列出，
@@ -522,11 +552,33 @@ func collectNodesSummary(ctx context.Context, date string) string {
 	if db.DB == nil {
 		return ""
 	}
-	rows, err := db.DB.QueryContext(ctx, `SELECT n.name, s.stats_json
-		FROM nodes n
-		LEFT JOIN cluster_node_daily_stats s ON s.node = n.name AND s.date = ?
-		WHERE COALESCE(n.mode,'slave')='slave' AND COALESCE(n.is_approved,0)=1
-		ORDER BY n.name`, date)
+	// 读侧键必须与写侧同形：cluster_node_daily_stats 的归属键是
+	// SlaveNodeLabel(name, ip, port)（services.RecordNodeDailyStats 的
+	// NodeIdentity），nodes.name 裸名只出现在历史迁移前的行。按裸名 JOIN 会让
+	// 每一条生产统计都落成「未上报」——先取当日全部统计入 map，再按节点标签查。
+	statRows, err := db.DB.QueryContext(ctx, `SELECT node, stats_json FROM cluster_node_daily_stats WHERE date=?`, date)
+	if err != nil {
+		taskLogWarn(ctx, "daily", "各节点统计查询失败（date=%s）: %v", date, err)
+		return "节点统计读取失败（详见任务日志）"
+	}
+	statsByKey := map[string]string{}
+	for statRows.Next() {
+		var key, raw string
+		if err := statRows.Scan(&key, &raw); err != nil {
+			continue
+		}
+		statsByKey[key] = raw
+	}
+	statErr := statRows.Err()
+	statRows.Close()
+	if statErr != nil {
+		taskLogWarn(ctx, "daily", "各节点统计读取中断（date=%s）: %v", date, statErr)
+		return "节点统计读取失败（详见任务日志）"
+	}
+	rows, err := db.DB.QueryContext(ctx, `SELECT name, COALESCE(ip_address,''), COALESCE(port,0)
+		FROM nodes
+		WHERE COALESCE(mode,'slave')='slave' AND COALESCE(is_approved,0)=1
+		ORDER BY name`)
 	if err != nil {
 		taskLogWarn(ctx, "daily", "各节点统计查询失败（date=%s）: %v", date, err)
 		return "节点统计读取失败（详见任务日志）"
@@ -535,21 +587,22 @@ func collectNodesSummary(ctx context.Context, date string) string {
 	var lines []string
 	seen := map[string]bool{}
 	for rows.Next() {
-		var node string
-		var raw sql.NullString
-		if err := rows.Scan(&node, &raw); err != nil {
+		var node, ip string
+		var port int
+		if err := rows.Scan(&node, &ip, &port); err != nil {
 			continue
 		}
 		if seen[node] {
 			continue // 节点名无 UNIQUE 约束；同名行只报一次
 		}
 		seen[node] = true
-		if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		raw := strings.TrimSpace(statsByKey[SlaveNodeLabel(node, ip, port)])
+		if raw == "" {
 			lines = append(lines, node+"：未上报")
 			continue
 		}
 		var st ClusterNodeStats
-		if err := json.Unmarshal([]byte(raw.String), &st); err != nil {
+		if err := json.Unmarshal([]byte(raw), &st); err != nil {
 			lines = append(lines, fmt.Sprintf("%s：数据损坏", node))
 			continue
 		}
@@ -654,6 +707,7 @@ func RenderDaily(data DailyData, items []string, format string) string {
 // （webhook=JSON、email=HTML、QQ=markdown、微信=纯文本、未知=text）；
 // 非日报事件原样透传。不关心格式的调用方（模板链路/测试）用本入口；
 // 需要 Content-Type 决序的派发侧用 renderDailyForChannelFormat。
+// testseam: 导出供用例/预览链路直接断言按通道渲染结果（保持对外可见）。
 func renderDailyForChannel(msg Message, channelType, styleFormat string) string {
 	body, _ := renderDailyForChannelFormat(msg, channelType, styleFormat)
 	return body
@@ -674,8 +728,14 @@ func renderDailyForChannelFormat(msg Message, channelType, styleFormat string) (
 		Values  map[string]string `json:"values"`
 		Formats map[string]string `json:"formats"`
 	}
-	if err := json.Unmarshal([]byte(msg.Body), &payload); err != nil || payload.Date == "" {
-		return msg.Body, "" // 载荷解析失败回退原文（fail-visible，不静默吞）
+	if uerr := json.Unmarshal([]byte(msg.Body), &payload); uerr != nil || payload.Date == "" {
+		// 载荷损坏（库内 body 不是日报载荷 JSON）：回退可见占位而不是把坏数据
+		// 原文发给用户——原文只对排查有意义，任务日志留痕即足。
+		if uerr == nil {
+			uerr = errors.New("载荷缺少 date")
+		}
+		taskLogWarn(context.Background(), "daily", "日报载荷解析失败（channel=%s，按可见占位投递）: %v", channelType, uerr)
+		return "日报数据解析失败（详见任务日志）", ""
 	}
 	// 机器人日报格式协议固定（QQ=markdown 表格、微信=纯文本），不受用户/
 	// 通道配置覆盖（§14）；非机器人按 日报页配置 > 通道样式 > 自动映射。

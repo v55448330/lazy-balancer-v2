@@ -74,9 +74,19 @@ test('渲染模式生效值：显式优先，缺省按存量模板键推断', ()
   assert.equal(effectiveDailyMode(undefined, 'qq'), 'modules')
   assert.equal(effectiveDailyMode(JSON.stringify({}), 'qq'), 'modules')
   assert.equal(effectiveDailyMode(JSON.stringify({ content_template: 'tpl' }), 'qq'), 'template')
-  assert.equal(effectiveDailyMode(JSON.stringify({ content_template: '   ' }), 'qq'), 'modules', '空白模板=未配置')
+  // 后端 DailyModuleModeEffective 判据是 `Key == ""`（不 trim）：空白模板也算已配置。
+  assert.equal(effectiveDailyMode(JSON.stringify({ content_template: '   ' }), 'qq'), 'template', '后端不 trim：空白模板=已配置')
   assert.equal(effectiveDailyMode(JSON.stringify({ daily_mode: 'modules', content_template: 'tpl' }), 'qq'), 'modules', '显式值优先')
   assert.equal(effectiveDailyMode(JSON.stringify({ daily_mode: 'weird', content_template: 'tpl' }), 'qq'), 'template', '未知值按存量推断')
+})
+
+test('渲染模式跨键对齐后端：payload/body/content 任一非空即模板模式', () => {
+  // 后端不按通道类型挑键——三类正文模板键任一存在即 suppress 模块拼装。
+  assert.equal(effectiveDailyMode(JSON.stringify({ payload_template: '{}' }), 'qq'), 'template', 'webhook 模板键在机器人通道同样生效')
+  assert.equal(effectiveDailyMode(JSON.stringify({ content_template: 'x' }), 'email'), 'template', '机器人模板键在邮件通道同样生效')
+  assert.equal(effectiveDailyMode(JSON.stringify({ body_template: ' ' }), 'webhook'), 'template', '空白（不 trim）同样算已配置')
+  assert.equal(effectiveDailyMode(JSON.stringify({ payload_template: '' }), 'webhook'), 'modules', '空串=未配置')
+  assert.equal(effectiveDailyMode(JSON.stringify({ daily_mode: 'modules', body_template: 'x' }), 'qq'), 'modules', '显式值仍优先')
 })
 
 test('未编辑直接保存=零差异（多 tab 全量保存只提交真正变化的通道）', () => {

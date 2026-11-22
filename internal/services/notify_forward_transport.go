@@ -1,9 +1,10 @@
 package services
 
 // 集群上报（从节点事件/日报统计）的 TLS 信任装配：与快照同步共用同一 TOFU
-// 指纹体系（cluster_ca_pins/<host:port>）——自签主节点证书按 pin 校验，
-// 公网可信证书由系统根正常校验。此前上报走默认 transport，自签主节点下
-// TLS 握手失败导致事件/统计永远 spool 重传不出去（2026-11-22 实测定位）。
+// 指纹体系（cluster_ca_pins/<host:port>）。newClusterTOFUTransport 对**所有**
+// https 主节点（含公网可信证书）只按 pin 校验叶证书——InsecureSkipVerify 下
+// 没有系统根分支；首次指纹落盘即信任，之后逐次比对。此前上报走默认 transport，
+// 自签主节点下 TLS 握手失败导致事件/统计永远 spool 重传不出去（2026-11-22 实测定位）。
 
 import (
 	"net/http"

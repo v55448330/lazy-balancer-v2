@@ -1290,8 +1290,8 @@ func TestDeleteCertJob_recoveryKeepsCanonicalLockOrder(t *testing.T) {
 	}
 	// 给 T2 足够时间排到桶锁上——修复前 T1 解阻后会在此反向取 caddyOpMu。
 	// 这是负面条件的夹具窗口（T2 尚未排队时只会削弱断言，不会误红），
-	// 留 200ms 余量以适应负载较高的 CI/并行测试。
-	time.Sleep(200 * time.Millisecond)
+	// 留 2s 余量以适应负载较高的 CI/并行测试（墙钟上界放宽，不改变锁序判定）。
+	time.Sleep(2 * time.Second)
 	close(allowCancelReturn)
 
 	select {

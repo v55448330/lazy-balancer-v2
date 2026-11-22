@@ -1849,32 +1849,25 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 		return models.ClusterSnapshot{}, err
 	}
 	// 指纹校验的前提是 canonical_payload 非空：verifySnapshotSignature 已在
-	// 上方对「无 canonical_payload」返回 SignatureInvalid（v1/v2 扁平路径已移除），
-	// 故 verifySnapshotFingerprint 内部不再需要重复的空载荷分支（历史残留删除）。
-	if len(snapshot.CanonicalPayload) > 0 && snapshot.Fingerprint == "" {
+	// 上方对「无 canonical_payload」返回 SignatureInvalid（v1/v2 扁平路径已移除）
+	// ——故此处起 CanonicalPayload 恒非空，无需再判其长度。
+	if snapshot.Fingerprint == "" {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容缺少指纹"))
 	}
-	if snapshot.Fingerprint != "" {
-		if err := verifySnapshotFingerprint(snapshot); err != nil {
-			return models.ClusterSnapshot{}, err
-		}
+	if err := verifySnapshotFingerprint(snapshot); err != nil {
+		return models.ClusterSnapshot{}, err
 	}
-	if snapshot.SchemaVersion >= 3 && len(snapshot.CanonicalPayload) == 0 {
-		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("schema v3 快照缺少 canonical_payload"))
+	var canonical models.ClusterSnapshot
+	if err := json.Unmarshal(snapshot.CanonicalPayload, &canonical); err != nil {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("解析规范快照内容: %w", err))
 	}
-	if len(snapshot.CanonicalPayload) > 0 {
-		var canonical models.ClusterSnapshot
-		if err := json.Unmarshal(snapshot.CanonicalPayload, &canonical); err != nil {
-			return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("解析规范快照内容: %w", err))
-		}
-		if len(canonical.CanonicalPayload) > 0 || canonical.Version != snapshot.Version || canonical.SchemaVersion != snapshot.SchemaVersion || canonical.MinReaderVersion != snapshot.MinReaderVersion {
-			return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容与元数据不一致"))
-		}
-		canonical.Fingerprint = snapshot.Fingerprint
-		canonical.Signature = snapshot.Signature
-		canonical.CanonicalPayload = append(json.RawMessage(nil), snapshot.CanonicalPayload...)
-		snapshot = canonical
+	if len(canonical.CanonicalPayload) > 0 || canonical.Version != snapshot.Version || canonical.SchemaVersion != snapshot.SchemaVersion || canonical.MinReaderVersion != snapshot.MinReaderVersion {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容与元数据不一致"))
 	}
+	canonical.Fingerprint = snapshot.Fingerprint
+	canonical.Signature = snapshot.Signature
+	canonical.CanonicalPayload = append(json.RawMessage(nil), snapshot.CanonicalPayload...)
+	snapshot = canonical
 	// 只有验签且外层/canonical 元数据一致性通过后，才允许进入
 	// schema_too_new 终止路径。此处 snapshot.MinReaderVersion 已绑定签名内容；
 	// 被篡改的外层值只能得到可重试的 validation_failed，永不触发 halted。

@@ -2735,6 +2735,14 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
+	// 名称必须在两条 DELETE 之前读取（同一事务读自己的未提交视图）：删除后
+	// 再查恒空，通知/审计只能回落「#id」。若改回 db.DB 读则依赖连接池快照
+	// 隔离的偶然性（共享缓存/单连接形态直接失效）。
+	var policyDisplayName string
+	if err := tx.QueryRow(`SELECT COALESCE(name,'') FROM security_policies WHERE id=?`, id).Scan(&policyDisplayName); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		return
+	}
 	result, err := tx.Exec("DELETE FROM security_policies WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -2747,8 +2755,6 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("清理策略绑定失败", err)})
 		return
 	}
-	var policyDisplayName string
-	_ = db.DB.QueryRow(`SELECT COALESCE(name,'') FROM security_policies WHERE id=?`, id).Scan(&policyDisplayName)
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "删除",
 		Notify:      &notify.Event{Type: notify.EvtPolicyChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除了", "3": displayNameOrID(policyDisplayName, id)}},

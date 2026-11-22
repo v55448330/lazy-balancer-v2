@@ -39,9 +39,12 @@ func Start() {
 // Stop 停止分发循环（进程关停兜底；在途事件随进程回收——事实已在库）。
 // 集群转发队列不同：事件未落库，关停时把队列剩余条目全部落 spool，下次启动
 // 重传（不静默丢）。
+// 幂等且可早于 Start 调用：stopCh 未装配（启动失败早退路径）时只做队列落盘。
 func Stop() {
 	stopOnce.Do(func() {
-		close(stopCh)
+		if stopCh != nil {
+			close(stopCh)
+		}
 		drainClusterForwardQueueOnStop()
 	})
 }
@@ -60,6 +63,7 @@ func Bootstrap() {
 }
 
 // DroppedCount 已丢弃事件计数（监控/测试用）。
+// testseam: 导出只读计数供用例观测「是否发布」（队列未装配时 Publish 计入此处）。
 func DroppedCount() int64 { return droppedCount.Load() }
 
 // Publish 发布事件（目录外事件拒绝——订阅矩阵与模板均以目录为唯一事实源）。
@@ -71,7 +75,7 @@ func Publish(evt Event) {
 		log.Printf("WARN: notify.Publish 事件 %q 不在目录中，已丢弃", evt.Type)
 		return
 	}
-	noteAuthEvent(evt.Type) // 日报认证日计数（本机登录态本地语义，从节点也计）
+	noteAuthEvent(evt.Type) // 日报认证日计数（集群合计：主+全从——从节点事件经转发入主节点总线同样累加）
 	if evt.Time.IsZero() {
 		evt.Time = time.Now()
 	}

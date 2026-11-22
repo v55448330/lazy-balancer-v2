@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -95,7 +96,7 @@ func TestSecurityEventsPollOnce_auditWriterFailuresDegradeHealth(t *testing.T) {
 
 	// 下阈：1 条丢弃 → 计数披露，健康位保持。
 	writeWriterStats(1, 0)
-	if _, err := SecurityEventsPollOnce(); err != nil {
+	if _, err := securityEventsPollOnce(context.Background()); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
 	status := SecurityEventsIngestionHealthSnapshot()
@@ -108,7 +109,7 @@ func TestSecurityEventsPollOnce_auditWriterFailuresDegradeHealth(t *testing.T) {
 
 	// 达阈值：累计 3 条丢弃 → 降级（健康位与面板同一位）。
 	writeWriterStats(3, 0)
-	if _, err := SecurityEventsPollOnce(); err != nil {
+	if _, err := securityEventsPollOnce(context.Background()); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
 	status = SecurityEventsIngestionHealthSnapshot()
@@ -121,7 +122,7 @@ func TestSecurityEventsPollOnce_auditWriterFailuresDegradeHealth(t *testing.T) {
 
 	// 插件进程重启（计数器回落）：按新基线继续累计，不产生负增量假告警。
 	writeWriterStats(0, 0)
-	if _, err := SecurityEventsPollOnce(); err != nil {
+	if _, err := securityEventsPollOnce(context.Background()); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
 	status = SecurityEventsIngestionHealthSnapshot()

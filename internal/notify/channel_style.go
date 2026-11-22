@@ -13,6 +13,7 @@ package notify
 
 import (
 	"encoding/json"
+	"html"
 	"sort"
 	"strings"
 	"time"
@@ -82,6 +83,35 @@ func MergeStyleIntoTarget(targetJSON, styleJSON string) string {
 	return string(merged)
 }
 
+// baseTemplatePairs 三个文本型渲染器共用的占位符对（{{placeholder}}, 值）。
+// 顺序固定；日报扩展变量由调用方追加（避免 NewReplacer 重复键）。
+func baseTemplatePairs(msg Message, ts time.Time) []string {
+	event := msg.EventType
+	if event == "" {
+		event = "notification"
+	}
+	return []string{
+		"{{title}}", msg.Title,
+		"{{body}}", msg.Body,
+		"{{level}}", levelLabelZh(msg.Level),
+		"{{event}}", event,
+		"{{time}}", ts.Format("2006-01-02 15:04"),
+		"{{node}}", msg.Node,
+		"{{brand}}", BrandName(),
+		"{{date}}", templateDate(msg, ts),
+		"{{event_title}}", eventDisplayTitle(msg.EventType),
+	}
+}
+
+// dailyTemplatePairs 日报扩展变量对（键排除渲染器已内置键；确定性排序）。
+func dailyTemplatePairs(msg Message) []string {
+	var pairs []string
+	for _, k := range dailyFieldKeys(msg.Fields, styleReservedPlaceholders) {
+		pairs = append(pairs, "{{"+k+"}}", msg.Fields[k])
+	}
+	return pairs
+}
+
 // renderStyleTemplate 占位符替换（{{title}}/{{body}}/{{level}}/{{event}}/
 // {{time}}/{{node}}；未知占位符原样保留——用户可见可自查）。
 func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
@@ -93,27 +123,32 @@ func renderStyleTemplate(tpl string, msg Message, ts time.Time) string {
 	if !strings.Contains(tpl, "{{") {
 		return tpl
 	}
-	event := msg.EventType
-	if event == "" {
-		event = "notification"
-	}
-	pairs := []string{
-		"{{title}}", msg.Title,
-		"{{body}}", msg.Body,
-		"{{level}}", levelLabelZh(msg.Level),
-		"{{event}}", event,
-		"{{time}}", ts.Format("2006-01-02 15:04"),
-		"{{node}}", msg.Node,
-		"{{brand}}", BrandName(),
-		"{{date}}", templateDate(msg, ts),
-		"{{event_title}}", eventDisplayTitle(msg.EventType),
-	}
+	pairs := baseTemplatePairs(msg, ts)
 	// 日报变量（2026-11-22 二选一裁定）：模板模式下全部日常变量可放置。
 	// 事件消息 Fields 为编号键（"1"/"2"），不参与替换。
 	if msg.EventType == EvtDailyReport {
-		for _, k := range dailyFieldKeys(msg.Fields, styleReservedPlaceholders) {
-			pairs = append(pairs, "{{"+k+"}}", msg.Fields[k])
-		}
+		pairs = append(pairs, dailyTemplatePairs(msg)...)
+	}
+	return strings.NewReplacer(pairs...).Replace(tpl)
+}
+
+// renderStyleTemplateHTML HTML 上下文占位符替换（body_format=html 的通道
+// 正文模板）：模板本身是 HTML，占位符**值**必须 HTML 转义——事件正文/字段
+// 含 <img onerror> 等外部输入（IP/UA/规则名），原样拼接即注入面。日报变量
+// 同口径转义。模板字面量保持原样（那是用户声明的 HTML）。
+func renderStyleTemplateHTML(tpl string, msg Message, ts time.Time) string {
+	if msg.TemplateApplied {
+		return msg.Body
+	}
+	if !strings.Contains(tpl, "{{") {
+		return tpl
+	}
+	pairs := baseTemplatePairs(msg, ts)
+	if msg.EventType == EvtDailyReport {
+		pairs = append(pairs, dailyTemplatePairs(msg)...)
+	}
+	for i := 1; i < len(pairs); i += 2 {
+		pairs[i] = html.EscapeString(pairs[i])
 	}
 	return strings.NewReplacer(pairs...).Replace(tpl)
 }
@@ -126,19 +161,13 @@ func renderSubjectTemplate(tpl string, msg Message, ts time.Time) string {
 	if !strings.Contains(tpl, "{{") {
 		return tpl
 	}
-	event := msg.EventType
-	if event == "" {
-		event = "notification"
-	}
-	pairs := []string{
-		"{{title}}", msg.Title,
-		"{{level}}", levelLabelZh(msg.Level),
-		"{{event}}", event,
-		"{{time}}", ts.Format("2006-01-02 15:04"),
-		"{{node}}", msg.Node,
-		"{{brand}}", BrandName(),
-		"{{date}}", templateDate(msg, ts),
-		"{{event_title}}", eventDisplayTitle(msg.EventType),
+	base := baseTemplatePairs(msg, ts)
+	pairs := make([]string, 0, len(base))
+	for i := 0; i+1 < len(base); i += 2 {
+		if base[i] == "{{body}}" {
+			continue
+		}
+		pairs = append(pairs, base[i], base[i+1])
 	}
 	return strings.NewReplacer(pairs...).Replace(tpl)
 }
@@ -150,29 +179,29 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 	if !strings.Contains(tpl, "{{") {
 		return tpl
 	}
-	event := msg.EventType
-	if event == "" {
-		event = "notification"
-	}
 	enc := func(s string) string {
 		b, _ := json.Marshal(s)
 		return string(b)
 	}
-	pairs := []string{
-		"{{title}}", enc(msg.Title),
-		"{{body}}", enc(msg.Body),
-		"{{level}}", enc(msg.Level),
-		"{{event}}", enc(event),
-		"{{time}}", enc(ts.Format(time.RFC3339)),
-		"{{node}}", enc(msg.Node),
-		"{{brand}}", enc(BrandName()),
-		"{{date}}", enc(templateDate(msg, ts)),
-		"{{event_title}}", enc(eventDisplayTitle(msg.EventType)),
+	base := baseTemplatePairs(msg, ts)
+	pairs := make([]string, 0, len(base)+4)
+	for i := 0; i+1 < len(base); i += 2 {
+		val := base[i+1]
+		// JSON 变体保留机器枚举与 RFC3339 时刻（文本渲染器用中文级别/分钟粒度，
+		// 消费端按 JSON 解析时不能被展示词污染）。
+		switch base[i] {
+		case "{{level}}":
+			val = msg.Level
+		case "{{time}}":
+			val = ts.Format(time.RFC3339)
+		}
+		pairs = append(pairs, base[i], enc(val))
 	}
 	// 日报变量同文本变体：值经 JSON 编码嵌入（保存校验同口径）。
 	if msg.EventType == EvtDailyReport {
-		for _, k := range dailyFieldKeys(msg.Fields, styleReservedPlaceholders) {
-			pairs = append(pairs, "{{"+k+"}}", enc(msg.Fields[k]))
+		daily := dailyTemplatePairs(msg)
+		for i := 0; i+1 < len(daily); i += 2 {
+			pairs = append(pairs, daily[i], enc(daily[i+1]))
 		}
 	}
 	return strings.NewReplacer(pairs...).Replace(tpl)

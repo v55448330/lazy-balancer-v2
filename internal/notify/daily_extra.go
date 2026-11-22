@@ -169,8 +169,11 @@ func topPairs(ctx context.Context, query string, args ...any) [][2]string {
 // certExpiringList 30 天内到期的已签发证书（域名 · 到期日，单行列表）。
 func certExpiringList(ctx context.Context, now time.Time) string {
 	limit := now.AddDate(0, 0, 30).Format("2006-01-02 15:04:05")
+	// 下界=now：已过期证书不属于「临期」，旧查询只有上界会把过期多年的一并
+	// 列成临期（用户看到「还剩 -370 天」）。
 	rows, err := db.DB.QueryContext(ctx, `SELECT domain, expires_at FROM cert_jobs
-		WHERE status='issued' AND COALESCE(expires_at,'')<>'' AND expires_at<=? ORDER BY expires_at LIMIT 5`, limit)
+		WHERE status='issued' AND COALESCE(expires_at,'')<>'' AND expires_at>=? AND expires_at<=?
+		ORDER BY expires_at LIMIT 5`, now.Format("2006-01-02 15:04:05"), limit)
 	if err != nil {
 		return "无"
 	}
@@ -188,6 +191,10 @@ func certExpiringList(ctx context.Context, now time.Time) string {
 	}
 	if len(parts) == 0 {
 		return "无"
+	}
+	if len(parts) == 5 {
+		// LIMIT 5 命中即提示截断（可能还有更多，用户知道去看证书页全量）。
+		parts = append(parts, "（仅列前 5 条）")
 	}
 	return strings.Join(parts, "\n")
 }

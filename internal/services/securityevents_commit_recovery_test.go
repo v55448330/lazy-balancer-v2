@@ -137,7 +137,7 @@ func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testi
 
 	// When 提交失败（驱动层错误，事务保持活动）。
 	driverStub.fail.Store(true)
-	if got, _ := SecurityEventsPollOnce(); got != 0 {
+	if got, _ := securityEventsPollOnce(context.Background()); got != 0 {
 		t.Fatalf("提交失败轮摄取=%d, want 0（未提交的行不得计入）", got)
 	}
 	status := SecurityEventsIngestionHealthSnapshot()
@@ -159,7 +159,7 @@ func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testi
 
 	// 恢复后下一轮正常摄取（写锁未滞留：偏移未推进，同一事务重放）。
 	driverStub.fail.Store(false)
-	got, _ := SecurityEventsPollOnce()
+	got, _ := securityEventsPollOnce(context.Background())
 	if got != 1 {
 		t.Fatalf("恢复轮摄取=%d, want 1", got)
 	}

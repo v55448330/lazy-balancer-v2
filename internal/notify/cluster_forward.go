@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -170,6 +171,12 @@ func clusterForwardLoop(ch chan clusterForwardJob) {
 			continue
 		}
 		if err := forwardEventToMasterWithRole(job.evt, job.role); err != nil {
+			if permanentClusterReportRejection(err) {
+				// 永久拒绝（4xx 非限流）：重试只会永远打回，逐次落 spool 再删
+				// 是纯噪声——直接丢弃并留痕（事件通知非审计面）。
+				log.Printf("WARN: 集群事件上报被永久拒绝（%v），事件 %s 丢弃", err, job.evt.Type)
+				continue
+			}
 			spoolClusterEvent(job.evt)
 		}
 	}
@@ -401,7 +408,7 @@ func checkClusterReportStatus(what string, code int) error {
 	if code >= http.StatusOK && code < http.StatusMultipleChoices {
 		return nil
 	}
-	return fmt.Errorf("%s被拒: %d", what, code)
+	return &clusterReportStatusError{what: what, code: code}
 }
 
 // postClusterEventReport 上报 POST（3s 超时，与 detach 通知同口径）。
@@ -437,7 +444,18 @@ func spoolClusterEvent(evt Event) {
 	if dir == "" {
 		return
 	}
-	nodeName := clusterForwardNodeName()
+	// 主节点上报地址/令牌未配置（含已升主/从未入集群）：落盘后没有任何重传
+	// 面能消费，等于只涨磁盘。直接丢弃并留痕。
+	// 探测本身失败（rerr≠nil，如 DB 瞬时故障）不属此列：保持落盘，等探测恢复
+	// 后由 spool 重传——误判丢弃等于数据永久丢失。
+	isMaster, masterURL, token, nodeName, rerr := clusterForwardRole()
+	if rerr == nil && (isMaster || masterURL == "" || token == "") {
+		log.Printf("WARN: 集群事件 spool 跳过（主节点上报地址/令牌未配置，master=%v，事件 %s 丢弃）", isMaster, evt.Type)
+		return
+	}
+	if nodeName == "" {
+		nodeName = LocalNodeName()
+	}
 	origin, hop := evt.Origin, evt.Hop
 	if origin == "" {
 		origin = nodeName
@@ -472,13 +490,28 @@ func spoolClusterEvent(evt Event) {
 	trimClusterForwardSpool(dir)
 }
 
-// clusterForwardNodeName spool 侧节点名（角色查询失败时回退主机名）。
-func clusterForwardNodeName() string {
-	_, _, _, name, err := clusterForwardRole()
-	if err != nil || name == "" {
-		return LocalNodeName()
+// clusterReportStatusError 上报响应非 2xx（详情同旧文案，便于日志比对）。
+type clusterReportStatusError struct {
+	what string
+	code int
+}
+
+func (e *clusterReportStatusError) Error() string {
+	return fmt.Sprintf("%s被拒: %d", e.what, e.code)
+}
+
+// permanent 永久拒绝判定：4xx 中除超时(408)/限流(429) 外重试必败。
+func (e *clusterReportStatusError) permanent() bool {
+	return e.code >= 400 && e.code < 500 && e.code != http.StatusRequestTimeout && e.code != http.StatusTooManyRequests
+}
+
+// permanentClusterReportRejection 上报错误是否属「永久拒绝」（无需重试）。
+func permanentClusterReportRejection(err error) bool {
+	var se *clusterReportStatusError
+	if !errors.As(err, &se) {
+		return false
 	}
-	return name
+	return se.permanent()
 }
 
 // clusterForwardSpoolDir spool 目录（data 目录派生；未初始化返回空=不落盘）。
@@ -545,11 +578,22 @@ func DiscardClusterForwardSpool(reason string) {
 // trimClusterForwardSpool 上限裁剪（最老先丢）。
 func trimClusterForwardSpool(dir string) {
 	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) <= clusterForwardSpoolMaxFiles {
+	if err != nil {
+		return
+	}
+	// 只统计成品 .json：原子写的 .tmp 半成品正在被 rename，误删会让写侧
+	// rename 失败（事件静默丢失）；非 spool 文件同理不参与裁剪计数。
+	finished := make([]os.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			finished = append(finished, e)
+		}
+	}
+	if len(finished) <= clusterForwardSpoolMaxFiles {
 		return
 	}
 	// ReadDir 已按文件名序（时序命名=最老在前）
-	for _, e := range entries[:len(entries)-clusterForwardSpoolMaxFiles] {
+	for _, e := range finished[:len(finished)-clusterForwardSpoolMaxFiles] {
 		_ = os.Remove(filepath.Join(dir, e.Name()))
 	}
 }
@@ -594,6 +638,12 @@ func DrainClusterForwardSpool(ctx context.Context) {
 			report.Node = nodeName
 		}
 		if err := postClusterEventReport(masterURL, token, report); err != nil {
+			if permanentClusterReportRejection(err) {
+				// 永久拒绝（4xx 非限流）：保留文件等于无限重试同一份必败载荷。
+				_ = os.Remove(path)
+				log.Printf("WARN: 集群事件 spool 上报被永久拒绝（%v），已丢弃: %s", err, e.Name())
+				continue
+			}
 			log.Printf("INFO: 集群事件 spool 重传暂缓（主节点仍不可达，下轮重试）: %v", err)
 			return // 主节点仍不可达——保留下轮重试
 		}

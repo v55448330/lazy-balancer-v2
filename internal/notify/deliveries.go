@@ -80,18 +80,25 @@ func channelsForUser(userID int64) ([]deliveryTarget, error) {
 	return out, rows.Err()
 }
 
-// markDelivery 更新投递行状态。
+// markDelivery 更新投递行状态。sent_at 只在「已送达」语义（sent/partial）
+// 写入；failed/dead 必须置 NULL——旧实现四个状态都写 sent_at，失败/过期行
+// 在投递记录里显示成已发送时刻（误导排查）。
 func markDelivery(id int64, status string, incrAttempts bool, errMsg string) {
+	var sentAt any
+	switch status {
+	case "sent", "partial":
+		sentAt = time.Now().UTC().Format("2006-01-02 15:04:05")
+	}
 	if incrAttempts {
 		_, err := db.DB.Exec(`UPDATE notification_deliveries SET status=?, attempts=attempts+1, error=?, sent_at=? WHERE id=?`,
-			status, errMsg, time.Now().UTC().Format("2006-01-02 15:04:05"), id)
+			status, errMsg, sentAt, id)
 		if err != nil {
 			log.Printf("WARN: notify 投递状态更新失败（id=%d）: %v", id, err)
 		}
 		return
 	}
 	_, err := db.DB.Exec(`UPDATE notification_deliveries SET status=?, error=?, sent_at=? WHERE id=?`,
-		status, errMsg, time.Now().UTC().Format("2006-01-02 15:04:05"), id)
+		status, errMsg, sentAt, id)
 	if err != nil {
 		log.Printf("WARN: notify 投递状态更新失败（id=%d）: %v", id, err)
 	}

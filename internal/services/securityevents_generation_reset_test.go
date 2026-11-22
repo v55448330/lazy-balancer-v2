@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -110,7 +111,7 @@ func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.
 	autobanMu.Lock()
 	autobanWindows[ip] = &autobanCounter{Count: 4, WindowStart: time.Now(), LastSeen: time.Now()}
 	autobanMu.Unlock()
-	ingested, err := SecurityEventsPollOnce()
+	ingested, err := securityEventsPollOnce(context.Background())
 	if err != nil {
 		t.Fatalf("first poll: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.
 		t.Fatalf("首轮摄取=%d、计数=%d, want 1、5（重放前置条件）", ingested, autobanCountForTest(ip))
 	}
 
-	// When：metrics 库隔离重建后走真实 SecurityEventsPollOnce，代际复位并整份重放。
+	// When：metrics 库隔离重建后走真实 securityEventsPollOnce，代际复位并整份重放。
 	oldMetrics := db.MetricsDB
 	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
 		t.Fatalf("initialize rebuilt metrics db: %v", err)
@@ -129,7 +130,7 @@ func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.
 		}
 		db.MetricsDB = oldMetrics
 	})
-	ingested, err = SecurityEventsPollOnce()
+	ingested, err = securityEventsPollOnce(context.Background())
 
 	// Then：计数由本轮真实事件恰好重建一次，不归零，也不叠加旧代计数。
 	if err != nil {
@@ -157,7 +158,7 @@ func TestSecurityEventsGenerationGuard_resetsMessagesDroppedOnReplay(t *testing.
 	}
 	securityEventsMessagesDropped.Store(4)
 	t.Cleanup(func() { securityEventsMessagesDropped.Store(0) })
-	ingested, err := SecurityEventsPollOnce()
+	ingested, err := securityEventsPollOnce(context.Background())
 	if err != nil {
 		t.Fatalf("first poll: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestSecurityEventsGenerationGuard_resetsMessagesDroppedOnReplay(t *testing.
 		t.Fatalf("首轮摄取=%d、messages_dropped=%d, want 1、8（重放前置条件）", ingested, securityEventsMessagesDropped.Load())
 	}
 
-	// When：metrics 库隔离重建后走真实 SecurityEventsPollOnce 复位并重放。
+	// When：metrics 库隔离重建后走真实 securityEventsPollOnce 复位并重放。
 	oldMetrics := db.MetricsDB
 	if err := db.InitializeMetricsDB(t.TempDir()); err != nil {
 		t.Fatalf("initialize rebuilt metrics db: %v", err)
@@ -176,7 +177,7 @@ func TestSecurityEventsGenerationGuard_resetsMessagesDroppedOnReplay(t *testing.
 		}
 		db.MetricsDB = oldMetrics
 	})
-	ingested, err = SecurityEventsPollOnce()
+	ingested, err = securityEventsPollOnce(context.Background())
 
 	// Then：重放后的进程计数等于日志单遍真实总量，不是重放前清零后的零或两遍之和。
 	if err != nil {

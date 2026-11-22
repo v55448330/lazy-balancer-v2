@@ -134,7 +134,10 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		Description: "按保留期配置（基础设置→通知投递保留天数）滚动删除过期投递记录与每通道结果",
 		Category:    "通知",
 		Kind:        taskengine.KindPeriodic,
-		IntervalFn:  func() time.Duration { return 24 * time.Hour },
+		// 与同族日报一致：清理面只在主节点（数据单点收敛，多节点并发清理
+		// 只会互相干扰且无收益）。
+		RunsOn:     taskengine.RoleMasterOnly,
+		IntervalFn: func() time.Duration { return 24 * time.Hour },
 		Run: func(rc taskengine.RunContext) error {
 			result, err := NotificationDeliveryRetentionCleanup(rc.Ctx)
 			if err != nil {
@@ -153,7 +156,10 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		Description: "每日扫描 7 天内到期的启用 API 密钥，发布临期预警事件（apikey.expiry_warning）",
 		Category:    "通知",
 		Kind:        taskengine.KindPeriodic,
-		IntervalFn:  func() time.Duration { return 24 * time.Hour },
+		// 单次执行只发布一条预警（去重语义由主节点单点承担）：从节点若也跑，
+		// 同一把临期密钥会在各节点各发一遍。
+		RunsOn:     taskengine.RoleMasterOnly,
+		IntervalFn: func() time.Duration { return 24 * time.Hour },
 		Run: func(rc taskengine.RunContext) error {
 			return notify.CheckAPIKeyExpiry()
 		},

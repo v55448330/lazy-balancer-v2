@@ -79,6 +79,12 @@ func TestUpdateNotificationRule_groupWriteIsAtomic(t *testing.T) {
 	t.Cleanup(func() { _, _ = db.DB.Exec(`DROP TRIGGER IF EXISTS fail_last_group_event`) })
 
 	r := newRulesTestRouter(h, 7, "user")
+	// 选择必须引用真实存在的通道（2026-11-22 就绪门：不存在的 id 会被清洗，
+	// 清洗为空直接 400，本用例主题=组写事务原子性，故先满足通道存在性）。
+	if _, err := db.DB.Exec(`INSERT INTO notification_channels (id, user_id, type, name, target, enabled)
+		VALUES (1, 7, 'email', '原子性夹具通道', '{"email":"a@b.c"}', 1)`); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
 	status, out := doNotifyRequest(t, r, http.MethodPost, "/notification/rules/"+gid,
 		`{"enabled":true,"min_level":"warn","channel_ids":[1]}`)
 	if status != http.StatusInternalServerError {

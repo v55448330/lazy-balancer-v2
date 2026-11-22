@@ -263,6 +263,7 @@ export default {
         typeWx: '微信机器人',
         targetWebhookUrl: 'URL',
         targetWebhookPlaceholder: 'https://example.com/hook',
+        targetMaskedPlaceholder: '已脱敏，重新输入完整目标',
         transportSection: '传输配置',
         configSection: '通道配置',
         botProtocolHint: '机器人传输协议固定：QQ 以 Markdown 富文本发送，微信以纯文本发送；消息正文模板在「通知规则」中按通道配置。',

@@ -2254,7 +2254,7 @@ type securityEventsTailer struct {
 	// 字节 + 上次干净」并不意味着已读到 EOF（还有未摄取内容），空闲 tick
 	// 的提前返回必须让位给续跑。
 	passBoundHit bool
-	// lastIngested 上一 pass 摄取事件数（SecurityEventsPollOnce 消费后清零——
+	// lastIngested 上一 pass 摄取事件数（securityEventsPollOnce 消费后清零——
 	// SPEC §6.5 业务摘要行：有事件才写任务日志）。
 	lastIngested int
 	// stallOffset/stallCount 是停等状态：最近一次「残缺文档等待
@@ -3773,15 +3773,12 @@ func SecurityEventsSetIngestionHealthForTest(status SecurityEventsIngestionStatu
 	securityEventsSkipHealth.mu.Unlock()
 }
 
-// SecurityEventsPollOnce 单轮摄取（先采集后轮转——引擎 2s 节拍调用）。
+// securityEventsPollOnce 单轮摄取（先采集后轮转——引擎 2s 节拍调用）。
 // 返回本轮摄取条数与轮转错误（采集 tick 错误经限流 warn+健康快照记账，
 // 不随返回值暴露）；任务日志只由 ingestion daemon 自己写，其他调用方不得越权。
-// 无取消语义的调用方（手动兜底轮转）用本入口；daemon 走 securityEventsPollOnce
-// 传入引擎 ctx，让停机时 pass 在批次边界收尾。
-func SecurityEventsPollOnce() (int, error) {
-	return securityEventsPollOnce(context.Background())
-}
-
+// 调用方必须传入含义明确的 ctx（daemon 传引擎 ctx，让停机时 pass 在批次边界
+// 收尾）；无取消语义的手动兜底/测试传 context.Background()——本入口不导出，
+// 以免包外消费方误以为存在可取消语义。
 func securityEventsPollOnce(ctx context.Context) (int, error) {
 	securityEventsPollState.Lock()
 	defer securityEventsPollState.Unlock()

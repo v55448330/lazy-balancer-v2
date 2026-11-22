@@ -471,7 +471,7 @@ func TestSecurityEventsLegacyAuditLog_consumedOnceThenStable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ingested, rotErr := SecurityEventsPollOnce()
+	ingested, rotErr := securityEventsPollOnce(context.Background())
 	if rotErr != nil {
 		t.Fatalf("legacy poll: %v", rotErr)
 	}
@@ -483,7 +483,7 @@ func TestSecurityEventsLegacyAuditLog_consumedOnceThenStable(t *testing.T) {
 	}
 
 	// 第二轮：文件不再增长 → 无新增、无重复（offset 已持久化）。
-	ingested, rotErr = SecurityEventsPollOnce()
+	ingested, rotErr = securityEventsPollOnce(context.Background())
 	if rotErr != nil {
 		t.Fatalf("second legacy poll: %v", rotErr)
 	}

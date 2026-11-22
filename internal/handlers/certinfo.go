@@ -67,8 +67,15 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	// 单规则端点（同一基准函数降级成功）口径分叉。阈值对本请求恒定，作首参
 	// 绑定；独立切片（不得前插共享 args——下方 cert_jobs 候选查询按 IN 占位
 	// 复用 args，错位会让候选集恒空）。
+	// DB 未装配/关停窗（db.Close 会把包级句柄置 nil）裸解引用会 panic：
+	// 捕获本地句柄并显式 nil 守卫，整批 500 固定文案（fail-visible）。
+	database := db.DB
+	if database == nil {
+		writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", nil)
+		return
+	}
 	queryArgs := append([]any{services.GetCertExpiryThreshold()}, args...)
-	rows, err := db.DB.QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := database.QueryContext(c.Request.Context(), fmt.Sprintf(`
 		SELECT caddy_id, COALESCE(enabled,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(domain,''), COALESCE(tls_cert,''),
 			?
 		FROM lb_rules WHERE caddy_id IN (%s)`, placeholders), queryArgs...)
@@ -101,7 +108,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		return
 	}
 
-	jobRows, err := db.DB.QueryContext(c.Request.Context(), fmt.Sprintf(`
+	jobRows, err := database.QueryContext(c.Request.Context(), fmt.Sprintf(`
 		SELECT rule_id, `+services.CertificateCandidateColumnList+`
 		FROM cert_jobs
 		WHERE rule_id IN (%s) AND %s

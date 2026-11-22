@@ -256,6 +256,7 @@ export default {
         typeWx: 'WeChat bot',
         targetWebhookUrl: 'URL',
         targetWebhookPlaceholder: 'https://example.com/hook',
+        targetMaskedPlaceholder: 'Target is masked; re-enter the full target',
         transportSection: 'Transport settings',
         configSection: 'Channel settings',
         botProtocolHint: 'Bot transport is fixed by protocol: QQ sends Markdown rich text, WeChat sends plain text. Message body templates are configured per channel under Notification Rules.',

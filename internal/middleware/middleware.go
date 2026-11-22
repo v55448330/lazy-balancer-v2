@@ -925,7 +925,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		// 的门控放大成并发写尝试。挂独立宽桶（120/min/IP，前端首屏只读一次，
 		// 不受影响），与 oidc 两条公开端点同口径。
 		v1.GET("/branding", clusterRateLimit("branding", 120, "品牌配置查询过于频繁，请稍后再试"), h.GetBranding)
-		v1.POST("/cluster/register", clusterRegisterRateLimit(), h.RegisterClusterNode)
+		// 注册成功响应含一次性 registration_secret 明文：与 register-tokens/login-ticket
+		// 同口径挂 no-store（命中限流/校验失败的响应同样不得被缓存）。
+		v1.POST("/cluster/register", noStoreResponse(), clusterRegisterRateLimit(), h.RegisterClusterNode)
 		v1.GET("/cluster/register/:id/status", clusterMachineRateLimit("registration-status", clusterCredentialFromRegistration), noStoreResponse(), registrationAuth(db.DB), h.GetClusterRegistrationStatus)
 		v1.GET("/cluster/sync/snapshot", clusterMachineRateLimit("sync-snapshot", clusterCredentialFromToken), noStoreResponse(), clusterTokenAuth(db.DB), h.GetClusterSnapshot)
 		v1.GET("/cluster/sync/waf-files", clusterMachineRateLimit("sync-waf-files", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.GetClusterWafFiles)

@@ -7,6 +7,7 @@ package services
 //     否则该行没有任何通道，规则在重启前整条不发布。
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -40,7 +41,7 @@ func TestRunManualCertExpiryCheck_doesNotClaimCleanWhenAbnormal(t *testing.T) {
 		t.Fatalf("夹具前提不成立：首次告警门应放行")
 	}
 
-	if err := runManualCertExpiryCheck(gate); err != nil {
+	if err := runManualCertExpiryCheck(context.Background(), gate); err != nil {
 		t.Fatalf("manual check: %v", err)
 	}
 
@@ -72,7 +73,7 @@ func TestRunManualCertExpiryCheck_cleanRoundStillReports(t *testing.T) {
 		VALUES ('lb_manual_broken2','manual-broken2','manual-broken2.test','http',8083,1,1,'manual','not-a-pem')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := runManualCertExpiryCheck(newManualCertExpiryAlertGate()); err != nil {
+	if err := runManualCertExpiryCheck(context.Background(), newManualCertExpiryAlertGate()); err != nil {
 		t.Fatalf("manual check: %v", err)
 	}
 	logContent := readTaskLog(t, "cert-manual-poll")

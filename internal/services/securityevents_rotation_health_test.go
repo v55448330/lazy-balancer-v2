@@ -2,7 +2,7 @@ package services
 
 // 审计日志轮转失败必须进入采集健康态——此前
 // rotateAuditLogIfNeeded 的所有失败分支只经 60s 限流日志留痕，不参与
-// SecurityEventsPollOnce 的健康快照记账，磁盘写满/copy 持续失败时事件页
+// securityEventsPollOnce 的健康快照记账，磁盘写满/copy 持续失败时事件页
 // 健康位恒 healthy、任务监控零痕迹。
 
 import (
@@ -38,8 +38,8 @@ func TestSecurityEventsPollOnce_rotationFailureEntersHealthSnapshot(t *testing.T
 	// When：copy 持续失败（磁盘写满形态）→ 每轮轮转中止，错误随返回值暴露。
 	auditLogCopyFile = func(src, dst string) error { return errors.New("injected copy failure") }
 	for range securityEventsIngestionFailureThreshold {
-		if _, rotErr := SecurityEventsPollOnce(); rotErr == nil {
-			t.Fatal("轮转失败必须随 SecurityEventsPollOnce 返回值暴露")
+		if _, rotErr := securityEventsPollOnce(context.Background()); rotErr == nil {
+			t.Fatal("轮转失败必须随 securityEventsPollOnce 返回值暴露")
 		}
 	}
 
@@ -59,7 +59,7 @@ func TestSecurityEventsPollOnce_rotationFailureEntersHealthSnapshot(t *testing.T
 
 	// When：copy 恢复 → 下一轮成功轮转。
 	auditLogCopyFile = copyAuditLogTo
-	if _, rotErr := SecurityEventsPollOnce(); rotErr != nil {
+	if _, rotErr := securityEventsPollOnce(context.Background()); rotErr != nil {
 		t.Fatalf("copy 恢复后轮转仍报错: %v", rotErr)
 	}
 

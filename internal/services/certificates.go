@@ -1252,9 +1252,14 @@ func CertRenewalScanOnce(ctx context.Context) error {
 // 巡检只读 lb_rules 的手动证书并用告警门去重，不依赖 CA 队列/服务实例——
 // 停止「证书签发」调度时手动证书没有自动续签，告警是唯一信号，巡检因此照常
 // 执行（服务实例缺失时使用包级去重门）。巡检读失败必须上抛。
-func CertManualCheckOnce() error {
+// ctx 来自引擎轮次（taskengine RunContext）：取消后面板停机/超时不应再跑完
+// 整轮扫描——查询走 QueryContext，被取消即以 ctx 错误收尾。
+func CertManualCheckOnce(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !certScanDatabaseReady() {
-		TaskLogf("cert-manual-poll", "check", "数据库未就绪：本轮手动证书到期检查已跳过（装配完成后由周期节拍重试）")
+		TaskLogfContext(ctx, "cert-manual-poll", "check", "数据库未就绪：本轮手动证书到期检查已跳过（装配完成后由周期节拍重试）")
 		return taskengine.ErrTaskSkipped
 	}
 	activeCertService.Lock()
@@ -1264,7 +1269,7 @@ func CertManualCheckOnce() error {
 	if svc != nil && svc.expiryAlertGate != nil {
 		gate = svc.expiryAlertGate
 	}
-	return runManualCertExpiryCheck(gate)
+	return runManualCertExpiryCheck(ctx, gate)
 }
 
 // certScanDatabaseReady 报告证书域扫描是否具备可执行的数据库：db.DB 未装配
@@ -2683,9 +2688,16 @@ var manualCertExpiryFallbackGate = newManualCertExpiryAlertGate()
 // runManualCertExpiryCheck 是手动证书到期巡检的包级实现：只读 lb_rules 的
 // 手动证书并用告警门去重，与 CA 队列/证书服务实例无关。生产入口是
 // CertManualCheckOnce；实例方法形态仅存在于测试夹具（certificates_test.go）。
-func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
+// ctx 必传：候选查询走 QueryContext，取消后在锁内立即返回 ctx 错误。
+func runManualCertExpiryCheck(ctx context.Context, gate *manualCertExpiryAlertGate) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	manualCertExpiryCheckMu.Lock()
 	defer manualCertExpiryCheckMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if gate == nil {
 		gate = manualCertExpiryFallbackGate
 	}
@@ -2694,7 +2706,7 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 	// 与其余全部扫描/渲染口径对齐（enabled=1）——禁用规则的证书
 	// 不进入任何 TLS 连接策略，此前漏筛 enabled 会每天对禁用规则产出
 	// 问题「证书已过期」并每 10 分钟计数一次，稀释真实告警。
-	rows, err := db.DB.Query(`
+	rows, err := db.DB.QueryContext(ctx, `
 		SELECT caddy_id, name, domain, tls_cert 
 		FROM lb_rules 
 		WHERE enable_tls = 1 AND COALESCE(enabled,0) = 1
@@ -2705,7 +2717,7 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 		// 读失败上抛（对齐 cert-renewal-scan/cert-reconcile）——失败轮
 		// 结果不可信，任务日志留失败行 + 返回 error（task_runs 失败终态）；
 		// 此前仅应用日志 + return，任务监控呈现假健康。
-		TaskLogf("cert-manual-poll", "check", "巡检失败：手动证书查询出错（%v），本轮未执行到期检查，下一周期重试", err)
+		TaskLogfContext(ctx, "cert-manual-poll", "check", "巡检失败：手动证书查询出错（%v），本轮未执行到期检查，下一周期重试", err)
 		return fmt.Errorf("查询手动证书: %w", err)
 	}
 	type certInfo struct {
@@ -2732,7 +2744,7 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 	if err := rows.Err(); err != nil {
 		Logf("warn", "cert expiration check: iteration error: %v", err)
 		// 迭代失败结果集不可信——失败行 + 上抛（同查询失败口径）。
-		TaskLogf("cert-manual-poll", "check", "巡检失败：手动证书遍历出错（%v），本轮结果不可信，下一周期重试", err)
+		TaskLogfContext(ctx, "cert-manual-poll", "check", "巡检失败：手动证书遍历出错（%v），本轮结果不可信，下一周期重试", err)
 		_ = rows.Close()
 		return fmt.Errorf("遍历手动证书: %w", err)
 	}
@@ -2804,12 +2816,12 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 		// SPEC §6.5：业务结论镜像到任务日志。收敛与告警同一去重门——异常
 		// 持续期只在首次/加深轮留一行，全正常轮与重复轮零日志（原「每 10
 		// 分钟一条摘要」会把任务日志真正的事件行挤掉）。
-		TaskLogf("cert-manual-poll", "check", "手动证书到期检查：%d 张已过期、%d 张临期（阈值 %d 天）%s", expiredCount, expiringSoonCount, warnDays, skippedNote)
+		TaskLogfContext(ctx, "cert-manual-poll", "check", "手动证书到期检查：%d 张已过期、%d 张临期（阈值 %d 天）%s", expiredCount, expiringSoonCount, warnDays, skippedNote)
 	} else if (parseFailCount > 0 || scanFailCount > 0) && expiredCount == 0 && expiringSoonCount == 0 {
 		// 「无过期无临期」是对事实的断言，只有统计真为 0 才允许说：此前本分支
 		// 只看 parseFailCount，当异常证书当日已告警（alerted=false）而同轮另有
 		// 解析失败行时会写出与本轮事实相反的结论。
-		TaskLogf("cert-manual-poll", "check", "手动证书到期检查：无过期无临期（阈值 %d 天）%s", warnDays, skippedNote)
+		TaskLogfContext(ctx, "cert-manual-poll", "check", "手动证书到期检查：无过期无临期（阈值 %d 天）%s", warnDays, skippedNote)
 	}
 	// 单行读失败让本轮进入失败终态（同族 rescan/对账口径）：摘要已如实标注跳过
 	// 行数，返回值再把「结果不可信」交给 task_runs——只靠摘要文案时自动化监控

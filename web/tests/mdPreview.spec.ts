@@ -24,6 +24,17 @@ test('定稿事件模板：星号列表/加粗标签/分隔线/引用（marked G
   assert.match(html, /<p><strong>证书 3 天后过期<\/strong><\/p>/, '正文行不得被 --- 提升为 setext 标题（QQ 按分隔线渲染）')
 })
 
+test('fenced code 内的 --- 不得被当作分隔线/setext 下划线（代码块原样保留）', () => {
+  const html = mdToHtml('说明\n\n```text\nalpha\n---\nbeta\n```\n\n---\n结尾')
+  assert.match(html, /<pre><code[^>]*>alpha\n---\nbeta/, '代码块内 --- 必须原样保留')
+  assert.equal((html.match(/<hr\s*\/?>/g) || []).length, 1, '仅代码块外的 --- 渲染为分隔线')
+  assert.ok(!/<h2[^>]*>alpha/.test(html), '代码块内不得触发 setext 标题')
+  // 围栏字符/长度不匹配的行不得误闭合代码块（``` 内出现 ~~~ 仍是代码正文）
+  const mixed = mdToHtml('```\nalpha\n~~~\n---\nbeta\n```\n\n---\n结尾')
+  assert.match(mixed, /<pre><code[^>]*>alpha\n~~~\n---\nbeta/, '``` 内 ~~~ 不闭合围栏')
+  assert.equal((mixed.match(/<hr\s*\/?>/g) || []).length, 1, '仅围栏外的 --- 为分隔线')
+})
+
 test('日报预置：GFM 表格（表头/数据行）', () => {
   const html = mdToHtml('| 指标 | 数值 |\n| :--- | ---: |\n| 集群状态 | 3/3 |\n| 运行时长 | 32 天 |')
   assert.match(html, /<table>/, '表格元素')

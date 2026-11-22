@@ -222,6 +222,8 @@ import { useAuthStore } from '@/stores/auth'
 import {
   buildChannelStyleConfig, channelStyleExtras, channelStyleFormFrom, emptyChannelStyleForm, parseStyleConfig,
 } from '@/utils/channelStyle'
+import { channelEditPayload, channelTargetKey } from '@/utils/channelEdit'
+import { channelHealthState, type ChannelHealthState } from '@/utils/channelHealth'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import type { NotificationChannel, NotificationChannelType, NotificationChannelsResponse } from '@/types/notifications.ts'
@@ -308,14 +310,7 @@ const targetLabelShort = (typ: NotificationChannelType): string => {
     default: return 'wxid'
   }
 }
-const targetField = (typ: NotificationChannelType): string => {
-  switch (typ) {
-    case 'webhook': return 'url'
-    case 'email': return 'email'
-    case 'qq': return 'openid'
-    default: return 'receiver'
-  }
-}
+const targetField = (typ: NotificationChannelType): string => channelTargetKey(typ)
 const parseTargetValue = (ch: NotificationChannel): string => {
   try {
     const parsed = JSON.parse(ch.target) as Record<string, unknown>
@@ -327,6 +322,9 @@ const parseTargetValue = (ch: NotificationChannel): string => {
 }
 const displayTarget = (ch: NotificationChannel): string => {
   const v = parseTargetValue(ch)
+  // 后端已脱敏（非属主视角）：脱敏串不再是合法 target JSON，直接照原样展示，
+  // 不得再二次切片（会把 "abc***xyz" 再次切成乱码）。
+  if (ch.target_masked) return v || '-'
   if (!isMine(ch) && v.length > 8) return v.slice(0, 4) + '••••' + v.slice(-4)
   return v || '-'
 }
@@ -357,20 +355,21 @@ const bindParts = (s: string): { text: string; bold: boolean }[] => {
   return parts
 }
 // 复合健康态（单一事实呈现，避免「在线+就绪+测试失败」自相矛盾）：
-// disabled > link_down > session_stale(wx) > test_failed > unverified > ready
-type HealthState = 'disabled' | 'link_down' | 'session_stale' | 'test_failed' | 'unverified' | 'ready'
-const channelHealth = (ch: NotificationChannel): { state: HealthState; label: string; type: 'info' | 'success' | 'warning' | 'danger' } => {
-  if (!ch.enabled) return { state: 'disabled', label: t('app.notification.channels.healthDisabled'), type: 'info' }
-  if ((ch.type === 'qq' || ch.type === 'wx_clawbot') && ch.link_connected === false) {
-    return { state: 'link_down', label: t('app.notification.channels.healthLinkDown'), type: 'danger' }
+// disabled > link_down > session_stale(wx) > unverified > test_failed > ready
+// 判定逻辑单源在 utils/channelHealth（未验证必须早于验证失败：后端
+// last_test_ok 默认 0，从未测试的通道此前被误报「验证失败」）。
+type HealthTag = { state: ChannelHealthState; label: string; type: 'info' | 'success' | 'warning' | 'danger' }
+const healthTagOf = (state: ChannelHealthState): HealthTag => {
+  switch (state) {
+    case 'disabled': return { state, label: t('app.notification.channels.healthDisabled'), type: 'info' }
+    case 'link_down': return { state, label: t('app.notification.channels.healthLinkDown'), type: 'danger' }
+    case 'session_stale': return { state, label: t('app.notification.channels.healthSessionStale'), type: 'warning' }
+    case 'unverified': return { state, label: t('app.notification.channels.healthUnverified'), type: 'info' }
+    case 'test_failed': return { state, label: t('app.notification.channels.healthTestFailed'), type: 'danger' }
+    default: return { state, label: t('app.notification.channels.healthReady'), type: 'success' }
   }
-  if (ch.type === 'wx_clawbot' && !wxSessionOk(ch)) {
-    return { state: 'session_stale', label: t('app.notification.channels.healthSessionStale'), type: 'warning' }
-  }
-  if (ch.last_test_ok === false) return { state: 'test_failed', label: t('app.notification.channels.healthTestFailed'), type: 'danger' }
-  if (!ch.last_test_at) return { state: 'unverified', label: t('app.notification.channels.healthUnverified'), type: 'info' }
-  return { state: 'ready', label: t('app.notification.channels.healthReady'), type: 'success' }
 }
+const channelHealth = (ch: NotificationChannel): HealthTag => healthTagOf(channelHealthState(ch))
 const channelHealthTip = (ch: NotificationChannel): string => {
   const verified = ch.last_test_at ? formatDate(ch.last_test_at) : t('app.notification.channels.healthNeverVerified')
   return t('app.notification.channels.healthTooltip', { state: channelHealth(ch).label, time: verified })
@@ -408,6 +407,9 @@ const canSave = computed(() => {
   if ((typ === 'qq' || typ === 'wx_clawbot') && !editTarget.value) {
     return bindPhase.value === 'confirmed' && drawerForm.value.targetValue.trim() !== ''
   }
+  // 编辑脱敏目标：输入框置空是预期形态——未重新输入也允许保存（只改名称/样式），
+  // 保存体不提交 target（见 channelEditPayload）。
+  if (editTarget.value?.target_masked) return true
   return drawerForm.value.targetValue.trim() !== ''
 })
 
@@ -437,6 +439,7 @@ const targetLabel = (typ: NotificationChannelType): string => {
   return map[typ] ?? 'Target'
 }
 const targetPlaceholder = (typ: NotificationChannelType): string => {
+  if (editTarget.value?.target_masked) return t('app.notification.channels.targetMaskedPlaceholder')
   const map: Record<string, string> = { webhook: t('app.notification.channels.targetWebhookPlaceholder'), email: t('app.notification.channels.targetEmailPlaceholder') }
   return map[typ] ?? ''
 }
@@ -456,10 +459,15 @@ const saveDrawer = async (): Promise<void> => {
     const key = { webhook: 'url', email: 'email', qq: 'openid', wx_clawbot: 'receiver' }[drawerForm.value.type] ?? 'target'
     const target = JSON.stringify({ [key]: drawerForm.value.targetValue.trim() })
     if (editing) {
-      // 编辑：名称/目标/样式一次提交（样式全量覆盖=所见即所存）
+      // 编辑：名称/样式一次提交（样式全量覆盖=所见即所存）；target 由脱敏态
+      // 决定——脱敏且未重新输入=省略键，防止脱敏串回写覆盖真实目标。
       await request.put(`/notification/channels/${editing.id}`, {
-        name: drawerForm.value.name.trim(),
-        target,
+        ...channelEditPayload({
+          name: drawerForm.value.name.trim(),
+          targetValue: drawerForm.value.targetValue,
+          type: drawerForm.value.type,
+          targetMasked: editing.target_masked === true,
+        }),
         style_config: buildStyleConfig(),
       })
       mfaAwareSuccess(t('app.notification.channels.updateSuccess'))
@@ -801,7 +809,9 @@ const openCreate = (): void => {
 
 const openEdit = (ch: NotificationChannel): void => {
   editTarget.value = ch
-  drawerForm.value = { type: ch.type, name: ch.name, targetValue: parseTargetValue(ch) }
+  // 脱敏 target 不回填（置空 + 占位提示）：脱敏串不是合法 target JSON，回填后
+  // 保存未修改会把脱敏串当新目标覆盖真实接收者。
+  drawerForm.value = { type: ch.type, name: ch.name, targetValue: ch.target_masked ? '' : parseTargetValue(ch) }
   if (ch.type === 'wx_clawbot') void checkWxLoggedIn()
   // 回填既有样式（style_config JSON → 表单；缺省键=默认形态；未知键进
   // styleExtras 原样带回，保存不得抹掉）

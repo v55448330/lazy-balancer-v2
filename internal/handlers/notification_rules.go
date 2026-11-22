@@ -62,25 +62,47 @@ type RuleChannel struct {
 }
 
 // sanitizeRuleChannelIDs 规则保存时的通道就绪清洗（2026-11-22 用户裁定）：
-// 剔除已停用/不存在的通道与「微信会话未就绪」（会话待刷新）的通道——
-// 失效微信通道自动取消选择，不再允许发送；重新绑定就绪后用户可再选。
-// 返回保序子集；显式空数组语义由调用方保留（'[]' 不经过此处）。
+// 剔除已停用/不存在的通道、「已知测试失败」（last_test_at 非空且
+// last_test_ok=0——从未测试保留，未测≠失败）与「微信会话未就绪」（会话
+// 待刷新）的通道——失效通道自动取消选择，不再允许发送；重新绑定/测试通过
+// 后用户可再选。返回保序子集；显式空数组语义由调用方保留（'[]' 不经过此处）。
 func sanitizeRuleChannelIDs(database interface{ QueryRow(string, ...any) *sql.Row }, userID int64, ids []int64) []int64 {
 	if len(ids) == 0 {
 		return ids
 	}
 	out := make([]int64, 0, len(ids))
 	for _, id := range ids {
-		var typ, target string
-		var enabled bool
-		err := database.QueryRow(`SELECT type, COALESCE(target,''), COALESCE(enabled,1) FROM notification_channels WHERE id=? AND user_id=?`, id, userID).Scan(&typ, &target, &enabled)
-		if err != nil || !enabled {
+		var typ, target, lastTestAt string
+		var enabled, testOK int
+		err := database.QueryRow(`SELECT type, COALESCE(target,''), COALESCE(enabled,1),
+			COALESCE(last_test_at,''), COALESCE(last_test_ok,0)
+			FROM notification_channels WHERE id=? AND user_id=?`, id, userID).Scan(&typ, &target, &enabled, &lastTestAt, &testOK)
+		if err != nil || enabled == 0 {
+			continue
+		}
+		if lastTestAt != "" && testOK == 0 {
 			continue
 		}
 		if typ == "wx_clawbot" && !notify.WxSessionReady(target) {
 			continue
 		}
 		out = append(out, id)
+	}
+	return out
+}
+
+// ruleChannelsForIDs 按显式通道选择过滤启用通道（保 allChannels 顺序）。
+// 返回非 nil 切片：显式空选序列化为 []（=显式不投递），不得回落全部通道。
+func ruleChannelsForIDs(all []RuleChannel, ids []int64) []RuleChannel {
+	idSet := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	out := make([]RuleChannel, 0, len(ids))
+	for _, ch := range all {
+		if idSet[ch.ID] {
+			out = append(out, ch)
+		}
 	}
 	return out
 }
@@ -222,15 +244,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		// 接收通道三态：nil=全部启用通道（缺省）；[]=不投递（显式空选）；
 		// 非空=仅选定通道。
 		if rule.ChannelIDs != nil {
-			idSet := map[int64]bool{}
-			for _, id := range rule.ChannelIDs {
-				idSet[id] = true
-			}
-			for _, ch := range allChannels {
-				if idSet[ch.ID] {
-					rule.Channels = append(rule.Channels, ch)
-				}
-			}
+			rule.Channels = ruleChannelsForIDs(allChannels, rule.ChannelIDs)
 		} else {
 			rule.Channels = allChannels
 		}
@@ -266,6 +280,12 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 				return
 			}
 		}
+		// 接收通道三态与事件规则同口径：nil=全部启用通道（缺省）；
+		// []=不投递；非空=仅选定通道（真实投递面由 daemon 按 channel_ids 消费）。
+		dailyChannels := allChannels
+		if chIDs != nil {
+			dailyChannels = ruleChannelsForIDs(allChannels, chIDs)
+		}
 		rules = append(rules, NotificationRule{
 			ID:         "daily",
 			Trigger:    "daily",
@@ -273,7 +293,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 			SendTime:   dailyCfg.SendTime,
 			Items:      dailyCfg.Items,
 			Formats:    dailyCfg.Formats,
-			Channels:   allChannels,
+			Channels:   dailyChannels,
 			ChannelIDs: chIDs,
 			UpdatedAt:  dailyAt,
 			UpdatedBy:  dailyBy,
@@ -400,6 +420,20 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		if req.Formats != nil {
 			cfg.Formats = req.Formats
 		}
+		// 通道选择先过就绪清洗再落任何写：400 必须整请求拒绝（不得先写
+		// daily 配置再报通道错）。非空选择清洗为空=400；显式空数组=不投递，合法。
+		var selectedChannelIDs []int64
+		if req.ChannelIDs != nil {
+			ids := *req.ChannelIDs
+			if len(ids) > 0 {
+				ids = sanitizeRuleChannelIDs(db.DB, uid, ids)
+				if len(ids) == 0 {
+					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, msgNotifyChannelSelectionUnavailable), MessageKey: msgNotifyChannelSelectionUnavailable})
+					return
+				}
+			}
+			selectedChannelIDs = ids
+		}
 		if err := notify.SaveDailyConfig(cfg); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
 			return
@@ -407,7 +441,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		// 日报目标通道落 sys.daily_report 订阅行（deliverOne 消费三态）；
 		// 同时记录更新者/时间（items/send_time 变更亦刷新）。
 		if req.ChannelIDs != nil {
-			b, _ := json.Marshal(*req.ChannelIDs)
+			b, _ := json.Marshal(selectedChannelIDs)
 			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates, enabled, updated_at, updated_by)
 				VALUES (?,?,?,?,?,?,1,datetime('now'),?)
 				ON CONFLICT(user_id, event_type) DO UPDATE SET channel_ids=excluded.channel_ids, enabled=1, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
@@ -509,10 +543,15 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			if req.ChannelIDs != nil {
 				// 显式空数组='[]'=不投递任何通道（用户裁定）；非空=仅选定通道。
 				// 缺省键（nil）才沿用现值；'' 缺省态=全部启用通道（默认订阅）。
-				// 非空选择过就绪清洗：失效微信通道不落库（会话待刷新=发送被派发侧跳过）。
+				// 非空选择过就绪清洗：失效通道不落库（会话待刷新=发送被派发侧跳过）；
+				// 清洗后为空=400（不得静默落 "[]" 变成显式不投递）。
 				ids := *req.ChannelIDs
 				if len(ids) > 0 {
 					ids = sanitizeRuleChannelIDs(tx, uid, ids)
+					if len(ids) == 0 {
+						c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, msgNotifyChannelSelectionUnavailable), MessageKey: msgNotifyChannelSelectionUnavailable})
+						return
+					}
 				}
 				b, _ := json.Marshal(ids)
 				curIDs = string(b)

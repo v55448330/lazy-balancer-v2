@@ -1098,6 +1098,19 @@ func TestRotateAuditLog_retriesPendingDeltaBeforeShifting(t *testing.T) {
 	}
 }
 
+// 单轮摄取入口不导出：包外不存在需要「无取消语义」的消费者，导出包装会
+// 让调用方以为可以不受 ctx 约束（daemon 必须走 securityEventsPollOnce(ctx)
+// 让停机在批次边界收尾）。入口若被重新导出，此守卫响亮失败。
+func TestSecurityEventsPollOnce_remainsUnexported(t *testing.T) {
+	source, err := os.ReadFile("securityevents.go")
+	if err != nil {
+		t.Fatalf("读取 securityevents.go: %v", err)
+	}
+	if strings.Contains(string(source), "func SecurityEventsPollOnce(") {
+		t.Fatal("单轮摄取入口被重新导出：保持 securityEventsPollOnce(ctx) 包内形态")
+	}
+}
+
 func TestSecurityEventsPollOnce_reportsPersistentFailureAndRecovery(t *testing.T) {
 	// Given 可摄取日志与已装配指标库。
 	dataDir := t.TempDir()
@@ -1127,7 +1140,7 @@ func TestSecurityEventsPollOnce_reportsPersistentFailureAndRecovery(t *testing.T
 	// When 指标库暂时不可用导致连续 tick 失败。
 	db.MetricsDB = nil
 	for range securityEventsIngestionFailureThreshold {
-		SecurityEventsPollOnce()
+		securityEventsPollOnce(context.Background())
 	}
 	status := SecurityEventsIngestionHealthSnapshot()
 	if !status.Observed || status.Healthy || status.ConsecutiveFailures != securityEventsIngestionFailureThreshold {
@@ -1139,7 +1152,7 @@ func TestSecurityEventsPollOnce_reportsPersistentFailureAndRecovery(t *testing.T
 
 	// Then 指标库恢复后的成功轮清除连续失败并记录成功时间。
 	db.MetricsDB = metricsDB
-	if got, _ := SecurityEventsPollOnce(); got != 1 {
+	if got, _ := securityEventsPollOnce(context.Background()); got != 1 {
 		t.Fatalf("恢复后摄取=%d, want 1", got)
 	}
 	status = SecurityEventsIngestionHealthSnapshot()
@@ -1172,7 +1185,7 @@ func TestSecurityEventsPollOnce_returnsCountWithoutWritingTaskLog(t *testing.T) 
 	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
 
 	// When：非 ingestion 调用方直接执行一轮摄取。
-	got, _ := SecurityEventsPollOnce()
+	got, _ := securityEventsPollOnce(context.Background())
 
 	// Then：条数交给调用方，函数自身不得越权写 ingestion 任务日志。
 	if got != 1 {
@@ -1209,7 +1222,7 @@ func TestSecurityEventsPollOnce_callsRollupRewindHookForInsertedBatch(t *testing
 	var rewinds []time.Time
 	SetSecurityEventsRollupRewrite(func(minute time.Time, _ []time.Time) { rewinds = append(rewinds, minute) })
 
-	if got, _ := SecurityEventsPollOnce(); got != 1 {
+	if got, _ := securityEventsPollOnce(context.Background()); got != 1 {
 		t.Fatalf("ingested=%d, want 1", got)
 	}
 	if len(rewinds) != 1 {
@@ -1239,7 +1252,7 @@ func TestSecurityEventsPollOnce_callsRollupRewindHookForInsertedBatch(t *testing
 		t.Fatal(err)
 	}
 	resetSecurityEventsPollState(t)
-	if got, _ := SecurityEventsPollOnce(); got != 0 {
+	if got, _ := securityEventsPollOnce(context.Background()); got != 0 {
 		t.Fatalf("replayed poll ingested=%d, want 0", got)
 	}
 	if got := securityEventsIngestCommits.Load() - commitsBefore; got != 1 {
@@ -1308,7 +1321,7 @@ func TestSecurityEventsTick_reportsErrorBeyondScanWindow(t *testing.T) {
 	oldWriter := log.Writer()
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(oldWriter) })
-	SecurityEventsPollOnce()
+	securityEventsPollOnce(context.Background())
 
 	// Then：停摆以 warn 暴露（日志含 "tick failed"），而非静默打转
 	if !strings.Contains(buf.String(), "tick failed") {
@@ -1536,7 +1549,7 @@ func TestSecurityEventsTick_warnRateLimitedPerOffset(t *testing.T) {
 	// When：单轮摄取连续执行 10 次（同一 pollState 尾读器——同偏移反复，旧行为每轮一条 warn）
 	resetSecurityEventsPollState(t)
 	for i := 0; i < 10; i++ { // ≥ 10 轮——同一 pollState 尾读器跨轮复用
-		SecurityEventsPollOnce()
+		securityEventsPollOnce(context.Background())
 	}
 
 	// Then：同一偏移的停摆告警只出现一条（按偏移限流），而非每 tick 刷屏

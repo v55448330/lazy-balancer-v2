@@ -121,7 +121,7 @@ func TestTaskLogf_CertManualPoll_exceptionRoundsOnly(t *testing.T) {
 	}
 
 	// When：全正常轮。Then：零任务日志行（原「共 N 张，无过期无临期」行删除）。
-	CertManualCheckOnce()
+	CertManualCheckOnce(context.Background())
 	if data, err := os.ReadFile(taskengine.TaskLogPath("cert-manual-poll")); err == nil && strings.Contains(string(data), "手动证书到期检查") {
 		t.Fatalf("全正常轮不得写任务日志行: %q", string(data))
 	}
@@ -133,7 +133,7 @@ func TestTaskLogf_CertManualPoll_exceptionRoundsOnly(t *testing.T) {
 	}
 
 	// When：异常轮。Then：恰一行带计数结论。
-	CertManualCheckOnce()
+	CertManualCheckOnce(context.Background())
 	logStr := readTaskLog(t, "cert-manual-poll")
 	if got := strings.Count(logStr, "手动证书到期检查"); got != 1 {
 		t.Fatalf("异常轮结论行=%d, want 1: %q", got, logStr)
@@ -159,7 +159,7 @@ func TestTaskLogf_CertManualPoll_parseFailureCountedInSummary(t *testing.T) {
 	}
 
 	// When：解析失败是行级跳过（非读故障），轮次本身不算失败
-	if err := CertManualCheckOnce(); err != nil {
+	if err := CertManualCheckOnce(context.Background()); err != nil {
 		t.Fatalf("解析失败轮 err=%v, want nil", err)
 	}
 

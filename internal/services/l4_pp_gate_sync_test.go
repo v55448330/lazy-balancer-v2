@@ -45,7 +45,8 @@ func TestL4PPAllowGate_prefixWidthJudgmentsMirroredInModule(t *testing.T) {
 	}
 	modSrc, err := os.ReadFile(caddyl4secPPSource)
 	if err != nil {
-		t.Skipf("caddyl4sec 模块源码缺席（并行实现未落地）: %v", err)
+		// 文件缺失不是「可跳过」：跳过等于让双侧口径守卫静默失效。
+		t.Fatalf("caddyl4sec 模块源码缺席（模块源码路径变更须同步本守卫）: %v", err)
 	}
 
 	pairs := [][2]string{

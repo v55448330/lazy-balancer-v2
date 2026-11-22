@@ -44,5 +44,7 @@ func init() {
 	Register("k_8e353bc9", "测试消息发送失败: %s", "Failed to send the test message: %s")
 	Register("k_4bde3724", "测试消息已发送", "Test message sent")
 	Register("k_1d8f5b94", "未知事件组: %s", "Unknown event group: %s")
+	// 规则保存：非空通道选择经就绪门清洗后为空（全部已停用/未通过测试/微信会话待刷新）。
+	Register("k_6287f2db", "选定的通知通道均不可用（已停用/未通过测试/微信会话待刷新）", "None of the selected notification channels is available (disabled, not passing the test, or the WeChat session needs to be refreshed)")
 	Register("k_53f42807", "无效规则 ID: %s", "Invalid rule ID: %s")
 }

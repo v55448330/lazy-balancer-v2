@@ -697,7 +697,7 @@ const TASK_NAME_KEYS: Record<string, string> = {
 
 // 任务族描述词条映射(后端 description zh;未登记任务族回落原文)
 const taskDesc = (task: { name: string; description?: string }): string => {
-  const k = TASK_NAME_KEYS[task.name]
+  const k = hasOwn(TASK_NAME_KEYS, task.name) ? TASK_NAME_KEYS[task.name] : undefined
   if (k) {
     const key = `common.app.taskDesc.${k}`
     const v = t(key)
@@ -728,7 +728,7 @@ const cadenceText = (cadence?: string): string => {
 }
 
 const taskDisplayName = (name: string): string => {
-  const k = TASK_NAME_KEYS[name]
+  const k = hasOwn(TASK_NAME_KEYS, name) ? TASK_NAME_KEYS[name] : undefined
   if (k) return t(`common.app.taskNames.${k}`)
   const m = name.match(/^ACME 签发 · (.+)$/)
   if (m) return `${t('common.app.taskNames.acmeIssuePrefix')} · ${m[1]}`
@@ -1049,7 +1049,7 @@ const scheduleStoppedTip = (row: TaskInfo) => {
 // 分类显示名映射(后端 category 为 zh 码;徽标/下拉经此翻译)
 const categoryLabel = (c: string): string => {
   const keys: Record<string, string> = { '安全防护': 'security', '证书': 'certs', '备份': 'backup', '集群': 'cluster', '系统': 'system', '通知': 'notifications' }
-  return keys[c] ? t(`app.settings.taskMonitor.categories.${keys[c]}`) : c
+  return hasOwn(keys, c) ? t(`app.settings.taskMonitor.categories.${keys[c]}`) : c
 }
 
 const categoryOrder: Record<string, number> = { '安全防护': 0, '证书': 1, '备份': 2, '集群': 3, '系统': 4, '通知': 5 }

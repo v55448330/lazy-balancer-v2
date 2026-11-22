@@ -35,11 +35,14 @@ const (
 )
 
 type notificationChannelDTO struct {
-	ID            int64  `json:"id"`
-	UserID        int64  `json:"user_id"`
-	Type          string `json:"type"`
-	Name          string `json:"name"`
-	Target        string `json:"target"`
+	ID     int64  `json:"id"`
+	UserID int64  `json:"user_id"`
+	Type   string `json:"type"`
+	Name   string `json:"name"`
+	Target string `json:"target"`
+	// TargetMasked=true 表示 target 已脱敏（非属主视角）：调用方（前端编辑
+	// 抽屉）不得把该展示值回写 target，否则会把掩码串写进真实目标。
+	TargetMasked  bool   `json:"target_masked"`
 	Enabled       bool   `json:"enabled"`
 	LastTestAt    string `json:"last_test_at"`
 	LastTestOK    bool   `json:"last_test_ok"`
@@ -103,6 +106,7 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 		}
 		if r.UserID != uid {
 			r.Target = maskChannelTarget(r.Type, r.Target)
+			r.TargetMasked = true
 		}
 		out = append(out, r)
 	}

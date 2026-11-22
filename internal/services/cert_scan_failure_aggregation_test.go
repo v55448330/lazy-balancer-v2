@@ -62,7 +62,7 @@ func TestRunManualCertExpiryCheck_scanFailureInSummaryAndError(t *testing.T) {
 	db.DB = fake
 	t.Cleanup(func() { db.DB = realDB; _ = fake.Close() })
 
-	err := runManualCertExpiryCheck(newManualCertExpiryAlertGate())
+	err := runManualCertExpiryCheck(context.Background(), newManualCertExpiryAlertGate())
 
 	if err == nil {
 		t.Fatal("单行 Scan 失败必须上抛（本轮结果不可信）")
@@ -87,7 +87,7 @@ func TestRunManualCertExpiryCheck_healthyRowsStayClean(t *testing.T) {
 	db.DB = fake
 	t.Cleanup(func() { db.DB = realDB; _ = fake.Close() })
 
-	if err := runManualCertExpiryCheck(newManualCertExpiryAlertGate()); err != nil {
+	if err := runManualCertExpiryCheck(context.Background(), newManualCertExpiryAlertGate()); err != nil {
 		t.Fatalf("err=%v, want nil（空结果集不是失败轮）", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -127,69 +128,125 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 	taskLogWarn(ctx, "delivery", "投递 %d 失败（user=%d event=%s）: %s", id, userID, msg.EventType, strings.Join(errs, "; "))
 }
 
+// sendToChannelConcurrency 逐通道发送的有界并发度：单条投递行的通道数通常
+// 个位数，串行会让一个慢通道（SMTP 握手/远端超时）拖住整批；上限 3 防止
+// 突发批量把出站连接打爆。
+const sendToChannelConcurrency = 3
+
 // sendToChannels 逐通道渲染+发送（失败重试 1 次）+结果落行。deliverOne 与
 // 规则测试共用：模板优先级链=事件×通道模板 > 事件级模板 > 通道样式 > 默认。
 // deliveryID=0 时不落结果行（测试发送不污染投递统计）。
+// 并发：≤sendToChannelConcurrency 个通道并行发送（慢通道不阻塞其余通道），
+// 结果按通道序收集后统一落行——落库仍在单 goroutine，保持既有语义与顺序。
 // wxSessionReadyForDelivery 微信会话就绪判定（测试可覆写）。会话待刷新
 // （iLink 上下文过期/从未建立）时不再尝试发送——见 sendToChannels 守卫。
 var wxSessionReadyForDelivery = WxSessionReady
 
-func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []deliveryTarget, channelTpls map[int64]string, msg Message) ([]string, bool) {
-	var errs []string
-	sentAny := false
-	for _, ch := range channels {
-		// 通道就绪门（2026-11-22 用户裁定）：微信会话失效后不再允许发送，
-		// 跳过并留可见原因（投递记录可见），直到重新绑定且会话就绪。
-		if ch.Type == "wx_clawbot" && !wxSessionReadyForDelivery(ch.Target) {
-			reason := "微信会话未就绪（会话待刷新，已跳过发送）；请让该微信先给机器人发消息重建会话，或重新扫码绑定"
-			errs = append(errs, ch.Type+": "+reason)
-			if deliveryID > 0 {
-				recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "failed", reason, 0)
-			}
-			continue
+type channelSendResult struct {
+	errMsg string // 非空=该通道失败（含跳过原因）
+	sent   bool
+	durMs  int64
+}
+
+// wxChannelCredentialsConfigured 微信通道凭据是否齐备（receiver 与 bot 键/
+// 登录令牌都来自 target 或全局凭据）。未配置与会话过期要给出不同的跳过文案。
+func wxChannelCredentialsConfigured(targetJSON string) bool {
+	var cfg struct {
+		Receiver string `json:"receiver"`
+	}
+	_ = json.Unmarshal([]byte(targetJSON), &cfg)
+	if strings.TrimSpace(cfg.Receiver) == "" {
+		return false
+	}
+	return wxTargetBotKey(targetJSON) != ""
+}
+
+// sendOneChannel 单通道发送（含重试 1 次与就绪门），不落库。
+func sendOneChannel(ctx context.Context, ch deliveryTarget, channelTpl, eventTpl string, msg Message) channelSendResult {
+	// 通道就绪门（2026-11-22 用户裁定）：微信会话失效后不再允许发送，
+	// 跳过并留可见原因（投递记录可见），直到重新绑定且会话就绪。未配置
+	// 凭据与会话过期是两种用户动作，文案必须区分。
+	if ch.Type == "wx_clawbot" && !wxSessionReadyForDelivery(ch.Target) {
+		if !wxChannelCredentialsConfigured(ch.Target) {
+			return channelSendResult{errMsg: "微信凭据未配置（receiver/登录令牌为空）；请重新扫码登录并在通道配置中重新绑定"}
 		}
-		chMsg := msg
+		return channelSendResult{errMsg: "微信会话未就绪（会话待刷新，已跳过发送）；请让该微信先给机器人发消息重建会话，或重新扫码绑定"}
+	}
+	chMsg := msg
+	if msg.EventType != EvtDailyReport {
+		// 通道名后缀只服务事件消息（同事件多通道时区分来源）；日报标题固定
+		// 「每日日报」，追加通道名对用户无意义。
 		chName := ch.Name
 		if chName == "" {
 			chName = ch.Type
 		}
 		chMsg.Title = msg.Title + "（" + chName + "）"
-		eventTpl := channelTpls[ch.ChannelID]
-		if eventTpl == "" {
-			eventTpl = subscriptionTemplateFor(userID, msg.EventType)
-		}
-		if eventTpl != "" && msg.EventType != EvtDailyReport {
-			chMsg.Body = renderStyleTemplate(eventTpl, msg, time.Now())
-			// 全量布局已渲染：通道样式模板不得再套（双渲染根因修复）。
-			chMsg.TemplateApplied = true
-		}
-		// 传 chMsg 保留事件模板渲染结果（非日报原样透传 chMsg.Body）；
-		// 此前传 msg 会把事件模板渲染覆盖回目录原始正文（事件模板不生效根因）。
-		// ContentFormat=实际渲染格式：邮件通道据此决定 Content-Type（NOTIF153-02）。
-		chStyle := ParseChannelStyle(ch.StyleConfig)
-		// 日报渲染模式显式开关（2026-11-22）：模块拼装=该通道正文模板保留
-		// 但不生效（dailyTemplatesSuppressed），走 items 分节渲染。
-		if msg.EventType == EvtDailyReport && chStyle.DailyModuleModeEffective() {
-			chMsg.DailyModuleMode = true
-		}
-		chMsg.Body, chMsg.ContentFormat = renderDailyForChannelFormat(chMsg, ch.Type, chStyle.DailyFormat)
-		styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
-		sendStart := time.Now()
-		sendErr := sendToChannel(ctx, ch.Type, styledTarget, chMsg)
-		if sendErr != nil {
-			sendErr = sendToChannel(ctx, ch.Type, styledTarget, chMsg)
-		}
-		durMs := time.Since(sendStart).Milliseconds()
-		if sendErr != nil {
-			errs = append(errs, ch.Type+": "+sendErr.Error())
+	}
+	if channelTpl == "" {
+		channelTpl = eventTpl
+	}
+	if channelTpl != "" && msg.EventType != EvtDailyReport {
+		chMsg.Body = renderStyleTemplate(channelTpl, msg, time.Now())
+		// 全量布局已渲染：通道样式模板不得再套（双渲染根因修复）。
+		chMsg.TemplateApplied = true
+	}
+	// 传 chMsg 保留事件模板渲染结果（非日报原样透传 chMsg.Body）；
+	// 此前传 msg 会把事件模板渲染覆盖回目录原始正文（事件模板不生效根因）。
+	// ContentFormat=实际渲染格式：邮件通道据此决定 Content-Type。
+	chStyle := ParseChannelStyle(ch.StyleConfig)
+	// 日报渲染模式显式开关（2026-11-22）：模块拼装=该通道正文模板保留
+	// 但不生效（dailyTemplatesSuppressed），走 items 分节渲染。
+	if msg.EventType == EvtDailyReport && chStyle.DailyModuleModeEffective() {
+		chMsg.DailyModuleMode = true
+	}
+	chMsg.Body, chMsg.ContentFormat = renderDailyForChannelFormat(chMsg, ch.Type, chStyle.DailyFormat)
+	styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
+	sendStart := time.Now()
+	sendErr := sendToChannel(ctx, ch.Type, styledTarget, chMsg)
+	if sendErr != nil {
+		sendErr = sendToChannel(ctx, ch.Type, styledTarget, chMsg)
+	}
+	durMs := time.Since(sendStart).Milliseconds()
+	if sendErr != nil {
+		return channelSendResult{errMsg: sendErr.Error(), durMs: durMs}
+	}
+	return channelSendResult{sent: true, durMs: durMs}
+}
+
+func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []deliveryTarget, channelTpls map[int64]string, msg Message) ([]string, bool) {
+	// 事件级模板（同一 user×event 对所有通道相同）：提升到循环外，避免逐通道
+	// 重复查库。
+	eventTpl := subscriptionTemplateFor(userID, msg.EventType)
+
+	results := make([]channelSendResult, len(channels))
+	sem := make(chan struct{}, sendToChannelConcurrency)
+	var wg sync.WaitGroup
+	for i := range channels {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i] = sendOneChannel(ctx, channels[i], channelTpls[channels[i].ChannelID], eventTpl, msg)
+		}(i)
+	}
+	wg.Wait()
+
+	var errs []string
+	sentAny := false
+	for i, ch := range channels {
+		// 落库在收集阶段串行完成：SQLite 单写者，避免并发写锁竞争。
+		r := results[i]
+		if r.errMsg != "" {
+			errs = append(errs, ch.Type+": "+r.errMsg)
 			if deliveryID > 0 {
-				recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "failed", sendErr.Error(), durMs)
+				recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "failed", r.errMsg, r.durMs)
 			}
 			continue
 		}
 		sentAny = true
 		if deliveryID > 0 {
-			recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "sent", "", durMs)
+			recordChannelResult(ctx, deliveryID, userID, ch, msg.EventType, "sent", "", r.durMs)
 		}
 	}
 	return errs, sentAny
@@ -257,11 +314,17 @@ func RecordChannelTestDelivery(userID, channelID int64, typ, name string, ok boo
 		status = "failed"
 	}
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	// sent_at 只在成功时写（与 markDelivery 同口径）：失败测试行不得带
+	// 「已发送时刻」，否则投递记录把失败通道显示成已发送。
+	var sentAt any
+	if ok {
+		sentAt = now
+	}
 	res, err := db.DB.Exec(`INSERT INTO notification_deliveries
 		(user_id, event_type, level, title, body, status, attempts, is_test, created_at, sent_at)
 		VALUES (?,?,?,?,?,?,1,1,?,?)`,
 		userID, "channel.test", "info", "【测试】通道「"+name+"」",
-		"通道连通性测试消息", status, now, now)
+		"通道连通性测试消息", status, now, sentAt)
 	if err != nil {
 		return err
 	}

@@ -9,8 +9,10 @@ const (
 	msgDailySendTimeInvalid  = "k_f9986707"
 	msgDailyItemUnknown      = "k_d1a39d14"
 	msgDailyTriggerForbidden = "k_4b8e3591"
-	msgQQTaskCreateFailed    = "k_413b63ec"
-	msgQQPollFailed          = "k_27469cbd"
-	msgWxQRStartFailed       = "k_94d8f73b"
-	msgWxQRPollFailed        = "k_403c12fe"
+	// 规则通道选择被就绪门清洗为空（非空选择全部失效）——400 固定文案。
+	msgNotifyChannelSelectionUnavailable = "k_6287f2db"
+	msgQQTaskCreateFailed                = "k_413b63ec"
+	msgQQPollFailed                      = "k_27469cbd"
+	msgWxQRStartFailed                   = "k_94d8f73b"
+	msgWxQRPollFailed                    = "k_403c12fe"
 )

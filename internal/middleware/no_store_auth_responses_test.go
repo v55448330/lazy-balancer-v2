@@ -99,6 +99,9 @@ func TestAuthenticationResponsesAreNotStored(t *testing.T) {
 		{name: "cluster register token", method: http.MethodPost, path: "/api/v1/cluster/register-tokens", body: `{}`, withToken: true},
 		{name: "cluster login ticket", method: http.MethodPost, path: "/api/v1/cluster/nodes/999999/login-ticket", registration: "/api/v1/cluster/nodes/:id/login-ticket", body: `{}`, withToken: true},
 		{name: "cluster registration status", method: http.MethodGet, path: "/api/v1/cluster/register/999999/status", registration: "/api/v1/cluster/register/:id/status", withToken: true},
+		// 一次性注册成功响应体内含 registration_secret 明文：不挂 no-store 会
+		// 被浏览器回退缓存/中间反代留存。
+		{name: "cluster register", method: http.MethodPost, path: "/api/v1/cluster/register", body: `{}`},
 		{name: "cluster sync snapshot", method: http.MethodGet, path: "/api/v1/cluster/sync/snapshot", withToken: true},
 		{name: "logout", method: http.MethodPost, path: "/api/v1/auth/logout", withToken: true, wantStatus: []int{http.StatusOK}},
 	}

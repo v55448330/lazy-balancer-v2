@@ -602,7 +602,7 @@
           </el-table-column>
           <el-table-column :label="t('common.app.views.secRules.lib.colAutoUpdate')" width="90" align="center">
             <template #default="{ row }">
-              <el-switch v-if="row.kind === 'v4'" :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode" @change="(v: string | number | boolean) => toggleLibAutoUpdate({ key: 'ip2region', name: t('common.app.views.secRules.lib.ipLibrary') } as LibRow, v === true)" />
+              <el-switch v-if="row.kind === 'v4'" :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode" @change="(v: string | number | boolean) => toggleLibAutoUpdate(ipLibraryLibRow, v === true)" />
               <el-switch v-else :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode || savingIP2RegionV6" :loading="savingIP2RegionV6" @change="(v: string | number | boolean) => toggleIP2RegionV6(v === true)" />
             </template>
           </el-table-column>
@@ -786,7 +786,7 @@ import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securi
 // 名单分类显示映射:后端/存储为 zh 分类码(有限集合),en 用户经词条显示;
 // 未登记值(自定义名)回落原文。筛选/表单 value 保持 zh 原样不传译值。
 // ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源
-import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources } from '@/utils/securityLibraries'
+import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, restoreLibRow, summarizeLibrarySources } from '@/utils/securityLibraries'
 import { updaterName } from '@/utils/updaterName'
 import { hasOwn } from '@/utils/hasOwn'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
@@ -1015,6 +1015,10 @@ const libRows = computed<LibRow[]>(() => {
   return rows
 })
 
+// IP 库 v4 源开关=全局自动更新开关的别位入口：必须传完整 LibRow（含
+// autoUpdate）——合成半行 `{key,name}` 在失败回滚时会把 undefined 写进展示态。
+const ipLibraryLibRow = computed<LibRow>(() => libRows.value.find(r => r.key === 'ip2region')!)
+
 // 卡头库健康标签组（2026-09-24 用户裁定）：逐库彩色标签，异常 danger/
 // 正常 success；缺库（后端渲染层已停用全部安全规则，见
 // SecurityLibrariesAvailable）时模板追加红色警示后缀。
@@ -1064,8 +1068,9 @@ const toggleLibAutoUpdate = async (row: LibRow, val: boolean): Promise<void> => 
     await applyLibAutoUpdate(row.key, val)
     mfaAwareSuccess(t('common.app.views.secRules.msgs.updated'))
   } catch {
-    // 失败回滚显示值（服务端为准；各库 fetch 亦会回填）
-    setLibAutoUpdateShown(row.key, previous)
+    // 失败回滚显示值（完整行取原值；半行/缺列回落 false，不得写 undefined）
+    const restored = restoreLibRow(row, previous)
+    setLibAutoUpdateShown(restored.key, restored.autoUpdate)
   } finally {
     autoUpdateSaving.value.delete(row.key)
   }
@@ -1386,7 +1391,8 @@ const applyIpListQuery = (): void => {
   if (hits === 0) {
     ElMessage.warning(t('common.app.views.secRules.msgs.searchNotFound', { mode: label }))
   } else {
-    mfaAwareSuccess(t('common.app.views.secRules.msgs.searchHits', { mode: label, hits }))
+    // 查询是只读操作：不走 MFA 宽限提示（mfaAwareSuccess 的宽限前缀只属于写操作）。
+    ElMessage.success(t('common.app.views.secRules.msgs.searchHits', { mode: label, hits }))
   }
 }
 
@@ -1412,6 +1418,8 @@ const addIpListEntry = (): void => {
 
 //（同 useClampedPagination 的 maxPage 夹紧口径，entries 切片另有共享数组注释见上）
 const removeIpListEntry = (index: number): void => {
+  // 过滤态下分页映射可能缺失（$index 越界传 -1）：splice(-1) 会误删末条。
+  if (index < 0) return
   ipListForm.value.entries.splice(index, 1)
   const maxPage = Math.max(1, Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize))
   if (ipListEntryPage.value > maxPage) ipListEntryPage.value = maxPage

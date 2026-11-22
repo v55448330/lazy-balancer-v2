@@ -57,7 +57,13 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	}
 	body := msg.Body
 	if cfg.BodyTemplate != "" && !msg.TemplateApplied && !msg.dailyTemplatesSuppressed() {
-		body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
+		// HTML 模板走转义渲染（占位符值 HTML 转义，模板字面量保持声明形态）：
+		// 事件正文/日报变量来自外部输入，原样拼进 HTML 即注入面。
+		if cfg.BodyFormat == "html" {
+			body = renderStyleTemplateHTML(cfg.BodyTemplate, msg, ts)
+		} else {
+			body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
+		}
 	}
 	tlsEnabled, insecure := smtpTLSOptions()
 	htmlBody := emailHTMLBody(cfg.BodyTemplate, cfg.BodyFormat, msg)

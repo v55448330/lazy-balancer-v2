@@ -49,7 +49,7 @@ func TestRunManualCertExpiryCheck_taskLogSummaryDeduped(t *testing.T) {
 	}
 	gate := newManualCertExpiryAlertGate()
 	for round := range 2 {
-		if err := runManualCertExpiryCheck(gate); err != nil {
+		if err := runManualCertExpiryCheck(context.Background(), gate); err != nil {
 			t.Fatalf("round %d: %v", round, err)
 		}
 	}
@@ -103,7 +103,7 @@ func TestBackfillIssuedCertExpiry_fillsMissingExpiry(t *testing.T) {
 // runManualCertExpiryCheck）：保留实例方法形态，让用例能断言实例的
 // expiryAlertGate 参与去重。生产代码不得调用。
 func (s *CertificateService) checkManualCertExpiration() error {
-	return runManualCertExpiryCheck(s.expiryAlertGate)
+	return runManualCertExpiryCheck(context.Background(), s.expiryAlertGate)
 }
 
 // Given 一次性部署重试正常执行完毕。

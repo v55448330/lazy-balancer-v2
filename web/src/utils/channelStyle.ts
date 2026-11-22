@@ -94,12 +94,21 @@ export type DailyRenderMode = 'modules' | 'template'
 export const channelBodyTplKey = (typ: string): string =>
   typ === 'webhook' ? 'payload_template' : typ === 'email' ? 'body_template' : 'content_template'
 
-export const effectiveDailyMode = (raw: string | undefined, typ: string): DailyRenderMode => {
+// 三类正文模板键（后端 ChannelStyle 的 payload/body/content）——日报模式推断
+// 不按通道类型挑键：任一键非空即模板模式。
+const BODY_TEMPLATE_KEYS: readonly string[] = ['payload_template', 'body_template', 'content_template']
+
+export const effectiveDailyMode = (raw: string | undefined, _typ: string): DailyRenderMode => {
   const style = parseStyleConfig(raw)
   const explicit = style.daily_mode
   if (explicit === 'modules' || explicit === 'template') return explicit
-  const tpl = style[channelBodyTplKey(typ)]
-  return typeof tpl === 'string' && tpl.trim() !== '' ? 'template' : 'modules'
+  // 与后端 DailyModuleModeEffective 同口径：不 trim——空白模板也算已配置
+  // （后端判据 Key == ""；前端曾按类型单键 + trim，跨类型/空白形态判定分叉）。
+  const hasBodyTpl = BODY_TEMPLATE_KEYS.some((k) => {
+    const tpl = style[k]
+    return typeof tpl === 'string' && tpl !== ''
+  })
+  return hasBodyTpl ? 'template' : 'modules'
 }
 
 const canonical = (v: unknown): unknown => {
