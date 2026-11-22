@@ -273,7 +273,7 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.doesNotMatch(nc, /savingTplChannelId/, '单 tab 保存态已退役')
   assert.match(nc, /templateInactiveHint/, '内置模板模式提示词必须与开关一致')
   assert.match(nc, /modeModulesPreviewHint/, '内置模板预览必须带只读口径说明（编辑弹框内）')
-  assert.match(nc, /const format = tplActiveFormat\.value \|\| 'markdown'/, '内置模板预览格式必须取当前通道实际格式（webhook=json/email=html）')
+  assert.match(nc, /const sel = tplFormats\.value\[tplChannelTab\.value\]\n\s+if \(sel\) return sel/, '格式=弹框格式行当前选择（预览与格式行一致）')
   assert.match(nc, /const moduleLabel = \(mod: \{ id: string; label: string \}\)/, '模块名必须经词条映射（缺键回落后端 label）')
   assert.match(nc, /:readonly="tplMode === 'daily' && tplDailyMode === 'modules'"/, '模块拼装模式编辑器必须只读')
   assert.match(nc, /modeModulesPreviewHint/, '模块拼装预览提示必须在位')

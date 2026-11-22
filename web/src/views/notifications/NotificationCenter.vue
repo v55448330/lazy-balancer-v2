@@ -497,7 +497,10 @@ const allChannels = ref<RuleChannel[]>([])
 const channelOptions = computed<RuleChannel[]>(() => {
   if (!allChannels.value.length) return userChannels.value
   const live = new Map(userChannels.value.map(c => [c.id, c]))
-  return allChannels.value.map(c => ({ ...c, last_test_ok: live.get(c.id)?.last_test_ok ?? c.last_test_ok }))
+  return allChannels.value.map(c => {
+    const l = live.get(c.id)
+    return { ...c, last_test_ok: l?.last_test_ok ?? c.last_test_ok, session_ready: l?.session_ready ?? c.session_ready }
+  })
 })
 const hasDisabledChannels = computed(() => channelOptions.value.some(c => c.enabled === false))
 const channelPickTitle = (ch: RuleChannel): string | undefined =>
@@ -738,11 +741,15 @@ const tplActiveFormat = computed<string>(() => {
   const ch = tplActiveChannel.value
   if (!ch) return 'text'
   if (isBotChannel(ch.type)) return fixedDailyFormat(ch.type)
+  // 格式=弹框格式行的**当前选择**（rule=编辑草稿；daily=持久化格式，切换即存），
+  // 不按通道类型猜——预览/高亮与格式行所见一致（2026-11-22 用户纠偏）。
+  const sel = tplFormats.value[tplChannelTab.value]
+  if (sel) return sel
   if (tplMode.value === 'daily') {
     const f = dailyRule.value ? dailyFormatOf(dailyRule.value, ch.type) : 'auto'
     return f === 'auto' ? autoDailyFormat(ch.type) : f
   }
-  return tplFormats.value[tplChannelTab.value] || (ch.type === 'webhook' ? 'json' : 'html')
+  return ch.type === 'webhook' ? 'json' : 'html'
 })
 const setTplFormat = (v: string): void => { tplFormats.value = { ...tplFormats.value, [tplChannelTab.value]: v } }
 // 版式统一：rule/daily 共用同一格式行（机器人协议固定 tag；webhook/email 同款下拉），
@@ -937,7 +944,7 @@ const fetchChannels = async (): Promise<void> => {
     const res = await request.get<NotificationChannelsResponse>(url, { silent: true })
     const list = res.data?.channels ?? []
     dailyFullChannels.value = list
-    allChannels.value = list.map(c => ({ id: c.id, type: c.type, name: c.name, enabled: c.enabled, last_test_ok: c.last_test_ok }))
+    allChannels.value = list.map(c => ({ id: c.id, type: c.type, name: c.name, enabled: c.enabled, last_test_ok: c.last_test_ok, session_ready: c.session_ready }))
   } catch { /* 通道 DTO 不可用时退化为 rules 端点的启用通道集 */ }
 }
 

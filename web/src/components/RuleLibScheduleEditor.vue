@@ -106,19 +106,13 @@ const emitSave = () => {
 .schedule-editor__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .schedule-editor__title { font-size: 13px; font-weight: 600; color: #1f2937; }
 .schedule-editor__hint { font-size: 12px; color: #909399; }
-/* 星期多选随选中项换行增高（7 天全选=两行）：时间选择框必须拉伸到同一行高
- * 并内部垂直居中，否则停在 32px 与左侧错位（2026-11-22 用户裁定）。保存按钮
- * 保持自身高度、只在行内垂直居中，不被拉伸变形。 */
-.schedule-editor__controls { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+/* 控件行=垂直居中对齐（2026-11-22 用户三轮纠偏终版）：星期多选随选中项
+ * 换行增高（7 天全选=两行 92px），时间框/保存按钮保持自身高度、在行内
+ * 垂直居中——此前两版误用 stretch 拉伸（Element 的 .el-date-editor 显式
+ * height:32px 压过 align-self:stretch，时间框恒 32 顶部悬挂=用户截图形态）。 */
+.schedule-editor__controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .schedule-editor__days { flex: 1 1 220px; min-width: 180px; }
-/* 两侧 wrapper 都必须拉伸到行高：此前只拉了时间框（el-input__wrapper
- * height:100%），星期多选的 el-select__wrapper 仍是最小 32px——肉眼即
- * 「时间框更高、左侧更矮」的错位（2026-11-22 用户两轮截图纠偏）。
- * height:auto 显式覆盖 el-input 固定 height，否则 stretch 对显式高度无效。 */
-.schedule-editor__time { width: 110px; align-self: stretch; height: auto; }
-.schedule-editor__days :deep(.el-select__wrapper),
-.schedule-editor__time :deep(.el-input__wrapper) { height: 100%; min-height: 32px; align-items: center; }
-.schedule-editor__controls > .el-button { align-self: center; }
+.schedule-editor__time { width: 110px; }
 .schedule-editor__tip { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.6; }
 .schedule-editor__tip--error { color: var(--el-color-danger); }
 </style>
