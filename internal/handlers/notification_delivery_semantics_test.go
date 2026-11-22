@@ -333,3 +333,28 @@ func TestNotificationTestEndpointsRejectSlave(t *testing.T) {
 		t.Fatalf("主节点规则测试 status=%d body=%v, want 200", status, out)
 	}
 }
+
+func TestNotificationDeliveries_channelsCollapseToLatestPerChannel(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	r := newNotificationSemanticsRouter(h, 7, "user")
+	id := seedSemanticsDelivery(t, 7, "partial", 0)
+	// 同一通道先失败后成功（重试/重发追加行）：列表必须只回最新一行。
+	seedChannelResult(t, id, 501, "邮件A", "email", "failed")
+	seedChannelResult(t, id, 501, "邮件A", "email", "sent")
+
+	status, out := doNotifyRequest(t, r, http.MethodGet, "/notification/deliveries", "")
+	if status != http.StatusOK {
+		t.Fatalf("list status=%d body=%v", status, out)
+	}
+	items := out["data"].(map[string]any)["deliveries"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("deliveries=%d, want 1", len(items))
+	}
+	chs := items[0].(map[string]any)["channels"].([]any)
+	if len(chs) != 1 {
+		t.Fatalf("channels=%d（历史结果行混入）, want 1（每通道最新）", len(chs))
+	}
+	if got := chs[0].(map[string]any)["status"]; got != "sent" {
+		t.Fatalf("channel status=%v, want sent（最新行）", got)
+	}
+}

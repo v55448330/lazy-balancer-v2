@@ -326,6 +326,7 @@ export default {
         rebindIncompleteWarn: '重新绑定未完成：旧机器人不可用，通道保持停用，请稍后重试',
         rebindIncompleteTag: '重绑未完成',
         disabledTag: '已停用',
+        betaBadge: 'BETA',
         healthDisabled: '已停用',
         healthLinkDown: '连接离线',
         healthSessionStale: '会话待刷新',

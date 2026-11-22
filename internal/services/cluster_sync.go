@@ -1848,14 +1848,13 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
-	// 指纹校验的前提是 canonical_payload 非空：verifySnapshotSignature 已在
-	// 上方对「无 canonical_payload」返回 SignatureInvalid（v1/v2 扁平路径已移除）
-	// ——故此处起 CanonicalPayload 恒非空，无需再判其长度。
-	if snapshot.Fingerprint == "" {
-		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容缺少指纹"))
-	}
-	if err := verifySnapshotFingerprint(snapshot); err != nil {
-		return models.ClusterSnapshot{}, err
+	// 指纹可选：签名（HMAC 覆盖 canonical）已保证来源与完整性，指纹是加值
+	// 校验。旧主节点可能只签名不写指纹——空指纹跳过比对（历史兼容；升级
+	// 顺序从节点在先时不得因此永久 validation_failed）。非空指纹必须匹配。
+	if snapshot.Fingerprint != "" {
+		if err := verifySnapshotFingerprint(snapshot); err != nil {
+			return models.ClusterSnapshot{}, err
+		}
 	}
 	var canonical models.ClusterSnapshot
 	if err := json.Unmarshal(snapshot.CanonicalPayload, &canonical); err != nil {

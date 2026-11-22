@@ -130,6 +130,25 @@ func maskChannelTarget(typ, target string) string {
 	}
 }
 
+// targetContainsMaskedValue 提交的 target JSON 中是否有字符串值等于脱敏串
+// （旧前端把列表展示值当真实值回写的形态）。仅精确相等才豁免，用户名/URL
+// 里正常出现 *** 不受影响。
+func targetContainsMaskedValue(raw, masked string) bool {
+	if masked == "" || raw == "" {
+		return false
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(raw), &m) != nil {
+		return false
+	}
+	for _, v := range m {
+		if s, ok := v.(string); ok && s == masked {
+			return true
+		}
+	}
+	return false
+}
+
 // validateChannelTarget 通道目标 JSON 校验（按类型的最小契约）。
 func validateChannelTarget(typ, raw string) error {
 	var m map[string]any
@@ -296,8 +315,8 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
 	var owner int64
-	var typ, name string
-	if err := db.DB.QueryRow(`SELECT user_id, type, name FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name); err != nil {
+	var typ, name, currentTarget string
+	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
 		return
 	}
@@ -334,6 +353,13 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		if err := validateChannelTarget(typ, req.Target); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
+		}
+		// 旧前端兜底：列表对非属主 target 整体脱敏，旧版编辑把掩码串当新目标
+		// 回写（形如 {"openid":"{\"o***6\"}"}）。服务端识别「内层值等于当前目标
+		// 的脱敏串」→ 视为未变更，跳过 target 更新——不能让前端版本决定数据安全。
+		if req.Target == maskChannelTarget(typ, currentTarget) || targetContainsMaskedValue(req.Target, maskChannelTarget(typ, currentTarget)) {
+			services.Logf("warn", "通知通道 %d 的 target 提交为脱敏串（旧前端回写），按未变更处理", id)
+			req.Target = ""
 		}
 	}
 	tx, err := db.DB.Begin()
@@ -405,8 +431,8 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
 	var owner int64
-	var typ, name string
-	if err := db.DB.QueryRow(`SELECT user_id, type, name FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name); err != nil {
+	var typ, name, currentTarget string
+	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
 		return
 	}

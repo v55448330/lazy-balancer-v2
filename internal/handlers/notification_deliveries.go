@@ -157,7 +157,10 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		}
 		chRows, err := db.DB.Query(`SELECT nc.delivery_id, nc.channel_id, COALESCE(NULLIF(c.name,''), NULLIF(nc.channel_name,''), ''), nc.channel_type, nc.status, COALESCE(nc.error,''), COALESCE(nc.duration_ms,0)
 			FROM notification_delivery_channels nc LEFT JOIN notification_channels c ON c.id = nc.channel_id
-			WHERE nc.delivery_id IN (`+string(placeholders)+`) ORDER BY nc.id`, chArgs...)
+			WHERE nc.delivery_id IN (`+string(placeholders)+`)
+			  AND nc.id=(SELECT MAX(id) FROM notification_delivery_channels
+			             WHERE delivery_id=nc.delivery_id AND channel_id=nc.channel_id)
+			ORDER BY nc.id`, chArgs...)
 		if err == nil {
 			byDelivery := map[int64]int{}
 			for i, id := range ids {

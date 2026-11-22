@@ -40,6 +40,7 @@
                 <div class="ch-name" :title="ch.name">{{ ch.name }}</div>
                 <div class="ch-tags">
                   <el-tag size="small" effect="plain" type="info">{{ typeLabel(ch.type) }}</el-tag>
+                  <el-tag v-if="ch.type === 'wx_clawbot'" size="small" effect="plain" type="warning">{{ t('app.notification.channels.betaBadge') }}</el-tag>
                   <el-tag v-if="!isMine(ch)" size="small" effect="plain">{{ t('app.notification.channels.ownerTag', { id: ch.user_id }) }}</el-tag>
                   <el-tag v-if="rebindIncompleteIds.has(ch.id)" size="small" effect="plain" type="danger">{{ t('app.notification.channels.rebindIncompleteTag') }}</el-tag>
                   <el-tag v-if="!ch.enabled" size="small" effect="plain" type="warning">{{ t('app.notification.channels.disabledTag') }}</el-tag>
@@ -112,7 +113,9 @@
         </el-form-item>
         <el-form-item :label="t('app.notification.channels.colType')">
           <el-radio-group v-if="!editTarget" v-model="drawerForm.type">
-            <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">{{ typeLabel(typ) }}</el-radio-button>
+            <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">
+              {{ typeLabel(typ) }}<span v-if="typ === 'wx_clawbot'" class="ch-beta-badge">{{ t('app.notification.channels.betaBadge') }}</span>
+            </el-radio-button>
           </el-radio-group>
           <span v-else>{{ typeLabel(drawerForm.type) }}</span>
         </el-form-item>
@@ -928,6 +931,7 @@ defineExpose({ fetchChannels })
   display: flex; align-items: center; justify-content: center;
   flex: none;
 }
+.ch-beta-badge { margin-left: 6px; padding: 0 4px; border: 1px solid var(--el-color-warning); border-radius: 2px; color: var(--el-color-warning); font-size: 10px; line-height: 14px; vertical-align: 1px; }
 .ch-icon-webhook { background: #eff6ff; color: #3b82f6; }
 .ch-icon-email { background: #ecfdf5; color: #10b981; }
 .ch-icon-qq { background: #eff6ff; color: #3b82f6; }

@@ -5,6 +5,7 @@ package handlers
 // （此前前端无法区分「真值」与「掩码串」，管理员保存即损坏目标）。
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -24,6 +25,7 @@ func newNotificationChannelsRouter(h *Handlers, uid int64, role string) *gin.Eng
 		c.Next()
 	})
 	r.GET("/notification/channels", h.ListNotificationChannels)
+	r.PUT("/notification/channels/:id", h.UpdateNotificationChannel)
 	return r
 }
 
@@ -87,4 +89,39 @@ func TestListNotificationChannels_marksMaskedTargetsForNonOwner(t *testing.T) {
 	if masked, _ := row["target_masked"].(bool); masked {
 		t.Fatalf("属主列表 target_masked=true, want false")
 	}
+}
+
+func TestUpdateNotificationChannel_maskedTargetWriteBackIsIgnored(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	const original = `{"openid":"abc123def456"}`
+	if _, err := db.DB.Exec(`INSERT INTO notification_channels (id, user_id, type, name, target, enabled)
+		VALUES (1, 7, 'qq', 'bot-x', ?, 1)`, original); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	admin := newNotificationChannelsRouter(h, 1, "admin")
+	_, out := doNotifyRequest(t, admin, http.MethodGet, "/notification/channels?user_id=7", "")
+	masked := channelByID(t, out, 1)["target"].(string)
+
+	// 旧前端行为：把列表里的脱敏串当作 openid 回写。
+	body := `{"target":` + mustJSONString(t, `{"openid":`+mustJSONString(t, masked)+`}`) + `}`
+	status, resp := doNotifyRequest(t, admin, http.MethodPut, "/notification/channels/1", body)
+	if status != http.StatusOK || resp["code"].(float64) != 0 {
+		t.Fatalf("masked write-back status=%d body=%v，want 200（按未变更处理）", status, resp)
+	}
+	var stored string
+	if err := db.DB.QueryRow(`SELECT target FROM notification_channels WHERE id=1`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != original {
+		t.Fatalf("目标被掩码串覆盖: stored=%q, want %q", stored, original)
+	}
+}
+
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

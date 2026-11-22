@@ -319,6 +319,7 @@ export default {
         rebindIncompleteWarn: 'Rebind did not complete: the old bot is unavailable, the channel stays disabled; please retry later',
         rebindIncompleteTag: 'Rebind incomplete',
         disabledTag: 'Disabled',
+        betaBadge: 'BETA',
         healthDisabled: 'Disabled',
         healthLinkDown: 'Link down',
         healthSessionStale: 'Session stale',

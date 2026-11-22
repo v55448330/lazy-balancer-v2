@@ -2312,3 +2312,15 @@ func TestSyncDrainers_registersAllInstancesAndUnregisters(t *testing.T) {
 	}
 	unregisterClusterService(clusterB)
 }
+
+func TestVerifiedSnapshotIntegrity_acceptsSignedSnapshotWithoutFingerprint(t *testing.T) {
+	// 旧主节点可能只签名不写指纹：签名（HMAC 覆盖 canonical）已保证来源与
+	// 完整性，指纹是加值校验——空指纹沿用旧语义跳过指纹比对（否则升级从节点
+	// 先于主节点时同步永久 validation_failed）。
+	const token = "tok-legacy"
+	snapshot := signedTestSnapshot(5, token)
+	snapshot.Fingerprint = ""
+	if err := verifySnapshotIntegrity(snapshot, token, 0); err != nil {
+		t.Fatalf("空指纹但签名有效的快照被拒: %v（want 兼容旧主节点）", err)
+	}
+}

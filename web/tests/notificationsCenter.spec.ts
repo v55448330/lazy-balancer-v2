@@ -362,3 +362,13 @@ test('微信会话失效=规则禁用且取消选择（2026-11-22 用户裁定�
   assert.match(nc, /pruneChannelIds = \(ids: number\[\]\): number\[\] => ids\.filter\(id => \{ const c = channelOptions\.value\.find/, '显示层必须自动取消失效通道选择（prune 单源）')
   assert.match(nc, /wxSessionStaleHint/, '失效原因必须可提示')
 })
+
+test('微信机器人通道标注 BETA（创建类型选择器 + 卡片类型标签，zh/en 成对）', () => {
+  const cards = code('src/views/notifications/ChannelCards.vue')
+  // 创建抽屉的类型选择器：wx_clawbot 选项带 BETA 标记
+  assert.match(cards, /typ === 'wx_clawbot'[\s\S]{0,160}betaBadge/, '创建类型选择器必须在微信机器人选项上标注 BETA')
+  // 通道卡片：类型 tag 旁同样标注，已建通道也可辨识
+  assert.match(cards, /ch\.type === 'wx_clawbot'[\s\S]{0,160}betaBadge/, '通道卡片类型 tag 旁必须标注 BETA')
+  assert.match(code('src/locales/zh/notifications.ts'), /betaBadge: 'BETA'/, 'zh 词条必须存在')
+  assert.match(code('src/locales/en/notifications.ts'), /betaBadge: 'BETA'/, 'en 词条必须存在')
+})

@@ -11,6 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log"
 	"os"
 	"path/filepath"
@@ -1102,12 +1105,43 @@ func TestRotateAuditLog_retriesPendingDeltaBeforeShifting(t *testing.T) {
 // 让调用方以为可以不受 ctx 约束（daemon 必须走 securityEventsPollOnce(ctx)
 // 让停机在批次边界收尾）。入口若被重新导出，此守卫响亮失败。
 func TestSecurityEventsPollOnce_remainsUnexported(t *testing.T) {
-	source, err := os.ReadFile("securityevents.go")
+	// AST 级守卫：不只拦精确函数名——任何导出函数/方法包装内部入口同样
+	// 属「重新导出」。改名/换壳绕不过（此前仅字符串匹配，别名/包装函数可逃逸）。
+	files, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("读取 securityevents.go: %v", err)
+		t.Fatalf("枚举 services 源码: %v", err)
 	}
-	if strings.Contains(string(source), "func SecurityEventsPollOnce(") {
-		t.Fatal("单轮摄取入口被重新导出：保持 securityEventsPollOnce(ctx) 包内形态")
+	var offenders []string
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("解析 %s: %v", file, err)
+		}
+		ast.Inspect(parsed, func(n ast.Node) bool {
+			fd, ok := n.(*ast.FuncDecl)
+			if !ok || !fd.Name.IsExported() || fd.Body == nil {
+				return true
+			}
+			callsInternal := false
+			ast.Inspect(fd.Body, func(inner ast.Node) bool {
+				if id, ok := inner.(*ast.Ident); ok && id.Name == "securityEventsPollOnce" {
+					callsInternal = true
+					return false
+				}
+				return true
+			})
+			if callsInternal {
+				offenders = append(offenders, file+":"+fd.Name.Name)
+			}
+			return true
+		})
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("单轮摄取入口被导出包装（应保持 securityEventsPollOnce(ctx) 包内形态）: %v", offenders)
 	}
 }
 
