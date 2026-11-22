@@ -474,12 +474,12 @@ func (m *CRSUpdateManager) runWithContext(runCtx context.Context, trigger string
 		switch snap.Status {
 		case string(CRSStatusFailed):
 			RecordAuditLog(operator, "更新失败", "CRS规则库", detail, "")
-			notify.PublishLibUpdateFailed("CRS规则库", trigger, snap.Message)
+			notify.PublishLibUpdateResult("CRS规则库", trigger, false, snap.Message)
 		case string(CRSStatusCancelled):
 			RecordAuditLog(operator, "取消", "CRS规则库", detail, "")
 		case string(CRSStatusSuccess):
 			RecordAuditLog(operator, "更新", "CRS规则库", detail, "")
-			notify.PublishLibUpdateSucceeded("CRS规则库", trigger, libUpdateVersionDetail(snap.Version))
+			notify.PublishLibUpdateResult("CRS规则库", trigger, true, libUpdateVersionDetail(snap.Version))
 		default:
 			RecordAuditLog(operator, "更新", "CRS规则库", detail, "")
 		}

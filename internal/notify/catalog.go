@@ -73,9 +73,7 @@ const (
 	EvtBlockPageChanged       = "sec.block_page_changed"        // 拦截页 CRUD
 	EvtAutobanCfgChanged      = "sec.autoban_config_changed"    // 自动封禁配置/累犯移除
 	EvtMCPDisconnected        = "sec.mcp_disconnected"          // MCP 会话强制断开
-	EvtLibUpdated             = "sec.lib_updated"               // 安全库手动更新发起（CRS/威胁/IP2Region/爬虫）
-	EvtLibUpdateSucceeded     = "sec.lib_update_succeeded"      // 安全库更新终态：成功（四库）
-	EvtLibUpdateFailed        = "sec.lib_update_failed"         // 安全库更新终态：失败（四库）
+	EvtLibUpdated             = "sec.lib_updated"               // 规则库更新（手动/自动，四库终态）
 	EvtIngestDegraded         = "sec.ingest_degraded"           // 安全事件摄取健康降级（聚合原因）
 	EvtIngestRecovered        = "sec.ingest_recovered"          // 安全事件摄取健康恢复
 	EvtUserUpdated            = "auth.user_updated"             // 管理员修改用户角色/显示名
@@ -123,8 +121,8 @@ var catalog = []catalogEntry{
 	{EvtCaddyRecovered, LevelInfo, true, "Caddy 应用恢复", "配置应用已恢复（%s）"},
 	{EvtImportDone, LevelInfo, false, "配置导入完成", "%s 完成了配置导入"},
 	{EvtImportFailed, LevelCritical, true, "配置导入失败", "配置导入失败：%s"},
-	{EvtBackupDone, LevelInfo, false, "备份完成", "自动备份完成：%s"},
-	{EvtBackupFailed, LevelCritical, true, "备份失败", "自动备份失败：%s"},
+	{EvtBackupDone, LevelInfo, false, "自动备份完成", "自动备份完成：%s"},
+	{EvtBackupFailed, LevelCritical, true, "自动备份失败", "自动备份失败：%s"},
 	{EvtRestoreDone, LevelInfo, false, "还原完成", "%s 完成了配置还原"},
 	{EvtRestoreFailed, LevelCritical, true, "还原失败", "配置还原失败：%s"},
 	{EvtBlockedAggregate, LevelInfo, true, "拦截聚合", "%s内拦截 %s 次 / 挑战 %s 次 / 自动封禁 %s 次（TOP 规则：%s）"},
@@ -166,9 +164,7 @@ var catalog = []catalogEntry{
 	{EvtBlockPageChanged, LevelInfo, false, "拦截页变更", "用户 %s %s（页面：%s）"},
 	{EvtAutobanCfgChanged, LevelWarn, true, "自动封禁配置变更", "用户 %s %s"},
 	{EvtMCPDisconnected, LevelWarn, true, "MCP 会话断开", "管理员 %s 强制断开了 MCP 会话（%s）"},
-	{EvtLibUpdated, LevelInfo, false, "安全库手动更新（已发起）", "用户 %s 发起了 %s 手动更新"},
-	{EvtLibUpdateSucceeded, LevelInfo, false, "安全库更新成功", "%s 更新成功（触发：%s）：%s"},
-	{EvtLibUpdateFailed, LevelWarn, true, "安全库更新失败", "%s 更新失败（触发：%s）：%s"},
+	{EvtLibUpdated, LevelInfo, false, "规则库更新", "「%s」%s更新%s（%s）"},
 	{EvtLibSettingsChanged, LevelInfo, false, "安全库设置变更", "用户 %s 变更了%s（%s）"},
 	{EvtClusterServiceControl, LevelWarn, true, "集群服务控制", "管理员 %s 对节点 %s 执行 %s（%s）"},
 	{EvtClusterLoginTicket, LevelWarn, true, "集群登录票据签发", "管理员 %s 签发了节点 %s 的登录票据（目标用户：%s）"},

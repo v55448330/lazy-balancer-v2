@@ -58,9 +58,18 @@ func TestNewEventTypesHavePublishSites(t *testing.T) {
 		}
 	}
 	src := corpus.String()
+	// 统一发布 helper：常量只在 notify 包内使用（handler/services 调用 helper），
+	// 发布点守卫按 helper 名核对，避免把「封装」误判为「无发布点」。
+	publishTokens := map[string]string{
+		"EvtLibUpdated": "PublishLibUpdateResult", // 四库手动/自动统一终态事件
+	}
 	for evt, id := range newEvents {
-		if !strings.Contains(src, evt) {
-			t.Errorf("事件 %s（%s）无发布点——handler/services 内无 notify.Publish 消费该常量", id, evt)
+		token := evt
+		if t, ok := publishTokens[evt]; ok {
+			token = t
+		}
+		if !strings.Contains(src, token) {
+			t.Errorf("事件 %s（%s）无发布点——handler/services 内无 %s 消费路径", id, evt, token)
 		}
 	}
 	// 目录完整性：新常量必须进 catalog（订阅矩阵可见）

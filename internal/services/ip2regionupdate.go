@@ -280,12 +280,12 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 			// 资源名用归一表规范名「IP数据库」——旧名
 			// 「IP2Region数据库」属归一表旧值，写入即被下次启动迁移重写。
 			RecordAuditLog(operator, "更新失败", "IP数据库", detail, "")
-			notify.PublishLibUpdateFailed("IP数据库", trigger, message)
+			notify.PublishLibUpdateResult("IP数据库", trigger, false, message)
 		case string(IP2RegionStatusCancelled):
 			RecordAuditLog(operator, "取消", "IP数据库", detail, "")
 		case string(IP2RegionStatusSuccess):
 			RecordAuditLog(operator, "更新", "IP数据库", detail, "")
-			notify.PublishLibUpdateSucceeded("IP数据库", trigger, libUpdateVersionDetail(version))
+			notify.PublishLibUpdateResult("IP数据库", trigger, true, libUpdateVersionDetail(version))
 		default:
 			RecordAuditLog(operator, "更新", "IP数据库", detail, "")
 		}

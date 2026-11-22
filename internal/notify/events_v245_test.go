@@ -19,9 +19,7 @@ func TestV245CatalogEntries(t *testing.T) {
 		title string
 		body  string
 	}{
-		{EvtLibUpdated, LevelInfo, false, "安全库手动更新（已发起）", "用户 %s 发起了 %s 手动更新"},
-		{EvtLibUpdateSucceeded, LevelInfo, false, "安全库更新成功", "%s 更新成功（触发：%s）：%s"},
-		{EvtLibUpdateFailed, LevelWarn, true, "安全库更新失败", "%s 更新失败（触发：%s）：%s"},
+		{EvtLibUpdated, LevelInfo, false, "规则库更新", "「%s」%s更新%s（%s）"},
 		{EvtIngestDegraded, LevelWarn, true, "安全事件摄取降级", "安全事件摄取降级：%s"},
 		{EvtIngestRecovered, LevelInfo, true, "安全事件摄取恢复", "安全事件摄取已恢复（降级原因：%s）"},
 		{EvtUserUpdated, LevelWarn, true, "用户配置变更", "管理员 %s 修改了用户「%s」（%s）"},
@@ -63,19 +61,22 @@ func TestBlockedAggregateCatalogBodyIncludesCounters(t *testing.T) {
 
 func TestLibUpdateResultEvents(t *testing.T) {
 	ok := libUpdateResultEvent(true, "CRS规则库", "auto", "版本 4.5.0")
-	if ok.Type != EvtLibUpdateSucceeded || ok.Level != "" {
-		t.Fatalf("成功事件 = {%s,%q}, want {%s,空级别由目录回填}", ok.Type, ok.Level, EvtLibUpdateSucceeded)
+	if ok.Type != EvtLibUpdated || ok.Level != LevelInfo {
+		t.Fatalf("成功事件 = {%s,%q}, want {%s,info}", ok.Type, ok.Level, EvtLibUpdated)
 	}
-	if got := ok.Fields["2"]; got != "自动" {
-		t.Fatalf("触发标签=%q, want 自动", got)
+	if ok.Fields["2"] != "自动" || ok.Fields["3"] != "成功" {
+		t.Fatalf("成功字段=%v", ok.Fields)
 	}
 	body := renderBody(mustCatalog(t, ok.Type), ok)
-	if want := "CRS规则库 更新成功（触发：自动）：版本 4.5.0"; body != want {
+	if want := "「CRS规则库」自动更新成功（版本 4.5.0）"; body != want {
 		t.Fatalf("成功正文=%q, want %q", body, want)
 	}
 	bad := libUpdateResultEvent(false, "威胁情报库", "manual", "下载失败：timeout")
+	if bad.Type != EvtLibUpdated || bad.Level != LevelWarn {
+		t.Fatalf("失败事件 = {%s,%q}, want {%s,warn}", bad.Type, bad.Level, EvtLibUpdated)
+	}
 	body = renderBody(mustCatalog(t, bad.Type), bad)
-	if want := "威胁情报库 更新失败（触发：手动）：下载失败：timeout"; body != want {
+	if want := "「威胁情报库」手动更新失败（下载失败：timeout）"; body != want {
 		t.Fatalf("失败正文=%q, want %q", body, want)
 	}
 }

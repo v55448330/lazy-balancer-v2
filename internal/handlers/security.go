@@ -6054,19 +6054,6 @@ func (h *Handlers) libAutoUpdate(c *gin.Context, spec libAutoUpdateSpec, save fu
 	return *req.AutoUpdate, true
 }
 
-// libUpdateEventLabel 手动发起事件的库名：调用方的 displayName 携带「更新」
-// 动作后缀（审计名用），目录正文已是「发起了 %s 手动更新」——不去后缀会出现
-// 「发起了 CRS 更新 手动更新」。
-func libUpdateEventLabel(name string) string {
-	name = strings.TrimSpace(name)
-	name = strings.TrimSuffix(name, " 更新")
-	name = strings.TrimSuffix(name, "更新")
-	if name == "" {
-		return "安全库"
-	}
-	return name
-}
-
 // startLibUpdate 三库手动更新触发端点共享骨架（主节点门 → 任务引擎装配门 →
 // 单飞 409 → 引擎受理）。执行体由任务引擎注册的执行器承载，端点零旁路。
 func (h *Handlers) startLibUpdate(c *gin.Context, taskID, family, displayName string) {
@@ -6093,7 +6080,6 @@ func (h *Handlers) startLibUpdate(c *gin.Context, taskID, family, displayName st
 		respondTaskTriggerAdmissionError(c, err)
 		return
 	}
-	notify.Publish(notify.Event{Type: notify.EvtLibUpdated, Fields: map[string]string{"1": c.GetString("username"), "2": libUpdateEventLabel(displayName)}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 

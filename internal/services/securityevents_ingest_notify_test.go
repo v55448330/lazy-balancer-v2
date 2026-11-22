@@ -59,14 +59,14 @@ func TestIngestionNotifyTrackerTransitions(t *testing.T) {
 	}
 }
 
-// TestLibUpdateTerminalPublishSites 四库 manager 终态收尾必须调用终态事件
-// 发布函数（成功/失败各可达）——只在 notify 目录里定义不代表运行期会发。
+// TestLibUpdateTerminalPublishSites 四库 manager 终态收尾必须调用统一终态事件
+// 发布函数（手动/自动共用）——只在 notify 目录里定义不代表运行期会发。
 func TestLibUpdateTerminalPublishSites(t *testing.T) {
 	files := map[string][]string{
-		"crsupdate.go":       {"PublishLibUpdateSucceeded", "PublishLibUpdateFailed"},
-		"ip2regionupdate.go": {"PublishLibUpdateSucceeded", "PublishLibUpdateFailed"},
-		"threatupdate.go":    {"PublishLibUpdateSucceeded", "PublishLibUpdateFailed"},
-		"crawler_update.go":  {"PublishLibUpdateSucceeded", "PublishLibUpdateFailed"},
+		"crsupdate.go":       {"PublishLibUpdateResult"},
+		"ip2regionupdate.go": {"PublishLibUpdateResult"},
+		"threatupdate.go":    {"PublishLibUpdateResult"},
+		"crawler_update.go":  {"PublishLibUpdateResult"},
 	}
 	for file, wants := range files {
 		b, err := os.ReadFile(file)

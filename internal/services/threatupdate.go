@@ -370,7 +370,7 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 			if msg == "" {
 				msg = ErrThreatUpdateFailed.Error()
 			}
-			notify.PublishLibUpdateFailed("威胁情报库", trigger, msg)
+			notify.PublishLibUpdateResult("威胁情报库", trigger, false, msg)
 		case "cancelled":
 			RecordAuditLog(operator, "取消", "威胁情报库", detail, "")
 		case "skipped":
@@ -380,9 +380,9 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 		default:
 			RecordAuditLog(operator, "更新", "威胁情报库", detail, "")
 			if emptySources {
-				notify.PublishLibUpdateSucceeded("威胁情报库", trigger, "无到期源")
+				notify.PublishLibUpdateResult("威胁情报库", trigger, true, "无到期源")
 			} else {
-				notify.PublishLibUpdateSucceeded("威胁情报库", trigger, "全部源处理完成")
+				notify.PublishLibUpdateResult("威胁情报库", trigger, true, "全部源处理完成")
 			}
 		}
 	}()

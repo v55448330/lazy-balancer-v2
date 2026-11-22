@@ -286,3 +286,34 @@ func TestGetNotificationRules_failsVisibleWhenAggregateReadBreaks(t *testing.T) 
 		})
 	}
 }
+
+func TestGetNotificationRules_catalogCoversEveryEvent(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	r := newRulesTestRouter(h, 7, "user")
+	status, out := doNotifyRequest(t, r, http.MethodGet, "/notification/rules", "")
+	if status != http.StatusOK || out["code"].(float64) != 0 {
+		t.Fatalf("rules status=%d body=%v", status, out)
+	}
+	data := out["data"].(map[string]any)
+	rules := data["rules"].([]any)
+	seen := map[string]string{} // eventID -> rule group
+	for _, raw := range rules {
+		row := raw.(map[string]any)
+		group, _ := row["title"].(string)
+		if titles, ok := row["event_titles"].(map[string]any); ok {
+			for ev := range titles {
+				seen[ev] = group
+			}
+		}
+	}
+	for _, e := range notify.CatalogExport() {
+		if _, ok := seen[e.ID]; !ok {
+			t.Errorf("catalog 事件 %s 未出现在规则列表（不可订阅）", e.ID)
+		}
+	}
+	for _, id := range []string{"cfg.backup_done", "cfg.backup_failed"} {
+		if seen[id] != "配置" {
+			t.Errorf("%s 所属规则组=%q, want 配置（自动备份事件必须可在规则列表订阅）", id, seen[id])
+		}
+	}
+}
