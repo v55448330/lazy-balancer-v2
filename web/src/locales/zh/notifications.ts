@@ -53,7 +53,8 @@ export default {
         'notify.channel_down': '通知通道离线',
         'channel.test': '通道测试',
         'notify.channel_recovered': '通知通道恢复',
-        'task.failed': '定时任务失败',
+        'task.succeeded': '任务执行成功',
+        'task.failed': '任务执行失败',
         'apikey.expiry_warning': 'API 密钥临期',
         // 2026-11-21 查漏补缺批 24 类写操作通知（catalog.go 同位）
         'cfg.caddy_lifecycle': 'Caddy 服务启停',
@@ -153,7 +154,8 @@ export default {
         'notify.channel_recovered': '通知通道恢复、投递正常时提醒。',
         'notify.channel_changed': '通知通道新建、修改或删除时提醒。',
         'notify.rule_changed': '通知订阅规则新建、修改或删除时提醒。',
-        'task.failed': '定时或周期任务执行失败时提醒，带任务名和错误摘要。',
+        'task.succeeded': '任意类型的任务执行成功时提醒，正文带任务类型与任务名；默认关闭。',
+        'task.failed': '任意类型的任务执行失败时提醒，正文带任务类型、任务名和错误摘要。',
         'task.manual_action': '用户手动触发、启停或取消任务时提醒。',
       },
       // 事件分组多语言（键=后端 catalogGroup 中文分组名）

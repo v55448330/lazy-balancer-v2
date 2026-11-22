@@ -49,7 +49,8 @@ export default {
         'notify.channel_down': 'Notification channel offline',
         'channel.test': 'Channel test',
         'notify.channel_recovered': 'Channel recovered',
-        'task.failed': 'Scheduled task failed',
+        'task.succeeded': 'Task succeeded',
+        'task.failed': 'Task failed',
         'apikey.expiry_warning': 'API key expiring',
         // 24 write-operation events from the 2026-11-21 catalog batch
         'cfg.caddy_lifecycle': 'Caddy service start/stop',
@@ -149,7 +150,8 @@ export default {
         'notify.channel_recovered': 'Alerts when a notification channel recovers and delivery is normal again.',
         'notify.channel_changed': 'Alerts when a notification channel is created, changed, or deleted.',
         'notify.rule_changed': 'Alerts when a notification subscription rule is created, changed, or deleted.',
-        'task.failed': 'Alerts when a scheduled or periodic task fails, with the task name and error summary.',
+        'task.succeeded': 'Alerts when any type of task succeeds, with its type and name. Off by default.',
+        'task.failed': 'Alerts when any type of task fails, with its type, name, and error summary.',
         'task.manual_action': 'Alerts when a user manually triggers, starts/stops, or cancels a task.',
       },
       eventGroups: {

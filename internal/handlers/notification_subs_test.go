@@ -105,7 +105,8 @@ func TestNotificationCatalog_exportPins(t *testing.T) {
 		"sec.blocked_aggregate": {"拦截聚合", "info", true, "安全"},
 		"cluster.node_joined":   {"集群节点加入", "info", false, "集群"},
 		"notify.channel_down":   {"通知通道离线", "warn", true, "通知"},
-		"task.failed":           {"定时任务失败", "warn", true, "任务"},
+		"task.succeeded":        {"任务执行成功", "info", false, "任务"},
+		"task.failed":           {"任务执行失败", "warn", true, "任务"},
 	}
 	for _, raw := range events {
 		row, _ := raw.(map[string]any)

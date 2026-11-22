@@ -59,7 +59,8 @@ const (
 	EvtDailyReport            = "sys.daily_report"
 	EvtNotifyChannelDown      = "notify.channel_down"      // 通道掉线自监控（走其它还活着的通道告警）
 	EvtNotifyChannelRecovered = "notify.channel_recovered" // 通道恢复（与掉线成对）
-	EvtTaskFailed             = "task.failed"              // 定时任务执行失败
+	EvtTaskSucceeded          = "task.succeeded"           // 任意类型任务执行成功
+	EvtTaskFailed             = "task.failed"              // 任意类型任务执行失败
 	EvtAPIKeyExpiryWarning    = "apikey.expiry_warning"    // API 密钥临期预警
 	// ── 2026-11-21 用户裁定「全部都做」：写操作通知事件查漏补缺（T1+T2 全量）──
 	EvtCaddyLifecycle         = "cfg.caddy_lifecycle"           // Caddy 启动/停止/重启
@@ -148,7 +149,8 @@ var catalog = []catalogEntry{
 	// 不走订阅矩阵事件订阅面）；事件键保留供投递记录展示。
 	{EvtNotifyChannelDown, LevelWarn, true, "通知通道离线", "通知通道「%s」已离线（%s）——事件将暂存重投"},
 	{EvtNotifyChannelRecovered, LevelInfo, true, "通知通道恢复", "通知通道已恢复（%s），投递正常"},
-	{EvtTaskFailed, LevelWarn, true, "定时任务失败", "任务 %s 执行失败：%s"},
+	{EvtTaskSucceeded, LevelInfo, false, "任务执行成功", "任务类型「%s」任务「%s」执行成功"},
+	{EvtTaskFailed, LevelWarn, true, "任务执行失败", "任务类型「%s」任务「%s」执行失败：%s"},
 	{EvtAPIKeyExpiryWarning, LevelWarn, true, "API 密钥临期", "API 密钥「%s」将于 %s 到期（剩余 %s 天）"},
 	// ── 2026-11-21 查漏补缺批：可用性/安全敏感 = warn+默认订阅；常规运维 = info ──
 	// cfg.caddy_lifecycle 参数序：1=操作人 2=动作（启动/停止/重启）3=结果

@@ -686,6 +686,7 @@ func (e *Engine) Register(d Descriptor) error {
 	// 先报真正缺失的字段（排障指向正确），合法描述符仍被 ErrEngineStopped 拒绝。
 	// stopped 检查与登记同属 e.mu 临界区（与 reserveRunInternal admission
 	// 同族）：锁外 check-then-lock 会让并发 Stop 穿过检查，留下静默注册项。
+	taskEventMeta.Store(d.ID, taskEventMetaEntry{name: d.Name, kind: string(d.Kind)})
 	beforeRegisterAdmission()
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -2667,9 +2668,7 @@ func updateTaskRunTerminal(runID int64, status string, durMs int64, message stri
 			_, err = taskRunTerminalExec(`UPDATE task_runs SET status=?, finished_at=?, duration_ms=? WHERE id=?`, status, finishedAt, durMs, runID)
 		}
 		if err == nil {
-			if status == "failed" {
-				publishTaskFailed(runID, message)
-			}
+			publishTaskTerminal(runID, status, message)
 			return
 		}
 		if attempt < terminalWriteAttempts {
@@ -2683,18 +2682,42 @@ func (e *Engine) finishRun(runID int64, status string, durMs int64) {
 	updateTaskRunTerminal(runID, status, durMs, "")
 }
 
-// TaskFailedHook 任务失败回调（services 注入 notify.Publish，避免 taskengine→notify
-// 循环依赖：notify/tasklog 已依赖 taskengine）。nil=不发布。
-var TaskFailedHook func(taskID, message string)
+type taskEventMetaEntry struct {
+	name string
+	kind string
+}
 
-// publishTaskFailed 任务失败事件：读 task_id 作参数1，失败原因参数2，经钩子发布。
-func publishTaskFailed(runID int64, message string) {
-	if TaskFailedHook == nil {
+var taskEventMeta sync.Map // task_id → taskEventMetaEntry（注册时写入，终态事件取名称/类型）
+
+// TaskTerminalHook 任务终态回调（services 注入 notify.Publish，避免
+// taskengine→notify 循环依赖：notify/tasklog 已依赖 taskengine）。nil=不发布。
+// status=success/failed；kindLabel 为「定时/常驻/周期/触发」中文类型。
+var TaskTerminalHook func(taskID, taskName, kindLabel, status, message string)
+
+// KindLabel 任务类型的中文展示名（事件正文用）。
+func KindLabel(k Kind) string {
+	switch k {
+	case KindScheduled:
+		return "定时任务"
+	case KindDaemon:
+		return "常驻任务"
+	case KindPeriodic:
+		return "周期任务"
+	case KindOneshot:
+		return "触发任务"
+	default:
+		return "任务"
+	}
+}
+
+// publishTaskTerminal 任务成功/失败事件：读取 task_id 与注册元数据，正文由
+// 订阅模板带上任务类型与任务名（不再只发「定时任务失败」）。
+func publishTaskTerminal(runID int64, status, message string) {
+	if TaskTerminalHook == nil || (status != "success" && status != "failed") {
 		return
 	}
 	// 关停竞态守卫：终态 UPDATE 成功后进程可能恰在关停（db.DB 已被置 nil），
-	// 此时 QueryRow 会 nil 解引用 panic——关停窗口不发失败事件（终态已落库，
-	// 事实不丢）。
+	// 此时 QueryRow 会 nil 解引用 panic——关停窗口不发终态事件（终态已落库）。
 	if db.DB == nil {
 		return
 	}
@@ -2702,10 +2725,19 @@ func publishTaskFailed(runID int64, message string) {
 	if err := db.DB.QueryRow(`SELECT task_id FROM task_runs WHERE id=?`, runID).Scan(&taskID); err != nil {
 		taskID = fmt.Sprintf("#%d", runID)
 	}
-	if message == "" {
+	name, kind := taskID, "任务"
+	if v, ok := taskEventMeta.Load(taskID); ok {
+		if meta, ok := v.(taskEventMetaEntry); ok {
+			if meta.name != "" {
+				name = meta.name
+			}
+			kind = KindLabel(Kind(meta.kind))
+		}
+	}
+	if message == "" && status == "failed" {
 		message = "执行失败"
 	}
-	TaskFailedHook(taskID, message)
+	TaskTerminalHook(taskID, name, kind, status, message)
 }
 
 func (e *Engine) finishRunWithMessage(runID int64, status string, durMs int64, message string) {

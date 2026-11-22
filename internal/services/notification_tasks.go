@@ -17,10 +17,16 @@ func registerNotificationTasks(te *taskengine.Engine) {
 	// 日报「本地日历日」时区与全站配置时区同源（窗口/日期标签/认证计数桶共用；
 	// 未注入时 notify 回落进程 TZ，会与 task_runs 等配置时区墙钟错位）。
 	notify.DailyLocation = CurrentLocation
-	// 任务失败事件钩子（taskengine 不直接依赖 notify，解循环）。
-	taskengine.TaskFailedHook = func(taskID, message string) {
-		notify.Publish(notify.Event{Type: notify.EvtTaskFailed, Level: notify.LevelWarn,
-			Fields: map[string]string{"1": taskID, "2": message}})
+	// 任务终态事件钩子（taskengine 不直接依赖 notify，解循环）：所有任务类型
+	// 的成功/失败都发布，正文带任务类型与任务名。
+	taskengine.TaskTerminalHook = func(taskID, taskName, kindLabel, status, message string) {
+		fields := map[string]string{"1": kindLabel, "2": taskName}
+		if status == "success" {
+			notify.Publish(notify.Event{Type: notify.EvtTaskSucceeded, Level: notify.LevelInfo, Fields: fields})
+			return
+		}
+		fields["3"] = message
+		notify.Publish(notify.Event{Type: notify.EvtTaskFailed, Level: notify.LevelWarn, Fields: fields})
 	}
 	mustRegisterTask(te, taskengine.Descriptor{
 		ID:          "notification-delivery",
