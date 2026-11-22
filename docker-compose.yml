@@ -52,7 +52,7 @@ services:
         # web/src/utils/branding.ts 的 appVersion 回退值；发布时另需 buildx
         # --build-arg 显式传参。以上各处须同步递增。
         # VERSION=最新正式版本号（v2.4.4，stable 部署组口径）；测试通道见
-        # v2.4.4-beta（image tag 加 -beta 后缀，build VERSION 用正式核 v2.4.4）。
+        # v2.4.5-beta（image tag 加 -beta 后缀，build VERSION 用正式核 v2.4.5）。
         VERSION: v2.4.4
     container_name: lazy-balancer
     network_mode: host
