@@ -25,6 +25,8 @@ const DECLARED_NOT_CATALOGED = new Set(['sys.daily_report'])
 
 const zh: Record<string, string> = zhLocale.app.notification.eventTitles
 const en: Record<string, string> = enLocale.app.notification.eventTitles
+const zhDesc: Record<string, string> = zhLocale.app.notification.eventDescriptions
+const enDesc: Record<string, string> = enLocale.app.notification.eventDescriptions
 
 /** catalog.go → 事件 ID → Title（EvtXxx 常量折叠到 id）。 */
 const parseCatalogTitles = (): Map<string, string> => {
@@ -80,4 +82,42 @@ test('事件标题对表：zh 文案与 catalog TitleFormat 同文，en 全部�
   assert.deepEqual(untranslated, [], 'en eventTitles 残留中文（未翻译）')
   const blank = Object.entries(en).filter(([, value]) => !value.trim()).map(([id]) => id)
   assert.deepEqual(blank, [], 'en eventTitles 存在空值')
+})
+
+
+/** catalog_descriptions.go → 事件 ID → 中文说明。 */
+const parseCatalogDescriptions = (): Map<string, string> => {
+  const src = repoCode('internal/notify/catalog_descriptions.go')
+  const out = new Map<string, string>()
+  for (const m of src.matchAll(/^\s*"([a-z0-9_.]+)":\s*"([^"]*)",/gm)) out.set(m[1], m[2])
+  assert.ok(out.size > 40, `catalog_descriptions 解析异常（${out.size}）——扫描器失效`)
+  return out
+}
+
+test('事件说明对表：catalog ID ↔ zh/en eventDescriptions 双向零缺零多', () => {
+  const descriptions = parseCatalogDescriptions()
+  const ids = new Set(descriptions.keys())
+  const missingZh = [...ids].filter((id) => !(id in zhDesc))
+  const missingEn = [...ids].filter((id) => !(id in enDesc))
+  assert.deepEqual(missingZh, [], `zh eventDescriptions 缺 ${missingZh.length} 个目录事件`)
+  assert.deepEqual(missingEn, [], `en eventDescriptions 缺 ${missingEn.length} 个目录事件`)
+  const extrasZh = Object.keys(zhDesc).filter((id) => !ids.has(id))
+  const extrasEn = Object.keys(enDesc).filter((id) => !ids.has(id))
+  assert.deepEqual(extrasZh, [], 'zh eventDescriptions 出现目录外键')
+  assert.deepEqual(extrasEn, [], 'en eventDescriptions 出现目录外键')
+})
+
+test('事件说明对表：zh 与 catalog 同文，en 已翻译且非空', () => {
+  const descriptions = parseCatalogDescriptions()
+  const drift: string[] = []
+  for (const [id, text] of descriptions) {
+    if (zhDesc[id] !== text) drift.push(`${id}: zh「${zhDesc[id]}」≠ catalog「${text}」`)
+  }
+  assert.deepEqual(drift, [], `zh 说明与 catalog 原文漂移:\n${drift.join('\n')}`)
+  const untranslated = Object.entries(enDesc)
+    .filter(([, value]) => /[\u4e00-\u9fa5]/.test(value))
+    .map(([id, value]) => `${id}: ${value}`)
+  assert.deepEqual(untranslated, [], 'en eventDescriptions 残留中文')
+  const blank = Object.entries(enDesc).filter(([, value]) => !value.trim()).map(([id]) => id)
+  assert.deepEqual(blank, [], 'en eventDescriptions 存在空值')
 })

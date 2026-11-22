@@ -477,6 +477,8 @@ const eventTitle = (row: Rule, ev: string): string => {
 }
 
 const eventDescription = (rule: Rule, ev: string): string => {
+  const m = (tm('app.notification.eventDescriptions') || {}) as Record<string, string>
+  if (hasOwn(m, ev) && m[ev]) return m[ev]
   const found = eventCatalog.value.find(e => e.id === ev)
   return found?.description || eventTitle(rule, ev)
 }

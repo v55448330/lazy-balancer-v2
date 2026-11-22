@@ -4,6 +4,7 @@ package notify
 // 启动事件单发、用户配置变更、登录/MFA 失败去抖、拦截聚合降噪与计数。
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestV245CatalogEntries(t *testing.T) {
 		{EvtLibUpdated, LevelInfo, false, "规则库更新", "「%s」%s更新%s（%s）"},
 		{EvtIngestDegraded, LevelWarn, true, "安全事件摄取降级", "安全事件摄取降级：%s"},
 		{EvtIngestRecovered, LevelInfo, true, "安全事件摄取恢复", "安全事件摄取已恢复（降级原因：%s）"},
-		{EvtUserUpdated, LevelWarn, true, "用户配置变更", "管理员 %s 修改了用户「%s」（%s）"},
+		{EvtUserUpdated, LevelWarn, true, "用户配置变更", "用户 %s 修改了用户「%s」（%s）"},
 	}
 	for _, c := range cases {
 		e, ok := catalogByID(c.id)
@@ -98,12 +99,12 @@ func resetAuthFailureDebounceForTest(t *testing.T) time.Time {
 	oldNow := authFailureNow
 	authFailureNow = func() time.Time { return now }
 	authFailureMu.Lock()
-	authFailureSeen = map[string]time.Time{}
+	authFailureSeen = map[string]*authFailureState{}
 	authFailureMu.Unlock()
 	t.Cleanup(func() {
 		authFailureNow = oldNow
 		authFailureMu.Lock()
-		authFailureSeen = map[string]time.Time{}
+		authFailureSeen = map[string]*authFailureState{}
 		authFailureMu.Unlock()
 	})
 	return now
@@ -117,23 +118,36 @@ func TestPublishLoginFailedDebounce(t *testing.T) {
 	date := time.Now().In(dailyLocation()).Format("2006-01-02")
 	_, failBefore, _ := readAuthCounters(date)
 
-	PublishLoginFailed("alice", "认证失败", "203.0.113.9")
-	PublishLoginFailed("alice", "认证失败", "203.0.113.9")
-	if got := DroppedCount() - before; got != 1 {
-		t.Fatalf("同用户同 IP 窗口内发布 %d 条, want 1", got)
+	for i := 0; i < 4; i++ {
+		PublishLoginFailed("alice", "认证失败", "203.0.113.9")
 	}
-	PublishLoginFailed("alice", "认证失败", "203.0.113.10")
+	if got := DroppedCount() - before; got != 0 {
+		t.Fatalf("低于阈值发布 %d 条, want 0", got)
+	}
+	PublishLoginFailed("alice", "认证失败", "203.0.113.9") // 第 5 次达阈值
+	if got := DroppedCount() - before; got != 1 {
+		t.Fatalf("达到阈值发布 %d 条, want 1", got)
+	}
+	PublishLoginFailed("alice", "认证失败", "203.0.113.9") // 窗口内继续静默
+	if got := DroppedCount() - before; got != 1 {
+		t.Fatalf("阈值后窗口内又发布：累计 %d 条, want 1", got)
+	}
+	for i := 0; i < 5; i++ {
+		PublishLoginFailed("alice", "认证失败", "203.0.113.10") // 不同 IP 独立计数
+	}
 	if got := DroppedCount() - before; got != 2 {
-		t.Fatalf("不同 IP 应独立去抖：累计 %d 条, want 2", got)
+		t.Fatalf("不同 IP 应独立达阈值：累计 %d 条, want 2", got)
 	}
 	authFailureNow = func() time.Time { return base.Add(10*time.Minute + time.Second) }
-	PublishLoginFailed("alice", "认证失败", "203.0.113.9")
-	if got := DroppedCount() - before; got != 3 {
-		t.Fatalf("10 分钟窗口滑出后应重新发布：累计 %d 条, want 3", got)
+	for i := 0; i < 5; i++ {
+		PublishLoginFailed("alice", "认证失败", "203.0.113.9")
 	}
-	// 通知去抖不得让日报失败计数少记（每次尝试都累加）。
-	if _, failAfter, _ := readAuthCounters(date); failAfter-failBefore != 4 {
-		t.Fatalf("日报登录失败计数增量=%d, want 4（去抖只作用于通知）", failAfter-failBefore)
+	if got := DroppedCount() - before; got != 3 {
+		t.Fatalf("10 分钟窗口滑出后应重新计数发布：累计 %d 条, want 3", got)
+	}
+	// 通知阈值不得让日报失败计数少记（每次尝试都累加）。
+	if _, failAfter, _ := readAuthCounters(date); failAfter-failBefore != 16 {
+		t.Fatalf("日报登录失败计数增量=%d, want 16（阈值只作用于通知）", failAfter-failBefore)
 	}
 }
 
@@ -158,17 +172,19 @@ func TestPublishMFAVerifyFailedDebounce(t *testing.T) {
 
 	PublishMFAVerifyFailed("carol", "MFA step-up 验证失败", "203.0.113.11")
 	PublishMFAVerifyFailed("carol", "MFA step-up 验证失败", "203.0.113.11")
-	if got := DroppedCount() - before; got != 1 {
-		t.Fatalf("MFA 同用户同 IP 窗口内发布 %d 条, want 1", got)
+	if got := DroppedCount() - before; got != 0 {
+		t.Fatalf("低于阈值 MFA 发布 %d 条, want 0", got)
 	}
-	// 与登录失败共用同一用户|IP 键：非终态的登录失败不得绕过 MFA 去抖。
+	// 与登录失败共用同一用户|IP 计数：非终态 MFA 失败不得绕过阈值。
 	PublishMFAVerifyFailed("carol", "禁用 MFA 前验证失败", "203.0.113.11")
+	PublishMFAVerifyFailed("carol", "MFA step-up 验证失败", "203.0.113.11")
+	PublishMFAVerifyFailed("carol", "MFA step-up 验证失败", "203.0.113.11") // 第 5 次
 	if got := DroppedCount() - before; got != 1 {
-		t.Fatalf("非终态 MFA 失败不得绕过去抖：累计 %d 条, want 1", got)
+		t.Fatalf("达到阈值 MFA 发布 %d 条, want 1", got)
 	}
 	date := time.Now().In(dailyLocation()).Format("2006-01-02")
-	if _, _, mfa := readAuthCounters(date); mfa < 3 {
-		t.Fatalf("日报 MFA 失败计数=%d, want ≥3（去抖不减少计数）", mfa)
+	if _, _, mfa := readAuthCounters(date); mfa < 5 {
+		t.Fatalf("日报 MFA 失败计数=%d, want ≥5（阈值不减少计数）", mfa)
 	}
 }
 
@@ -200,19 +216,27 @@ func TestPublishStartupAbnormal(t *testing.T) {
 
 func TestBlockedAggregateSingleBlockPublishesOnce(t *testing.T) {
 	resetBlockedStateForTest(t)
-	evs := recordBlocked("r1")
-	if len(evs) != 1 || evs[0].Type != EvtBlockedAggregate {
-		t.Fatalf("单次拦截发布 %d 条, want 1 条聚合", len(evs))
+	for i := 0; i < 9; i++ {
+		if evs := recordBlocked("r1", "203.0.113.5", "/login"); len(evs) != 0 {
+			t.Fatalf("第 %d 次拦截低于最低阈值却发布: %v", i+1, levels(evs))
+		}
+	}
+	evs := recordBlocked("r1", "203.0.113.5", "/login") // 第 10 次达 info 阈值
+	if len(evs) != 1 || evs[0].Type != EvtBlockedAggregate || evs[0].Level != LevelInfo {
+		t.Fatalf("第 10 次拦截=%v, want 1 条 info 聚合", levels(evs))
 	}
 	body := renderBody(mustCatalog(t, EvtBlockedAggregate), evs[0])
-	if !strings.Contains(body, "拦截 1 次 / 挑战 0 次 / 自动封禁 0 次") {
-		t.Fatalf("首条聚合正文未含三项计数: %q", body)
+	if !strings.Contains(body, "拦截 10 次 / 挑战 0 次 / 自动封禁 0 次") {
+		t.Fatalf("聚合正文未含三项计数: %q", body)
 	}
-	if evs := recordBlocked("r1"); len(evs) != 0 {
+	if !strings.Contains(body, "TOP IP：203.0.113.5") || !strings.Contains(body, "TOP 路径：/login") {
+		t.Fatalf("聚合正文缺 TOP IP/路径: %q", body)
+	}
+	if evs := recordBlocked("r1", "203.0.113.5", "/login"); len(evs) != 0 {
 		t.Fatalf("同窗口后续拦截又发布了 %d 条", len(evs))
 	}
 	if ev := takeBlockedWindowEvent(); ev != nil {
-		t.Fatalf("单次拦截窗口 flush 又发布了事件: %+v", ev)
+		t.Fatalf("已达阈值窗口 flush 又发布了事件: %+v", ev)
 	}
 }
 
@@ -222,13 +246,13 @@ func TestBlockedAggregateThresholdEscalatesOncePerLevel(t *testing.T) {
 	t.Cleanup(func() { blockedThresholdsFn = old })
 	resetBlockedStateForTest(t)
 
-	e1 := recordBlocked("x")
-	e2 := recordBlocked("x")
-	e3 := recordBlocked("x")
-	e4 := recordBlocked("x")
-	e5 := recordBlocked("x")
-	if len(e1) != 1 || e1[0].Level != LevelInfo {
-		t.Fatalf("首发=%v, want 1 条 info", levels(e1))
+	e1 := recordBlocked("x", "203.0.113.5", "/x")
+	e2 := recordBlocked("x", "203.0.113.5", "/x")
+	e3 := recordBlocked("x", "203.0.113.5", "/x")
+	e4 := recordBlocked("x", "203.0.113.5", "/x")
+	e5 := recordBlocked("x", "203.0.113.5", "/x")
+	if len(e1) != 0 {
+		t.Fatalf("阈值以下发布了 %v, want 0", levels(e1))
 	}
 	if len(e2) != 1 || e2[0].Level != LevelWarn {
 		t.Fatalf("达 warn 阈值=%v, want 1 条 warn", levels(e2))
@@ -253,11 +277,11 @@ func TestBlockedAggregateCountsChallengesAndAutobans(t *testing.T) {
 	t.Cleanup(func() { blockedThresholdsFn = old })
 	resetBlockedStateForTest(t)
 
-	recordBlocked("SQLi")
-	RecordChallengeEvent()
-	RecordChallengeEvent()
+	recordBlocked("SQLi", "203.0.113.6", "/item?id=1")
+	RecordChallengeEvent("cc_rate", "203.0.113.1")
+	RecordChallengeEvent("cc_rate", "203.0.113.1")
 	recordAutobanInWindow()
-	e := recordBlocked("SQLi")
+	e := recordBlocked("SQLi", "203.0.113.6", "/item?id=1")
 	if len(e) != 1 {
 		t.Fatalf("达 warn 阈值发布 %d 条, want 1", len(e))
 	}
@@ -267,6 +291,44 @@ func TestBlockedAggregateCountsChallengesAndAutobans(t *testing.T) {
 	}
 	if !strings.Contains(body, "SQLi") {
 		t.Fatalf("聚合正文缺 TOP 规则: %q", body)
+	}
+}
+
+func TestChallengeSummaryThreshold(t *testing.T) {
+	resetBlockedStateForTest(t)
+	ensureBusStoppedForTest(t)
+	before := DroppedCount()
+	for i := 0; i < 49; i++ {
+		recordChallengeSummary("cc_rate", "203.0.113.20")
+	}
+	flushChallengeWindow()
+	if got := DroppedCount() - before; got != 0 {
+		t.Fatalf("低于挑战阈值发布 %d 条, want 0", got)
+	}
+	for i := 0; i < 50; i++ {
+		recordChallengeSummary("cc_rate", "203.0.113.21")
+	}
+	flushChallengeWindow()
+	if got := DroppedCount() - before; got != 1 {
+		t.Fatalf("达到挑战阈值发布 %d 条, want 1", got)
+	}
+}
+
+func TestAutobanBurstSummary(t *testing.T) {
+	resetBlockedStateForTest(t)
+	ensureBusStoppedForTest(t)
+	before := DroppedCount()
+	for i := 0; i < 4; i++ {
+		PublishAutobanTriggered("198.51.100."+strconv.Itoa(i+1), "命中 5 次")
+	}
+	if got := DroppedCount() - before; got != 4 {
+		t.Fatalf("前 4 个封禁逐条发布 %d 条, want 4", got)
+	}
+	for i := 4; i < 8; i++ {
+		PublishAutobanTriggered("198.51.100."+strconv.Itoa(i+1), "命中 5 次")
+	}
+	if got := DroppedCount() - before; got != 5 {
+		t.Fatalf("第 5 个起应合并为 1 条摘要：累计 %d 条, want 5", got)
 	}
 }
 

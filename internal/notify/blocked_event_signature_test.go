@@ -16,10 +16,12 @@ func TestRecordBlockedEventExposesNoUnusedPublishSeam(t *testing.T) {
 	if fnType.Kind() != reflect.Func {
 		t.Fatalf("RecordBlockedEvent 不是函数: %v", fnType.Kind())
 	}
-	if got := fnType.NumIn(); got != 1 {
-		t.Fatalf("RecordBlockedEvent 形参数=%d, want 1（仅 ruleName；publish 死缝已删除，勿回流）", got)
+	if got := fnType.NumIn(); got != 3 {
+		t.Fatalf("RecordBlockedEvent 形参数=%d, want 3（ruleName/clientIP/path；publish 死缝已删除，勿回流）", got)
 	}
-	if fnType.In(0).Kind() != reflect.String {
-		t.Fatalf("RecordBlockedEvent 首参类型=%v, want string（ruleName）", fnType.In(0).Kind())
+	for i := 0; i < 3; i++ {
+		if fnType.In(i).Kind() != reflect.String {
+			t.Fatalf("RecordBlockedEvent 第 %d 参类型=%v, want string", i+1, fnType.In(i).Kind())
+		}
 	}
 }

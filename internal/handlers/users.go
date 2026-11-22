@@ -357,7 +357,14 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	}
 	// 角色/显示名变更通知（纯启停继续走 auth.user_status_changed，不双发）。
 	if len(profileChanged) > 0 {
-		notify.Publish(notify.Event{Type: notify.EvtUserUpdated,
+		level := notify.LevelInfo // 仅改显示名（含管理员）属常规信息
+		for _, f := range profileChanged {
+			if f == "角色" {
+				level = notify.LevelWarn // 权限变更需醒目
+				break
+			}
+		}
+		notify.Publish(notify.Event{Type: notify.EvtUserUpdated, Level: level,
 			Fields: map[string]string{
 				"1": c.GetString("username"),
 				"2": user.Username,

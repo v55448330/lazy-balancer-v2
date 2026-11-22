@@ -104,7 +104,8 @@ func TestNotificationCatalog_exportPins(t *testing.T) {
 		"cert.failed":           {"证书签发失败", "critical", true, "证书"},
 		"sec.blocked_aggregate": {"拦截聚合", "info", true, "安全"},
 		"cluster.node_joined":   {"集群节点加入", "info", false, "集群"},
-		"notify.channel_down":   {"通知通道离线", "warn", true, "系统"},
+		"notify.channel_down":   {"通知通道离线", "warn", true, "通知"},
+		"task.failed":           {"定时任务失败", "warn", true, "任务"},
 	}
 	for _, raw := range events {
 		row, _ := raw.(map[string]any)

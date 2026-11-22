@@ -162,7 +162,7 @@ func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				RecordBlockedEvent("r1")
+				RecordBlockedEvent("r1", "203.0.113.1", "/r1")
 			}
 		}
 	}()
@@ -184,8 +184,8 @@ func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 }
 
 // TestRecordBlockedEventFirstOnlyPublishPerWindow 无并发、可观测断言：同一窗口
-// 内只有首条拦截立即发布一次（后续进聚合）；窗口 flush 不再追加同级别汇总
-// （v2.4.5 降噪：单次/同级别窗口只发 1 条）。
+// 低于最低阈值（10 次）不发布，达到阈值只发一条 info；窗口 flush 不再追加
+// 同级别汇总（单窗口同级别只发 1 条）。
 // 旧实现的锁外首条判定在「flush 置 nil / 窗口轮换」竞态下会重发首条——本用例
 // 与 TestRecordBlockedEventNoUnlockedRead（需 -race 才有 RED 证据）互补：
 // 后者是压测，本用例是确定性的行为钉。
@@ -195,11 +195,17 @@ func TestRecordBlockedEventFirstOnlyPublishPerWindow(t *testing.T) {
 	resetBlockedStateForTest(t)
 	ensureBusStoppedForTest(t) // queue=nil：Publish 走丢弃计数，可观测「发布了几条」
 	before := DroppedCount()
-	RecordBlockedEvent("r1")
-	RecordBlockedEvent("r1")
-	RecordBlockedEvent("r2")
+	RecordBlockedEvent("r1", "203.0.113.1", "/r1")
+	RecordBlockedEvent("r1", "203.0.113.1", "/r1")
+	RecordBlockedEvent("r2", "203.0.113.2", "/r2")
+	if got := DroppedCount() - before; got != 0 {
+		t.Fatalf("低于最低阈值发布 %d 条, want 0", got)
+	}
+	for i := 0; i < 7; i++ {
+		RecordBlockedEvent("r2", "203.0.113.2", "/r2")
+	}
 	if got := DroppedCount() - before; got != 1 {
-		t.Fatalf("同窗口三次拦截发布 %d 条, want 1（仅首条立即告警）", got)
+		t.Fatalf("达到最低阈值发布 %d 条, want 1", got)
 	}
 	flushBlockedWindow()
 	if got := DroppedCount() - before; got != 1 {
@@ -282,6 +288,15 @@ func resetBlockedStateForTest(t *testing.T) {
 	blockedMu.Lock()
 	blockedCurrent = nil
 	blockedMu.Unlock()
+	challengeMu.Lock()
+	challengeCurrent = nil
+	challengeMu.Unlock()
+	suppressMu.Lock()
+	autobanBurstStart = time.Time{}
+	autobanBurstCount = 0
+	autobanBurstIPs = nil
+	autobanBurstSent = false
+	suppressMu.Unlock()
 }
 
 // ---- 日报 per-user send_time 分槽 ------------------------------

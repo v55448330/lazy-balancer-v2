@@ -774,6 +774,12 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 			notify.Publish(notify.Event{Type: notify.EvtPasswordChanged,
 				Fields: map[string]string{"1": user.Username}})
 		}
+		if displayNameChanged {
+			// 自助改显示名与管理员改角色/显示名共用 auth.user_updated；正文
+			// 使用通用「用户」措辞（此前的「管理员」在自助路径上失实）。
+			notify.Publish(notify.Event{Type: notify.EvtUserUpdated, Level: notify.LevelInfo,
+				Fields: map[string]string{"1": user.Username, "2": user.Username, "3": "显示名"}})
+		}
 	}
 	response := models.NewUserResponse(user, meta.MFAEnabled)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: response})

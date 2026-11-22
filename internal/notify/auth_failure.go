@@ -1,8 +1,8 @@
 package notify
 
-// 认证失败通知去抖（登录失败 / MFA 验证失败）：按「用户|IP」10 分钟窗口，
-// 首次发布、窗口内静默。暴力破解尝试会按请求产生失败事件——不去抖会灌满
-// 发布队列（与 cc_triggered 逐 IP 去抖同因）。
+// 认证失败通知阈值（登录失败 / MFA 验证失败）：按「用户|IP」10 分钟窗口，
+// 累计达到 5 次才发布一次；低于阈值只进审计与日报，避免单次输错密码就告警。
+// 暴力破解尝试会按请求产生失败事件——不设阈值会灌满发布队列。
 //
 // 终态原因（账户已锁定/已禁用）绕过去抖立即发布：这类结果不是重复尝试的
 // 噪音，而是账户状态的安全事实，任何一次都不得被窗口吞掉。
@@ -13,11 +13,20 @@ import (
 	"time"
 )
 
-const authFailureDedupWindow = 10 * time.Minute
+const (
+	authFailureDedupWindow = 10 * time.Minute
+	authFailureThreshold   = 5 // 10 分钟内同用户|IP 失败 ≥5 次才通知
+)
+
+type authFailureState struct {
+	first         time.Time
+	count         int
+	lastPublished time.Time
+}
 
 var (
 	authFailureMu   sync.Mutex
-	authFailureSeen = map[string]time.Time{} // 用户|IP → 上次发布时刻
+	authFailureSeen = map[string]*authFailureState{} // 用户|IP → 窗口计数
 	// authFailureNow 测试缝（生产恒 time.Now）。
 	authFailureNow = time.Now
 )
@@ -47,8 +56,9 @@ func PublishMFAVerifyFailed(username, detail, ip string) {
 		Fields: map[string]string{"1": username, "2": detail}})
 }
 
-// authFailureDebounced 报告本次失败是否应静默（窗口内重复）。终态原因恒不
-// 静默，且不占用/刷新窗口（锁定/禁用事实重复出现时仍每次可见）。
+// authFailureDebounced 报告本次失败是否应静默。终态原因恒不静默，且不占用/
+// 刷新窗口（锁定/禁用事实重复出现时仍每次可见）；非终态在窗口内累计，达到
+// 阈值才放行一条，之后窗口内继续静默。
 func authFailureDebounced(username, ip, reason string) bool {
 	if authFailureTerminalReason(reason) {
 		return false
@@ -57,11 +67,20 @@ func authFailureDebounced(username, ip, reason string) bool {
 	key := username + "|" + ip
 	authFailureMu.Lock()
 	defer authFailureMu.Unlock()
-	if at, ok := authFailureSeen[key]; ok && now.Sub(at) < authFailureDedupWindow {
+	st, ok := authFailureSeen[key]
+	if !ok || now.Sub(st.first) >= authFailureDedupWindow {
+		st = &authFailureState{first: now}
+		authFailureSeen[key] = st
+	}
+	st.count++
+	pruneAuthFailureLocked(now)
+	if st.count < authFailureThreshold {
 		return true
 	}
-	authFailureSeen[key] = now
-	pruneAuthFailureLocked(now)
+	if !st.lastPublished.IsZero() && now.Sub(st.lastPublished) < authFailureDedupWindow {
+		return true
+	}
+	st.lastPublished = now
 	return false
 }
 
@@ -74,8 +93,8 @@ func authFailureTerminalReason(reason string) bool {
 
 // pruneAuthFailureLocked 清理超窗条目（随写入懒清理，map 有界）。
 func pruneAuthFailureLocked(now time.Time) {
-	for key, at := range authFailureSeen {
-		if now.Sub(at) >= authFailureDedupWindow {
+	for key, st := range authFailureSeen {
+		if now.Sub(st.first) >= authFailureDedupWindow {
 			delete(authFailureSeen, key)
 		}
 	}

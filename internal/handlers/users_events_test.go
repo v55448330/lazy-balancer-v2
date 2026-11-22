@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/notify"
 )
 
@@ -47,6 +50,13 @@ func TestUpdateCurrentUser_selfProfileAndPasswordEvents(t *testing.T) {
 		t.Helper()
 		h := newBackupTestHandlers(t)
 		seedUserAuditTest(t, 5, "self", "user", true)
+		hash, err := bcrypt.GenerateFromPassword([]byte("OldPass123!"), bcrypt.MinCost)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.DB.Exec(`UPDATE users SET password_hash=? WHERE id=5`, string(hash)); err != nil {
+			t.Fatal(err)
+		}
 		before := notify.DroppedCount()
 		rec := serveUserMutationAs(h, http.MethodPatch, "/users/me", body, 5, "user", h.UpdateCurrentUser)
 		if rec.Code != http.StatusOK {

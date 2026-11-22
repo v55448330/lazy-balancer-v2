@@ -9,7 +9,9 @@ package notify
 // 发出方统一经 PublishAutobanTriggered / PublishCCTriggered，禁止绕过直发。
 
 import (
+	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +23,11 @@ var (
 	suppressMu      sync.Mutex
 	autobanArmed    = map[string]time.Time{} // 抑制键（IPv4 裸地址 / IPv6 /64）→ 自动封禁事件发出时刻
 	ccLastPublished = map[string]time.Time{} // IP（原始地址）→ CC 事件上次发出时刻
+	// 封禁风暴合并：5 分钟内第 5 个封禁起不再逐 IP 发，改为一条摘要。
+	autobanBurstStart time.Time
+	autobanBurstCount int
+	autobanBurstIPs   []string
+	autobanBurstSent  bool
 )
 
 // suppressionKey 归一抑制/去抖键：IPv6 按 /64 前缀归一，IPv4 保持裸地址。
@@ -67,7 +74,46 @@ func PublishAutobanTriggered(ip, detail string) {
 	suppressMu.Unlock()
 	// 计入已开启的拦截聚合窗口（挑战/自动封禁是攻击规模的两项补充计数）。
 	recordAutobanInWindow()
+	if summary, suppress := recordAutobanBurst(ip, now); suppress {
+		if summary != nil {
+			Publish(*summary)
+		}
+		return
+	}
 	Publish(Event{Type: EvtAutobanTriggered, Fields: map[string]string{"1": ip, "2": detail}})
+}
+
+// recordAutobanBurst 5 分钟窗口封禁计数：第 5 个起合并为一条摘要并静默后续
+// 单 IP 事件；窗口结束后重新计数。
+func recordAutobanBurst(ip string, now time.Time) (*Event, bool) {
+	suppressMu.Lock()
+	defer suppressMu.Unlock()
+	if autobanBurstStart.IsZero() || now.Sub(autobanBurstStart) >= blockedWindow {
+		autobanBurstStart = now
+		autobanBurstCount = 0
+		autobanBurstIPs = nil
+		autobanBurstSent = false
+	}
+	autobanBurstCount++
+	autobanBurstIPs = append(autobanBurstIPs, ip)
+	if len(autobanBurstIPs) > 5 {
+		autobanBurstIPs = autobanBurstIPs[len(autobanBurstIPs)-5:]
+	}
+	if autobanBurstCount < 5 || autobanBurstSent {
+		return nil, autobanBurstCount >= 5
+	}
+	autobanBurstSent = true
+	span := blockedSpanLabel(now.Sub(autobanBurstStart))
+	return &Event{
+		Type: EvtAutobanSummary, Level: LevelWarn, Title: "封禁风暴",
+		Body: fmt.Sprintf("%s内自动封禁 %d 个 IP（最近：%s）",
+			span, autobanBurstCount, strings.Join(autobanBurstIPs, "、")),
+		Fields: map[string]string{
+			"1": span,
+			"2": fmt.Sprint(autobanBurstCount),
+			"3": strings.Join(autobanBurstIPs, "、"),
+		},
+	}, true
 }
 
 // PublishCCTriggered 发布 CC 防护触发：同 IP 处于 autoban 抑制窗或自身去抖窗

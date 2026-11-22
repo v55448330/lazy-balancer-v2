@@ -315,6 +315,7 @@ func TestWriteEndpointsPublishNotificationEvents(t *testing.T) {
 		{"certificates.go", "func (h *Handlers) DeleteCertificateConfig(", "publishCertConfigChanged"},
 		{"caddy.go", "func (h *Handlers) UpdateConfig(", "publishCertConfigChanged"},
 		{"admintls.go", "func (h *Handlers) UpdateAdminTLS(", "EvtGlobalChanged"},
+		{"auth.go", "func (h *Handlers) UpdateCurrentUser(", "EvtUserUpdated"},
 	}
 	cache := map[string]string{}
 	for _, tc := range cases {

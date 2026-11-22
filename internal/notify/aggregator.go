@@ -1,10 +1,9 @@
 package notify
 
 // 拦截聚合降噪（sec.blocked_aggregate）：滚动窗口（默认 5 分钟，进程内
-// 状态）内，每个级别至多一条——首发恒 info（及时性），窗口累计跨过
-// warn/critical 阈值时各补一条升级事件；窗口关闭时只在「仍有未发级别」时
-// 补发（正常情况下不会发生，防御阈值在窗口末刻跨越的边沿）。单次拦截因此
-// 只产生 1 条通知（旧实现首条 + 窗口摘要双发）。
+// 状态）内，每个级别至多一条——低于最低阈值（默认 10 次）不通知；跨过
+// 10/50/200 时分别补 info/warn/critical，窗口关闭时只补发未发级别。
+// 单次扫描或零星拦截不再触发通知，避免绕过最低阈值。
 //
 // 聚合正文同时披露挑战数与自动封禁数：挑战（action=challenged）由摄取
 // 主路径与 IPC 路径经 RecordChallengeEvent 计数；自动封禁在
@@ -16,14 +15,18 @@ package notify
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	blockedWindow     = 5 * time.Minute
-	blockedWarnAt     = 50  // 窗口累计 ≥50 → warn（内置默认；可被 notify_settings 阈值覆盖）
-	blockedCriticalAt = 200 // 窗口累计 ≥200 → critical（内置默认；可被 notify_settings 阈值覆盖）
+	blockedWindow      = 5 * time.Minute
+	blockedInfoAt      = 10  // 窗口累计 ≥10 → info（最低触发阈值；低于此不通知）
+	blockedWarnAt      = 50  // 窗口累计 ≥50 → warn（内置默认；可被 notify_settings 阈值覆盖）
+	blockedCriticalAt  = 200 // 窗口累计 ≥200 → critical（内置默认；可被 notify_settings 阈值覆盖）
+	challengeSummaryAt = 50  // 挑战统计：5 分钟 ≥50 次才发摘要（事件本身默认关）
+
 )
 
 // blockedThresholdsFn 阈值来源（测试缝；生产=BlockedThresholds，读取
@@ -37,8 +40,10 @@ type blockedWindowState struct {
 	challenges int
 	autobans   int
 	topRule    map[string]int
-	// warnAt/criticalAt 在窗口开启时快照（见 blockedThresholdsFn）。
-	warnAt, criticalAt int
+	topIP      map[string]int
+	topPath    map[string]int
+	// infoAt 为最低触发阈值；warnAt/criticalAt 在窗口开启时快照。
+	infoAt, warnAt, criticalAt int
 	// 已发布的级别（每级别至多一条）：info 恒随首条发出。
 	infoSent, warnSent, criticalSent bool
 }
@@ -53,15 +58,15 @@ var (
 // RecordBlockedEvent 安全事件摄取拦截分支调用：计数 + 按级别发布（首发
 // info / 跨阈值升级各一条）。ruleName 为命中规则名（TOP 统计维度）。发布
 // 恒走包级 Publish（无发布器注入缝）——需要隔离断言时以包级总线状态为准。
-func RecordBlockedEvent(ruleName string) {
-	for _, evt := range recordBlocked(ruleName) {
+func RecordBlockedEvent(ruleName, clientIP, path string) {
+	for _, evt := range recordBlocked(ruleName, clientIP, path) {
 		Publish(evt)
 	}
 }
 
 // recordBlocked 计数并返回本轮需要发布的事件（0-1 条；纯内存，便于单测
 // 直接断言级别与文案而不依赖总线）。调用方负责发布。
-func recordBlocked(ruleName string) []Event {
+func recordBlocked(ruleName string, extra ...string) []Event {
 	blockedInitWheel.Do(func() {
 		blockedFlushCh = make(chan struct{})
 		go blockedFlushLoop()
@@ -72,8 +77,8 @@ func recordBlocked(ruleName string) []Event {
 	if blockedCurrent == nil || now.Sub(blockedCurrent.start) >= blockedWindow {
 		warnAt, criticalAt := blockedThresholdsFn()
 		blockedCurrent = &blockedWindowState{
-			start: now, topRule: map[string]int{},
-			warnAt: warnAt, criticalAt: criticalAt,
+			start: now, topRule: map[string]int{}, topIP: map[string]int{}, topPath: map[string]int{},
+			infoAt: blockedInfoAt, warnAt: warnAt, criticalAt: criticalAt,
 		}
 	}
 	w := blockedCurrent
@@ -81,31 +86,42 @@ func recordBlocked(ruleName string) []Event {
 	if ruleName != "" {
 		w.topRule[ruleName]++
 	}
+	if len(extra) > 0 && extra[0] != "" {
+		w.topIP[extra[0]]++
+	}
+	if len(extra) > 1 {
+		path := extra[1]
+		if i := strings.IndexByte(path, '?'); i >= 0 {
+			path = path[:i]
+		}
+		if path != "" {
+			w.topPath[path]++
+		}
+	}
 	switch {
-	case w.count == 1:
-		// 首发恒 info：阈值再低（如用户把 warn 配成 1）也不把首条直接升级，
-		// 保证「首发 info + 升级各一条」的级别序列稳定。
-		w.infoSent = true
-		return []Event{blockedEventAtLevel(w, LevelInfo)}
 	case w.criticalAt > 0 && w.count >= w.criticalAt && !w.criticalSent:
 		w.criticalSent = true
 		return []Event{blockedEventAtLevel(w, LevelCritical)}
 	case w.warnAt > 0 && w.count >= w.warnAt && !w.warnSent:
 		w.warnSent = true
 		return []Event{blockedEventAtLevel(w, LevelWarn)}
+	case w.infoAt > 0 && w.count >= w.infoAt && !w.infoSent:
+		w.infoSent = true
+		return []Event{blockedEventAtLevel(w, LevelInfo)}
 	}
 	return nil
 }
 
 // RecordChallengeEvent 摄取到 action=challenged 事件时调用（主路径与 IPC
-// 路径）。只累加到已开启的聚合窗口：挑战流量本身不触发聚合通知（CC 触发
-// 有独立事件与逐 IP 去抖）。
-func RecordChallengeEvent() {
+// 路径）。累加到已开启的拦截聚合窗口，并单独累计挑战统计窗口（≥50 次才
+// 发 sec.challenge_summary；该事件默认关，避免挑战流量逐请求通知）。
+func RecordChallengeEvent(reason, ip string) {
 	blockedMu.Lock()
 	if w := blockedCurrent; w != nil {
 		w.challenges++
 	}
 	blockedMu.Unlock()
+	recordChallengeSummary(reason, ip)
 }
 
 // recordAutobanInWindow 自动封禁计数（PublishAutobanTriggered 内调用）：
@@ -140,6 +156,9 @@ func takeBlockedWindowEvent() *Event {
 	blockedMu.Unlock()
 	if w == nil || w.count == 0 {
 		return nil
+	}
+	if w.count < w.infoAt && w.warnAt > w.count && w.criticalAt > w.count {
+		return nil // 低于最低阈值：不补发
 	}
 	level := blockedWindowLevel(w)
 	switch level {
@@ -189,28 +208,25 @@ func blockedAggregateEvent(w *blockedWindowState) Event {
 }
 
 // blockedEventAtLevel 按指定级别构造聚合事件（Fields 序=目录模板参数序：
-// 1 跨度 2 拦截 3 挑战 4 自动封禁 5 TOP 规则）。
+// 1 跨度 2 拦截 3 挑战 4 自动封禁 5 TOP 规则 6 TOP IP 7 TOP 路径）。
 func blockedEventAtLevel(w *blockedWindowState, level Level) Event {
-	top := topRules(w.topRule, 3)
-	topStr := "无"
-	for i, r := range top {
-		if i > 0 {
-			topStr += "、"
-		}
-		topStr += fmt.Sprintf("%s×%d", r.name, r.count)
-	}
+	topStr := topCounts(w.topRule, 3, "×")
+	topIP := topCounts(w.topIP, 3, "×")
+	topPath := topCounts(w.topPath, 3, "×")
 	span := blockedSpanLabel(time.Since(w.start))
 	return Event{
 		Type: EvtBlockedAggregate, Level: level,
 		Title: "拦截聚合",
-		Body: fmt.Sprintf("%s内拦截 %d 次 / 挑战 %d 次 / 自动封禁 %d 次（TOP 规则：%s）",
-			span, w.count, w.challenges, w.autobans, topStr),
+		Body: fmt.Sprintf("%s内拦截 %d 次 / 挑战 %d 次 / 自动封禁 %d 次（TOP 规则：%s；TOP IP：%s；TOP 路径：%s）",
+			span, w.count, w.challenges, w.autobans, topStr, topIP, topPath),
 		Fields: map[string]string{
 			"1": span,
 			"2": fmt.Sprint(w.count),
 			"3": fmt.Sprint(w.challenges),
 			"4": fmt.Sprint(w.autobans),
 			"5": topStr,
+			"6": topIP,
+			"7": topPath,
 		},
 	}
 }
@@ -237,14 +253,95 @@ type ruleCount struct {
 	count int
 }
 
+func topCounts(m map[string]int, n int, sep string) string {
+	out := topRules(m, n)
+	if len(out) == 0 {
+		return "无"
+	}
+	parts := make([]string, 0, len(out))
+	for _, r := range out {
+		parts = append(parts, fmt.Sprintf("%s%s%d", r.name, sep, r.count))
+	}
+	return strings.Join(parts, "、")
+}
+
 func topRules(m map[string]int, n int) []ruleCount {
 	out := make([]ruleCount, 0, len(m))
 	for k, v := range m {
 		out = append(out, ruleCount{k, v})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].count > out[j].count })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].count != out[j].count {
+			return out[i].count > out[j].count
+		}
+		return out[i].name < out[j].name
+	})
 	if len(out) > n {
 		out = out[:n]
 	}
 	return out
+}
+
+// ---- 挑战统计窗口（sec.challenge_summary；默认关） ----
+
+type challengeWindowState struct {
+	start     time.Time
+	count     int
+	topReason map[string]int
+	topIP     map[string]int
+}
+
+var (
+	challengeMu        sync.Mutex
+	challengeCurrent   *challengeWindowState
+	challengeInitWheel sync.Once
+)
+
+func recordChallengeSummary(reason, ip string) {
+	challengeInitWheel.Do(func() { go challengeFlushLoop() })
+	challengeMu.Lock()
+	defer challengeMu.Unlock()
+	now := time.Now()
+	if challengeCurrent == nil || now.Sub(challengeCurrent.start) >= blockedWindow {
+		challengeCurrent = &challengeWindowState{start: now, topReason: map[string]int{}, topIP: map[string]int{}}
+	}
+	w := challengeCurrent
+	w.count++
+	if reason != "" {
+		w.topReason[reason]++
+	}
+	if ip != "" {
+		w.topIP[ip]++
+	}
+}
+
+func challengeFlushLoop() {
+	t := time.NewTicker(blockedWindow)
+	defer t.Stop()
+	for range t.C {
+		flushChallengeWindow()
+	}
+}
+
+func flushChallengeWindow() {
+	challengeMu.Lock()
+	w := challengeCurrent
+	challengeCurrent = nil
+	challengeMu.Unlock()
+	if w == nil || w.count < challengeSummaryAt {
+		return
+	}
+	span := blockedSpanLabel(time.Since(w.start))
+	Publish(Event{
+		Type: EvtChallengeSummary, Level: LevelWarn,
+		Title: "挑战统计",
+		Body: fmt.Sprintf("%s内挑战 %d 次（TOP 原因：%s；TOP IP：%s）",
+			span, w.count, topCounts(w.topReason, 3, "×"), topCounts(w.topIP, 3, "×")),
+		Fields: map[string]string{
+			"1": span,
+			"2": fmt.Sprint(w.count),
+			"3": topCounts(w.topReason, 3, "×"),
+			"4": topCounts(w.topIP, 3, "×"),
+		},
+	})
 }
