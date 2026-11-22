@@ -4017,7 +4017,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if db.MetricsDB != nil {
 		if _, err := db.MetricsDB.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID); err != nil {
 			// （裁定）：清理失败不阻断删除（规则已提交），
-			// 但必须显性化——操作审计留痕 + 周期任务 metrics-orphan-cleanup
+			// 但必须显性化——操作审计留痕 + 周期任务 maintenance-retention
 			// 按「已删除规则」谓词有界收敛重试（残留行 7 天保留期另兜底）。
 			services.Logf("error", "DeleteRule metrics_history delete error for caddy_id=%s: %v", caddyID, err)
 			recordAudit(c, "清理失败", "规则指标", services.FormatAuditDetail(

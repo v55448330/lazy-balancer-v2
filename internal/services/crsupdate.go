@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 )
 
 // CRSBundledVersion is the CRS release baked into the container image; it is
@@ -473,8 +474,12 @@ func (m *CRSUpdateManager) runWithContext(runCtx context.Context, trigger string
 		switch snap.Status {
 		case string(CRSStatusFailed):
 			RecordAuditLog(operator, "更新失败", "CRS规则库", detail, "")
+			notify.PublishLibUpdateFailed("CRS规则库", trigger, snap.Message)
 		case string(CRSStatusCancelled):
 			RecordAuditLog(operator, "取消", "CRS规则库", detail, "")
+		case string(CRSStatusSuccess):
+			RecordAuditLog(operator, "更新", "CRS规则库", detail, "")
+			notify.PublishLibUpdateSucceeded("CRS规则库", trigger, libUpdateVersionDetail(snap.Version))
 		default:
 			RecordAuditLog(operator, "更新", "CRS规则库", detail, "")
 		}

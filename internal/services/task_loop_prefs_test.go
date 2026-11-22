@@ -29,21 +29,21 @@ func reinitTaskEngineForTest(t *testing.T) *taskengine.Engine {
 	return InitTaskEngine("", t.TempDir()+"/app.log")
 }
 
-// Given 用户停止 audit-retention 并落偏好；When 重新初始化引擎；
+// Given 用户停止 maintenance-retention 并落偏好；When 重新初始化引擎；
 // Then 仍为停止态，且不产生首轮执行。
 func TestTaskLoopPrefs_stoppedTaskSurvivesReinitWithoutFirstRun(t *testing.T) {
 	te := newWireTestEngine(t)
-	te.StopLoop("audit-retention")
-	if err := RecordTaskLoopPref("audit-retention", false); err != nil {
+	te.StopLoop("maintenance-retention")
+	if err := RecordTaskLoopPref("maintenance-retention", false); err != nil {
 		t.Fatalf("record pref: %v", err)
 	}
-	before := taskRunCountForTest(t, "audit-retention")
+	before := taskRunCountForTest(t, "maintenance-retention")
 
 	te2 := reinitTaskEngineForTest(t)
-	if te2.IsRunning("audit-retention") {
-		t.Fatal("重启后 audit-retention 应为停止态（用户显式停止不得被默认启动清单复活）")
+	if te2.IsRunning("maintenance-retention") {
+		t.Fatal("重启后 maintenance-retention 应为停止态（用户显式停止不得被默认启动清单复活）")
 	}
-	if after := taskRunCountForTest(t, "audit-retention"); after != before {
+	if after := taskRunCountForTest(t, "maintenance-retention"); after != before {
 		t.Fatalf("停止态任务不得首轮执行：task_runs %d -> %d", before, after)
 	}
 }
@@ -104,7 +104,7 @@ func TestTaskLoopPrefs_internalWakeDoesNotRewritePreference(t *testing.T) {
 // Then 表中仅一行、状态幂等且无错误。
 func TestTaskLoopPrefs_concurrentWriteAndRepeatedInitIdempotent(t *testing.T) {
 	te := newWireTestEngine(t)
-	const id = "log-cleanup"
+	const id = "maintenance-retention"
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
 	for range 8 {
@@ -178,11 +178,11 @@ func TestTaskLoopPrefs_staleRowPurgedAndTimestampUsesConfigWallClock(t *testing.
 
 	// 时间列与同域口径同源：写入值必须接近当前配置时区墙钟（±1 分钟），
 	// 而不是 UTC datetime('now')（在非 UTC 时区下相差整小时）。
-	if err := RecordTaskLoopPref("audit-retention", false); err != nil {
+	if err := RecordTaskLoopPref("maintenance-retention", false); err != nil {
 		t.Fatalf("record pref: %v", err)
 	}
 	var updatedAt string
-	if err := db.DB.QueryRow(`SELECT updated_at FROM task_loop_prefs WHERE task_id='audit-retention'`).Scan(&updatedAt); err != nil {
+	if err := db.DB.QueryRow(`SELECT updated_at FROM task_loop_prefs WHERE task_id='maintenance-retention'`).Scan(&updatedAt); err != nil {
 		t.Fatal(err)
 	}
 	got, err := time.ParseInLocation("2006-01-02 15:04:05", updatedAt, CurrentLocation())

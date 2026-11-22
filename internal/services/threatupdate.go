@@ -19,6 +19,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/wafiplist"
 )
 
@@ -68,6 +69,8 @@ type ThreatUpdateManager struct {
 	lastStartedAt   string
 	lastFinishedAt  string
 	lastTaskOutcome string // success / failed / ""（未跑过）
+	// lastTaskMessage 本轮失败摘要（通知终态事件的「错误」字段；成功轮空串）。
+	lastTaskMessage string
 	scheduleSlotErr error
 	// lastRunEmptySources 标记本轮「启用源均未到期，无更新」。它是**审计动作
 	// 的附加语义**而非终态：零到期源轮按成功轮落定（task_runs=success），审计
@@ -361,6 +364,13 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 		switch outcome {
 		case "failed":
 			RecordAuditLog(operator, "更新失败", "威胁情报库", detail, "")
+			m.mu.Lock()
+			msg := m.lastTaskMessage
+			m.mu.Unlock()
+			if msg == "" {
+				msg = ErrThreatUpdateFailed.Error()
+			}
+			notify.PublishLibUpdateFailed("威胁情报库", trigger, msg)
 		case "cancelled":
 			RecordAuditLog(operator, "取消", "威胁情报库", detail, "")
 		case "skipped":
@@ -369,6 +379,11 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 			RecordAuditLog(operator, "跳过", "威胁情报库", detail, "")
 		default:
 			RecordAuditLog(operator, "更新", "威胁情报库", detail, "")
+			if emptySources {
+				notify.PublishLibUpdateSucceeded("威胁情报库", trigger, "无到期源")
+			} else {
+				notify.PublishLibUpdateSucceeded("威胁情报库", trigger, "全部源处理完成")
+			}
 		}
 	}()
 	// 函数内 recover：本 defer 注册在上方审计 defer 之后，恢复先于审计执行
@@ -399,6 +414,7 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 	m.lastTrigger = trigger
 	m.lastStartedAt = time.Now().UTC().Format(crsTimeLayout)
 	m.lastRunEmptySources = false
+	m.lastTaskMessage = ""
 	m.scheduleSlotErr = nil
 	m.mu.Unlock()
 	// 起点角色复查：调度器 tick 的 is_master
@@ -412,6 +428,7 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 		m.mu.Lock()
 		m.lastFinishedAt = time.Now().UTC().Format(crsTimeLayout)
 		m.lastTaskOutcome = "failed"
+		m.lastTaskMessage = "角色读取失败：" + roleErr.Error()
 		m.mu.Unlock()
 		return
 	} else if !isMaster {
@@ -432,6 +449,9 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 	}
 	if err != nil {
 		Logf("error", "威胁情报库: 读取源列表失败: %v", err)
+		m.mu.Lock()
+		m.lastTaskMessage = "读取源列表失败：" + err.Error()
+		m.mu.Unlock()
 		finishWith("failed") // 早退路径同样落终态，状态端点不失真
 		return
 	}
@@ -533,6 +553,7 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 		m.lastTaskOutcome = "cancelled"
 	} else if anyFailed {
 		m.lastTaskOutcome = "failed"
+		m.lastTaskMessage = "部分源更新失败（详见威胁库更新日志）"
 	} else {
 		m.lastTaskOutcome = "success"
 	}

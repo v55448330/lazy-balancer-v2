@@ -1,7 +1,7 @@
 package services
 
 // 规则访问日志的周期兜底：规则删除/导入差集/集群差集三个事件型删除入口任一
-// 失败即永久残留（单规则含轮转副本上限约 6×caddy_log_size_mb），故 log-cleanup
+// 失败即永久残留（单规则含轮转副本上限约 6×caddy_log_size_mb），故日志清理步
 // 按「存活规则清单」求差兜底，与 metrics 孤儿清理同构。
 
 import (
@@ -96,7 +96,7 @@ func TestPurgeOrphanRuleLogs_survivesRuleListReadFailureWithoutDeleting(t *testi
 		}
 	}
 	if err := (RuntimeCleanupResult{RuleLogs: result}).Err(); err == nil {
-		t.Fatal("扫描失败必须进 log-cleanup 错误面（任务落 failed）")
+		t.Fatal("扫描失败必须进日志清理步错误面（任务落 failed）")
 	}
 }
 
@@ -137,7 +137,7 @@ func TestPurgeOrphanRuleLogs_removeFailureSurfaces(t *testing.T) {
 	}
 	res := RuntimeCleanupResult{RuleLogs: result}
 	if err := res.Err(); err == nil {
-		t.Fatal("删除失败必须进 log-cleanup 错误面（任务落 failed）")
+		t.Fatal("删除失败必须进日志清理步错误面（任务落 failed）")
 	}
 	if summary := res.RuleLogs.Summary(); !containsAll(summary, "删除失败", "1 个") {
 		t.Fatalf("摘要未披露删除失败：%s", summary)

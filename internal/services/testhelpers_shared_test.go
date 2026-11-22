@@ -247,7 +247,7 @@ func captureApplicationLogs(t *testing.T) *bytes.Buffer {
 // 承载 test-only 符号会让「生产调用面」判断失真（误复用即把旧形态拉回主链），
 // 故搬到同包测试文件（编译进测试二进制，不进产品符号表）。
 
-// logCleanupSummaryLine log-cleanup 任务单轮摘要行——对「摘要行口径 = 实际
+// logCleanupSummaryLine 日志清理步单轮摘要行——对「摘要行口径 = 实际
 // 清理口径」直接钉测。
 func logCleanupSummaryLine(logFile string) string {
 	_, line := logCleanupRound(context.Background(), logFile)

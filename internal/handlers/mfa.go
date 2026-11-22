@@ -302,9 +302,9 @@ func mfaVerifyFailureResponse(c *gin.Context, verr error, failureDetail string) 
 		return
 	}
 	recordAudit(c, "认证拒绝", "用户认证", failureDetail)
-	// MFA 验证码校验失败通知（安全可观测面；真码错才发，业务态/故障不发）
-	notify.Publish(notify.Event{Type: notify.EvtMFAVerifyFailed,
-		Fields: map[string]string{"1": c.GetString("username"), "2": failureDetail}})
+	// MFA 验证码校验失败通知（安全可观测面；真码错才发，业务态/故障不发）。
+	// 「用户|IP」10 分钟去抖在 notify.PublishMFAVerifyFailed 内收敛。
+	notify.PublishMFAVerifyFailed(c.GetString("username"), failureDetail, c.ClientIP())
 	c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_345a8c4a"), MessageKey: "k_345a8c4a"})
 }
 

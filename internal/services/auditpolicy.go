@@ -143,11 +143,10 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/system/restart":          AuditPolicyGeneric,
 	// 任务监控（v2.3.4）：toggle/cancel/control 三操作 handler 均显式留痕。
 	// 任务触发：升为 Explicit——Skip 前提「任务体 defer
-	// 单记」随 v2.0 可触发族扩容失效（时仅 3 自记族；现注册全集 27 族中
-	// 可手动触发 17 族=6 自记+11 非自记，非自记族任务体零审计：log-cleanup/
-	// audit-retention/security-events-retention/cert-renewal-scan/cert-reconcile/
-	// cert-manual-poll/cert-waiting-ca 等，全量分流清单见 audit_policy_test.go
-	// 的族对表钉测）。
+	// 单记」随 v2.0 可触发族扩容失效（时仅 3 自记族；现注册全集 29 族中
+	// 可手动触发 16 族=6 自记+10 非自记，非自记族任务体零审计：
+	// config-watchdog/maintenance-retention/cert-scan/cert-manual-poll/
+	// cert-waiting-ca 等，全量分流清单见 audit_policy_test.go 的族对表钉测）。
 	// handler 按 TaskTriggerSelfRecordsAudit 分流：非自记族显式补记「触发」，
 	// 自记族跳过（保 任务体单记裁定，operator 经 RunContext 归人）。
 	"POST /api/v1/system/tasks/:id/trigger": AuditPolicyExplicit,
@@ -279,9 +278,10 @@ func ClassifyAuditRoute(method, path string) AuditPolicy {
 //   - auto-backup：备份执行器（handlers/autobackup.go）按结果记「备份/备份失败」；
 //   - startup:config-load：runConfigLoad 载入审计（启动与手动同体）。
 //
-// 其余 11 个可手动触发 Periodic 族（config-watchdog/log-cleanup/audit-retention/
-// security-events-retention/metrics-orphan-cleanup/cert-renewal-scan/
-// cert-reconcile/cert-manual-poll/cert-waiting-ca/autoban/metrics-history-cleanup）
+// 其余 10 个可手动触发 Periodic 族（config-watchdog/maintenance-retention/
+// cert-scan/cert-manual-poll/cert-waiting-ca/autoban/notification-daily-report/
+// notification-delivery-retention/notification-apikey-expiry/
+// notification-node-stats-report）
 // 任务体零 RecordAuditLog，由 trigger handler 显式补记。常驻（daemon）族恒不可
 // 手动触发（CanTrigger=Kind!=daemon，启停语义由调度开关承担），不在本分流面。
 // 新增可触发族时必须评估本集合

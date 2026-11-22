@@ -15,16 +15,16 @@ import (
 // 取单键。
 func TestApplyTaskLoopPrefs_consumesProvidedSnapshot(t *testing.T) {
 	te := newWireTestEngine(t)
-	meta, ok := te.Lookup("log-cleanup")
+	meta, ok := te.Lookup("maintenance-retention")
 	if !ok || !meta.LoopOn {
-		t.Fatalf("装配默认应开启 log-cleanup 调度, ok=%v loopOn=%v", ok, meta.LoopOn)
+		t.Fatalf("装配默认应开启 maintenance-retention 调度, ok=%v loopOn=%v", ok, meta.LoopOn)
 	}
 	// 快照中的偏好行不在 task_loop_prefs 表内（旧实现内部重查 → 空映射 → 无效）。
 	if prefs := loadTaskLoopPrefs(); len(prefs) != 0 {
 		t.Fatalf("基线表应为空, got %v", prefs)
 	}
-	applyTaskLoopPrefs(te, map[string]bool{"log-cleanup": false})
-	if meta, _ := te.Lookup("log-cleanup"); meta.LoopOn {
+	applyTaskLoopPrefs(te, map[string]bool{"maintenance-retention": false})
+	if meta, _ := te.Lookup("maintenance-retention"); meta.LoopOn {
 		t.Fatal("applyTaskLoopPrefs 必须消费调用方快照（旧实现内部重查表会无视该偏好）")
 	}
 }

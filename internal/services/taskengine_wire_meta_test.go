@@ -248,12 +248,10 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 		t.Fatal("DescribeAll empty")
 	}
 	wantPeriodic := map[string]int{
-		"config-watchdog": 60, "log-cleanup": 86400, "audit-retention": 86400,
-		"security-events-retention": 86400, "metrics-orphan-cleanup": 86400,
+		"config-watchdog": 60, "maintenance-retention": 86400,
 		"notification-delivery-retention": 86400, "notification-apikey-expiry": 86400,
-		"cert-renewal-scan": 21600, "cert-reconcile": 21600, "cert-manual-poll": 600,
+		"cert-scan": 21600, "cert-manual-poll": 600,
 		"cert-waiting-ca": 30, "autoban": 60,
-		"metrics-history-cleanup": 86400,
 	}
 	seen := map[string]bool{}
 	for _, m := range metas {
@@ -305,7 +303,7 @@ func TestTaskEngineWire_MasterOnlyFamiliesTriggerRejectedOnSlave(t *testing.T) {
 		t.Fatal(err)
 	}
 	te.SetRole(false) // 从节点
-	for _, id := range []string{"cert-renewal-scan", "cert-reconcile", "auto-backup"} {
+	for _, id := range []string{"cert-scan", "auto-backup"} {
 		err := te.Trigger(id, "manual", "tester")
 		if err == nil || !strings.Contains(err.Error(), "主节点") {
 			t.Fatalf("从节点 Trigger %s 应被角色门拒绝，得到 err=%v", id, err)
@@ -329,7 +327,7 @@ func TestTaskEngineWire_canTriggerDerivedFromKind(t *testing.T) {
 
 // StopTaskEngine 先 engine.Stop()（drain 超时即放弃等待）再置全局
 // taskEngine=nil；daemon goroutine 若在超时后首次进入 Run，裸读 taskEngine
-// 会 nil 解引用 panic。同族 cert-renewal-scan / cert-waiting-ca 已固定句柄
+// 会 nil 解引用 panic。同族 cert-scan / cert-waiting-ca 已固定句柄
 // 本处为第三处。
 func TestClusterSyncDaemonRun_nilEngineReturnsWithoutPanic(t *testing.T) {
 	old := TaskEngine()

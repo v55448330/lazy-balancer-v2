@@ -48,7 +48,7 @@
 | 违规项（v2.2 立案） | 立案位置（修复前） | 状态 |
 |---|---|---|
 | 每个 CA 提供商一个 `go q.loop()` | `internal/services/caqueue.go:1163-1166` | 已归口 → `cert-issuance` daemon `RunTicker` 派发泵 |
-| `MetricsService.Start` 30s 抓取 + 24h 清理 | `internal/services/services.go:79-114` | 已归口 → `metrics-collector` daemon + `metrics-history-cleanup` Periodic |
+| `MetricsService.Start` 30s 抓取 + 24h 清理 | `internal/services/services.go:79-114` | 已归口 → `metrics-collector` daemon + `maintenance-retention` 的指标历史步 |
 | rollup warmer 60s（启动即首轮） | `internal/handlers/security_threat_screen.go:1085-1124` | 已归口 → `threat-rollup-warmer` daemon |
 | caddy-restart 触发源 2s 轮询 | `internal/handlers/handlers.go:1175-1203` | 已归口 → `caddy-restart-watcher` daemon |
 | API-Key last_used 1min flush + 1h 清理 | `internal/db/apikey_last_used.go:76-125` | 已归口 → `apikey-usage-flusher` daemon |
@@ -158,7 +158,7 @@ type Descriptor struct {
 
 已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为；`ToggleFn`/`ToggleName`（2026-10-11）——v2.0 调度开关统一（StartLoop/StopLoop）后声明族零消费退役，TaskMeta/TaskInfo 的 `toggleable`/`toggle_name` 序列化字段一并删除；`ManualRun`（勘误）——手动触发能力由 Kind 派生（DescribeAll `CanTrigger`），声明字段无消费；`TaskMeta.Enabled`（任务监控只认 `loop_on`，`Lookup/DescribeAll` 不再求值 `EnabledFn`）——`Descriptor.EnabledFn` 仍保留为 Scheduled/Periodic 调度门。
 
-## 2. 任务清单（34 注册任务；实时全集以 `DescribeAll` 为准）
+## 2. 任务清单（29 注册任务；实时全集以 `DescribeAll` 为准）
 
 ### 定时（7）——排程槽驱动，Run 纯业务
 
@@ -200,7 +200,7 @@ failed 行（没有执行就没有 task_runs 记录）。该形态的可观测�
 | qq-bot-connection | 自管理阻塞循环（WebSocket 长连：鉴权/心跳/Resume 重连）——scope-exempt: daemon-run-body-loop | QQ 官方机器人事件网关（绑定指令收）；**RunsOn=MasterOnly**，掉线触发 notify_channel_down 告警 |
 | wx-bot-connection | 自管理阻塞循环（iLink 长轮询+REST 发送）——scope-exempt: daemon-run-body-loop | 微信个人 Bot（扫码登录态维护/绑定指令）；**RunsOn=MasterOnly**，掉线触发 notify_channel_down 告警 |
 
-运行期常驻族 7 个 daemon（metrics-collector/threat-rollup-warmer/caddy-restart-watcher/ratelimit-bucket-sweep/apikey-usage-flusher/runtime-log-threshold/runtime-tz-refresh）与其余运行期循环任务（metrics-history-cleanup）描述符与工作体在 `taskengine_wire_runtime.go`；跨包工作体经 `Set*` 钩子注入（main 在 `InitTaskEngine` 前装配），钩子未接线时空载体阻塞至停止（零 task_runs 噪音）。
+运行期常驻族 7 个 daemon（metrics-collector/threat-rollup-warmer/caddy-restart-watcher/ratelimit-bucket-sweep/apikey-usage-flusher/runtime-log-threshold/runtime-tz-refresh）描述符与工作体在 `taskengine_wire_runtime.go`；指标历史清理已并入 `maintenance-retention`（`taskengine_wire.go`，工作体 `services.go`）。跨包工作体经 `Set*` 钩子注入（main 在 `InitTaskEngine` 前装配），钩子未接线时空载体阻塞至停止（零 task_runs 噪音）。
 
 系统启动即运行（默认 StartLoop）；关闭调度=启动也不运行；允许手动停止和启用。
 
@@ -222,22 +222,17 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 且状态列呈现 `failed`（修复前恒 `idle`「空闲」，采集/签发静默停摆无信号）；
 显式停止调度后回 `idle`。
 
-### 循环（13）——固定间隔，每轮独立执行+记录
+### 循环（8）——固定间隔，每轮独立执行+记录
 
 | 任务 | 间隔 |
 |---|---|
 | config-watchdog | 60s |
-| cert-renewal-scan | 6h（入队时唤醒 cert-waiting-ca） |
-| cert-reconcile | 6h |
+| cert-scan | 6h（续期扫描入队时唤醒 cert-waiting-ca；同轮执行状态对账） |
 | cert-manual-poll | 10min |
 | cert-waiting-ca | 30s（**默认调度关闭**——见 §3） |
-| log-cleanup | 24h |
-| audit-retention | 24h |
-| security-events-retention | 24h |
+| maintenance-retention | 24h（五步一轮：日志轮转清理、审计与 90 天任务历史保留、安全事件保留、指标历史（含 L4 与日聚合）、孤儿规则指标；单步失败留痕后继续，轮末汇总失败步骤） |
 | notification-delivery-retention | 24h（按保留期删除过期通知投递记录与每通道结果，500 行/批让锁推进；失败进任务失败终态） |
 | notification-apikey-expiry | 24h（扫描 7 天内到期的启用 API 密钥，发布 apikey.expiry_warning 临期预警） |
-| metrics-orphan-cleanup | 24h（已删除规则的残留历史指标收敛清理，单轮限量分批） |
-| metrics-history-cleanup | 24h（>7 天指标历史清理，5000 行/批让锁推进；失败进任务失败终态） |
 | autoban | 60s（调度唯一前提=业务启用：PUT 保存联动启停+启动按库实态对齐，Descriptor 无 EnabledFn；观察模式默认开） |
 
 
@@ -273,7 +268,7 @@ crs/ip2region 状态镜像仅在对应 manager 本进程在途时采纳——持
 ```
 默认：调度关闭（不在默认 StartLoop 清单）——引擎不 tick，页面状态列「空闲」+开关列「已停止」（方案 A，2026-10-12）
 唤醒（勘误：非单点——四处入队成功路径各自唤醒）：
-      cert-renewal-scan Run 体入队后 → `RearmLoop("cert-waiting-ca", certJobsActive())`
+      cert-scan 的续期扫描步入队后 → `RearmLoop("cert-waiting-ca", certJobsActive())`
       CreateOrRequeueCertJobWithChange 成功路径（规则写路径 Create/Retry/Renew 收敛点）
       RetryCertJob 成功路径（handlers/certjobs.go）
       DeleteCertJob 删除失败恢复重入队成功路径（handlers/certjobs.go）
@@ -369,7 +364,7 @@ crs/ip2region 状态镜像仅在对应 manager 本进程在途时采纳——持
 本槽不再投递；业务推进/重排新槽后恢复。手动触发轮被取消不改预约（不消费槽），
 `CancelHook` 返回 false（取消未生效）同样不消费。
 
-task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取消全部运行，再等待 Scheduled/Periodic/Oneshot 在途 Run 与全部 daemon 落定终态；停止后新的 Trigger/RunSync 返回 `ErrEngineStopped`。
+task_runs 保留 90 天（maintenance-retention 每日清理）。`Engine.Stop` 先取消全部运行，再等待 Scheduled/Periodic/Oneshot 在途 Run 与全部 daemon 落定终态；停止后新的 Trigger/RunSync 返回 `ErrEngineStopped`。
 
 **配置导入暂停/排空**：`PauseScheduling` 与 `ResumeScheduling` 成对使用，均在 `e.mu` 内提交暂停状态，与 `runNow` 的 `inFlight` 登记严格定序。暂停后 tick 不再派发，`Trigger`、`RunSync` 及已越过入口检查的迟到 `runNow` 均返回 `ErrSchedulingPaused`；仅装配期 BootSync（`trigger=startup`）豁免。因此除该启动路径外，暂停返回后 `inFlight` 只减不增，导入可安全排空在途执行；恢复同样在 `e.mu` 内提交，暂停/恢复边界不留下登记窗口。
 
@@ -392,7 +387,7 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 - 统一入口为 `taskengine.RotateTaskLogBeforeWrite`：`size(path)+len(待写入行) > task_log_size_mb` 时先 `RotateTaskLogFile` 再追加。`taskLogAppend`、`TeeTaskLog` 与证书任务日志全部经过该入口，禁止另设每日巡检滚动或第二套滚动实现。
 - 普通任务与证书任务日志共用 `taskengine.TruncateTaskLogLine`：滚动判定前将单行按 UTF-8 安全截到 4096 字节并保留显式截断标记，避免巨型错误行突破活动文件尺寸治理。
 - 主流水 `tasks/{id}.log` 保 1 份，证书任务 `tasks/certjobs/*.log` 保 5 份；归档份数是保留策略差异，不是第二种滚动机制。
-- `log-cleanup` 只负责保留期清理，不再负责尺寸滚动。`tasks/` 根日志删除统一经 `taskengine.RemoveTaskLogIfModifiedBefore`，在路径写锁内重新 stat 后删除（避免锁外旧 FileInfo 与 `rotate→rename→append` 交错误删新一代）；`tasks/certjobs/` 子目录仍由 ruleID 写锁同源复核。
+- `maintenance-retention` 的日志清理步只负责保留期清理，不再负责尺寸滚动。`tasks/` 根日志删除统一经 `taskengine.RemoveTaskLogIfModifiedBefore`，在路径写锁内重新 stat 后删除（避免锁外旧 FileInfo 与 `rotate→rename→append` 交错误删新一代）；`tasks/certjobs/` 子目录仍由 ruleID 写锁同源复核。
 - 每个 `tasks/{id}.log` 只能由该任务执行链写入：cluster-sync/普通配置导入不得写三库日志；`SecurityEventsPollOnce` 只返回条数，ingestion 自行记录；autoban 仅 Run/候选修剪同链写日志，摄取热路径不直接写。
 - 普通任务路径=`TaskLogPath`；`cert-job:<job_id>` 先解析 `rule_id` 再进 `tasks/certjobs/certjob-<rule>.log`，API/MCP/`/logs/stats` 共用 `systemTaskLogPath`。
 - 日志统计与弹框使用 `task:<id>`：每个任务对应自己的真实文件、活动大小、轮转副本和阈值；禁止用 `tasks/*.log` 目录聚合值代替当前任务。
@@ -454,7 +449,7 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 | # | 违规项 | 目标注册任务 | 状态 |
 |---|---|---|---|
 | 1 | per-provider `go q.loop()` | `cert-issuance`（Daemon + `RunTicker` 遍历 `DispatchOnce`） | 已完成（`taskengine_wire.go` cert-issuance Run：`RunTicker(100ms, WakeCh, DispatchOnce)`；工作体 `caqueue.go` `DispatchOnce` 单源） |
-| 2 | `MetricsService.Start`（30s + 24h） | 新 daemon `metrics-collector`（RunsOn=RoleAny；24h 清理拆 `Periodic`） | 已完成（`taskengine_wire_runtime.go`：`metrics-collector` daemon + `metrics-history-cleanup` Periodic；工作体 `services.go`/`metrics.go`） |
+| 2 | `MetricsService.Start`（30s + 24h） | 新 daemon `metrics-collector`（RunsOn=RoleAny；24h 清理并入 `maintenance-retention`） | 已完成（`taskengine_wire_runtime.go`：`metrics-collector` daemon；`maintenance-retention` 指标历史步在 `taskengine_wire.go`；工作体 `services.go`/`metrics.go`） |
 | 3 | rollup warmer（60s） | 独立 daemon `threat-rollup-warmer`（实际实现未并入 `security-events-ingestion`——60s 预热与 2s 摄取节拍/生命周期不同域，独立 daemon 各自启停且零 task_runs 噪音） | 已完成（`taskengine_wire_runtime.go`；工作体 `handlers.RunThreatRollupWarmerRound`） |
 | 4 | caddy-restart 触发源（2s） | 新 daemon `caddy-restart-watcher`（Daemon 生命周期只落 1 行，无 task_runs 噪音） | 已完成（`taskengine_wire_runtime.go`；工作体 `handlers.CaddyRestartWatcherOnce`） |
 | 5 | API-Key last_used（1min/1h） | 新 daemon `apikey-usage-flusher`（循环移出 db 包，db 只暴露 flush/cleanup 函数） | 已完成（`taskengine_wire_runtime.go` `runAPIKeyUsageFlusher`；db 只暴露 `FlushAPIKeyLastUsed`/`CleanupAPIKeyAuxTables`） |

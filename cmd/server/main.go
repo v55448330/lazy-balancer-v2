@@ -66,8 +66,7 @@ func runMain(args []string, healthcheck func() int, serve func() error) int {
 			services.Logf("error", "startup failed: %v", startupFailure.err)
 			// 启动期失败通知（库装配前的失败 Publish 安全丢弃——分发循环
 			// 未启动/无队列时入 default 分支计数，绝不阻塞失败退出路径）。
-			notify.Publish(notify.Event{Type: notify.EvtStartupAbnormal,
-				Fields: map[string]string{"1": startupFailure.err.Error()}})
+			notify.PublishStartupAbnormal(startupFailure.err.Error())
 		} else {
 			services.Logf("error", "HTTP server stopped unexpectedly: %v", err)
 		}
@@ -493,8 +492,8 @@ func run() error {
 		go func() { serverErrors <- server.Serve(ln) }()
 	}
 	// 监听已建立=启动完成事实点（此后异常属运行期，走 serverErrors 链）。
-	notify.Publish(notify.Event{Type: notify.EvtStartupCompleted,
-		Fields: map[string]string{"1": addr}})
+	// 幂等守卫：进程内完成事件只发一次。
+	notify.PublishStartupCompleted(addr)
 
 	serverErr := waitForServerStop(server, serverStopSignals{quit: quit, restart: restart, serverErrors: serverErrors, caddyAdminURL: cfg.CaddyAdminURL, budget: shutdown})
 	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {

@@ -37,7 +37,7 @@ var errPendingDeltaMarkerCorrupt = errors.New("pending delta marker corrupt")
 
 // errAuditRotationDeferred 轮转未完成（归档已就位、活文件未截断，下轮重试）。
 // 与「无需轮转」（nil）和「轮转失败」（其它错误）三态区分：调用方据此披露
-// 「延迟」而不是把它当成功（log-cleanup 摘要）或当硬失败（daemon 任务）。
+// 「延迟」而不是把它当成功（日志清理步摘要）或当硬失败（daemon 任务）。
 var errAuditRotationDeferred = errors.New("audit log rotation deferred")
 
 // pendingDeltaCorruptQuarantineRounds 连续损坏轮次达到该值后隔离标记。
@@ -442,7 +442,7 @@ func rotateAuditLogIfNeeded(ctx context.Context) (total int, rotErr error) {
 		throttledAuditFailureLogf("audit log rotation: live tail not fully ingested (reached %d of %d bytes), truncate deferred", reached, finalInfo.Size())
 		// 轮转未完成必须可识别：返回值此前与「无需轮转」同为 nil（健康位
 		// healthy、调用方无法区分「已回收空间」与「每 2s 全量复制但未截断」）。
-		// 哨兵让健康位与 log-cleanup 摘要如实披露延迟。
+		// 哨兵让健康位与日志清理摘要如实披露延迟。
 		deferred := fmt.Errorf("%w: 活文件尾部尚未摄取（reached %d of %d bytes，下轮重试）", errAuditRotationDeferred, reached, finalInfo.Size())
 		if rotErr != nil {
 			return total, errors.Join(rotErr, deferred)

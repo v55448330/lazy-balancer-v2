@@ -13,7 +13,7 @@ import (
 
 func TestSecurityEventsRetentionReadFailure_warnsOnceAndRecovers(t *testing.T) {
 	initServicesDB(t)
-	const stateKey = "security-events-retention-read"
+	const stateKey = "maintenance-retention-read"
 	resetLogStateTransitionForTest(stateKey)
 	t.Cleanup(func() { resetLogStateTransitionForTest(stateKey) })
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30, security_events_row_cap=1234 WHERE id=1`); err != nil {

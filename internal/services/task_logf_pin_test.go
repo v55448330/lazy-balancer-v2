@@ -38,8 +38,8 @@ func readTaskLog(t *testing.T, taskID string) string {
 }
 
 // Given 空库（无临期证书、无过期审计、配置一致无从判定——cert 域最简可测形）。
-// When cert-renewal-scan 摘要行写入。
-// Then tasks/cert-renewal-scan.log 含「无临期证书」业务结论行。
+// When 证书扫描任务体写入摘要行。
+// Then tasks/cert-scan.log 含「无临期证书」业务结论行。
 func TestTaskLogf_CertRenewalScanNoExpiringSummary(t *testing.T) {
 	newTaskLogDir(t)
 	setupIsolatedDB(t)
@@ -47,17 +47,19 @@ func TestTaskLogf_CertRenewalScanNoExpiringSummary(t *testing.T) {
 	// 有 jobs 的循环内消费——空路径不依赖队列）
 	s := &CertificateService{}
 	s.renewExpiringCertificates(context.Background())
-	log := readTaskLog(t, "cert-renewal-scan")
+	log := readTaskLog(t, "cert-scan")
 	if !strings.Contains(log, "无临期证书") {
-		t.Fatalf("cert-renewal-scan 摘要行缺失: %q", log)
+		t.Fatalf("cert-scan 摘要行缺失: %q", log)
 	}
 }
 
-// Given audit-retention 已在引擎注册（真实 Run 体：CleanupAuditLogs→
+// Given 保留期清理任务已在引擎注册（真实 Run 体：CleanupAuditLogs→
 // PurgeTaskRuns→TaskLogf），库中含过期审计行。
 // When 经引擎 Trigger 执行真实 Run 体（接线钉——曾由测试自调
 // CleanupAuditLogs+自写 TaskLogf，删 Run 体内 TaskLogf 调用不会红）。
-// Then tasks/audit-retention.log 含 Run 体写出的带删除条数的结论行。
+// Then tasks/maintenance-retention.log 含 Run 体写出的带删除条数的结论行。
+// （其余四步在未初始化 metrics 库的测试形态下可失败——本用例只钉审计步
+// 的摘要行存在，故不要求整轮成功。）
 func TestTaskLogf_AuditRetentionCleanupSummary(t *testing.T) {
 	newTaskLogDir(t)
 	te := newWireTestEngine(t)
@@ -68,12 +70,10 @@ func TestTaskLogf_AuditRetentionCleanupSummary(t *testing.T) {
 	if _, err := db.AuditDB.Exec(`INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES ('u','登录','认证','','','2020-01-01 00:00:00')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := te.Trigger("audit-retention", "manual", ""); err != nil {
-		t.Fatalf("trigger audit-retention: %v", err)
-	}
-	log := readTaskLog(t, "audit-retention")
+	_ = te.Trigger("maintenance-retention", "manual", "")
+	log := readTaskLog(t, "maintenance-retention")
 	if !strings.Contains(log, "清理完成：审计日志 1 条") {
-		t.Fatalf("audit-retention Run 体摘要行缺失（接线断）: %q", log)
+		t.Fatalf("maintenance-retention Run 体审计摘要行缺失（接线断）: %q", log)
 	}
 }
 
@@ -177,12 +177,10 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 	"threat": taskengine.KindScheduled, "crs": taskengine.KindScheduled,
 	"ip2region": taskengine.KindScheduled, "auto-backup": taskengine.KindScheduled,
 	"crawlerbot-update": taskengine.KindScheduled,
-	"config-watchdog":   taskengine.KindPeriodic, "log-cleanup": taskengine.KindPeriodic,
-	"audit-retention": taskengine.KindPeriodic, "security-events-retention": taskengine.KindPeriodic,
-	"metrics-orphan-cleanup":          taskengine.KindPeriodic,
+	"config-watchdog":   taskengine.KindPeriodic, "maintenance-retention": taskengine.KindPeriodic,
 	"notification-delivery-retention": taskengine.KindPeriodic,
-	"cert-renewal-scan":               taskengine.KindPeriodic, "cert-reconcile": taskengine.KindPeriodic,
-	"cert-manual-poll": taskengine.KindPeriodic, "cert-waiting-ca": taskengine.KindPeriodic,
+	"cert-scan":                       taskengine.KindPeriodic,
+	"cert-manual-poll":                taskengine.KindPeriodic, "cert-waiting-ca": taskengine.KindPeriodic,
 	"autoban": taskengine.KindPeriodic,
 	// 运行期常驻族归口（引擎外调度器 → 注册任务）
 	"metrics-collector":         taskengine.KindDaemon,
@@ -192,7 +190,6 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 	"apikey-usage-flusher":      taskengine.KindDaemon,
 	"runtime-log-threshold":     taskengine.KindDaemon,
 	"runtime-tz-refresh":        taskengine.KindDaemon,
-	"metrics-history-cleanup":   taskengine.KindPeriodic,
 	"security-events-ingestion": taskengine.KindDaemon, "cert-issuance": taskengine.KindDaemon,
 	"cluster-sync":        taskengine.KindDaemon,
 	"startup:config-load": taskengine.KindOneshot,
@@ -231,18 +228,17 @@ func TestTaskEngineWire_KindMapping(t *testing.T) {
 	}
 }
 
-// runtimeLogFile 未打开（旋转写入器打开失败）时 log-cleanup
-// 整个 Run 体此前为空——任务监控恒绿却零动作、任务日志零行。必须留「未启用」行。
+// runtimeLogFile 未打开（旋转写入器打开失败）时日志清理步
+// 此前整个 Run 体为空——任务监控恒绿却零动作、任务日志零行。必须留「未启用」行。
 func TestTaskLogf_LogCleanupDisabledWhenRuntimeLogFileMissing(t *testing.T) {
 	// runtimeLogFile 为空=旋转写入器打开失败的真实形态；InitTaskEngine 会按
 	// 生产默认 /app/logs 派生任务日志目录，故引擎装配后再把任务日志目录指回
 	// 临时目录（TaskLogPath 为读时取值）。
 	te := newWireTestEngineWithRuntimeLog(t, "")
 	newTaskLogDir(t)
-	if err := te.Trigger("log-cleanup", "manual", ""); err != nil {
-		t.Fatalf("trigger log-cleanup: %v", err)
-	}
-	log := readTaskLog(t, "log-cleanup")
+	// 其余步骤在未初始化 metrics 库时可能失败——本用例只钉日志清理步留痕。
+	_ = te.Trigger("maintenance-retention", "manual", "")
+	log := readTaskLog(t, "maintenance-retention")
 	if !strings.Contains(log, "未启用") {
 		t.Fatalf("运行日志文件未打开时必须留「未启用」留痕（此前 Run 体整段静默）: %q", log)
 	}
@@ -265,13 +261,13 @@ func TestTaskLogf_SecurityEventsRetentionFailureSaysFailed(t *testing.T) {
 	if _, err := db.MetricsDB.Exec(`ALTER TABLE metrics_state RENAME TO metrics_state_v87`); err != nil {
 		t.Fatal(err)
 	}
-	_ = te.Trigger("security-events-retention", "manual", "")
-	log := readTaskLog(t, "security-events-retention")
-	if !strings.Contains(log, "清理失败") {
-		t.Fatalf("失败轮缺失败摘要行: %q", log)
+	_ = te.Trigger("maintenance-retention", "manual", "")
+	log := readTaskLog(t, "maintenance-retention")
+	if !strings.Contains(log, "安全事件保留清理失败") {
+		t.Fatalf("失败轮缺安全事件失败摘要行: %q", log)
 	}
-	if strings.Contains(log, "清理完成") {
-		t.Fatalf("失败轮不得写「清理完成」（与 task_runs failed 语义冲突）: %q", log)
+	if strings.Contains(log, "安全事件保留清理完成") {
+		t.Fatalf("失败步不得写「安全事件保留清理完成」（与 task_runs failed 语义冲突）: %q", log)
 	}
 }
 
@@ -286,12 +282,12 @@ func TestTaskLogf_MetricsOrphanCleanupFailureSaysFailed(t *testing.T) {
 	if _, err := db.DB.Exec(`ALTER TABLE lb_rules RENAME TO lb_rules_v87`); err != nil {
 		t.Fatal(err)
 	}
-	_ = te.Trigger("metrics-orphan-cleanup", "manual", "")
-	log := readTaskLog(t, "metrics-orphan-cleanup")
-	if !strings.Contains(log, "清理失败") {
-		t.Fatalf("失败轮缺失败摘要行: %q", log)
+	_ = te.Trigger("maintenance-retention", "manual", "")
+	log := readTaskLog(t, "maintenance-retention")
+	if !strings.Contains(log, "孤儿规则指标清理失败") {
+		t.Fatalf("失败轮缺孤儿清理失败摘要行: %q", log)
 	}
-	if strings.Contains(log, "清理完成") {
-		t.Fatalf("失败轮不得写「清理完成」（与 task_runs failed 语义冲突）: %q", log)
+	if strings.Contains(log, "孤儿规则指标清理完成") {
+		t.Fatalf("失败步不得写「孤儿规则指标清理完成」（与 task_runs failed 语义冲突）: %q", log)
 	}
 }

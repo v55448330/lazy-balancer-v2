@@ -111,6 +111,10 @@ func (h *Handlers) StartCrawlerLibUpdate(c *gin.Context) {
 		respondTaskTriggerAdmissionError(c, err)
 		return
 	}
+	// 手动发起事件（与三库同口径：受理即发，终态另发成功/失败）。
+	notify.Publish(notify.Event{Type: notify.EvtLibUpdated, Fields: map[string]string{
+		"1": c.GetString("username"), "2": libUpdateEventLabel("爬虫地址库更新"),
+	}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 

@@ -130,23 +130,6 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine, taskLoopPrefs map[stri
 	})
 
 	mustRegisterTask(te, taskengine.Descriptor{
-		ID:          "metrics-history-cleanup",
-		Family:      "system",
-		Name:        "指标历史清理",
-		Description: "每日清理超过 7 天保留期的指标历史（5000 行/批让锁推进）；失败进任务失败终态，不得恒成功",
-		Category:    "系统",
-		Kind:        taskengine.KindPeriodic,
-		IntervalFn:  func() time.Duration { return 24 * time.Hour },
-		Run: func(rc taskengine.RunContext) error {
-			m := currentMetricsCollector()
-			if m == nil {
-				return nil
-			}
-			return m.cleanupHistory()
-		},
-	})
-
-	mustRegisterTask(te, taskengine.Descriptor{
 		ID:          "threat-rollup-warmer",
 		Family:      "security",
 		Name:        "威胁大屏 rollup 预热",
@@ -250,7 +233,7 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine, taskLoopPrefs map[stri
 	// 语义与 InitTaskEngine 内置默认清单一致——先查偏好再 StartLoop，
 	// 不留假启动记录；偏好来自调用方传入的快照，函数内不二次查表）。
 	for _, id := range []string{
-		"metrics-collector", "metrics-history-cleanup",
+		"metrics-collector",
 		"threat-rollup-warmer", "caddy-restart-watcher",
 		"ratelimit-bucket-sweep", "apikey-usage-flusher",
 		"runtime-log-threshold", "runtime-tz-refresh",

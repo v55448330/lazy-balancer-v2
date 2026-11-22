@@ -16,7 +16,7 @@ func TestTaskLogPath_whitelistAlphabet(t *testing.T) {
 	setLogDirForTest(t, dir)
 
 	// 既有注册 ID 全字母表形态零变化（含 ':' 冒号任务）
-	for _, id := range []string{"crs", "ip2region", "threat", "autoban", "startup:config-load", "security-events-ingestion", "cert-renewal-scan"} {
+	for _, id := range []string{"crs", "ip2region", "threat", "autoban", "startup:config-load", "security-events-ingestion", "cert-scan"} {
 		if got, want := TaskLogPath(id), filepath.Join(dir, id+".log"); got != want {
 			t.Fatalf("TaskLogPath(%q)=%q, want %q（合法注册 ID 不得变形）", id, got, want)
 		}

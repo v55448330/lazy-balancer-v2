@@ -1,7 +1,8 @@
 package services
 
 // taskengine_wire_runtime_test.go —— 运行期生命周期 daemon 归口的钉测：
-// ①任务注册成功（8 个 ID、Kind/RunsOn/节拍口径）；
+// ①任务注册成功（7 个 ID、Kind/RunsOn/节拍口径；指标历史清理已并入
+//   maintenance-retention，不在运行期族）；
 // ②RunTicker 首跑立即生效（bootstrap 不等首个节拍）；
 // ③间隔执行（小节拍观测 ≥2 轮）；
 // ④StopLoop 后不再执行（观察窗内计数稳定）；
@@ -50,14 +51,13 @@ func newRuntimeLifecycleTestEngineWithSeed(t *testing.T, seed func()) *taskengin
 func TestRuntimeLifecycleTasks_registered(t *testing.T) {
 	te := newRuntimeLifecycleTestEngine(t)
 	want := map[string]taskengine.Kind{
-		"metrics-collector":       taskengine.KindDaemon,
-		"metrics-history-cleanup": taskengine.KindPeriodic,
-		"threat-rollup-warmer":    taskengine.KindDaemon,
-		"caddy-restart-watcher":   taskengine.KindDaemon,
-		"ratelimit-bucket-sweep":  taskengine.KindDaemon,
-		"apikey-usage-flusher":    taskengine.KindDaemon,
-		"runtime-log-threshold":   taskengine.KindDaemon,
-		"runtime-tz-refresh":      taskengine.KindDaemon,
+		"metrics-collector":      taskengine.KindDaemon,
+		"threat-rollup-warmer":   taskengine.KindDaemon,
+		"caddy-restart-watcher":  taskengine.KindDaemon,
+		"ratelimit-bucket-sweep": taskengine.KindDaemon,
+		"apikey-usage-flusher":   taskengine.KindDaemon,
+		"runtime-log-threshold":  taskengine.KindDaemon,
+		"runtime-tz-refresh":     taskengine.KindDaemon,
 	}
 	for id, kind := range want {
 		meta, ok := te.Lookup(id)
@@ -73,9 +73,10 @@ func TestRuntimeLifecycleTasks_registered(t *testing.T) {
 			t.Fatalf("任务 %s Controllable=%v, want %v（Kind=%s）", id, meta.Controllable, wantControllable, kind)
 		}
 	}
-	meta, _ := te.Lookup("metrics-history-cleanup")
-	if meta.IntervalSec != int(24*time.Hour/time.Second) {
-		t.Fatalf("metrics-history-cleanup IntervalSec=%d, want 24h", meta.IntervalSec)
+	// 指标历史清理已并入 maintenance-retention（InitTaskEngine 注册），运行期
+	// 装配不得再注册旧 Periodic 任务（否则双注册 panic/任务页重复）。
+	if _, ok := te.Lookup("metrics-history-cleanup"); ok {
+		t.Fatal("运行期装配不得再注册 metrics-history-cleanup（已并入 maintenance-retention）")
 	}
 }
 

@@ -65,6 +65,8 @@ func PublishAutobanTriggered(ip, detail string) {
 	autobanArmed[key] = now
 	pruneSuppressionLocked(now)
 	suppressMu.Unlock()
+	// 计入已开启的拦截聚合窗口（挑战/自动封禁是攻击规模的两项补充计数）。
+	recordAutobanInWindow()
 	Publish(Event{Type: EvtAutobanTriggered, Fields: map[string]string{"1": ip, "2": detail}})
 }
 

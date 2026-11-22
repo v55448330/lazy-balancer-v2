@@ -240,7 +240,7 @@ func AppendAPIKeyAuditDetail(detail string, keyID int, keyName string) string {
 //     任务落 failed（下轮重试）。
 //   - 越界值（<1）同回退默认（写侧 1-12 校验+启动钳位兜底，正常不可达）。
 //
-// log-cleanup 摘要行不再自行查库复算月数，改为复用
+// maintenance-retention 的日志清理步摘要行不再自行查库复算月数，改为复用
 // RuntimeLogCleanupOnce 回填的 RuntimeCleanupResult.RetentionMonths——仍在
 // 上述三消费点内，未新增第四份口径。
 //
@@ -292,7 +292,7 @@ var auditCleanupBatchSize = 5000
 var errAuditDBUnavailable = errors.New("审计数据库未初始化")
 
 // CleanupAuditLogs 按保留月数清理审计日志，返回删除条数（SPEC §6.5 摘要行数据源）。
-// 失败必须上抛：audit-retention 任务体据此落 failed 终态，且失败轮不得写
+// 失败必须上抛：maintenance-retention 的审计步据此落 failed 终态，且失败轮不得写
 // 「清理完成」（此前失败静默返回 0——任务监控全绿、摘要谎报完成）。
 // 分批删除：每批至多 auditCleanupBatchSize 行循环至删净，批间释放写锁并
 // 复检 ctx（删除按批幂等，中途取消语义无损——关停/取消可中断本轮，不让
@@ -317,7 +317,7 @@ func CleanupAuditLogs(ctx context.Context) (int, error) {
 		if err != nil {
 			Logf("warn", "audit log cleanup failed: %v", err)
 			// 已删除批次不可逆——失败路径必须返回真实部分计数，摘要才能如实
-			// 反映「已删除 N 条后中止」（与 security-events-retention 同口径）。
+			// 反映「已删除 N 条后中止」（与安全事件保留步同口径）。
 			return total, err
 		}
 		n, err := res.RowsAffected()

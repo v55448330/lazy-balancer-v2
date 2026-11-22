@@ -6,6 +6,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -161,18 +162,14 @@ func TestListSystemTasks_allFamiliesPresent(t *testing.T) {
 		"ip2region":                 "安全防护",
 		"crawlerbot-update":         "安全防护",
 		"autoban":                   "安全防护",
-		"cert-renewal-scan":         "证书",
-		"cert-reconcile":            "证书",
+		"cert-scan":                 "证书",
 		"cert-manual-poll":          "证书",
 		"cert-waiting-ca":           "证书",
 		"cert-issuance":             "证书",
 		"auto-backup":               "备份",
 		"cluster-sync":              "集群",
 		"config-watchdog":           "系统",
-		"log-cleanup":               "系统",
-		"audit-retention":           "系统",
-		"security-events-retention": "系统",
-		"metrics-orphan-cleanup":    "系统",
+		"maintenance-retention":     "系统",
 		"security-events-ingestion": "系统",
 		"startup:config-load":       "系统",
 	}
@@ -223,8 +220,8 @@ func TestInitTaskEngineForTest_replacesStoppedEngine(t *testing.T) {
 	if services.TaskEngine().IsStopped() {
 		t.Fatal("initTaskEngineForTest 复用了 stopped 引擎")
 	}
-	if err := services.TaskEngine().Trigger("log-cleanup", "manual", ""); err != nil {
-		t.Fatalf("重建后 Trigger 仍失败: %v", err)
+	if err := services.TaskEngine().Trigger("maintenance-retention", "manual", ""); errors.Is(err, taskengine.ErrEngineStopped) {
+		t.Fatalf("重建后 Trigger 仍返回引擎已停止: %v", err)
 	}
 }
 
@@ -243,8 +240,8 @@ func TestTaskWriteHandlers_slaveRejectedConsistently(t *testing.T) {
 	router.POST("/system/tasks/:id/cancel", h.CancelSystemTask)
 	router.POST("/system/tasks/:id/control", h.ControlSystemTask)
 	for _, tc := range []struct{ name, path, body string }{
-		{name: "trigger", path: "/system/tasks/log-cleanup/trigger", body: ""},
-		{name: "toggle", path: "/system/tasks/log-cleanup/toggle", body: `{"enabled":true}`},
+		{name: "trigger", path: "/system/tasks/maintenance-retention/trigger", body: ""},
+		{name: "toggle", path: "/system/tasks/maintenance-retention/toggle", body: `{"enabled":true}`},
 		{name: "cancel", path: "/system/tasks/cluster-sync/cancel", body: ""},
 		{name: "control", path: "/system/tasks/cluster-sync/control", body: `{"action":"restart"}`},
 	} {
@@ -381,7 +378,7 @@ func TestTriggerSystemTask_blockedDuringImportWindow(t *testing.T) {
 
 	closeWindow := beginImportWindowForTest(t)
 	resp := httptest.NewRecorder()
-	r.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/system/tasks/log-cleanup/trigger", nil))
+	r.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/trigger", nil))
 	if resp.Code != http.StatusConflict {
 		t.Fatalf("导入窗口内触发 status=%d body=%s, want 409", resp.Code, resp.Body.String())
 	}
@@ -391,7 +388,7 @@ func TestTriggerSystemTask_blockedDuringImportWindow(t *testing.T) {
 	// 窗口关闭后门必须放行（同一请求按正常触发链受理 200）
 	closeWindow()
 	resp2 := httptest.NewRecorder()
-	r.ServeHTTP(resp2, httptest.NewRequest(http.MethodPost, "/system/tasks/log-cleanup/trigger", nil))
+	r.ServeHTTP(resp2, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/trigger", nil))
 	if resp2.Code != http.StatusOK || strings.Contains(resp2.Body.String(), "配置导入进行中") {
 		t.Fatalf("窗口关闭后 status=%d body=%s, want 正常触发 200", resp2.Code, resp2.Body.String())
 	}

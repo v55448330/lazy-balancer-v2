@@ -1,8 +1,8 @@
 package services
 
 // 任务引擎接线（v2.0 四类型标准）：Kind 决定调度/记录/日志——零 flag。
-// 注册全集 27：定时(5)/常驻(10)/循环(11)/触发(1)——含 taskengine_wire_runtime.go
-// 的 8 个运行期常驻族；以 DescribeAll 输出为准。
+// 注册全集 29：定时(7)/常驻(13)/循环(8)/触发(1)——含 taskengine_wire_runtime.go
+// 的运行期常驻族 7 与 registerNotificationTasks 的通知族 7；以 DescribeAll 输出为准。
 // 触发(1)：仅手动/代码触发
 // 默认调度关闭——入队时唤醒，全部终态自动停。
 
@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +27,16 @@ import (
 // 翻转、证书唤醒、autoban 等）并发访问——裸指针在 StopTaskEngine 置 nil
 // 与读者之间构成数据竞争，改用原子指针（读者要么拿到旧代，要么拿到 nil）。
 var taskEnginePtr atomic.Pointer[taskengine.Engine]
+
+// 任务合并后的稳定 ID（任务体、任务日志、唤醒与测试的唯一来源）。旧 ID 不留
+// 兼容别名：旧调度偏好行由 applyTaskLoopPrefs 按「注册表外残行」在启动期清理。
+const (
+	// maintenanceRetentionTaskID 保留期清理五合一：日志轮转、审计与任务历史
+	// 保留、安全事件保留、指标历史、孤儿规则指标。
+	maintenanceRetentionTaskID = "maintenance-retention"
+	// certScanTaskID 证书续期扫描与状态对账二合一。
+	certScanTaskID = "cert-scan"
+)
 
 // configLoadRerun 系统配置载入手动重载钩子（main 注入：DB 渲染→强制应用）。
 // operator 透传：手动重载归因操作者，启动 BootSync 传空。
@@ -362,8 +373,137 @@ func normalizeUnregisteredThreatSourceSlots() {
 	}
 }
 
-// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 31 任务（本文件 19 +
-// taskengine_wire_runtime.go 运行期族 8）并启动默认循环。
+// runMaintenanceRetentionRound 保留期清理五步合一的单轮执行体。
+//
+// 每步独立失败留痕后继续：五族保留期互不依赖，单步故障（审计库锁冲突、
+// 指标表损坏等）不得让同轮其余清理静默跳过。轮末把失败步骤汇总为一条
+// error——task_runs 落 failed 且 message 点名失败步骤，失败轮不得记成功。
+// ctx 已取消时不再启动后续步骤（清理是尽力而为，关停预算内不再拉起新的
+// 大批量删除）；各步内部的批间取消仍由步内消费 ctx 收口。
+func runMaintenanceRetentionRound(ctx context.Context, runtimeLogFile string) error {
+	steps := []struct {
+		name string
+		run  func() error
+	}{
+		{"日志清理", func() error {
+			res, line := logCleanupRound(ctx, runtimeLogFile)
+			if err := res.Err(); err != nil {
+				TaskLogfWarnContext(ctx, maintenanceRetentionTaskID, "logs", "%s", line)
+				return err
+			}
+			TaskLogfContext(ctx, maintenanceRetentionTaskID, "logs", "%s", line)
+			return nil
+		}},
+		{"审计/任务历史保留", func() error {
+			auditDeleted, runsDeleted, err := auditRetentionRound(ctx)
+			// 失败轮摘要不得称「清理完成」（失败轮谎报完成会把排障方向带偏）。
+			if err != nil {
+				TaskLogfWarnContext(ctx, maintenanceRetentionTaskID, "audit-history", "清理未完成：审计日志已删除 %d 条、任务运行历史已删除 %d 行后中止，错误：%v", auditDeleted, runsDeleted, err)
+				return err
+			}
+			TaskLogfContext(ctx, maintenanceRetentionTaskID, "audit-history", "清理完成：审计日志 %d 条、任务运行历史 %d 行（无过期数据时为 0）", auditDeleted, runsDeleted)
+			return nil
+		}},
+		{"安全事件保留", func() error {
+			retention, err := SecurityEventsRetentionCleanupDetail(ctx)
+			if err != nil {
+				TaskLogfWarnContext(ctx, maintenanceRetentionTaskID, "security-events", "安全事件保留清理失败：本轮已删除事件 %d 条 · 聚合/高水位 %d 行后中止（保留期与条数上限），错误：%v", retention.Events, retention.Aggregates(), err)
+				return err
+			}
+			// 按构成披露：聚合/高水位删除不计入事件数时，仅报「删除 N 条事件」
+			// 会让停摆后首次清理显示 0（运维误判保留策略未生效）。
+			TaskLogfContext(ctx, maintenanceRetentionTaskID, "security-events", "安全事件保留清理完成：删除事件 %d 条 · 聚合 %d 行 · 被攻击目标聚合 %d 行 · 总览聚合 %d 行 · 分钟状态键 %d 个（保留期与条数上限，无过期为 0）", retention.Events, retention.Rollup, retention.TargetRollup, retention.OverviewRollup, retention.Highwater)
+			if retention.AgeDeferred {
+				TaskLogfContext(ctx, maintenanceRetentionTaskID, "security-events", "年龄裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，过期原始事件暂不删除")
+			}
+			// 行帽延后必须可见：否则运维会把「行数未收敛」当成清理失效。
+			if retention.RowCapDeferred {
+				TaskLogfContext(ctx, maintenanceRetentionTaskID, "security-events", "行帽裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，原始事件暂不按行数上限裁剪")
+			}
+			return nil
+		}},
+		{"指标历史", func() error {
+			m := currentMetricsCollector()
+			if m == nil {
+				// 未接线（测试/启动极早窗口）：不是失败轮，但保留一行说明。
+				TaskLogfContext(ctx, maintenanceRetentionTaskID, "metrics-history", "指标历史清理跳过：指标采集未接线（测试或启动极早窗口）")
+				return nil
+			}
+			if err := m.cleanupHistory(); err != nil {
+				TaskLogfWarnContext(ctx, maintenanceRetentionTaskID, "metrics-history", "指标历史清理未完成：%v", err)
+				return err
+			}
+			TaskLogfContext(ctx, maintenanceRetentionTaskID, "metrics-history", "指标历史清理完成：7 天前指标历史与 L4 连接历史、90 天前日聚合（无过期数据时为 0）")
+			return nil
+		}},
+		{"孤儿规则指标", func() error {
+			// 有界：单轮最多清理 metricsOrphanPurgeRulesPerRun 个规则，余量下轮收敛。
+			deletedRules, err := PurgeOrphanMetricsHistory(ctx)
+			if err != nil {
+				TaskLogfWarnContext(ctx, maintenanceRetentionTaskID, "metrics-orphan", "孤儿规则指标清理失败：本轮已清理 %d 个规则后中止，错误：%v", deletedRules, err)
+				return err
+			}
+			TaskLogfContext(ctx, maintenanceRetentionTaskID, "metrics-orphan", "孤儿规则指标清理完成：删除 %d 个规则的历史指标（无残留为 0）", deletedRules)
+			return nil
+		}},
+	}
+	var failed []string
+	for _, st := range steps {
+		if err := ctx.Err(); err != nil {
+			TaskLogfWarnContext(ctx, maintenanceRetentionTaskID, "cancelled", "本轮在「%s」前因取消中止（该步及后续未执行）：%v", st.name, err)
+			failed = append(failed, st.name+": 本轮取消")
+			continue
+		}
+		if err := st.run(); err != nil {
+			failed = append(failed, st.name+": "+err.Error())
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("保留期清理部分失败（%d/%d 步）：%s", len(failed), len(steps), strings.Join(failed, "；"))
+	}
+	return nil
+}
+
+// runCertScanRound 证书扫描与对账两步合一的单轮执行体。
+//
+// 续期扫描在前（临期入队），随后唤醒 CA 等待补扫（默认调度关闭；仅在确有
+// 在途任务时越过停止态）。两步各自失败留痕（各 Once 内部写摘要行），轮末
+// 汇总：真失败优先落 failed；仅跳过（角色降级/服务未运行/库未就绪）时保留
+// 跳过哨兵，整轮不得记 success。
+func runCertScanRound(ctx context.Context) error {
+	// 长跑期间 StopTaskEngine 可能把全局置 nil；先固定句柄，收尾唤醒不会
+	// nil 解引用。
+	te := TaskEngine()
+	scanErr := CertRenewalScanOnce(ctx)
+	if te != nil {
+		te.RearmLoop("cert-waiting-ca", certJobsActiveFn())
+	}
+	reconcileErr := CertReconcileOnce(ctx)
+
+	var failed []string
+	var skipped []string
+	record := func(name string, err error) {
+		switch {
+		case err == nil:
+		case errors.Is(err, taskengine.ErrTaskSkipped):
+			skipped = append(skipped, name)
+		default:
+			failed = append(failed, name+": "+err.Error())
+		}
+	}
+	record("续期扫描", scanErr)
+	record("状态对账", reconcileErr)
+	if len(failed) > 0 {
+		return fmt.Errorf("证书扫描任务部分失败（%d/2 步）：%s", len(failed), strings.Join(failed, "；"))
+	}
+	if len(skipped) > 0 {
+		return fmt.Errorf("%s本轮跳过: %w", strings.Join(skipped, "、"), taskengine.ErrTaskSkipped)
+	}
+	return nil
+}
+
+// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 29 任务（本文件 15 +
+// taskengine_wire_runtime.go 运行期族 7 + 通知装配 7）并启动默认循环。
 // 非幂等——调用方保证单次装配；重复调用前须先
 // StopTaskEngine（否则旧 scheduleLoop goroutine 泄漏、双引擎双写 task_runs）。
 // 测试环境须先 db.Initialize。
@@ -418,11 +558,11 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		normalizeUnregisteredThreatSourceSlots()
 	}
 
-	// ============ 循环（10）============
+	// ============ 循环（6）============
 	// 节标题=节内注册实数（四节同一惯例）；Kind 族口径按类型而非分节：
-	// 全局循环（Periodic）族 11=本节循环族 9（crawlerbot-update 属 Scheduled，
-	// 计入定时族）+定时节的 autoban 1+runtime 的 metrics-history-cleanup 1
-	//（文件头注册全集注释与标准文档 §2 同口径）。
+	// 全局循环（Periodic）族 8=本节 Periodic 5（crawlerbot-update 属
+	// Scheduled，计入定时族）+定时节的 autoban 1+通知节 2（投递保留/
+	// API Key 临期）。
 
 	// 看门狗：60s 一致性检查（漂移/恢复+小时级心跳——一致轮不逐轮记录）
 	watchdogAdminURLValue = watchdogAdminURL
@@ -443,105 +583,21 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		},
 	})
 
-	// 运行日志清理：每日
+	// 保留期清理与日志轮转：每日（2026-11-22 五合一：原五个日清理任务同为
+	// 24h/RoleAny，拆成五条只放大任务页噪音）。五步各自失败留痕后继续，
+	// 轮末汇总失败步骤（见 runMaintenanceRetentionRound）。
 	logFile := runtimeLogFile
 	mustRegisterTask(te, taskengine.Descriptor{
-		ID:          "log-cleanup",
+		ID:          maintenanceRetentionTaskID,
 		Family:      "system",
-		Name:        "日志清理与轮转",
-		Description: "清理超保留期的应用日志轮转副本（app.log.*）；统一清理任务日志（tasks/*.log：仅保留期删除，尺寸滚动由写入侧统一执行）；并按存活规则清单清理已删除规则的访问日志（logs/rules/*，含轮转副本）",
+		Name:        "保留期清理与日志轮转",
+		Description: "每日一轮依次执行：运行日志/任务日志/已删除规则访问日志清理；审计日志与 90 天前任务运行历史清理；安全事件保留清理；指标历史（含 L4 连接与日聚合）清理；孤儿规则指标清理。单步失败留痕后继续其余步骤，最终汇总失败步骤",
 		Category:    "系统",
 		Kind:        taskengine.KindPeriodic,
+		RunsOn:      taskengine.RoleAny,
 		IntervalFn:  func() time.Duration { return 24 * time.Hour },
 		Run: func(rc taskengine.RunContext) error {
-			// 清理失败必须进 task_runs failed 与任务日志失败行，摘要不得称
-			// 「完成」（同族 audit-retention / security-events-retention /
-			// metrics-orphan-cleanup 均失败上抛）。此前恒 return nil —— daemon
-			// 单文件删除失败全部只打应用日志；waf-audit 归摄取链路管理。
-			res, line := logCleanupRound(rc.Ctx, logFile)
-			if err := res.Err(); err != nil {
-				TaskLogfWarnContext(rc.Ctx, "log-cleanup", "cleanup", "%s", line)
-				return err
-			}
-			TaskLogfContext(rc.Ctx, "log-cleanup", "cleanup", "%s", line)
-			return nil
-		},
-	})
-
-	mustRegisterTask(te, taskengine.Descriptor{
-		ID:          "audit-retention",
-		Family:      "system",
-		Name:        "审计日志保留清理",
-		Description: "按「审计保留月数」配置删除 audit 库过期操作日志（基础设置可调）；并清理 90 天前的任务运行历史（task_runs）",
-		Category:    "系统",
-		Kind:        taskengine.KindPeriodic,
-		IntervalFn:  func() time.Duration { return 24 * time.Hour },
-		Run: func(rc taskengine.RunContext) error {
-			// 传任务 ctx——Stop(cancel) 可在大批量分批删除中途生效（批间
-			// 复检），且取消后不再启动任务历史删除，不让清理拖过关停预算。
-			auditDeleted, runsDeleted, err := auditRetentionRound(rc.Ctx)
-			// 失败传播：两段清理任一失败都让 task_runs 落 failed，且摘要行
-			// 不得称「清理完成」（失败轮谎报完成会把排障方向带偏）。
-			if err != nil {
-				TaskLogfWarnContext(rc.Ctx, "audit-retention", "cleanup", "清理未完成：审计日志已删除 %d 条、任务运行历史已删除 %d 行后中止，错误：%v", auditDeleted, runsDeleted, err)
-				return err
-			}
-			TaskLogfContext(rc.Ctx, "audit-retention", "cleanup", "清理完成：审计日志 %d 条、任务运行历史 %d 行（无过期数据时为 0）", auditDeleted, runsDeleted)
-			return nil
-		},
-	})
-
-	mustRegisterTask(te, taskengine.Descriptor{
-		ID:          "security-events-retention",
-		Family:      "system",
-		Name:        "安全事件保留清理",
-		Description: "按保留期配置删除 metrics 库中过期的安全事件记录",
-		Category:    "系统",
-		Kind:        taskengine.KindPeriodic,
-		IntervalFn:  func() time.Duration { return 24 * time.Hour },
-		Run: func(rc taskengine.RunContext) error {
-			// 传任务 ctx——Stop(cancel) 可在大批量首遍中途生效。
-			// 清理失败必须让 task_runs 落 failed，不得恒成功。
-			retention, err := SecurityEventsRetentionCleanupDetail(rc.Ctx)
-			// 失败轮不得写「清理完成」——task_runs 已落
-			// failed，任务日志称完成会把排障方向带偏。
-			if err != nil {
-				TaskLogfWarnContext(rc.Ctx, "security-events-retention", "cleanup", "安全事件保留清理失败：本轮已删除事件 %d 条 · 聚合/高水位 %d 行后中止（保留期与条数上限），错误：%v", retention.Events, retention.Aggregates(), err)
-				return err
-			}
-			// 按构成披露：聚合/高水位删除不计入事件数时，仅报「删除 N 条事件」
-			// 会让停摆后首次清理显示 0（运维误判保留策略未生效）。
-			TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "安全事件保留清理完成：删除事件 %d 条 · 聚合 %d 行 · 被攻击目标聚合 %d 行 · 总览聚合 %d 行 · 分钟状态键 %d 个（保留期与条数上限，无过期为 0）", retention.Events, retention.Rollup, retention.TargetRollup, retention.OverviewRollup, retention.Highwater)
-			if retention.AgeDeferred {
-				TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "年龄裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，过期原始事件暂不删除")
-			}
-			// 行帽延后必须可见：否则运维会把「行数未收敛」当成清理失效。
-			if retention.RowCapDeferred {
-				TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "行帽裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，原始事件暂不按行数上限裁剪")
-			}
-			return nil
-		},
-	})
-
-	mustRegisterTask(te, taskengine.Descriptor{
-		ID:          "metrics-orphan-cleanup",
-		Family:      "system",
-		Name:        "孤儿规则指标清理",
-		Description: "删除 metrics 库中已删除规则的残留历史指标——规则删除时清理失败的兜底（操作审计留痕）与有界重试收敛，每轮限量分批",
-		Category:    "系统",
-		Kind:        taskengine.KindPeriodic,
-		IntervalFn:  func() time.Duration { return 24 * time.Hour },
-		Run: func(rc taskengine.RunContext) error {
-			// 清理失败必须让 task_runs 落 failed，不得恒成功；
-			// 有界=单轮最多清理 metricsOrphanPurgeRulesPerRun 个规则，余量下轮收敛。
-			deletedRules, err := PurgeOrphanMetricsHistory(rc.Ctx)
-			// 失败轮不得写「清理完成」（task_runs 已落 failed）。
-			if err != nil {
-				TaskLogfWarnContext(rc.Ctx, "metrics-orphan-cleanup", "cleanup", "孤儿规则指标清理失败：本轮已清理 %d 个规则后中止，错误：%v", deletedRules, err)
-				return err
-			}
-			TaskLogfContext(rc.Ctx, "metrics-orphan-cleanup", "cleanup", "孤儿规则指标清理完成：删除 %d 个规则的历史指标（无残留为 0）", deletedRules)
-			return nil
+			return runMaintenanceRetentionRound(rc.Ctx, logFile)
 		},
 	})
 
@@ -565,31 +621,11 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	})
 
 	mustRegisterTask(te, taskengine.Descriptor{
-		ID: "cert-renewal-scan", Family: "certificates", Name: "证书续期扫描",
-		Description: "扫描全部证书配置的到期时间，临期证书自动入队续签；入队时唤醒 CA 等待补扫",
+		ID: certScanTaskID, Family: "certificates", Name: "证书扫描与状态对账",
+		Description: "每 6 小时扫描全部证书配置的到期时间（临期自动入队续签，入队时唤醒 CA 等待补扫），并核对证书文件与数据库状态一致性、修复中断任务残留的中间态；两步各自失败留痕，轮末汇总",
 		Category:    "证书", Kind: taskengine.KindPeriodic, RunsOn: taskengine.RoleMasterOnly,
 		IntervalFn: func() time.Duration { return 6 * time.Hour },
-		Run: func(rc taskengine.RunContext) error {
-			// 长跑期间 StopTaskEngine 可能把全局置 nil；闭包内固定句柄，
-			// 收尾调用不会 nil 解引用。
-			te := TaskEngine()
-			result := CertRenewalScanOnce(rc.Ctx)
-			// 入队即唤醒 CA 等待补扫（默认调度关闭）。走 RearmLoop
-			// 有活唤醒——仅在确有在途任务时越过「已停止」态，不再无条件
-			// StartLoop（避免把用户手动停止的调度隐式打开）。
-			if te != nil {
-				te.RearmLoop("cert-waiting-ca", certJobsActiveFn())
-			}
-			return result
-		},
-	})
-
-	mustRegisterTask(te, taskengine.Descriptor{
-		ID: "cert-reconcile", Family: "certificates", Name: "证书状态对账",
-		Description: "核对证书文件与数据库状态一致性，修复中断任务残留的中间态",
-		Category:    "证书", Kind: taskengine.KindPeriodic, RunsOn: taskengine.RoleMasterOnly,
-		IntervalFn: func() time.Duration { return 6 * time.Hour },
-		Run:        func(rc taskengine.RunContext) error { return CertReconcileOnce(rc.Ctx) },
+		Run:        func(rc taskengine.RunContext) error { return runCertScanRound(rc.Ctx) },
 	})
 
 	mustRegisterTask(te, taskengine.Descriptor{
@@ -1005,11 +1041,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// config-watchdog 曾被白名单遗漏致循环任务无「运行」操作）：
 	// 定时/循环/触发均可手动调度；常驻族恒不可（启停即可，启停由调度开关+重启承担）。
 
-	// 默认调度启动（本文件内置清单；运行期族 8 个的默认启动在
+	// 默认调度启动（本文件内置清单；运行期族 7 个的默认启动在
 	// registerRuntimeLifecycleTasks 内同口径执行）：
-	// - 循环共 11 个，本清单默认启动 8 个（cert-waiting-ca 除外——默认关闭，
-	//   续期扫描唤醒；autoban 除外——调度唯一前提=业务启用，见下；
-	//   metrics-history-cleanup 属运行期族，在其装配处启动）
+	// - 循环共 8 个，本清单默认启动 6 个（cert-waiting-ca 除外——默认关闭，
+	//   证书扫描唤醒；autoban 除外——调度唯一前提=业务启用，见下）
 	// - 常驻共 10 个，本清单启动 3 个（系统启动即运行；关闭调度=启动也不运行；
 	//   其余 7 个运行期常驻在 registerRuntimeLifecycleTasks 启动）
 	// - 定时 5 个启动排程（threat/crs/ip2region/auto-backup——EnabledFn/
@@ -1038,9 +1073,8 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// 应用自身收敛），不得据此宣称「全部常驻族被挡在配置载入之后」。
 	BeginConfigImportHold()
 	for _, id := range []string{
-		"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention",
-		"notification-delivery-retention", "metrics-orphan-cleanup",
-		"cert-renewal-scan", "cert-reconcile", "cert-manual-poll",
+		"config-watchdog", maintenanceRetentionTaskID,
+		"notification-delivery-retention", certScanTaskID, "cert-manual-poll",
 		"security-events-ingestion", "cert-issuance", "cluster-sync",
 		"threat", "crs", "ip2region", "auto-backup",
 		// 通知中心（2026-11-18）：投递常驻/日报定时/QQ+微信长连出站
@@ -1338,7 +1372,7 @@ func clusterSyncStatusMirror() string {
 // 闭包抽出，便于对「引擎句柄固定」契约直接钉测）。
 // 先固定引擎句柄再读角色——StopTaskEngine 在
 // engine.Stop() 的 drain 超时后置全局 taskEngine=nil，daemon goroutine 若在
-// 超时后首次进入 Run，裸读全局会 nil 解引用 panic（同族 cert-renewal-scan /
+// 超时后首次进入 Run，裸读全局会 nil 解引用 panic（同族 cert-scan /
 // cert-waiting-ca 已按 固定句柄）。句柄为空=引擎已停机/换代
 // 直接退出，不得把「无引擎」误判成从节点去拉起同步生命周期。
 func clusterSyncDaemonRun(rc taskengine.RunContext) error {

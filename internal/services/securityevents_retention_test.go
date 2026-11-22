@@ -205,10 +205,9 @@ func TestSecurityEventsRetention_engineTriggerDeletesExpired(t *testing.T) {
 	te := InitTaskEngine("", t.TempDir()+"/app.log")
 	t.Cleanup(StopTaskEngine)
 
-	// When：经引擎手动触发（与 24h Periodic 同一 Run 体）。
-	if err := te.Trigger("security-events-retention", "manual", ""); err != nil {
-		t.Fatal(err)
-	}
+	// When：经引擎手动触发（与 24h Periodic 同一 Run 体；其余步骤在测试库
+	// 形态下可独立失败，本用例只钉安全事件步的删除结果）。
+	_ = te.Trigger("maintenance-retention", "manual", "")
 
 	// Then：过期事件删除，近期事件保留。
 	if got := countSecurityEventsByType(t, "expired"); got != 0 {

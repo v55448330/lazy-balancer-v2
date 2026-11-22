@@ -170,7 +170,7 @@ func TestAuditUserPart(t *testing.T) {
 
 // 「审计保留月数」读取失败三态分裂统一——
 // CleanupAuditLogs 读取失败（含 global_config 行缺失 ErrNoRows）回退默认
-// 3 月继续清理 + warn 留痕（曾静默 return 0：audit-retention 任务每 24h
+// 3 月继续清理 + warn 留痕（曾静默 return 0：maintenance-retention 每 24h
 // 报「清理 0 条」而 audit_log 永久不清，三消费点中最坏分支）。
 func TestCleanupAuditLogs_fallsBackToDefaultOnMissingConfigRow(t *testing.T) {
 	// Given global_config 行缺失（ErrNoRows 形态）+ 超 3 月的陈旧审计行
@@ -284,7 +284,7 @@ func TestCleanupAuditLogs_deletesInBatches(t *testing.T) {
 }
 
 // 中途失败必须返回已删除的真实条数：前几批删除不可逆，摘要若恒报 0 会
-// 误导排障（与 security-events-retention 同口径）。
+// 误导排障（与安全事件保留步同口径）。
 func TestCleanupAuditLogs_reportsPartialCountOnMidwayFailure(t *testing.T) {
 	oldDB, oldAuditDB := db.DB, db.AuditDB
 	mainDB, err := sql.Open("sqlite", t.TempDir()+"/main.db")
@@ -583,7 +583,7 @@ func seedPurgeableTaskRuns(t *testing.T) {
 	if _, err := db.DB.Exec(`CREATE TABLE task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, started_at DATETIME)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, started_at) VALUES ('audit-retention', '2020-01-01 00:00:00')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, started_at) VALUES ('maintenance-retention', '2020-01-01 00:00:00')`); err != nil {
 		t.Fatal(err)
 	}
 }

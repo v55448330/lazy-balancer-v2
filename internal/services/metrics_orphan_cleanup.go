@@ -2,7 +2,7 @@ package services
 
 // （用户裁定）：删除规则后的 metrics_history 清理失败
 // 此前仅 Logf（无审计、无重试）。裁定=失败落操作审计 + taskengine 有界重试
-// ——本轮由周期任务 metrics-orphan-cleanup 承担：按「已删除规则」谓词收敛
+// ——本轮由周期任务 maintenance-retention 的孤儿指标步承担：按「已删除规则」谓词收敛
 // 清理残留历史指标（每轮限量分批，天然有界；收敛后每轮零工作）。
 //
 // 口径：
@@ -32,7 +32,7 @@ var metricsOrphanPurgeRulesPerRun = 500
 var metricsOrphanPurgeRowsPerBatch = 5000
 
 // PurgeOrphanMetricsHistory 清理 metrics 库中已删除规则的残留历史指标，
-// 返回本轮删除的规则数。调用方（taskengine metrics-orphan-cleanup）按错误
+// 返回本轮删除的规则数。调用方（maintenance-retention 孤儿指标步）按错误
 // 落 task_runs failed——不得静默成功。
 //
 // 库未初始化（启动早期/关停竞态里仍在跑的本轮/嵌入形态）时返回

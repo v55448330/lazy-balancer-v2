@@ -16,6 +16,7 @@ import (
 	ip2regionService "github.com/lionsoul2014/ip2region/binding/golang/service"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 )
 
 var ErrIP2RegionUpdateRunning = errors.New("IP2Region 更新任务正在进行中")
@@ -244,12 +245,21 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 	if rc != nil && rc.Operator != "" {
 		operator = rc.Operator
 	}
+	// running 复位必须先注册（LIFO 最后执行）：审计/终态通知 defer 要在
+	// running 仍置位时读取本轮终态快照（与 CRS 同序修正）——旧序让复位先执行，
+	// 新 run 可在旧审计读取前写入 checking，终态事件/审计读到下一轮状态。
+	defer func() {
+		m.mu.Lock()
+		m.running = false
+		m.mu.Unlock()
+	}()
+
 	// 任务自记审计：手动/自动同一审计（用户裁定 2026-09-29）。defer 基准=
 	// 内存 state（曾读 DB 行，slave 早退路径不写行导致
 	// 「更新成功<上轮消息>」+task_runs success 双假；CRS 内存基准即正确形）。
 	defer func() {
 		m.mu.Lock()
-		status, message := string(m.state.status), m.state.message
+		status, message, version := string(m.state.status), m.state.message, m.state.version
 		m.mu.Unlock()
 		// 状态中文归一（曾混英文 status token，与 threat 族口径不一）。
 		// 中间阶段三档也必须映射——任何早退/异常形态读到中间状态时不得回落
@@ -270,8 +280,12 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 			// 资源名用归一表规范名「IP数据库」——旧名
 			// 「IP2Region数据库」属归一表旧值，写入即被下次启动迁移重写。
 			RecordAuditLog(operator, "更新失败", "IP数据库", detail, "")
+			notify.PublishLibUpdateFailed("IP数据库", trigger, message)
 		case string(IP2RegionStatusCancelled):
 			RecordAuditLog(operator, "取消", "IP数据库", detail, "")
+		case string(IP2RegionStatusSuccess):
+			RecordAuditLog(operator, "更新", "IP数据库", detail, "")
+			notify.PublishLibUpdateSucceeded("IP数据库", trigger, libUpdateVersionDetail(version))
 		default:
 			RecordAuditLog(operator, "更新", "IP数据库", detail, "")
 		}
@@ -281,11 +295,6 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 	// runCtx 派生自 rc.Ctx（镜像 CRS 侧）——引擎 demote
 	// 中止（SetRole 取消在途 Scheduled）随 rc.Ctx 传播；nil rc 回退 Background。
 	// ctx 由调用方（StartUpdate/run）预建。
-	defer func() {
-		m.mu.Lock()
-		m.running = false
-		m.mu.Unlock()
-	}()
 
 	// 每次运行起点清空「排程槽未推进」状态：上一轮的读失败不得让本轮成功
 	// 轮仍被引擎判失败（读恢复后必须立即自愈）。

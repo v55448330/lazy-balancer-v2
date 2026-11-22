@@ -472,7 +472,7 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 			// RoleApplicable 门：从节点上 master-only 族的 LoopOn 仍是主节点
 			// 语义的值（引擎侧有意直传，由 RoleApplicable 解释「仅主节点运行」）。
 			// 此处是服务层自行推算的第二条路径，必须继承同一约定——否则从节点
-			// 对 cert-renewal-scan 等任务展示一个具体「下次执行」时间而实际永不
+			// 对 cert-scan 等任务展示一个具体「下次执行」时间而实际永不
 			// 投递，与同行的角色不适用标注自相矛盾。
 			if ti.NextRunAt == "" && m.IntervalSec > 0 && m.LoopOn && m.RoleApplicable && m.Kind == taskengine.KindPeriodic {
 				if t, err := time.ParseInLocation("2006-01-02 15:04:05", latestRun.StartedAt, CurrentLocation()); err == nil {

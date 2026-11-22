@@ -127,10 +127,10 @@ func recordLoginFailure(userID int) {
 // notifyLoginFailed 登录失败通知（fire-and-forget；Fields 键序=目录模板
 // 参数序「用户（原因），来源 IP」）。仅在用户可感知的认证结果失败分支调用
 // （认证失败/锁定/禁用/MFA 验证错误）；请求形态无效与基础设施故障不发
-// （前者无认证语义，后者会在故障期灌满发布队列）。
+// （前者无认证语义，后者会在故障期灌满发布队列）。「用户|IP」10 分钟去抖
+// 与终态（锁定/禁用）绕过在 notify.PublishLoginFailed 内收敛。
 func notifyLoginFailed(username, reason, ip string) {
-	notify.Publish(notify.Event{Type: notify.EvtLoginFailed,
-		Fields: map[string]string{"1": username, "2": reason, "3": ip}})
+	notify.PublishLoginFailed(username, reason, ip)
 }
 
 // parseLoginLockedUntil 锁定时间解析单源——写侧恒为 UTC「2006-01-02 15:04:05」，

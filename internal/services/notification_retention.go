@@ -2,7 +2,7 @@ package services
 
 // 通知投递记录保留清理（用户裁定：滚动写入/定期清理，基础设置可配保留期）。
 // 主库 notification_deliveries + notification_delivery_channels 按保留期裁剪；
-// 与 security-events-retention 同族（24h Periodic 任务体），但无预聚合/行帽
+// 与安全事件保留步同族（24h Periodic 任务体），但无预聚合/行帽
 // 复杂度——投递记录纯日志，年龄裁剪即可。保留期读 global_config
 // notification_delivery_retention_days（默认 30，上限 3650）。
 

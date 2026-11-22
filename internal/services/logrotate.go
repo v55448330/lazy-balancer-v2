@@ -62,7 +62,7 @@ func RefreshRuntimeLogSizeOnce() {
 
 // RotatingFileWriter writes to a log file and rotates it once it exceeds the
 // size limit. Rotated files are suffixed with a timestamp and are subject to
-// retention cleanup (log-cleanup 任务体的 RuntimeLogCleanupOnce——旧启动器
+// retention cleanup (maintenance-retention 任务体的 RuntimeLogCleanupOnce——旧启动器
 // StartRuntimeLogCleanup 已随任务引擎化退役).
 type RotatingFileWriter struct {
 	path string
@@ -168,9 +168,9 @@ var appLogEntryInfo = func(entry os.DirEntry) (os.FileInfo, error) { return entr
 // taskLogEntryInfo 是任务日志元数据采集的注入点，与应用日志副本侧同形。
 var taskLogEntryInfo = func(entry os.DirEntry) (os.FileInfo, error) { return entry.Info() }
 
-// RuntimeCleanupResult 单轮运行日志清理结果（log-cleanup 任务日志展示明细——
+// RuntimeCleanupResult 单轮运行日志清理结果（maintenance-retention 任务日志展示明细——
 // 2026-10-01 用户裁定：清理了哪个文件必须可见；单轮执行体=
-// RuntimeLogCleanupOnce，由任务引擎 log-cleanup 族按 24h 节拍驱动）。
+// RuntimeLogCleanupOnce，由任务引擎 maintenance-retention 族按 24h 节拍驱动）。
 type RuntimeCleanupResult struct {
 	AppRemoved int // 应用日志过期副本删除数（app.log.*）
 	// AppCleanupError 应用日志副本清理的目录读取失败原因（空=正常）。
@@ -200,9 +200,8 @@ type RuntimeCleanupResult struct {
 }
 
 // Err 聚合本轮全部清理失败（nil=一轮内每个清理动作都成功）。
-// log-cleanup 任务体据此落 failed 终态并停用「完成」措辞——此前清理失败
-// 只打应用日志、Run 恒返回 nil，任务监控恒绿（与同族 audit-retention /
-// security-events-retention / metrics-orphan-cleanup 的失败上抛口径不对称）。
+// maintenance-retention 任务体据此落 failed 终态并停用「完成」措辞——此前清理失败
+// 只打应用日志、Run 恒返回 nil，任务监控恒绿（与同任务其余步骤的失败上抛口径不对称）。
 func (r RuntimeCleanupResult) Err() error {
 	var errs []error
 	if r.RetentionError != "" {
@@ -279,7 +278,7 @@ func (r TaskLogHousekeepingResult) Summary() string {
 }
 
 // RuntimeLogCleanupOnce 单轮清理：应用日志过期副本删除 + 任务日志统一
-// 清理轮转（taskLogsHousekeeping）+ 规则访问日志孤儿兜底。由任务引擎 log-cleanup
+// 清理轮转（taskLogsHousekeeping）+ 规则访问日志孤儿兜底。由任务引擎 maintenance-retention
 // 族驱动（自此无独立启动器）。所有失败聚合进 RuntimeCleanupResult（Err()），
 // 由任务体决定 failed 终态与摘要措辞。
 func RuntimeLogCleanupOnce(ctx context.Context, logFile string) RuntimeCleanupResult {
@@ -343,11 +342,11 @@ func RuntimeLogCleanupOnce(ctx context.Context, logFile string) RuntimeCleanupRe
 
 // logCleanupRound 执行单轮清理并返回结果与任务日志摘要行——摘要行在存在任何
 // 清理失败时不得称「完成」（失败轮谎报完成会把排障方向带偏，与
-// audit-retention 同口径）。logFile 为空（旋转写入器打开失败）时返回零值结果
+// maintenance-retention 其余清理步同口径）。logFile 为空（旋转写入器打开失败）时返回零值结果
 // 与显式「未启用」摘要。
 func logCleanupRound(ctx context.Context, logFile string) (RuntimeCleanupResult, string) {
 	// 旋转写入器打开失败（runtimeLogFile 为空，
-	// main.go 已有 error 留痕）时不得让 log-cleanup 静默零动作——任务监控恒绿
+	// main.go 已有 error 留痕）时不得让 maintenance-retention 静默零动作——任务监控恒绿
 	// 却没有任何留痕，排障时看不出「清理为什么没跑」。
 	if logFile == "" {
 		// 运行日志 writer 打开失败只影响「需要运行日志目录」的两段（应用日志

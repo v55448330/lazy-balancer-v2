@@ -52,15 +52,15 @@ func assertPrefWriteFailureResponse(t *testing.T, response *httptest.ResponseRec
 func TestToggleSystemTask_prefWriteFailureRejectsAndKeepsState(t *testing.T) {
 	initTaskEngineForTest(t)
 	te := services.TaskEngine()
-	te.StopLoop("audit-retention")
+	te.StopLoop("maintenance-retention")
 	router, _ := taskMonitorRouter()
 
 	breakTaskLoopPrefs(t)
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/audit-retention/toggle", strings.NewReader(`{"enabled":true}`)))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/toggle", strings.NewReader(`{"enabled":true}`)))
 
 	assertPrefWriteFailureResponse(t, response)
-	if meta, ok := te.Lookup("audit-retention"); !ok || meta.LoopOn {
+	if meta, ok := te.Lookup("maintenance-retention"); !ok || meta.LoopOn {
 		t.Fatalf("偏好写失败后 loop_on=%v found=%v, want false（内存态不动）", meta.LoopOn, ok)
 	}
 }

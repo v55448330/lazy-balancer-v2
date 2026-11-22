@@ -500,7 +500,7 @@ func TestPendingDeltaArchiveReplaced_sizeGuard(t *testing.T) {
 
 // 截断推迟必须返回可识别哨兵：此前该分支返回 rotErr（通常 nil），调用方无法
 // 区分「本轮无需轮转」与「归档已复制但活文件未截断、每 2s 全量复制」——健康位
-// 与 log-cleanup 摘要都会把后者当成功。
+// 与日志清理步摘要都会把后者当成功。
 func TestRotateAuditLog_truncateDeferredReturnsSentinel(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := initSecurityEventsTestDB(t, dataDir); err != nil {

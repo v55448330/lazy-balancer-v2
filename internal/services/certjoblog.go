@@ -17,7 +17,7 @@ import (
 
 // 证书任务日志并入任务日志体系——挂靠
 // {任务日志目录}/certjobs/（与 tasks/*.log 同根：大小上限共用
-// task_log_size_mb、保留清理由 log-cleanup housekeeping 统一扫描）。
+// task_log_size_mb、保留清理由 maintenance-retention 的日志清理步统一扫描）。
 // 目录**惰性求值**——taskengine.LogDir() 注入恒晚于包
 // 初始化，曾以包级 IIFE 固化致生产恒回退 /app/logs 根（脱离 housekeeping
 // 清理面）。LogDir 未注入（测试环境）回退 /app/logs。
@@ -171,7 +171,7 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 
 	// 轮转判定计入待写入行——size+len(line) 超阈即在写入
 	// 前轮转，磁盘上活动文件恒 ≤ 上限。尺寸滚动唯一负责方为本写入侧（5 代移位），
-	// log-cleanup 仅负责保留期清理，不再参与尺寸轮转。
+	// 日志清理步仅负责保留期清理，不再参与尺寸轮转。
 	if _, err := taskengine.RotateTaskLogBeforeWrite(path, int64(len(line)), maxRotatedFiles); err != nil {
 		certJobLogWarnf("cert job log: rotate %s failed: %v", path, err)
 	}

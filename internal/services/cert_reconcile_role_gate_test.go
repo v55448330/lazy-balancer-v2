@@ -36,9 +36,9 @@ func countCertJobsByRule(t *testing.T, ruleID string) int {
 
 func readCertReconcileLog(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(taskengine.TaskLogPath("cert-reconcile"))
+	data, err := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if err != nil {
-		t.Fatalf("read cert-reconcile task log: %v", err)
+		t.Fatalf("read cert-scan task log: %v", err)
 	}
 	return string(data)
 }

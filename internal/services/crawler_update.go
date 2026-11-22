@@ -22,6 +22,7 @@ import (
 
 	"lazy-balancer-v2/geoipnames"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -315,6 +316,11 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 		switch outcome {
 		case "failed":
 			RecordAuditLog(operator, "更新失败", "爬虫地址库", detail, "")
+			if runErr != nil {
+				notify.PublishLibUpdateFailed("爬虫地址库", rc.Trigger, runErr.Error())
+			} else {
+				notify.PublishLibUpdateFailed("爬虫地址库", rc.Trigger, detail)
+			}
 		case "cancelled":
 			RecordAuditLog(operator, "取消", "爬虫地址库", detail, "")
 		case "skipped":
@@ -323,6 +329,11 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 			RecordAuditLog(operator, "跳过", "爬虫地址库", detail, "")
 		default:
 			RecordAuditLog(operator, "更新", "爬虫地址库", detail, "")
+			if emptyRound {
+				notify.PublishLibUpdateSucceeded("爬虫地址库", rc.Trigger, "无到期源")
+			} else {
+				notify.PublishLibUpdateSucceeded("爬虫地址库", rc.Trigger, "全部源处理完成")
+			}
 		}
 	}()
 	// changedCount/projectionConverged 供「正常收尾收敛」与「中止轮后置收敛」

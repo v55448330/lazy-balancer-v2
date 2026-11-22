@@ -372,3 +372,10 @@ test('微信机器人通道标注 BETA（创建类型选择器 + 卡片类型标
   assert.match(code('src/locales/zh/notifications.ts'), /betaBadge: 'BETA'/, 'zh 词条必须存在')
   assert.match(code('src/locales/en/notifications.ts'), /betaBadge: 'BETA'/, 'en 词条必须存在')
 })
+
+test('投递记录展开行：通道标签/描述/耗时垂直居中', () => {
+  const log = code('src/views/notifications/DeliveryLog.vue')
+  assert.match(log, /\.ch-expand-row \{[^}]*align-items:\s*center/, '展开行必须垂直居中（align-items:center）')
+  assert.match(log, /\.ch-expand-row \{[^}]*min-height:\s*24px/, '展开行最小高度与标签一致')
+  assert.doesNotMatch(log, /\.ch-expand-error \{[^}]*padding-top/, '错误描述不得用 padding-top 冒充居中')
+})

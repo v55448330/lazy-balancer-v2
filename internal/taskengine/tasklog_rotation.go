@@ -13,7 +13,7 @@ import (
 
 // 任务日志统一滚动：所有写入都在追加前按真实文件大小判断。
 // 阈值由 services 注入 task_log_size_mb（默认 10MB）；保留期清理由
-// log-cleanup 另行负责，不参与尺寸滚动。尺寸函数存于 taskLogConf
+// maintenance-retention 的日志清理步另行负责，不参与尺寸滚动。尺寸函数存于 taskLogConf
 // （与目录同一把读写锁——裸全局在测试并发下存在数据竞争）。
 func SetTaskLogSizeBytesFn(fn func(context.Context) int64) {
 	taskLogConf.Lock()

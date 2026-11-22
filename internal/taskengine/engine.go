@@ -340,8 +340,8 @@ func (e *Engine) IsStopped() bool { return e.stopped.Load() }
 func (e *Engine) Done() <-chan struct{} { return e.schedDone }
 
 // engineStopDrainTimeout 是 Stop 等待在途 Run/daemon 的兜底上限。
-// cert 四 tick / log-cleanup 中尚未上下文化的文件操作段不消费 rc.Ctx；
-// audit-retention 已在首段查询、批间和分段间响应取消。无界 Wait 仍可能被
+// cert 四 tick / maintenance-retention 中尚未上下文化的文件操作段不消费 rc.Ctx；
+// 保留期清理各步已在首段查询、批间和分段间响应取消。无界 Wait 仍可能被
 // 未上下文化的任务段拖到容器 grace 期结束后 SIGKILL，造成审计/日志尾部丢失。
 const engineStopDrainTimeout = 30 * time.Second
 
@@ -935,7 +935,7 @@ func (e *Engine) PauseScheduling() {
 //	...导入事务...
 //	engine.ResumeScheduling()         // 成功/失败都必须恢复
 //
-// 注意：Run 体中仍不消费 rc.Ctx 的任务段（log-cleanup 的文件操作段、
+// 注意：Run 体中仍不消费 rc.Ctx 的任务段（maintenance-retention 的日志文件操作段、
 // cluster 快照提交后副作用等）取消等价 no-op，等待会跑满该段时长——因此 ctx
 // deadline 仍是必需的兜底（建议与证书队列 PauseAndDrain 同量级 30s）。证书
 // 四 tick 已全部消费 rc.Ctx（waiting-ca/reconcile/续期扫描/手动巡检），可被
@@ -1861,17 +1861,21 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 		default:
 			r.schedFailStreak = 0
 			r.schedRetryAfter = time.Time{}
-			if status == "success" && !nextSlot.IsZero() && !time.Now().Before(nextSlot) {
-				// 同一槽只执行一次：成功落定后重读槽仍已到期（业务未把槽
-				// 推进到未来）——消费本槽，tick 不再按「槽过期」重投（含
-				// 手动触发轮：手动成功同样消费过期槽）。业务侧成功轮
-				// （auto/manual 同权）会自行推进空/过期槽，正常形态下本分支
-				// 不触发；走到这里说明业务槽推进写失败（或业务未按契约推进），
-				// 消费可避免每 tick 重复整轮执行——人工成功轮重新推进槽后仍能
-				// 自愈到下一排程槽。失败轮不进本分支（由退避兜底重投）；
+			if status == "success" {
+				// 同一槽只执行一次：有基线槽（本轮启动时已武装）→ 只消费
+				// **本轮实际执行的槽**（prevSlot）。不能消费 nextSlot——运行
+				// 期间业务可能把槽推进到另一个已过期的新值（重排/导入/测试
+				// 推进）；按 nextSlot 消费会把从未执行的新槽记入水位，该槽
+				// 永不投递（-race 下稳定复现，生产=重排后静默漏跑一次）。
+				// 无基线槽（手动触发早于首轮武装）→ 沿用旧语义消费当前已到期
+				// 槽，避免 tick 立刻重复整轮执行。失败轮不进本分支（退避兜底）；
 				// skipped/cancelled 的消费语义见 schedDoneSlot 字段注释。
-				if nextSlot.After(r.schedDoneSlot) {
-					r.schedDoneSlot = nextSlot
+				consume := prevSlot
+				if consume.IsZero() {
+					consume = nextSlot
+				}
+				if !consume.IsZero() && !time.Now().Before(consume) && consume.After(r.schedDoneSlot) {
+					r.schedDoneSlot = consume
 				}
 			}
 		}

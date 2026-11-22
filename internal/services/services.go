@@ -23,7 +23,7 @@ import (
 // MetricsService collects and stores metrics from Caddy。
 //
 // 采集/清理循环已按 task-engine 标准 v2.2 归口（30s 采集=metrics-collector
-// daemon 的 RunTicker 节拍；24h 历史清理=metrics-history-cleanup Periodic
+// daemon 的 RunTicker 节拍；24h 历史清理=maintenance-retention Periodic
 // 任务）——本结构只保留无状态工作体：collect()（单轮采集）与
 // cleanupHistory()（单轮清理，返回错误交任务终态）。生命周期（启停/节拍/
 // 排空）归任务引擎：引擎排空先于 db.Close，原 Start/Stop 的 stopped 守卫与
@@ -856,8 +856,8 @@ func (m *MetricsService) storePerRuleMetrics(byRule map[string]*ruleLabelAggrega
 	return nil
 }
 
-// cleanupHistory 单轮指标历史清理（metrics-history-cleanup Periodic 任务体）。
-// 错误上抛交任务终态（同族 audit-retention / security-events-retention：
+// cleanupHistory 单轮指标历史清理（maintenance-retention Periodic 任务体）。
+// 错误上抛交任务终态（同族审计/安全事件保留步：
 // 清理失败必须进 task_runs failed，不得恒 success）；状态转换日志口径保留。
 func (m *MetricsService) cleanupHistory() error {
 	if metricsCleanupHook != nil {
@@ -874,35 +874,35 @@ func (m *MetricsService) cleanupHistory() error {
 		// 守卫与 refreshDBOverviewMetrics 同口径（生产启动链不可达；防
 		// 测试/嵌入形态 nil 库 panic）。nil 库按失败上抛——「清理没跑成」
 		// 必须可见，不得伪装 success。
-		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up metrics history: metrics database is not initialized")
+		if lvl := logStateTransition("maintenance-retention", true); lvl != "" {
+			TaskLogfState("maintenance-retention", "cleanup", lvl, "Failed to clean up metrics history: metrics database is not initialized")
 		}
 		return errMetricsDBUnavailable
 	}
 	if err := db.CleanupMetricsHistory(retentionDays); err != nil {
-		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up metrics history: %v", err)
+		if lvl := logStateTransition("maintenance-retention", true); lvl != "" {
+			TaskLogfState("maintenance-retention", "cleanup", lvl, "Failed to clean up metrics history: %v", err)
 		}
 		return err
 	}
 	// L4 连接计数历史同保留期同任务体（独立表，同 7 天窗口）：失败同口径
 	// 上抛进任务失败终态，不得静默继续。
 	if err := db.CleanupL4ConnHistory(retentionDays); err != nil {
-		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up l4 conn history: %v", err)
+		if lvl := logStateTransition("maintenance-retention", true); lvl != "" {
+			TaskLogfState("maintenance-retention", "cleanup", lvl, "Failed to clean up l4 conn history: %v", err)
 		}
 		return err
 	}
 	// 正常请求日聚合独立保留（90 天，与 security_events 同口径）：过期日行
 	// 同任务体清理，失败同口径上抛进任务失败终态。
 	if err := db.CleanupDailyAgg(dailyAggRetentionDays); err != nil {
-		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
-			TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "Failed to clean up metrics daily agg: %v", err)
+		if lvl := logStateTransition("maintenance-retention", true); lvl != "" {
+			TaskLogfState("maintenance-retention", "cleanup", lvl, "Failed to clean up metrics daily agg: %v", err)
 		}
 		return err
 	}
-	if lvl := logStateTransition("metrics-history-cleanup", false); lvl != "" {
-		TaskLogfState("metrics-history-cleanup", "cleanup", lvl, "metrics history cleanup recovered")
+	if lvl := logStateTransition("maintenance-retention", false); lvl != "" {
+		TaskLogfState("maintenance-retention", "cleanup", lvl, "metrics history cleanup recovered")
 	}
 	return nil
 }

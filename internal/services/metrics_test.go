@@ -532,7 +532,7 @@ func TestMetricsServiceCleanupHistory_stillCleansWhenGlobalConfigDropped(t *test
 	}
 }
 
-// metrics-history-cleanup 任务体必须同轮清理 metrics_daily_agg 过期日行
+// maintenance-retention 指标历史步必须同轮清理 metrics_daily_agg 过期日行
 // （日聚合独立保留、行数上界=规则数×保留天数；任务体漏挂会让历史日行随
 // 规则更名/删除无限累积）。失败同口径上抛进任务失败终态。
 func TestMetricsServiceCleanupHistory_cleansStaleDailyAgg(t *testing.T) {
@@ -717,7 +717,7 @@ func TestMetricsService_nilMetricsDBGuards(t *testing.T) {
 }
 
 // 「历史清理与采集不串行 + 单飞」不变量已随归口重构消失：采集
-// （metrics-collector daemon）与清理（metrics-history-cleanup Periodic）是
+// （metrics-collector daemon）与清理（maintenance-retention 指标历史步）是
 // 两个独立任务，在途重叠由引擎 admission（in-flight 跳过）结构性保证——
 // 原 goroutine 单飞/Stop 等待/竞态负向钉测随自建循环一并退役。
 

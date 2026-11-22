@@ -2901,8 +2901,12 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					//   行不在此路径（dedupe 改判分支），拦截聚合口径=首次落库。
 					if rec.Action == "blocked" {
 						notify.RecordBlockedEvent(rule.name)
-					} else if rec.Action == "challenged" && strings.HasPrefix(rec.RuleTriggered, "cc_") {
-						notify.PublishCCTriggered(rec.ClientIP, AutobanCCTriggerReasonLabel(strings.TrimPrefix(rec.RuleTriggered, "cc_")))
+					} else if rec.Action == "challenged" {
+						// 挑战计数进已开启的拦截聚合窗口（规模指标，不单独发通知）。
+						notify.RecordChallengeEvent()
+						if strings.HasPrefix(rec.RuleTriggered, "cc_") {
+							notify.PublishCCTriggered(rec.ClientIP, AutobanCCTriggerReasonLabel(strings.TrimPrefix(rec.RuleTriggered, "cc_")))
+						}
 					}
 					batchMessagesDropped += uint64(rec.messagesDropped)
 					eventAt, _ := time.ParseInLocation("2006-01-02 15:04:05", rec.EventTime, time.UTC)
@@ -3844,6 +3848,8 @@ func runIngestionLoop(ctx context.Context) error {
 	lastSpoolPending := int64(0)
 	lastSpoolSaturated := false
 	lastSpoolUnavailable := false
+	// 健康降级/恢复通知（边沿触发；snapshot 每 2s 取一次，持续态不重复发）。
+	var healthNotify ingestionNotifyTracker
 	for {
 		select {
 		case <-ctx.Done():
@@ -3856,6 +3862,9 @@ func runIngestionLoop(ctx context.Context) error {
 			// 审计写侧失败状态变化才留痕（避免每 2s 重复写同一结论）：达阈值
 			// 降级与恢复各一行，随任务日志导出排障上下文。
 			status := SecurityEventsIngestionHealthSnapshot()
+			if evt := healthNotify.observe(status); evt != nil {
+				notify.Publish(*evt)
+			}
 			if status.SkippedRegions > lastSkippedRegions {
 				TaskLogfWarn("security-events-ingestion", "skip", "审计日志畸形区被跳过：累计 %d 段 / %d 字节，相关安全事件已永久丢失", status.SkippedRegions, status.SkippedBytes)
 				lastSkippedRegions = status.SkippedRegions

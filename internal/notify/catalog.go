@@ -1,6 +1,6 @@
 package notify
 
-// 事件目录（66 类）——订阅矩阵 UI 与默认订阅的唯一事实源。
+// 事件目录（71 类）——订阅矩阵 UI 与默认订阅的唯一事实源。
 // 每项：事件 ID / 级别 / 默认是否订阅 / 标题与正文模板（中文单源，%s 参数）。
 //
 // 模板参数序契约（发布方必须遵守）：
@@ -73,7 +73,12 @@ const (
 	EvtBlockPageChanged       = "sec.block_page_changed"        // 拦截页 CRUD
 	EvtAutobanCfgChanged      = "sec.autoban_config_changed"    // 自动封禁配置/累犯移除
 	EvtMCPDisconnected        = "sec.mcp_disconnected"          // MCP 会话强制断开
-	EvtLibUpdated             = "sec.lib_updated"               // 安全库手动更新触发（CRS/威胁/IP2Region/爬虫）
+	EvtLibUpdated             = "sec.lib_updated"               // 安全库手动更新发起（CRS/威胁/IP2Region/爬虫）
+	EvtLibUpdateSucceeded     = "sec.lib_update_succeeded"      // 安全库更新终态：成功（四库）
+	EvtLibUpdateFailed        = "sec.lib_update_failed"         // 安全库更新终态：失败（四库）
+	EvtIngestDegraded         = "sec.ingest_degraded"           // 安全事件摄取健康降级（聚合原因）
+	EvtIngestRecovered        = "sec.ingest_recovered"          // 安全事件摄取健康恢复
+	EvtUserUpdated            = "auth.user_updated"             // 管理员修改用户角色/显示名
 	EvtLibSettingsChanged     = "sec.lib_settings_changed"      // 安全库自动更新/定时/v6 开关
 	EvtClusterServiceControl  = "cluster.service_control"       // 主节点控制从节点服务（启停 Caddy/重启面板）
 	EvtClusterLoginTicket     = "cluster.login_ticket"          // 集群登录票据签发（主节点侧）
@@ -105,6 +110,7 @@ var catalog = []catalogEntry{
 	{EvtUserCreated, LevelWarn, true, "用户已创建", "管理员 %s 创建了用户「%s」（角色：%s）"},
 	{EvtUserDeleted, LevelWarn, true, "用户已删除", "管理员 %s 删除了用户「%s」"},
 	{EvtUserStatusChanged, LevelWarn, true, "用户状态变更", "管理员 %s 将用户「%s」%s"},
+	{EvtUserUpdated, LevelWarn, true, "用户配置变更", "管理员 %s 修改了用户「%s」（%s）"},
 	{EvtPasswordReset, LevelWarn, true, "密码已重置", "管理员 %s 重置了用户「%s」的密码"},
 	{EvtAPIKeyCreated, LevelInfo, false, "API 密钥已创建", "用户 %s 创建了 API 密钥「%s」"},
 	{EvtAPIKeyDeleted, LevelWarn, true, "API 密钥已删除", "用户 %s 删除了 API 密钥「%s」"},
@@ -121,7 +127,7 @@ var catalog = []catalogEntry{
 	{EvtBackupFailed, LevelCritical, true, "备份失败", "自动备份失败：%s"},
 	{EvtRestoreDone, LevelInfo, false, "还原完成", "%s 完成了配置还原"},
 	{EvtRestoreFailed, LevelCritical, true, "还原失败", "配置还原失败：%s"},
-	{EvtBlockedAggregate, LevelInfo, true, "拦截聚合", "%s内拦截 %s 次（TOP 规则：%s）"},
+	{EvtBlockedAggregate, LevelInfo, true, "拦截聚合", "%s内拦截 %s 次 / 挑战 %s 次 / 自动封禁 %s 次（TOP 规则：%s）"},
 	{EvtCCTriggered, LevelWarn, true, "CC 防护触发", "%s 命中 CC 异常阈值（%s）"},
 	{EvtAutobanTriggered, LevelWarn, true, "自动封禁触发", "%s 被自动封禁（%s）"},
 	{EvtAutobanExpired, LevelInfo, false, "自动封禁已到期", "%s 的自动封禁已到期解封"},
@@ -135,6 +141,8 @@ var catalog = []catalogEntry{
 	{EvtClusterSyncDrift, LevelWarn, true, "集群同步漂移", "节点 %s 检测到配置漂移"},
 	{EvtStartupCompleted, LevelInfo, false, "系统启动完成", "面板启动完成（%s）"},
 	{EvtStartupAbnormal, LevelCritical, true, "系统启动异常", "启动异常：%s"},
+	{EvtIngestDegraded, LevelWarn, true, "安全事件摄取降级", "安全事件摄取降级：%s"},
+	{EvtIngestRecovered, LevelInfo, true, "安全事件摄取恢复", "安全事件摄取已恢复（降级原因：%s）"},
 	// sys.daily_report 不进目录：日报已拆独立区块（per-user 配置+直接落投递，
 	// 不走订阅矩阵事件订阅面）；事件键保留供投递记录展示。
 	{EvtNotifyChannelDown, LevelWarn, true, "通知通道离线", "通知通道「%s」已离线（%s）——事件将暂存重投"},
@@ -158,7 +166,9 @@ var catalog = []catalogEntry{
 	{EvtBlockPageChanged, LevelInfo, false, "拦截页变更", "用户 %s %s（页面：%s）"},
 	{EvtAutobanCfgChanged, LevelWarn, true, "自动封禁配置变更", "用户 %s %s"},
 	{EvtMCPDisconnected, LevelWarn, true, "MCP 会话断开", "管理员 %s 强制断开了 MCP 会话（%s）"},
-	{EvtLibUpdated, LevelInfo, false, "安全库手动更新", "用户 %s 触发了%s手动更新"},
+	{EvtLibUpdated, LevelInfo, false, "安全库手动更新（已发起）", "用户 %s 发起了 %s 手动更新"},
+	{EvtLibUpdateSucceeded, LevelInfo, false, "安全库更新成功", "%s 更新成功（触发：%s）：%s"},
+	{EvtLibUpdateFailed, LevelWarn, true, "安全库更新失败", "%s 更新失败（触发：%s）：%s"},
 	{EvtLibSettingsChanged, LevelInfo, false, "安全库设置变更", "用户 %s 变更了%s（%s）"},
 	{EvtClusterServiceControl, LevelWarn, true, "集群服务控制", "管理员 %s 对节点 %s 执行 %s（%s）"},
 	{EvtClusterLoginTicket, LevelWarn, true, "集群登录票据签发", "管理员 %s 签发了节点 %s 的登录票据（目标用户：%s）"},

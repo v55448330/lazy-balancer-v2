@@ -150,7 +150,7 @@ func TestRenewExpiringCertificates_queryFailureWritesFailureSummary(t *testing.T
 	s := &CertificateService{}
 	s.renewExpiringCertificates(context.Background())
 
-	log := readTaskLog(t, "cert-renewal-scan")
+	log := readTaskLog(t, "cert-scan")
 	if strings.Contains(log, "无临期证书") {
 		t.Fatalf("候选查询失败仍写「无临期证书」假成功摘要: %q", log)
 	}
@@ -175,7 +175,7 @@ func TestRenewExpiringCertificates_rowScanFailuresCountedInSummary(t *testing.T)
 	s := &CertificateService{}
 	s.renewExpiringCertificates(context.Background())
 
-	log := readTaskLog(t, "cert-renewal-scan")
+	log := readTaskLog(t, "cert-scan")
 	if !strings.Contains(log, "1 行扫描失败已跳过") {
 		t.Fatalf("逐行扫描失败未计数入摘要: %q", log)
 	}

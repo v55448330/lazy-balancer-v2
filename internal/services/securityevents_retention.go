@@ -112,12 +112,12 @@ func securityEventsRetentionPolicyFromDB() (securityEventsRetentionPolicy, error
 			return policy, nil
 		}
 		// 面板摘要可显示默认值，但清理调用方必须拿到错误并暂停删除。
-		if lvl := logStateTransition("security-events-retention-read", true); lvl != "" {
+		if lvl := logStateTransition("maintenance-retention-read", true); lvl != "" {
 			Logf(lvl, "security events retention: read retention settings failed, falling back to %d days: %v", policy.Days, err)
 		}
 		return policy, err
 	}
-	if lvl := logStateTransition("security-events-retention-read", false); lvl != "" {
+	if lvl := logStateTransition("maintenance-retention-read", false); lvl != "" {
 		Logf(lvl, "security events retention: retention settings read recovered")
 	}
 	if explicitDays > 0 {

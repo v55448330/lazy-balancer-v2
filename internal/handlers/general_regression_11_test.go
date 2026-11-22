@@ -259,7 +259,7 @@ func TestRequireMasterNode_roleQueryFailureReturns500(t *testing.T) {
 	router := gin.New()
 	router.POST("/system/tasks/:id/trigger", h.TriggerSystemTask)
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/log-cleanup/trigger", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/trigger", nil))
 
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("DB 故障时 status=%d body=%s, want 500", response.Code, response.Body.String())

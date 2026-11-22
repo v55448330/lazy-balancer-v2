@@ -2,7 +2,7 @@ package handlers
 
 // （用户裁定）：删除规则后的 metrics_history 清理失败
 // 此前仅 Logf，无审计、无重试。裁定：改为操作审计 + taskengine 周期任务
-// （metrics-orphan-cleanup）有界收敛重试，不阻断删除。
+// （maintenance-retention 孤儿指标步）有界收敛重试，不阻断删除。
 
 import (
 	"database/sql"

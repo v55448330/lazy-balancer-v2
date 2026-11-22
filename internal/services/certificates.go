@@ -1183,7 +1183,7 @@ func SetActiveCertificateService(svc *CertificateService) {
 		// active 注入前引擎可能已首轮跳过（服务未运行）；就绪时重置节拍，
 		// 避免续期/手动轮询静默等待完整 6h/10min 周期。
 		if te := TaskEngine(); te != nil {
-			te.RearmLoop("cert-renewal-scan")
+			te.RearmLoop(certScanTaskID)
 			te.RearmLoop("cert-manual-poll")
 		}
 	}
@@ -1235,14 +1235,14 @@ func CertRenewalScanOnce(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	if !certScanDatabaseReady() {
-		TaskLogf("cert-renewal-scan", "scan", "数据库未就绪：本轮续期扫描已跳过（装配完成后由周期节拍重试）")
+		TaskLogf(certScanTaskID, "scan", "数据库未就绪：本轮续期扫描已跳过（装配完成后由周期节拍重试）")
 		return taskengine.ErrTaskSkipped
 	}
 	activeCertService.Lock()
 	svc := activeCertService.svc
 	activeCertService.Unlock()
 	if svc == nil {
-		TaskLogf("cert-renewal-scan", "scan", "证书签发任务未运行：本轮续期扫描已跳过（停止期间不会自动续签，请恢复调度以免证书到期）")
+		TaskLogf(certScanTaskID, "scan", "证书签发任务未运行：本轮续期扫描已跳过（停止期间不会自动续签，请恢复调度以免证书到期）")
 		return taskengine.ErrTaskSkipped
 	}
 	return svc.renewExpiringCertificates(ctx)
@@ -1307,7 +1307,7 @@ func certJobsActive() bool {
 // CertWaitingCATickOnce CA 等待/滞留补扫（30s 节拍）。
 // 门控（2026-09-29 用户裁定）：无非终态证书任务即退出——零扫描零动作；
 // 孤儿任务均为非终态，门控天然覆盖，不漏扫。
-// 写前门（与 cert-reconcile / cert-renewal-scan 同族）：三路写路径
+// 写前门（与证书状态对账/续期扫描同一任务体）：三路写路径
 // （CA 冷却重排 / 滞留重入队 / 断链部署重建）在每个写点前复用
 // certReconcileWriteGate——本轮窗口内的降级/换主/导入排空/停机必须零写入。
 // 准入时的角色判定在 30s 巡查窗口内会过期：从节点此后仍按主节点身份改写
@@ -1637,7 +1637,7 @@ func reconcileUncoveredIssuedCertJobs(ctx context.Context) (int, error) {
 // certReconcileWriteGate 复核——长轮次内节点降级不得继续写库。
 func CertReconcileOnce(ctx context.Context) error {
 	if !certScanDatabaseReady() {
-		TaskLogf("cert-reconcile", "skipped", "数据库未就绪：本轮状态对账已跳过（装配完成后由周期节拍重试）")
+		TaskLogf(certScanTaskID, "skipped", "数据库未就绪：本轮状态对账已跳过（装配完成后由周期节拍重试）")
 		return taskengine.ErrTaskSkipped
 	}
 	rebuilt, reconcileErr := reconcileMissingCertFiles(ctx, db.DB)
@@ -1662,13 +1662,13 @@ func CertReconcileOnce(ctx context.Context) error {
 			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 			(ctx != nil && ctx.Err() != nil)
 		if aborted {
-			TaskLogf("cert-reconcile", "skipped", "状态对账中止：%v（已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建、%d 个 SAN 不覆盖重签——均为部分计数，恢复后下一周期重做）", err, rebuilt, filledExpiry, swept, created, uncoveredRequeued)
+			TaskLogf(certScanTaskID, "skipped", "状态对账中止：%v（已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建、%d 个 SAN 不覆盖重签——均为部分计数，恢复后下一周期重做）", err, rebuilt, filledExpiry, swept, created, uncoveredRequeued)
 			return err
 		}
-		TaskLogf("cert-reconcile", "reconcile", "状态对账失败：%v（失败轮结果不可信，下一周期重试；已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建、%d 个 SAN 不覆盖重签——均为部分计数）", err, rebuilt, filledExpiry, swept, created, uncoveredRequeued)
+		TaskLogf(certScanTaskID, "reconcile", "状态对账失败：%v（失败轮结果不可信，下一周期重试；已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建、%d 个 SAN 不覆盖重签——均为部分计数）", err, rebuilt, filledExpiry, swept, created, uncoveredRequeued)
 		return err
 	}
-	TaskLogf("cert-reconcile", "reconcile", "状态对账完成：断链重建 %d 个、到期回填 %d 个、孤儿清理 %d 个、任务补建 %d 个、SAN 不覆盖重签 %d 个（一致时为 0）", rebuilt, filledExpiry, swept, created, uncoveredRequeued)
+	TaskLogf(certScanTaskID, "reconcile", "状态对账完成：断链重建 %d 个、到期回填 %d 个、孤儿清理 %d 个、任务补建 %d 个、SAN 不覆盖重签 %d 个（一致时为 0）", rebuilt, filledExpiry, swept, created, uncoveredRequeued)
 	return nil
 }
 
@@ -2534,13 +2534,13 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 		Logf("error", "cert expiration loop: failed to read cluster role, skipping this cycle: %v", err)
 		// 角色读取失败=本轮什么都没做，必须进入任务失败终态
 		// （此前只落应用日志，任务监控显示 success）。
-		TaskLogf("cert-renewal-scan", "scan", "扫描失败：读取节点角色失败（%v），本轮未执行续期，下一周期重试", err)
+		TaskLogf(certScanTaskID, "scan", "扫描失败：读取节点角色失败（%v），本轮未执行续期，下一周期重试", err)
 		return fmt.Errorf("读取节点角色: %w", err)
 	}
 	if !isMaster {
 		// 降级终态统一为 skipped 哨兵（与 crs/threat 同构）：从节点中止非故障，
 		// 但 return nil 会把「未执行」记成 success（任务监控假健康）。
-		TaskLogf("cert-renewal-scan", "skipped", "节点为从节点，本轮续期扫描未执行（从节点不签发）")
+		TaskLogf(certScanTaskID, "skipped", "节点为从节点，本轮续期扫描未执行（从节点不签发）")
 		return taskengine.ErrTaskSkipped
 	}
 
@@ -2563,10 +2563,10 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 		// WaitInFlightRuns）与停机都会取消 ctx，摘要必须与「查询/遍历出错」区分，
 		// 否则一次正常排空在任务监控里呈现为续期扫描失败。
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			TaskLogf("cert-renewal-scan", "scan", "续期中止：扫描阶段已取消（%v），本轮未入队任何任务", ctxErr)
+			TaskLogf(certScanTaskID, "scan", "续期中止：扫描阶段已取消（%v），本轮未入队任何任务", ctxErr)
 			return detail
 		}
-		TaskLogf("cert-renewal-scan", "scan", "扫描失败：续期候选查询/遍历出错（%v），本轮未执行续期，下一周期重试", detail)
+		TaskLogf(certScanTaskID, "scan", "扫描失败：续期候选查询/遍历出错（%v），本轮未执行续期，下一周期重试", detail)
 		return detail
 	}
 	jobs = append(jobs, firstIssuance...)
@@ -2576,7 +2576,7 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 		skippedNote = fmt.Sprintf("（另 %d 行扫描失败已跳过）", scanSkipped)
 	}
 	if len(jobs) == 0 {
-		TaskLogf("cert-renewal-scan", "scan", "扫描完成：无临期证书、无待重试签发任务%s", skippedNote)
+		TaskLogf(certScanTaskID, "scan", "扫描完成：无临期证书、无待重试签发任务%s", skippedNote)
 		return nil
 	}
 	domains := make([]string, 0, len(jobs))
@@ -2591,9 +2591,9 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 	// 自动重试不可达），摘要须分档标注——否则「待重试」口径失真。全部未达
 	// 上限时保持原文案（不追加空括注）。
 	if capped > 0 {
-		TaskLogf("cert-renewal-scan", "scan", "检测到 %d 个临期/待重试证书任务（其中 %d 个已达重试上限，仅手动重签可达）：%s%s", len(jobs), capped, strings.Join(domains, "、"), skippedNote)
+		TaskLogf(certScanTaskID, "scan", "检测到 %d 个临期/待重试证书任务（其中 %d 个已达重试上限，仅手动重签可达）：%s%s", len(jobs), capped, strings.Join(domains, "、"), skippedNote)
 	} else {
-		TaskLogf("cert-renewal-scan", "scan", "检测到 %d 个临期/待重试证书任务：%s%s", len(jobs), strings.Join(domains, "、"), skippedNote)
+		TaskLogf(certScanTaskID, "scan", "检测到 %d 个临期/待重试证书任务：%s%s", len(jobs), strings.Join(domains, "、"), skippedNote)
 	}
 	var actionErr error
 
@@ -2605,9 +2605,9 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 		if gateErr := certRenewalWriteGate(ctx); gateErr != nil {
 			remaining := len(jobs) - idxRenewalJob
 			if errors.Is(gateErr, taskengine.ErrTaskSkipped) {
-				TaskLogf("cert-renewal-scan", "scan", "续期中止：扫描期间节点已切换为从节点，剩余 %d 个任务本轮未入队（从节点不签发）", remaining)
+				TaskLogf(certScanTaskID, "scan", "续期中止：扫描期间节点已切换为从节点，剩余 %d 个任务本轮未入队（从节点不签发）", remaining)
 			} else {
-				TaskLogf("cert-renewal-scan", "scan", "续期中止：写前复核失败（%v），剩余 %d 个任务本轮未执行，下一周期重试", gateErr, remaining)
+				TaskLogf(certScanTaskID, "scan", "续期中止：写前复核失败（%v），剩余 %d 个任务本轮未执行，下一周期重试", gateErr, remaining)
 			}
 			Logf("warn", "Renewal: 写前门拦截（任务 %d，剩余 %d 个未处理）: %v", j.ID, remaining, gateErr)
 			if errors.Is(gateErr, taskengine.ErrTaskSkipped) {
@@ -2630,7 +2630,7 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 
 		if qm == nil {
 			Logf("error", "Renewal: CA queue manager not initialized")
-			TaskLogf("cert-renewal-scan", "scan", "续期中止：CA 队列未初始化，剩余 %d 个任务本轮未入队", len(jobs)-idxRenewalJob)
+			TaskLogf(certScanTaskID, "scan", "续期中止：CA 队列未初始化，剩余 %d 个任务本轮未入队", len(jobs)-idxRenewalJob)
 			return errors.Join(actionErr, errors.New("CA 队列未初始化"))
 		}
 		message := "等待排队续期"
@@ -2714,7 +2714,7 @@ func runManualCertExpiryCheck(ctx context.Context, gate *manualCertExpiryAlertGa
 	`)
 	if err != nil {
 		Logf("error", "Failed to query TLS certificates for expiration check: %v", err)
-		// 读失败上抛（对齐 cert-renewal-scan/cert-reconcile）——失败轮
+		// 读失败上抛（对齐 cert-scan 的续期扫描/状态对账）——失败轮
 		// 结果不可信，任务日志留失败行 + 返回 error（task_runs 失败终态）；
 		// 此前仅应用日志 + return，任务监控呈现假健康。
 		TaskLogfContext(ctx, "cert-manual-poll", "check", "巡检失败：手动证书查询出错（%v），本轮未执行到期检查，下一周期重试", err)

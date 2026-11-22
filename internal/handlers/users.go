@@ -247,6 +247,9 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	}
 
 	changed := []string{}
+	// profileChanged 仅供 auth.user_updated 事件：只含角色/显示名变更摘要
+	// （用户名/密码有各自事件，不并入本事件，避免双发/混淆）。
+	profileChanged := []string{}
 	sets := make([]string, 0, 5)
 	args := make([]any, 0, 5)
 	if usernameChanged {
@@ -263,11 +266,13 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		sets = append(sets, "role = ?")
 		args = append(args, *req.Role)
 		changed = append(changed, "角色："+oldRole+"→"+*req.Role)
+		profileChanged = append(profileChanged, "角色："+oldRole+"→"+*req.Role)
 	}
 	if displayNameChanged {
 		sets = append(sets, "display_name = ?")
 		args = append(args, *req.DisplayName)
 		changed = append(changed, "昵称："+oldDisplayName+"→"+*req.DisplayName)
+		profileChanged = append(profileChanged, "昵称："+oldDisplayName+"→"+*req.DisplayName)
 	}
 	if passwordHash != "" {
 		// 改密同时清空登录锁定（与 ResetUserPassword 共用同一列片段）
@@ -349,6 +354,15 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), "无修改"))
 	} else {
 		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+	}
+	// 角色/显示名变更通知（纯启停继续走 auth.user_status_changed，不双发）。
+	if len(profileChanged) > 0 {
+		notify.Publish(notify.Event{Type: notify.EvtUserUpdated,
+			Fields: map[string]string{
+				"1": c.GetString("username"),
+				"2": user.Username,
+				"3": strings.Join(profileChanged, "、"),
+			}})
 	}
 	response := models.NewUserResponse(user, meta.MFAEnabled)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_2e0275e4"), MessageKey: "k_2e0275e4", Data: response})

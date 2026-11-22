@@ -299,9 +299,9 @@ defineExpose({ fetchDeliveries })
 .ev-more { font-size: 11px; color: #6b7280; }
 /* 展开行：分通道投递结果（通道-状态-错误一一对应） */
 .ch-expand { padding: 4px 12px 8px 36px; display: flex; flex-direction: column; gap: 6px; }
-.ch-expand-row { display: flex; align-items: flex-start; gap: 8px; }
+.ch-expand-row { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .ch-expand-name { flex: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .ch-expand-dur { flex: none; color: #6b7280; font-size: 12px; font-variant-numeric: tabular-nums; }
-.ch-expand-error { font-size: 12px; color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding-top: 2px; }
+.ch-expand-error { font-size: 12px; line-height: 1.5; color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
 .ch-expand-error-failed { color: #dc2626; }
 </style>

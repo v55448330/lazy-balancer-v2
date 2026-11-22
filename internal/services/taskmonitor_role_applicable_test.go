@@ -12,7 +12,7 @@ import (
 
 func TestCollectEngineFamilies_roleApplicability(t *testing.T) {
 	te := newWireTestEngine(t)
-	masterOnly := []string{"crs", "threat", "ip2region", "cert-renewal-scan", "autoban", "auto-backup"}
+	masterOnly := []string{"crs", "threat", "ip2region", "cert-scan", "autoban", "auto-backup"}
 	roleAny := []string{"cluster-sync", securityEventsIngestionTaskID}
 
 	check := func(wantApplicable bool, label string) {
@@ -44,7 +44,7 @@ func TestCollectEngineFamilies_roleApplicability(t *testing.T) {
 // 自相矛盾）；主节点同形态照常推算。
 func TestCollectEngineFamilies_masterOnlyNextRunAtGatedByRole(t *testing.T) {
 	te := newWireTestEngine(t)
-	const id = "cert-renewal-scan"
+	const id = "cert-scan"
 	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
 		VALUES (?, 'cert', 'auto', 'success', ?)`, id, time.Now().In(CurrentLocation()).Format("2006-01-02 15:04:05")); err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestCollectEngineFamilies_scheduledNextRunAtGatedByRole(t *testing.T) {
 func TestCollectEngineFamilies_periodicFallbackSkipsPastNextRun(t *testing.T) {
 	te := newWireTestEngine(t)
 	te.SetRole(true)
-	const id = "cert-renewal-scan"
+	const id = "cert-scan"
 	past := time.Now().In(CurrentLocation()).Add(-72 * time.Hour).Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
 		VALUES (?, 'cert', 'auto', 'success', ?)`, id, past); err != nil {

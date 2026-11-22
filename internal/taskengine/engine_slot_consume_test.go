@@ -87,12 +87,21 @@ func TestEngine_ScheduledAdvancedPastSlotRefiresOnce(t *testing.T) {
 	e := newTestEngine(t)
 	shrinkSlotEvalFloor(t, 20*time.Millisecond)
 	slot1 := time.Now().Add(-2 * time.Minute)
-	var slot atomic.Value
-	slot.Store(slot1)
+	slot2 := time.Now().Add(-time.Minute)
+	// 确定性推进：首个求值=slot1（到期执行）；其后求值=slot2（运行期间业务
+	// 推进到新的过期槽）。旧实现会在本轮收尾按 nextSlot=slot2 记消费水位，
+	// 使 slot2 永不执行；本用例无真实并发/睡眠依赖，-race 下也稳定。
+	var calls atomic.Int32
+	slotFn := func() time.Time {
+		if calls.Add(1) == 1 {
+			return slot1
+		}
+		return slot2
+	}
 	ran := make(chan struct{}, 4)
 	var runs atomic.Int32
 	if err := e.Register(Descriptor{ID: "t-refire", Family: "t", Name: "槽推进再投", Kind: KindScheduled,
-		NextSlotFn: func() time.Time { return slot.Load().(time.Time) },
+		NextSlotFn: slotFn,
 		Run: func(rc RunContext) error {
 			runs.Add(1)
 			select {
@@ -106,23 +115,17 @@ func TestEngine_ScheduledAdvancedPastSlotRefiresOnce(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop("t-refire")
 
-	// 恰好两次执行：先收满两次事件，再做「水位不再上涨」的负断言
-	// （固定 sleep + 精确计数在慢机器上会把「还没跑到」误判成「不重投」）。
 	for i := 0; i < 2; i++ {
 		select {
 		case <-ran:
 		case <-time.After(waitRunCeiling):
-			t.Fatalf("第 %d 次执行未发生", i+1)
-		}
-		// 首槽之后业务推进到新的过期槽（槽值变化=新排程）——地板周期内重评后应再投一次。
-		if i == 0 {
-			slot.Store(time.Now().Add(-time.Minute))
+			t.Fatalf("第 %d 次执行未发生（新过期槽被本轮收尾消费）", i+1)
 		}
 	}
 	select {
 	case <-ran:
 		t.Fatalf("新槽消费后仍重投（执行 %d 次, want 2）", runs.Load())
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond):
 	}
 	if got := runs.Load(); got != 2 {
 		t.Fatalf("新槽消费后不得再重投, got %d, want 2", got)

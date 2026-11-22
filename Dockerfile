@@ -1,7 +1,7 @@
 # 编译阶段固定在构建机架构执行（--platform=$BUILDPLATFORM）：buildx 多架构构建
 # 不会为目标架构起 QEMU 跑 Go 工具链（跨架构编译慢数倍）。产物架构由下方
 # GOOS/GOARCH 显式指定；CGO_ENABLED=0 使交叉编译无需目标架构的 C 工具链。
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS xcaddy-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS xcaddy-builder
 RUN apk add --no-cache git
 # GOPROXY 逗号多级回退：阿里云 404/410 时依次回落 goproxy.cn、直连；
 # 校验不符类瞬态错误由下方 xcaddy build 的重试循环兜底
@@ -102,7 +102,7 @@ RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
 
 # Build Go backend
 # 与 xcaddy-builder 阶段同理：编译在构建机架构执行，产物平台由 GOOS/GOARCH 指定。
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS backend
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS backend
 WORKDIR /app
 # 交叉编译目标（buildx 预定义参数；无 buildx 时 TARGETARCH 为空则回落构建机架构）
 ARG TARGETOS=linux

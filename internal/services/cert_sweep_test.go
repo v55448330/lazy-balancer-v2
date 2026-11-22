@@ -140,7 +140,7 @@ func TestCertTicks_skippedRenewalScanIsVisibleAndManualPollStillRuns(t *testing.
 			t.Fatalf("round %d err=%v, want ErrTaskSkipped", round, err)
 		}
 	}
-	data, err := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
+	data, err := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if err != nil {
 		t.Fatalf("read task log: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestCertReconcileOnce_propagates_read_failure(t *testing.T) {
 		t.Fatal("CertReconcileOnce err=nil, want 对账读故障上抛（fail-visible）")
 	}
 	// Then 2：失败轮摘要不得写「完成」
-	data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-reconcile"))
+	data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if readErr != nil {
 		t.Fatalf("read task log: %v", readErr)
 	}
@@ -246,7 +246,7 @@ func TestCertReconcileOnce_failureSummaryIncludesBackfillCount(t *testing.T) {
 	if err == nil {
 		t.Fatal("CertReconcileOnce err=nil, want 对账读故障上抛")
 	}
-	data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-reconcile"))
+	data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if readErr != nil {
 		t.Fatalf("read task log: %v", readErr)
 	}
@@ -263,7 +263,7 @@ func TestCertReconcileOnce_healthy_round_reports_completion(t *testing.T) {
 	if err := CertReconcileOnce(context.Background()); err != nil {
 		t.Fatalf("CertReconcileOnce err=%v, want nil", err)
 	}
-	data, err := os.ReadFile(taskengine.TaskLogPath("cert-reconcile"))
+	data, err := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if err != nil {
 		t.Fatalf("read task log: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestCertRenewalScanOnce_propagates_scan_failure(t *testing.T) {
 	if err == nil {
 		t.Fatal("CertRenewalScanOnce err=nil, want 扫描读故障上抛（fail-visible）")
 	}
-	if data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan")); readErr == nil && strings.Contains(string(data), "扫描完成") {
+	if data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-scan")); readErr == nil && strings.Contains(string(data), "扫描完成") {
 		t.Fatalf("失败轮摘要谎报完成: %q", string(data))
 	}
 }
@@ -304,7 +304,7 @@ func TestCertRenewalScanOnce_service_missing_landsSkipped(t *testing.T) {
 	if !errors.Is(err, taskengine.ErrTaskSkipped) {
 		t.Fatalf("err=%v, want ErrTaskSkipped（服务未运行=跳过，不是成功）", err)
 	}
-	data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
+	data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if readErr != nil {
 		t.Fatalf("read task log: %v", readErr)
 	}
@@ -324,12 +324,9 @@ func TestTaskEngineWire_certTasksPropagateRunFailures(t *testing.T) {
 		t.Fatalf("drop cert_jobs: %v", err)
 	}
 
-	// Then：周期任务的 Run 都必须返回 error
-	if err := te.Trigger("cert-reconcile", "manual", ""); err == nil {
-		t.Fatal("cert-reconcile Run 未上抛对账读失败（任务监控会显示 success）")
-	}
-	if err := te.Trigger("cert-renewal-scan", "manual", ""); err == nil {
-		t.Fatal("cert-renewal-scan Run 未上抛扫描失败（任务监控会显示 success）")
+	// Then：合并任务的 Run 必须把任一步失败上抛（不得因另一步成功而记 success）
+	if err := te.Trigger("cert-scan", "manual", ""); err == nil {
+		t.Fatal("cert-scan Run 未上抛续期扫描/状态对账读失败（任务监控会显示 success）")
 	}
 	// 30s 补扫承担 waiting_ca 冷却重排 / 滞留 queued 重入队 / 断链部署重试的
 	// 唯一属主：三路读失败同样必须上抛（此前 Run 恒 return nil）。
@@ -372,7 +369,7 @@ func TestCertWaitingCATickOnce_propagates_scan_read_failures(t *testing.T) {
 
 // 手动证书到期巡检读失败必须上抛（此前仅应用日志 Logf+return，
 // Run 恒 nil，task_runs 落 success——任务监控呈现假健康）。对齐
-// cert-renewal-scan/cert-reconcile 同族口径。
+// cert-scan 的续期扫描/状态对账两步同族口径。
 func TestCertManualCheckOnce_propagates_query_failure(t *testing.T) {
 	useCertSweepTickTestEnv(t)
 	resetCertificateServiceForTest(t)

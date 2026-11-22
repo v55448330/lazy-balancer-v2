@@ -184,7 +184,8 @@ func TestRecordBlockedEventNoUnlockedRead(t *testing.T) {
 }
 
 // TestRecordBlockedEventFirstOnlyPublishPerWindow 无并发、可观测断言：同一窗口
-// 内只有首条拦截立即发布一次（后续进聚合），窗口 flush 再追加一条汇总。
+// 内只有首条拦截立即发布一次（后续进聚合）；窗口 flush 不再追加同级别汇总
+// （v2.4.5 降噪：单次/同级别窗口只发 1 条）。
 // 旧实现的锁外首条判定在「flush 置 nil / 窗口轮换」竞态下会重发首条——本用例
 // 与 TestRecordBlockedEventNoUnlockedRead（需 -race 才有 RED 证据）互补：
 // 后者是压测，本用例是确定性的行为钉。
@@ -201,13 +202,13 @@ func TestRecordBlockedEventFirstOnlyPublishPerWindow(t *testing.T) {
 		t.Fatalf("同窗口三次拦截发布 %d 条, want 1（仅首条立即告警）", got)
 	}
 	flushBlockedWindow()
-	if got := DroppedCount() - before; got != 2 {
-		t.Fatalf("窗口 flush 后累计发布 %d 条, want 2（首条 + 汇总）", got)
+	if got := DroppedCount() - before; got != 1 {
+		t.Fatalf("窗口 flush 后累计发布 %d 条, want 1（同级别不重复发）", got)
 	}
 	// flush 已清空窗口：再次 flush 无发布。
 	flushBlockedWindow()
-	if got := DroppedCount() - before; got != 2 {
-		t.Fatalf("空窗口 flush 发布了事件（累计 %d 条, want 2）", got)
+	if got := DroppedCount() - before; got != 1 {
+		t.Fatalf("空窗口 flush 发布了事件（累计 %d 条, want 1）", got)
 	}
 	resetBlockedStateForTest(t)
 }

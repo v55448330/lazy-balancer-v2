@@ -71,12 +71,12 @@ func TestSchedulingWriteEndpoints_rejectStoppedEngine(t *testing.T) {
 
 	router, _ := taskMonitorRouter()
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/system/tasks/audit-retention/toggle", strings.NewReader(`{"enabled":false}`)))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/toggle", strings.NewReader(`{"enabled":false}`)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("已停引擎 toggle status=%d body=%s, want 503", rec.Code, rec.Body.String())
 	}
 	var pref int
-	if err := db.DB.QueryRow(`SELECT enabled FROM task_loop_prefs WHERE task_id='audit-retention'`).Scan(&pref); err == nil {
+	if err := db.DB.QueryRow(`SELECT enabled FROM task_loop_prefs WHERE task_id='maintenance-retention'`).Scan(&pref); err == nil {
 		t.Fatalf("已停引擎的调度操作未生效，不得落偏好（enabled=%d）", pref)
 	}
 
@@ -102,7 +102,7 @@ func TestSchedulingWriteEndpoints_rejectStoppedEngine(t *testing.T) {
 	// Conflict（与族内 503 矛盾）并补记一条误导性「触发失败」审计。
 	before := countTaskAuditForTest(t, "触发失败")
 	rec = httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/system/tasks/log-cleanup/trigger", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/trigger", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("已停引擎 trigger status=%d body=%s, want 503", rec.Code, rec.Body.String())
 	}

@@ -467,7 +467,7 @@ func initMetricsSchema(db *sql.DB) error {
 	--     重载零丢失；容器崩溃丢 ≤30s 增量为物理下限；
 	--   - 独立保留（不随 metrics_history 7 天清理/行帽裁剪），默认 90 天保留
 	--     （与 security_events 同口径），过期日行由 CleanupDailyAgg 挂
-	--     metrics-history-cleanup 任务体清理，行数上界 = 规则数 × 保留天数；
+	--     maintenance-retention 指标历史步清理，行数上界 = 规则数 × 保留天数；
 	--   - 空表（新装/升级未激活窗口/历史日）读侧回落锚点差分（兼容回退，
 	--     判定=窗口内无本表行）。
 	CREATE TABLE IF NOT EXISTS metrics_daily_agg (
@@ -495,7 +495,7 @@ func initMetricsSchema(db *sql.DB) error {
 	-- /lb/l4-conn-stats，差分增量落库（per-rule 行 + 全局聚合行 rule_id=''）。
 	-- 存储的是**差分增量**而非累计快照（重置钳制在写侧完成：计数器随 /load
 	-- 归零后首个差分取当前值），读侧直接按日窗口 SUM。保留 7 天，
-	-- CleanupL4ConnHistory 挂在 metrics-history-cleanup 同一任务体。
+	-- CleanupL4ConnHistory 挂在 maintenance-retention 的指标历史步。
 	CREATE TABLE IF NOT EXISTS lb_l4_conn_history (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		timestamp DATETIME NOT NULL,
@@ -901,7 +901,7 @@ func CleanupMetricsHistory(retentionDays int) error {
 
 // CleanupL4ConnHistory 按 retentionDays 分批删除过期的 lb_l4_conn_history 行
 // （与 CleanupMetricsHistory 同批次参数/同让出节奏——同库同故障形态同口径，
-// 由 metrics-history-cleanup 任务体相邻调用）。MetricsDB 为 nil 早退 nil
+// 由 maintenance-retention 指标历史步相邻调用）。MetricsDB 为 nil 早退 nil
 // （与 CleanupMetricsHistory 守卫口径一致）。
 func CleanupL4ConnHistory(retentionDays int) error {
 	if MetricsDB == nil {

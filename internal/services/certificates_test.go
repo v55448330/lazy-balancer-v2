@@ -772,7 +772,7 @@ func TestSetActiveCertificateService_rearmsPeriodicTasks(t *testing.T) {
 		SetActiveCertificateService(nil)
 	})
 	counts := map[string]*atomic.Int32{}
-	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+	for _, id := range []string{"cert-scan", "cert-manual-poll"} {
 		id := id
 		counts[id] = &atomic.Int32{}
 		mustRegisterTask(te, taskengine.Descriptor{
@@ -786,17 +786,17 @@ func TestSetActiveCertificateService_rearmsPeriodicTasks(t *testing.T) {
 		te.StartLoop(id)
 	}
 	waitForCond(t, 2*time.Second, func() bool {
-		return counts["cert-renewal-scan"].Load() == 1 && counts["cert-manual-poll"].Load() == 1
+		return counts["cert-scan"].Load() == 1 && counts["cert-manual-poll"].Load() == 1
 	})
 
 	// When：证书服务就绪（active 指针注入）后再次 tick。
 	SetActiveCertificateService(NewCertificateService())
 	waitForCond(t, 100*time.Millisecond, func() bool {
-		return counts["cert-renewal-scan"].Load() == 2 && counts["cert-manual-poll"].Load() == 2
+		return counts["cert-scan"].Load() == 2 && counts["cert-manual-poll"].Load() == 2
 	})
 
 	// Then：服务就绪必须重置节拍并立即补首轮，不得静默等到 6h/10min 后。
-	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+	for _, id := range []string{"cert-scan", "cert-manual-poll"} {
 		if got := counts[id].Load(); got != 2 {
 			t.Errorf("%s 服务就绪后执行次数=%d, want 2（重置首轮）", id, got)
 		}
@@ -812,7 +812,7 @@ func TestSetActiveCertificateService_preservesStoppedTasks(t *testing.T) {
 		SetActiveCertificateService(nil)
 	})
 	var runs atomic.Int32
-	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+	for _, id := range []string{"cert-scan", "cert-manual-poll"} {
 		id := id
 		mustRegisterTask(te, taskengine.Descriptor{
 			ID: id, Family: "certificates", Name: id, Kind: taskengine.KindPeriodic, RunsOn: taskengine.RoleMasterOnly,
@@ -826,7 +826,7 @@ func TestSetActiveCertificateService_preservesStoppedTasks(t *testing.T) {
 	SetActiveCertificateService(NewCertificateService())
 
 	// Then：只能重置已开启任务的节拍，不得重新打开用户停止的调度或执行 Run。
-	for _, id := range []string{"cert-renewal-scan", "cert-manual-poll"} {
+	for _, id := range []string{"cert-scan", "cert-manual-poll"} {
 		meta, ok := te.Lookup(id)
 		if !ok || meta.LoopOn {
 			t.Errorf("%s 被 active 注入重新启用（用户停止态被覆盖）", id)
@@ -1073,7 +1073,7 @@ func TestCertificateService_renewExpiringCertificates_summaryTiersCappedJobs(t *
 	NewCertificateService().renewExpiringCertificates(context.Background())
 
 	// Then：N=2 其中 M=1 分档可见（修复前两任务混入同一「待重试」口径）
-	data, err := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
+	data, err := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if err != nil {
 		t.Fatalf("read task log: %v", err)
 	}
@@ -1134,7 +1134,7 @@ func TestCertificateService_renewExpiringCertificates_summaryKeepsPlainFormWitho
 	resetCertificateServiceForTest(t)
 	NewCertificateService().renewExpiringCertificates(context.Background())
 
-	data, err := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
+	data, err := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if err != nil {
 		t.Fatalf("read task log: %v", err)
 	}
@@ -2857,7 +2857,7 @@ func TestRenewalScanRechecksRoleBeforeEachEnqueue(t *testing.T) {
 	if statusB != "issued" {
 		t.Fatalf("demote 后第二个任务 status=%q, want issued（从节点不得继续入队）", statusB)
 	}
-	data, err := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
+	data, err := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if err != nil {
 		t.Fatalf("read renewal task log: %v", err)
 	}

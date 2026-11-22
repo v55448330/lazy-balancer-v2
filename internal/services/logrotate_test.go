@@ -159,7 +159,7 @@ func TestTaskLogsHousekeeping_reportsDetails(t *testing.T) {
 // 证书任务日志的保留期清理必须等待写入侧路径锁：写入方持锁追加时清理不得
 // 删除在写文件（持锁期间零删除，解锁后继续并删除过期文件）。
 // 注意：audit.log（waf-audit 兜底缓存）的摄取/轮转归 security-events-ingestion
-// 链路，log-cleanup 不触碰——见 TestRuntimeLogCleanupOnce_doesNotTouchWafAuditFallback。
+// 链路，maintenance-retention 不触碰——见 TestRuntimeLogCleanupOnce_doesNotTouchWafAuditFallback。
 func TestTaskLogsHousekeeping_waitsForCertJobWriteLock(t *testing.T) {
 	setupIsolatedDB(t)
 	if months, err := auditRetentionMonths(t.Context()); err != nil {
@@ -305,7 +305,7 @@ func writeStaleAppLogCopy(t *testing.T, dir, name string) {
 	}
 }
 
-// log-cleanup 摘要行的「保留 N 月」必须来自单源 auditRetentionMonths
+// maintenance-retention 摘要行的「保留 N 月」必须来自单源 auditRetentionMonths
 // （经 RuntimeCleanupResult.RetentionMonths 回填），不得在 wire/摘要层另行查库
 // 复算——同值两实现会在默认值/钳位逻辑变更时分裂（用户看到的保留期≠实际口径）。
 func TestRuntimeLogCleanupOnce_reportsRetentionMonthsSingleSource(t *testing.T) {
@@ -701,7 +701,7 @@ func TestRotatingFileWriter_Write_reopensAfterExplicitClose(t *testing.T) {
 	}
 }
 
-// B 形态后 audit.log 仅是兜底缓存，由摄取链路负责；log-cleanup 不得再轮转/
+// B 形态后 audit.log 仅是兜底缓存，由摄取链路负责；maintenance-retention 不得再轮转/
 // 截断它。生产代码在 logrotate.go 中不引用 auditLogPath/auditLogSizeBytes
 // （唯一消费方是 auditlog_rotation.go 的摄取/轮转链），故本用例不注入这两个
 // 变量——注入它们只会制造「测试缝存在」的错觉，负断言实际由「文件字节不变」
@@ -721,10 +721,10 @@ func TestRuntimeLogCleanupOnce_doesNotTouchWafAuditFallback(t *testing.T) {
 		t.Fatalf("audit.log must remain readable: %v", err)
 	}
 	if string(after) != string(content) {
-		t.Fatalf("log-cleanup 不得改写/截断 audit.log: got %q want %q", string(after), string(content))
+		t.Fatalf("maintenance-retention 不得改写/截断 audit.log: got %q want %q", string(after), string(content))
 	}
 	if _, err := os.Stat(logPath + ".1"); !os.IsNotExist(err) {
-		t.Fatalf("log-cleanup 不得轮转 audit.log（.1 不应存在）: %v", err)
+		t.Fatalf("maintenance-retention 不得轮转 audit.log（.1 不应存在）: %v", err)
 	}
 }
 

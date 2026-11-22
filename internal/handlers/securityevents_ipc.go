@@ -332,6 +332,10 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		if row.Kind == "rate_reject" {
 			notify.RecordBlockedEvent(attr.ruleName)
 		}
+		// challenge/fail 落库 action=challenged → 计入已开启的拦截聚合窗口。
+		if row.Kind == "challenge" || row.Kind == "fail" {
+			notify.RecordChallengeEvent()
+		}
 		if label := services.AutobanCCTriggerReasonLabel(row.Reason); label != "" {
 			notify.PublishCCTriggered(row.ClientIP, label)
 		}

@@ -244,7 +244,7 @@ func TestRetryCertJob_concurrent_status_change_returns_refresh_message(t *testin
 
 // 手动重试成功路径必须唤醒 cert-waiting-ca（默认调度关闭——
 // waiting_ca 重排唯一属主）。此前 retry 直入队无唤醒，任务滞留至多 6h
-// （cert-reconcile 间隔）才被周期路径拾起。
+// （cert-scan 间隔）才被周期路径拾起。
 func TestRetryCertJob_wakesCertWaitingCA(t *testing.T) {
 	initTaskEngineForTest(t)
 	h := newBackupTestHandlers(t)

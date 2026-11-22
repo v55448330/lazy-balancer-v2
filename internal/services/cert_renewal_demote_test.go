@@ -1,6 +1,6 @@
 package services
 
-// cert-renewal-scan 降级终态钉测：降级（入口复核/逐任务入队复核两处）统一落
+// cert-scan 降级终态钉测（续期扫描步）：降级（入口复核/逐任务入队复核两处）统一落
 // skipped 哨兵（ErrTaskSkipped，与 crs/threat 同构）——此前 return nil 落
 // success，把「从节点未执行」误报为「本轮扫描成功」。
 
@@ -77,7 +77,7 @@ func TestCertRenewalScan_demoteMidLoopLandsSkipped(t *testing.T) {
 		t.Fatalf("err=%v, want ErrTaskSkipped（降级中止轮不得落 success）", err)
 	}
 	// 留痕不回退：中止原因仍写任务日志。
-	data, rerr := os.ReadFile(taskengine.TaskLogPath("cert-renewal-scan"))
+	data, rerr := os.ReadFile(taskengine.TaskLogPath("cert-scan"))
 	if rerr != nil {
 		t.Fatalf("read renewal task log: %v", rerr)
 	}

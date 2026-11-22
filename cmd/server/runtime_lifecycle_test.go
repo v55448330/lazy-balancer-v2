@@ -150,7 +150,7 @@ func TestRuntimeLifecycle_StopACME_clearsActiveCertificateService(t *testing.T) 
 
 	// Then ①：active 指针已清除——续期扫描回到 skipped 哨兵
 	if err := services.CertRenewalScanOnce(context.Background()); !errors.Is(err, taskengine.ErrTaskSkipped) {
-		t.Fatalf("active certificate service survived StopACME: cert-renewal-scan would keep driving a stopped service, err=%v", err)
+		t.Fatalf("active certificate service survived StopACME: cert-scan would keep driving a stopped service, err=%v", err)
 	}
 	// Then ②（交叉断言）：手动到期巡检不依赖实例，停机后照常执行——停机
 	// 不得把「手动证书即将到期」这条唯一信号一起关掉。

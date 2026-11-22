@@ -27,22 +27,22 @@ func taskLoopPrefRow(t *testing.T, id string) (int, bool) {
 
 func TestToggleSystemTask_persistsLoopPreference(t *testing.T) {
 	initTaskEngineForTest(t)
-	services.TaskEngine().StartLoop("audit-retention")
+	services.TaskEngine().StartLoop("maintenance-retention")
 	router, _ := taskMonitorRouter()
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/audit-retention/toggle", strings.NewReader(`{"enabled":false}`)))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/toggle", strings.NewReader(`{"enabled":false}`)))
 	if response.Code != http.StatusOK {
 		t.Fatalf("toggle status=%d body=%s", response.Code, response.Body.String())
 	}
-	if enabled, ok := taskLoopPrefRow(t, "audit-retention"); !ok || enabled != 0 {
+	if enabled, ok := taskLoopPrefRow(t, "maintenance-retention"); !ok || enabled != 0 {
 		t.Fatalf("toggle 停止后偏好 enabled=%d found=%v, want 0/true", enabled, ok)
 	}
 	response = httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/audit-retention/toggle", strings.NewReader(`{"enabled":true}`)))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/maintenance-retention/toggle", strings.NewReader(`{"enabled":true}`)))
 	if response.Code != http.StatusOK {
 		t.Fatalf("toggle status=%d body=%s", response.Code, response.Body.String())
 	}
-	if enabled, ok := taskLoopPrefRow(t, "audit-retention"); !ok || enabled != 1 {
+	if enabled, ok := taskLoopPrefRow(t, "maintenance-retention"); !ok || enabled != 1 {
 		t.Fatalf("toggle 恢复后偏好 enabled=%d found=%v, want 1/true", enabled, ok)
 	}
 }

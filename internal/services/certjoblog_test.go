@@ -308,7 +308,7 @@ func TestCertJobFileLogger_housekeepingDeletesOnlyExpiredFiles(t *testing.T) {
 		t.Fatalf("touch active log: %v", err)
 	}
 
-	// When：log-cleanup housekeeping 节拍
+	// When：maintenance-retention 日志清理步节拍
 	logFile := filepath.Join(filepath.Dir(taskengine.LogDir()), "lazy-balancer.log")
 	result := taskLogsHousekeeping(logFile)
 

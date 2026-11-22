@@ -624,7 +624,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	}
 	// 手动重试入队成功=有在途证书工作——唤醒 cert-waiting-ca
 	// （默认调度关闭，waiting_ca 冷却重排/滞留重入队的唯一属主；此前重试
-	// 绕过单点唤醒，任务滞留至 cert-reconcile 周期至多 6h）。
+	// 绕过单点唤醒，任务滞留至 cert-scan 周期至多 6h）。
 	// 入队成功即真实工作，唤醒入口不重查活跃态（队列可能已快速失败）。
 	services.WakeCertWaitingCAForEnqueuedJob()
 	auditParts := []string{services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status)}
