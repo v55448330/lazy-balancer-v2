@@ -7,17 +7,22 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { code, cssDeclarations, section } from './_helpers.ts'
 
-test('定时更新卡片：控件行垂直居中（多选框换行增高时时间框/按钮中线对齐）', () => {
+test('定时更新卡片：两输入框严格同高 32px（原生容器锚定 + 特异性 ≥ 全局输入壳规则）', () => {
   const editor = code('src/components/RuleLibScheduleEditor.vue')
   const controls = cssDeclarations(editor, '.schedule-editor__controls')
-  // 2026-11-22 三轮纠偏终版：居中而非拉伸——Element 的 .el-date-editor 显式
-  // height:32px 压过 align-self:stretch（拉伸恒失效），两行标签时时间框顶部
-  // 悬挂。浏览器实测（560px/7 标签两行 92px）：center 语义下时间框/按钮与
-  // 星期框中线偏差 0px；单行 32px 全等高。
-  assert.equal(controls.get('align-items'), 'center', '控件行必须垂直居中（stretch 被 el-date-editor 显式高度压制=顶部悬挂根因）')
-  const time = cssDeclarations(editor, '.schedule-editor__time')
-  assert.ok(!time.has('align-self'), '时间框不得再写 stretch 覆写（已被实测证伪）')
-  assert.ok(!time.has('height'), '时间框不得覆写 height（保持 Element 原生高度参与居中）')
+  assert.equal(controls.get('align-items'), 'center', '控件行垂直居中')
+  // 终版（2026-11-22 用户裁定「不接受一高一低」，浏览器实测 heightDelta=0/centerDelta=0）：
+  // ①锚定必须用原生容器（.schedule-editor__controls 有 data-v）——el-time-picker/
+  //   el-select 组件根只透传 class 不带 scoped attr，挂在 .schedule-editor__time[data-v]
+  //   的 :deep 从不匹配（历轮全灭根因）；
+  // ②统一 32px=多选框单行标签自然高度（不压扁）；时间输入壳全局规则是
+  //   .el-input.el-input:not(--large) .el-input__wrapper=28px 且特异性 (0,4,0)，
+  //   覆写必须 (0,4,0)+（.schedule-editor 前缀）且后源注入。
+  const selWrap = cssDeclarations(editor, '.schedule-editor .schedule-editor__controls :deep(.el-select__wrapper)')
+  assert.equal(selWrap.get('height'), '32px', '多选壳钉 32px（与时间框自然同高）')
+  const inputWrap = cssDeclarations(editor, '.schedule-editor .schedule-editor__controls :deep(.el-input__wrapper)')
+  assert.equal(inputWrap.get('height'), '32px', '时间输入壳覆写回 32px（全局 28px 顶对齐分叉根因）')
+  assert.ok(!/schedule-editor__time[^{]*:deep/.test(editor), ':deep 不得锚在组件根 class（无 data-v，恒不匹配）')
 })
 
 test('IP 地址列表 tab：工具栏 flex 垂直居中（搜索框与新建按钮对齐）', () => {

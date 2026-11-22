@@ -106,13 +106,21 @@ const emitSave = () => {
 .schedule-editor__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .schedule-editor__title { font-size: 13px; font-weight: 600; color: #1f2937; }
 .schedule-editor__hint { font-size: 12px; color: #909399; }
-/* 控件行=垂直居中对齐（2026-11-22 用户三轮纠偏终版）：星期多选随选中项
- * 换行增高（7 天全选=两行 92px），时间框/保存按钮保持自身高度、在行内
- * 垂直居中——此前两版误用 stretch 拉伸（Element 的 .el-date-editor 显式
- * height:32px 压过 align-self:stretch，时间框恒 32 顶部悬挂=用户截图形态）。 */
+/* 控件行两输入框严格同高（2026-11-22 用户裁定：「不接受一行两个输入框一高一低」）：
+ * 统一 32px——多选框单行标签的**自然高度**就是 32（不压扁、不裁标签），
+ * 时间框把全局 28px 输入壳覆写回 32 填满 .el-date-editor 外层（此前 28 顶对齐
+ * 于 32 外层=2px 偏差根因）。窄容器标签不换行（nowrap+hidden），高度恒定。
+ * 历轮失败根因备案：stretch 被 .el-date-editor 显式高度压制；28px 钉高造成
+ * 外层 32/内层 28 顶对齐分叉——同高必须「两框都回到同一自然高度」。 */
 .schedule-editor__controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .schedule-editor__days { flex: 1 1 220px; min-width: 180px; }
 .schedule-editor__time { width: 110px; }
+/* 锚定必须用**原生元素**（controls 容器有 data-v）：el-time-picker/el-select
+ * 组件根只透传 class 不带 scoped attr——挂在 .schedule-editor__time[data-v]
+ * 上的 :deep 规则从不匹配（历轮修复全灭的最终根因）。统一 32px 自然同高。 */
+.schedule-editor .schedule-editor__controls :deep(.el-select__wrapper) { height: 32px; min-height: 32px; }
+.schedule-editor__controls :deep(.el-select__selection) { flex-wrap: nowrap; overflow: hidden; }
+.schedule-editor .schedule-editor__controls :deep(.el-input__wrapper) { height: 32px; box-sizing: border-box; }
 .schedule-editor__tip { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.6; }
 .schedule-editor__tip--error { color: var(--el-color-danger); }
 </style>
