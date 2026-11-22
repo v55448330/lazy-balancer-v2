@@ -14,7 +14,7 @@ WORKDIR /app
 
 # GOTOOLCHAIN=auto（本阶段仅作显式诊断兜底）：xcaddy 在临时主模块里按 Caddy
 # 声明的 go 指令构建；若 Caddy 提高到更高 Go 要求，auto 会拉取新工具链，而下方
-# go1.27.3 精确断言会立即拒绝产物。此时必须同步 bump 基础镜像与断言，不得把
+# go1.27.4 精确断言会立即拒绝产物。此时必须同步 bump 基础镜像与断言，不得把
 # 自动升级静默带入镜像；backend 阶段用 local 执行同一精确版本契约。
 ENV GOTOOLCHAIN=auto
 # 代理不在此声明：Docker 预定义 HTTP_PROXY/HTTPS_PROXY 等构建参数，经
@@ -97,7 +97,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 #  退出——构建日志直接指出失败项，无需人工解析阈值表；模块整体从依赖图消失
 #  时实际值报「未出现在依赖图中」（同样判失败）。
 RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
-    grep -q 'go1.27.3' /tmp/caddy-mods.txt || { echo ">>> Caddy 未使用 go1.27.3 构建" >&2; exit 1; }; \
+    grep -q 'go1.27.4' /tmp/caddy-mods.txt || { echo ">>> Caddy 未使用 go1.27.4 构建" >&2; exit 1; }; \
     awk -F'\t' 'function ge(v, f,  a, b, av, bv, i) { split(substr(v, 2), a, "."); split(substr(f, 2), b, "."); for (i = 1; i <= 3; i++) { av = a[i] + 0; bv = b[i] + 0; if (av > bv) return 1; if (av < bv) return 0 } return 1 } BEGIN { n = split("github.com/klauspost/compress v1.20.2;google.golang.org/grpc v1.83.2;go.opentelemetry.io/otel v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0;go.opentelemetry.io/otel/metric v1.45.0;go.opentelemetry.io/otel/trace v1.45.0;golang.org/x/net v0.62.0;golang.org/x/crypto v0.58.0;github.com/go-jose/go-jose/v4 v4.1.6;cel.dev/cel-go v0.32.0;github.com/corazawaf/coraza/v3 v3.8.1;github.com/go-chi/chi/v5 v5.4.0", spec, ";"); for (k = 1; k <= n; k++) { split(spec[k], pair, " "); mods[k] = pair[1]; floor[mods[k]] = pair[2] } } { for (i = 1; i < NF; i++) { if (floor[$i] != "") { ver[$i] = $(i+1); ok[$i] = ge($(i+1), floor[$i]); if ($i == "github.com/corazawaf/coraza/v3" && ge($(i+1), "v3.9.0")) ok[$i] = 0 } } } END { rc = 0; for (k = 1; k <= n; k++) { m = mods[k]; if (ok[m] != 1) { rc = 1; want = ">= " floor[m]; if (m == "github.com/corazawaf/coraza/v3") want = want " 且 < v3.9.0"; actual = (ver[m] == "") ? "未出现在依赖图中" : ver[m]; print ">>> 依赖下限不满足: " m " 需要 " want "（实际 " actual "）" > "/dev/stderr" } } exit rc }' /tmp/caddy-mods.txt
 
 # Build Go backend
@@ -170,7 +170,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
     go build -trimpath -ldflags="-s -w" -o lazy-balancer && \
-    go version -m lazy-balancer | grep -q 'go1.27.3' || { echo ">>> 后端二进制未使用 go1.27.3 构建" >&2; exit 1; }
+    go version -m lazy-balancer | grep -q 'go1.27.4' || { echo ">>> 后端二进制未使用 go1.27.4 构建" >&2; exit 1; }
 
 # Final image
 FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
