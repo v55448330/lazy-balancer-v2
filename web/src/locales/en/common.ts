@@ -31,6 +31,7 @@ export default {
     eventCorrelation: 'Event correlation',
     requestBodyRestrictions: 'Request body restrictions',
     genericExclusionsPostCrs: 'Generic exclusions (post-CRS)',
+    other: 'Other',
   },
   ipListCategory: {
     crawler: 'Search engine crawler',

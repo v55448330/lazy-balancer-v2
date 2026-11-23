@@ -31,6 +31,7 @@ export default {
     eventCorrelation: '事件关联',
     requestBodyRestrictions: '请求体限制',
     genericExclusionsPostCrs: '通用排除（CRS 后）',
+    other: '其他',
   },
   ipListCategory: {
     crawler: '搜索引擎爬虫',

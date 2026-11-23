@@ -30,6 +30,7 @@ const CRS_CATEGORY_KEYS: Record<string, string> = {
   '事件关联': 'eventCorrelation',
   '请求体限制': 'requestBodyRestrictions',
   '通用排除（CRS 后）': 'genericExclusionsPostCrs',
+  '其他': 'other',
 }
 
 import { tSafe } from '../i18n/tSafe.ts'
