@@ -237,6 +237,8 @@ test('wx 会话提示不由最近测试失败触发（测试失败走 test_faile
   const text = code('src/views/notifications/ChannelCards.vue')
   assert.match(text, /const wxSessionOk = \(ch: NotificationChannel\): boolean => ch\.session_ready === true/)
   assert.doesNotMatch(text, /wxSessionOk[^\n]*last_test_ok/, '会话就绪不得与测试结果折叠')
+  const finalize = text.slice(text.indexOf('const finalizeRebind'), text.indexOf('const startRebind'))
+  assert.match(finalize, /await verifyReboundChannel\(rb\.channelId\)/, '重绑落库后必须用真实测试刷新卡片验证态')
 })
 
 test('系统凭据消费 settings 契约：GET 嵌套形状+secret 留空不提交', () => {

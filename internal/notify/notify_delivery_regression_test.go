@@ -6,6 +6,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -318,6 +319,23 @@ func TestPendingQQCredDoesNotOverrideExistingBotBeforeConfirm(t *testing.T) {
 		if b.AppID == "APP_LIVE" && b.Secret != "SEC_LIVE" {
 			t.Fatalf("未确认的待绑定凭据覆盖了在线全局 bot：secret=%q", b.Secret)
 		}
+	}
+}
+
+// 旧 secret 已失效时，同 appid 的待绑定新 secret 必须能用于连接测试。
+func TestQQCredentialFallbackUsesPendingSecretOnInvalidOld(t *testing.T) {
+	newNotifyConnectorDB(t)
+	clearBindSessions()
+	t.Cleanup(clearBindSessions)
+	StartBindSessionWithCred(7, "qq", "scanner", "APP_SAME", "SEC_PENDING")
+
+	next, ok := qqCredentialFallback(qqBotCred{AppID: "APP_SAME", Secret: "SEC_OLD"}, errors.New(`QQ 鉴权响应缺 access_token: {"code":100016,"message":"invalid appid or secret"}`))
+	if !ok || next.Secret != "SEC_PENDING" {
+		t.Fatalf("fallback ok=%v cred=%+v, want APP_SAME/SEC_PENDING", ok, next)
+	}
+	// 非鉴权错误不切换（回归：网络/协议错误不得误换凭据）。
+	if _, ok := qqCredentialFallback(qqBotCred{AppID: "APP_SAME", Secret: "SEC_OLD"}, errors.New("connection reset")); ok {
+		t.Fatal("非鉴权错误不得切换待绑定凭据")
 	}
 }
 

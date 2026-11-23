@@ -462,7 +462,15 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	}
 	if req.Target != "" {
 		target := pinBotChannelTarget(owner, typ, req.Target)
-		if _, err := tx.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now') WHERE id=?`, target, id); err != nil {
+		if target != currentTarget {
+			// 目标已变=旧验证结论失效：不能把重绑前的“验证失败”继续显示在
+			// 新 bot 上（用户可见“绑定成功但验证失败”根因）。落为未验证，
+			// 重绑/保存后的自动测试再写真实结果。
+			if _, err := tx.Exec(`UPDATE notification_channels SET target=?, last_test_ok=NULL, last_test_at=NULL, updated_at=datetime('now') WHERE id=?`, target, id); err != nil {
+				failTx(err)
+				return
+			}
+		} else if _, err := tx.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now') WHERE id=?`, target, id); err != nil {
 			failTx(err)
 			return
 		}

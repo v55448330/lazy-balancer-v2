@@ -326,6 +326,37 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 // （op:7）或闪断时优先 Resume 补拉遗漏事件；会话失效（op:9）回退重新
 // Identify。长时间在线后重连退避计数归零（长期运行不受历史断连拖累）。
 // reset 信号（凭据轮换）作废会话态立即重连，不等退避。
+// pendingQQSecretFor 返回活跃绑定会话携带的同 appid 新 secret（未确认也可用）。
+func pendingQQSecretFor(appid string) (string, bool) {
+	bindSessionMu.Lock()
+	defer bindSessionMu.Unlock()
+	for _, s := range bindSessions {
+		if s.Type == "qq" && s.BotKey == appid && s.BotSecret != "" {
+			return s.BotSecret, true
+		}
+	}
+	return "", false
+}
+
+// qqCredentialFallback 旧 secret 鉴权失效时切到同 appid 的待绑定新 secret。
+// 只在 100016/invalid appid or secret 时触发，不改变未失效在线 bot 的凭据。
+func qqCredentialFallback(cred qqBotCred, err error) (qqBotCred, bool) {
+	if err == nil {
+		return cred, false
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "invalid appid or secret") && !strings.Contains(msg, "100016") {
+		return cred, false
+	}
+	secret, ok := pendingQQSecretFor(cred.AppID)
+	if !ok || secret == "" || secret == cred.Secret {
+		return cred, false
+	}
+	qqTokens.invalidateAppID(cred.AppID)
+	cred.Secret = secret
+	return cred, true
+}
+
 func qqBotWorkerRun(ctx context.Context, cred qqBotCred, link *botLinkState, reset <-chan struct{}) {
 	// 退出不置离线：计划内回收（凭据轮换/删通道）由 supervisor unregister 收口，
 	// 不产生在线→离线沿（防虚假掉线告警）；清洁停止由 stopAll 统一置离线。
@@ -339,6 +370,17 @@ func qqBotWorkerRun(ctx context.Context, cred qqBotCred, link *botLinkState, res
 		err := qqBotSession(ctx, cred, link, resume)
 		if ctx.Err() != nil {
 			return
+		}
+		// 重绑同 appid：旧 secret 可能已被官方轮换失效；待绑定会话里的新
+		// secret 未确认也要用于连接测试，否则「连接测试→发绑定测试→确认」
+		// 与「确认才切新 secret」互为死锁（QQ 客户端卡连接中）。
+		if next, ok := qqCredentialFallback(cred, err); ok {
+			cred = next
+			resume.reset()
+			attempt = 0
+			link.set(false, fmt.Sprintf("bot=%s 旧凭据失效，切换待绑定凭据重连", cred.AppID))
+			taskLogf(ctx, "connect", "QQ 旧凭据鉴权失效（bot=%s），切换本次扫码的待绑定凭据立即重连", cred.AppID)
+			continue
 		}
 		link.set(false, fmt.Sprintf("bot=%s 连接断开: %v", cred.AppID, err))
 		if time.Since(started) > 5*time.Minute {

@@ -719,6 +719,24 @@ const abortRebind = async (): Promise<void> => {
   bindPhase.value = 'idle'
   await revertRebind(rb)
 }
+// 重绑落库后立即走真实测试：卡片 last_test_ok 必须由新 target 的验证结果
+// 刷新，不能保留重绑前那次失败（用户可见“绑定成功但验证失败”根因）。
+const verifyReboundChannel = async (channelId: number): Promise<void> => {
+  await fetchChannels(true)
+  const ch = channels.value.find(c => c.id === channelId)
+  if (!ch) return
+  testingId.value = ch.id
+  try {
+    await request.post(`/notification/channels/${ch.id}/test`, {}, { silent: true })
+    mfaAwareSuccess(t('app.notification.channels.rebindSuccess'))
+  } catch {
+    ElMessage.error(t('app.notification.channels.testFailed'))
+  } finally {
+    testingId.value = null
+    await fetchChannels(true)
+  }
+}
+
 // confirmed（收到「绑定测试」入站）→ 落新 target 并恢复投递。
 const finalizeRebind = async (): Promise<void> => {
   const rb = rebind.value
@@ -734,9 +752,8 @@ const finalizeRebind = async (): Promise<void> => {
     await cleanupBindSession()
     markRebindIncomplete(rb.channelId, false)
     rebind.value = null
-    mfaAwareSuccess(t('app.notification.channels.rebindSuccess'))
     drawerVisible.value = false
-    await fetchChannels()
+    await verifyReboundChannel(rb.channelId)
   } catch (e) {
     console.error(e)
     ElMessage.error(t('app.notification.channels.rebindSaveFailed'))
