@@ -265,6 +265,13 @@ test('成功但无该 key：置 unavailable（统计条显式说明，而非整�
   assert.equal(next?.name, '操作日志')
 })
 
+test('条数口径行即使字节文件为空也不进入空态（安全事件行数可见）', () => {
+  const bar = code('src/components/LogStorageBar.vue')
+  const isEmpty = section(bar, 'const isEmpty = computed', '\n})')
+  assert.match(isEmpty, /!i\.limit_rows/, 'rows 模式必须绕过字节空态，展示行数/行帽')
+  assert.match(isEmpty, /i\.size_bytes === 0/, '字节空态仍保留给纯字节口径行')
+})
+
 test('无统计数据时渲染显式提示（不是把统计条藏起来）', () => {
   const bar = code('src/components/LogStorageBar.vue')
   // i18n 后双钉：调用点钉键，zh 母本钉原文

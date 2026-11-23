@@ -105,3 +105,33 @@ func TestCheckExpiration_renewalJitterGatesEnqueue(t *testing.T) {
 		})
 	}
 }
+
+// 有证书材料的正常在役规则同样必须按抖动槽入队；此前 PEM 窗口门先于
+// 抖动门短路，所有已签发证书仍在窗口边界扎堆。
+func TestCheckExpiration_renewalJitterAppliesToMaterialRows(t *testing.T) {
+	const window = 30 * 24 * time.Hour
+	const jitter = int64(7281) // rule-1 固定向量
+	now := time.Now()
+	notAfter := now.Add(window).Add(time.Duration(jitter-60) * time.Second)
+	domain := "material-jitter.example.com"
+	certPEM, keyPEM := certificatePairForDomains(t, notAfter.Add(-90*24*time.Hour), notAfter, domain)
+
+	_, database := newClusterTestService(t)
+	setRenewalDays(t, database, 30)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('rule-1','jitter',?,'http',8080,1,1,'acme_dns')`, domain); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem)
+		VALUES ('rule-1',?,'issued',?,?,?)`, domain, CanonicalDatetimeValue(notAfter), certPEM, keyPEM); err != nil {
+		t.Fatalf("seed material job: %v", err)
+	}
+
+	jobs, _, err := (&CertificateService{}).CheckExpiration(context.Background())
+	if err != nil {
+		t.Fatalf("check expiration: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("material row candidates=%d, want 1（抖动槽已到，PEM 窗口门不得抢先短路）", len(jobs))
+	}
+}

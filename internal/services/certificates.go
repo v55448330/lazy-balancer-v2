@@ -2986,6 +2986,7 @@ func scanRenewalCandidates(ctx context.Context, rows *sql.Rows, days int, warnPr
 				selectedByRule[j.RuleID] = selection
 			}
 		}
+		materialJitterChecked := false
 		if selected {
 			canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
 			if selectedErr == nil && canonicalSelected == canonicalRule {
@@ -2997,18 +2998,23 @@ func scanRenewalCandidates(ctx context.Context, rows *sql.Rows, days int, warnPr
 				if effective != window {
 					warnRenewalWindowNotExecutable(j.RuleID, days, effective, lifetime)
 				}
-				if selection.Certificate.NotAfter.After(now.Add(effective)) {
+				// 抖动必须与有材料行的窗口门合并：先判窗口再判抖动会让窗口边界
+				// 先短路，所有正常证书仍在边界扎堆。但窗口因寿命收敛/进入
+				// 保护区时不再叠加抖动，否则会越过 7 天保护边界提前续签。
+				jitter := time.Duration(0)
+				if effective == window {
+					jitter = certRenewalJitter(j.RuleID)
+				}
+				if selection.Certificate.NotAfter.After(now.Add(effective).Add(jitter)) {
 					continue
 				}
+				materialJitterChecked = true
 			}
 		}
-		// 抖动闸门（2026-10-30 裁定）：入队判据 = expires_at − renewalDays −
-		// jitter(rule_id) ≤ now（即 expires_at 晚于 now+窗口+自身抖动的行本轮
-		// 跳过），各规则的入队时刻按 rule_id 确定性摊开在 6h 区间，不再在窗口
-		// 边界扎堆。jitter 单源 certjitter.go（前后端同算法+固定向量表）；前端
-		// 「自动重签时间」显示同一时刻。无 expires_at 的行（首次签发重试）旁路。
-		// 收敛只发生在 PEM 分支（恒弱于原始窗口），本门不会把已判到期的行拦回。
-		if j.ExpiresAt.Valid && j.ExpiresAt.Time.After(now.Add(window).Add(certRenewalJitter(j.RuleID))) {
+		// 无材料/无法确认材料归属的行仍按 expires_at 抖动门（首次签发重试
+		// 等无 expires_at 行旁路）。有材料行已在上面按实际 NotAfter 完成同一门，
+		// 不得再用可能陈旧/不同口径的 cert_jobs.expires_at 二次拦截。
+		if !materialJitterChecked && j.ExpiresAt.Valid && j.ExpiresAt.Time.After(now.Add(window).Add(certRenewalJitter(j.RuleID))) {
 			continue
 		}
 		jobs = append(jobs, j)

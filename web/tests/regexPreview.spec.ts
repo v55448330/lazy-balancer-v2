@@ -22,6 +22,7 @@ test('RE2 合法 flag 形态不误拒：lead/中置/紧邻闭括号/flag 组/命
     '(?-i)a',
     'a(?i)(b)',
     '(?i)(?m)abc',
+    'a(?i)b(?m:c)',
   ]
   for (const pattern of valid) {
     assert.equal(compileJSRegex(pattern).valid, true, `${pattern} 是 RE2 合法形态，不得误判`)

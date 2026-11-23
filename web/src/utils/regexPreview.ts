@@ -45,7 +45,10 @@ export function compileJSRegex(pattern: string): RegexPreviewCompile {
   const midFlagStripped = src.replace(/\(\?(?:[imsU]+(?:-[imsU]+)?|-[imsU]+)\)/g, '')
   // flag 组((?i:...))——JS 不识别，替换为普通分组后再试。
   const flagGroupsOpened = src.replace(/\(\?[-imsU]+:/g, '(')
-  const candidates = [src, midFlagStripped, flagGroupsOpened]
+  // 两种 RE2 形态可同时出现（a(?i)b(?m:c)）：单形态候选都失败，需链式
+  // 先剥中置 flag 再展开 flag 组，否则前端比后端更严、合法规则保存被拦。
+  const combined = midFlagStripped.replace(/\(\?[-imsU]+:/g, '(')
+  const candidates = [src, midFlagStripped, flagGroupsOpened, combined]
   for (const candidate of candidates) {
     try {
       return { re: new RegExp(candidate, flags), valid: true }

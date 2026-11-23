@@ -51,7 +51,9 @@ const humanSize = formatBytes
 const isEmpty = computed(() => {
   const i = info.value
   if (!i) return false
-  return !!i.limit_bytes && i.size_bytes === 0 && i.rotated_bytes === 0
+  // 条数口径（如安全事件）即使旧审计文件为空也必须展示 rows/limit，
+  // 不能被字节空态整条吞掉。
+  return !i.limit_rows && !!i.limit_bytes && i.size_bytes === 0 && i.rotated_bytes === 0
 })
 
 // 条数口径形态（安全事件：进度=条数/上限，2026-09-14 用户裁定）——即使行数

@@ -177,11 +177,24 @@ else
 fi
 baseline_gate
 
+# 前置构建/解析失败时绝不进入 buildx 推送：失败只累积会让未过门禁的镜像
+# 占用发布 tag（stable 还会推 latest），而 tag 事后按冻结纪律不可重推。
+pre_push_gate() {
+  if [[ ${#FAILURES[@]} -ne 0 ]]; then
+    echo ""
+    echo "FINALIZE: 前置步骤失败（${#FAILURES[@]} 项），拒绝 buildx 推送/终验"
+    local f
+    for f in "${FAILURES[@]}"; do echo "  ✗ $f"; done
+    exit 1
+  fi
+}
+
 # ── ② 前端构建（保证 dist 与 HEAD 一致）──
 step "② 前端构建"
 ( cd web && npm run build > /tmp/finalize-fe.log 2>&1 ) && pass "npm run build 成功" || fail "npm run build 失败（见 /tmp/finalize-fe.log）"
 DIST_STAMP2="$(python3 -c "import json;print(json.load(open('web/dist/build-info.json'))['commit'])" 2>/dev/null || echo MISSING)"
 [[ "$DIST_STAMP2" == "$HEAD" ]] && pass "重建后 dist 构建戳 == HEAD" || fail "重建后 dist 构建戳=$DIST_STAMP2 ≠ HEAD"
+pre_push_gate
 
 # ── ③ Dockerfile 解析自检（注释误插/断链即红）──
 step "③ Dockerfile 解析自检"
@@ -206,6 +219,7 @@ LOCAL_LIMIT="$(docker exec lazy-balancer sh -c 'echo $GOMEMLIMIT' 2>/dev/null ||
 [[ "$LOCAL_LIMIT" == "1500MiB" ]] && pass "GOMEMLIMIT=1500MiB 生效" || fail "GOMEMLIMIT='$LOCAL_LIMIT' ≠ 1500MiB"
 LOCAL_BI="$(docker exec lazy-balancer sh -c 'grep -o "\"commit\": \"[^\"]*\"" /app/ui/build-info.json' 2>/dev/null | head -1 | grep -o '[0-9a-f]\{12\}' | head -1 || echo MISSING)"
 [[ "$LOCAL_BI" == "${HEAD:0:12}" ]] && pass "本地构建戳 == HEAD" || fail "本地构建戳=$LOCAL_BI ≠ HEAD（dist 未随重建）"
+pre_push_gate
 
 # ── ⑤ buildx 双架构推送（--skip-cloud 跳过）──
 if [[ "$SKIP_CLOUD" == "1" ]]; then
