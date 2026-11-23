@@ -1158,6 +1158,7 @@ function togglePause(): void {
     // 暂停期间的计数器差值不能当成本间隔增量：恢复首轮只重建
     // 基线，QPS 曲线从下一轮干净间隔开始，避免被暂停时长摊薄。
     trafficBaseline = null
+    l4PrevAt = 0
     feedTask.resume()
     toastTask.resume()
     statsTask.resume()
@@ -1240,6 +1241,7 @@ const screenLoop = createVisibilityIntervals({
     attackFlowSince = 0
     // 后台停摆时长不参与 QPS 差分（与手动暂停恢复同口径）。
     trafficBaseline = null
+    l4PrevAt = 0
     toastCursor = 0
     toastInitialized = false
     toastLastPollAt = 0

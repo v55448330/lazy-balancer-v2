@@ -588,8 +588,8 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column :label="t('common.app.views.secRules.common.entryCount')" width="100" align="right">
-            <template #default="{ row }">{{ row.entries ? formatInt(row.entries) : '—' }}</template>
+          <el-table-column :label="t('common.app.views.secRules.lib.colCountSize')" width="120" align="right">
+            <template #default="{ row }">{{ row.size ? formatSize(row.size) : '—' }}</template>
           </el-table-column>
           <el-table-column :label="t('common.app.views.secRules.lib.colVersion')" width="110">
             <template #default="{ row }"><span class="lib-version">{{ row.version || t('common.app.views.secRules.lib.notUpdated') }}</span></template>
@@ -1171,7 +1171,7 @@ const savingIP2RegionV6 = ref(false)
 const ip2regionSourceRows = computed(() => [
   {
     kind: 'v4', name: t('common.app.views.secRules.lib.v4Source'), sub: '',
-    entries: ip2regionInfo.value.db_size,
+    size: ip2regionInfo.value.db_size,
     version: ip2regionSourceVersion(ip2regionInfo.value.version),
     status: ip2regionInfo.value.update_status,
     enabled: ip2regionInfo.value.auto_update,
@@ -1179,7 +1179,7 @@ const ip2regionSourceRows = computed(() => [
   {
     kind: 'v6', name: t('common.app.views.secRules.lib.v6Source'),
     sub: ip2regionInfo.value.v6_enabled ? '' : t('common.app.views.secRules.lib.v6DisabledHint'),
-    entries: ip2regionInfo.value.v6_enabled ? ip2regionInfo.value.v6_db_size : 0,
+    size: ip2regionInfo.value.v6_enabled ? ip2regionInfo.value.v6_db_size : 0,
     version: ip2regionInfo.value.v6_enabled ? ip2regionSourceVersion(ip2regionInfo.value.v6_version) : '',
     status: ip2regionInfo.value.v6_update_status,
     enabled: ip2regionInfo.value.v6_enabled,
