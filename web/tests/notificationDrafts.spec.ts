@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import {
   mergeChannelTemplateDrafts,
   toggleDailyModules,
+  utf8ByteLength,
 } from '../src/utils/notificationDrafts.ts'
 
 test('大模块勾选只影响状态变化的模块：部分选中模块不被删除', () => {
@@ -25,6 +26,12 @@ test('大模块勾选：取消全选模块会整组删除，重新勾选会整�
   const modules = [{ id: 'm1', items: ['a', 'b'] }]
   assert.deepEqual(toggleDailyModules(['a', 'b', 'c'], modules, []), ['c'])
   assert.deepEqual(new Set(toggleDailyModules(['c'], modules, ['m1'])), new Set(['c', 'a', 'b']))
+})
+
+test('模板长度按 UTF-8 字节计数（与后端 len 同口径）', () => {
+  assert.equal(utf8ByteLength('abc'), 3)
+  assert.equal(utf8ByteLength('中文'), 6)
+  assert.equal(utf8ByteLength('a中'), 4)
 })
 
 test('事件模板保存保留停用通道的既有模板', () => {

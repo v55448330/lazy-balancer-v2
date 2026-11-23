@@ -174,6 +174,23 @@ func TestUpdateAPIKeyStatus_canonicalUnchangedWhitelistDoesNotRequireStepUp(t *t
 	}
 }
 
+func TestUpdateAPIKeyStatus_reorderedWhitelistDoesNotRequireStepUp(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedAPIKeyForStepUp(t, 10, 1, 0)
+	if _, err := db.DB.Exec(`UPDATE api_keys SET mcp_ip_whitelist='["10.0.0.1/32","192.0.2.1/32"]' WHERE id=10`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret='JBSWY3DPEHPK3PXP' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	setMfaWriteGuard(t, true)
+
+	rec := serveAPIKeyStatusUpdate(h, "10", `{"mcp_ip_whitelist":["192.0.2.1/32","10.0.0.1/32"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("同一集合重排不应触发 step-up: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // 守卫关闭（默认）时特权变更直通（回归形状：门不得做成恒拒）。
 func TestUpdateAPIKeyStatus_privilegeChangePassesWhenGuardOff(t *testing.T) {
 	h := newBackupTestHandlers(t)

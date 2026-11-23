@@ -811,14 +811,20 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 }
 
 // GetDeliveryTrend GET /notification/delivery-trend——7天投递趋势（按日计数+成功率）。
-// 管理员可 ?user_id=X 查看指定用户；默认当前用户。
+// 普通用户=本人；管理员默认全平台（与概览统计卡一致），可 ?user_id=X 下钻指定用户。
 func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
 	uid := contextUserID(c)
+	scope, args := " AND user_id=?", []any{uid}
 	if isAdminRequest(c) {
 		if q := c.Query("user_id"); q != "" {
 			if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
 				uid = v
+				args = []any{uid}
 			}
+		} else {
+			// 概览页的管理员口径=全平台（与 admin/overview、delivery-stats 一致）；
+			// 显式 ?user_id 仍可下钻单用户。
+			scope, args = "", nil
 		}
 	}
 	type dayStat struct {
@@ -833,11 +839,13 @@ func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
 		// 否则本地时区午夜窗口（如 UTC+8 00:00-08:00）会漏计当日投递。
 		day := time.Now().UTC().AddDate(0, 0, -i).Format("2006-01-02")
 		var total, sent int
-		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=?`, uid, day).Scan(&total); err != nil {
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE substr(created_at,1,10)=?`+scope,
+			append([]any{day}, args...)...).Scan(&total); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递趋势失败", err)})
 			return
 		}
-		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE user_id=? AND substr(created_at,1,10)=? AND status IN ('sent','partial')`, uid, day).Scan(&sent); err != nil {
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE substr(created_at,1,10)=? AND status IN ('sent','partial')`+scope,
+			append([]any{day}, args...)...).Scan(&sent); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递趋势失败", err)})
 			return
 		}

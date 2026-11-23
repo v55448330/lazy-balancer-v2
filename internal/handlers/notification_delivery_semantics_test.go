@@ -282,6 +282,23 @@ func TestNotificationStats_partialCountsAsSuccess(t *testing.T) {
 	}
 }
 
+func TestNotificationDeliveryTrend_adminSeesAllUsers(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedSemanticsDelivery(t, 7, "sent", 0)
+	seedSemanticsDelivery(t, 8, "failed", 0)
+
+	adminRouter := newNotificationSemanticsRouter(h, 1, "admin")
+	status, out := doNotifyRequest(t, adminRouter, http.MethodGet, "/notification/delivery-trend", "")
+	if status != http.StatusOK {
+		t.Fatalf("admin trend status=%d body=%v", status, out)
+	}
+	trend, _ := out["data"].(map[string]any)["trend"].([]any)
+	last := trend[len(trend)-1].(map[string]any)
+	if last["total"].(float64) != 2 {
+		t.Fatalf("admin 趋势 total=%v, want 2（全平台口径，与统计卡一致）", last["total"])
+	}
+}
+
 // 从节点「规则测试/日报测试」必须显式拒绝（403 master_required）。
 // 从节点不存在 pending 消费方（投递 Daemon 仅主节点运行），放行=API 成功但
 // 消息永不投递的假成功。

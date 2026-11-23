@@ -377,7 +377,9 @@ const channelHealthTip = (ch: NotificationChannel): string => {
   const verified = ch.last_test_at ? formatDate(ch.last_test_at) : t('app.notification.channels.healthNeverVerified')
   return t('app.notification.channels.healthTooltip', { state: channelHealth(ch).label, time: verified })
 }
-const wxSessionOk = (ch: NotificationChannel): boolean => ch.session_ready === true && ch.last_test_ok !== false
+// 会话就绪与测试结果是两轴：测试失败走 test_failed 徽章，不得折叠成
+// “会话失效”并引导重新绑定（可能中断投递）。这里只表达会话是否就绪。
+const wxSessionOk = (ch: NotificationChannel): boolean => ch.session_ready === true
 
 const fetchChannels = async (silent = false): Promise<void> => {
   const seq = ++fetchSeq

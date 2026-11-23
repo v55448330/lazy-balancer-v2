@@ -193,7 +193,7 @@ const saveSettings = async (): Promise<void> => {
     // secret 留空即省略键（不覆盖既有凭据）
     const payload: NotificationSettingsPayload = {
       smtp: {
-        host: form.value.smtpHost,
+        host: form.value.smtpHost.trim(),
         port: form.value.smtpPort ? String(form.value.smtpPort) : '',
         user: form.value.smtpUser,
         from: form.value.smtpFrom,

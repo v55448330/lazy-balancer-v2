@@ -219,6 +219,26 @@ test('投递记录消费 deliveries 契约：恒全量+用户/通道维度+失�
   assert.match(resendable, /\['failed', 'dead'\]/, '重发入口仅失败态（failed/dead）')
 })
 
+test('日报默认模板分节与后端单源一致：threat_db/logged 归安全风险', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  const qqStart = nc.indexOf("if (typ === 'qq') return [")
+  const qqEnd = nc.indexOf('const line = (label: string, key: string)')
+  assert.ok(qqStart > 0 && qqEnd > qqStart, 'QQ 日报预置块必须存在')
+  const qq = nc.slice(qqStart, qqEnd)
+  const secSecurity = qq.indexOf('## ${L.secSecurity}')
+  const secCert = qq.indexOf('## ${L.secCert}')
+  assert.ok(secSecurity > 0 && secCert > secSecurity, '安全风险/证书分节必须存在')
+  assert.ok(qq.indexOf("row(L.logged") > secSecurity && qq.indexOf("row(L.logged") < secCert, 'logged 必须在安全风险段')
+  assert.ok(qq.indexOf("row(L.threatDb") > secSecurity && qq.indexOf("row(L.threatDb") < secCert, 'threat_db 必须在安全风险段')
+  assert.ok(qq.indexOf("row(L.threatDb") > qq.indexOf("row(L.blocked"), 'threat_db 不得回到服务状态段')
+})
+
+test('wx 会话提示不由最近测试失败触发（测试失败走 test_failed 徽章）', () => {
+  const text = code('src/views/notifications/ChannelCards.vue')
+  assert.match(text, /const wxSessionOk = \(ch: NotificationChannel\): boolean => ch\.session_ready === true/)
+  assert.doesNotMatch(text, /wxSessionOk[^\n]*last_test_ok/, '会话就绪不得与测试结果折叠')
+})
+
 test('系统凭据消费 settings 契约：GET 嵌套形状+secret 留空不提交', () => {
   const text = code('src/views/notifications/SystemCredentials.vue')
   assert.match(text, /request\.get<NotificationSettingsResponse>\('\/notification\/settings'\)/)
@@ -227,6 +247,7 @@ test('系统凭据消费 settings 契约：GET 嵌套形状+secret 留空不提�
   const saveBlock = text.slice(text.indexOf('const payload: NotificationSettingsPayload'), text.indexOf('await request.put'))
   // 空 secret 必须以条件展开省略键（不能提交空串覆盖既有凭据）
   assert.match(saveBlock, /\.\.\.\(form\.value\.smtpPass \? \{ pass: form\.value\.smtpPass \} : \{\}\)/)
+  assert.match(saveBlock, /host: form\.value\.smtpHost\.trim\(\)/, 'SMTP host 保存必须 trim（测试/快照同口径）')
   // 页面收敛裁定：系统凭据页只剩 SMTP——QQ/微信凭据单源=扫码绑定自动落库
   // （通道向导承载展示与编辑），MCP 全局开关归 MCP 会话卡；手工形态禁止回潮
   assert.doesNotMatch(text, /qqSecret|qqAppId|wxCred|mcpEnabled|WxQRLogin|bind-state/, 'QQ/微信凭据与 MCP 开关不得在系统凭据页回潮')
@@ -274,7 +295,8 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.doesNotMatch(nc, /savingTplChannelId/, '单 tab 保存态已退役')
   assert.match(nc, /templateInactiveHint/, '内置模板模式提示词必须与开关一致')
   assert.match(nc, /modeModulesPreviewHint/, '内置模板预览必须带只读口径说明（编辑弹框内）')
-  assert.match(nc, /const sel = tplFormats\.value\[tplChannelTab\.value\]\n\s+if \(sel\) return sel/, '格式=弹框格式行当前选择（预览与格式行一致）')
+  assert.match(nc, /if \(tplMode\.value === 'daily'\) \{\n\s+const f = dailyRule\.value \? dailyFormatOf/, 'daily 格式必须先读持久化格式，不能沿用 rule 草稿')
+  assert.match(nc, /const sel = tplFormats\.value\[tplChannelTab\.value\]\n\s+if \(sel\) return sel/, 'rule 模式格式=弹框格式行当前选择（预览与格式行一致）')
   assert.match(nc, /const moduleLabel = \(mod: \{ id: string; label: string \}\)/, '模块名必须经词条映射（缺键回落后端 label）')
   assert.match(nc, /:readonly="tplMode === 'daily' && tplDailyMode === 'modules'"/, '模块拼装模式编辑器必须只读')
   assert.match(nc, /modeModulesPreviewHint/, '模块拼装预览提示必须在位')

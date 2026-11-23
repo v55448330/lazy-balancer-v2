@@ -378,7 +378,7 @@
           <CodeEditor v-if="tplEditorLang !== 'text'" v-model="tplText" :language="tplEditorLang" height="220px" :aria-label="tplEditorLabel" :readonly="tplMode === 'daily' && tplDailyMode === 'modules'" />
           <el-input v-else v-model="tplText" type="textarea" :rows="7" :placeholder="tplPlaceholder" :readonly="tplMode === 'daily' && tplDailyMode === 'modules'" />
           <div v-if="tplLengthLimit > 0" class="tpl-length-row">
-            <span class="form-hint" :class="{ 'tpl-length-over': tplText.length > tplLengthLimit }">{{ tplText.length }} / {{ tplLengthLimit }}</span>
+            <span class="form-hint" :class="{ 'tpl-length-over': tplByteLength > tplLengthLimit }">{{ tplByteLength }} / {{ tplLengthLimit }}</span>
           </div>
           <div class="ph-row">
             <el-tag v-for="ph in tplActivePh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag>
@@ -386,7 +386,7 @@
           <div class="tpl-hints">
             <div v-for="hint in tplHints" :key="hint" class="form-tip-line">{{ hint }}</div>
           </div>
-          <div v-if="tplLengthLimit > 0 && tplText.length > tplLengthLimit" class="info-note-bar"><span class="info-note-desc">{{ tplActiveChannel?.type === 'email' ? t('app.notification.daily.bodyTemplateTooLong') : t('app.notification.daily.templateTooLong') }}</span></div>
+          <div v-if="tplLengthLimit > 0 && tplByteLength > tplLengthLimit" class="info-note-bar"><span class="info-note-desc">{{ tplActiveChannel?.type === 'email' ? t('app.notification.daily.bodyTemplateTooLong') : t('app.notification.daily.templateTooLong') }}</span></div>
         </div>
 
         <el-divider />
@@ -446,7 +446,7 @@ import {
   type DailyRenderMode,
 } from '@/utils/channelStyle'
 import { dailySampleValues } from '@/utils/dailySamples'
-import { mergeChannelTemplateDrafts, toggleDailyModules } from '@/utils/notificationDrafts'
+import { mergeChannelTemplateDrafts, toggleDailyModules, utf8ByteLength } from '@/utils/notificationDrafts'
 import { formatDate } from '@/utils/date'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
@@ -746,14 +746,15 @@ const tplActiveFormat = computed<string>(() => {
   const ch = tplActiveChannel.value
   if (!ch) return 'text'
   if (isBotChannel(ch.type)) return fixedDailyFormat(ch.type)
-  // 格式=弹框格式行的**当前选择**（rule=编辑草稿；daily=持久化格式，切换即存），
-  // 不按通道类型猜——预览/高亮与格式行所见一致（2026-11-22 用户纠偏）。
-  const sel = tplFormats.value[tplChannelTab.value]
-  if (sel) return sel
+  // daily 模式必须先读持久化格式：tplFormats 是 rule 模式草稿，切到日报后
+  // 若沿用会把日报预览/高亮固定在 rule 残留格式；daily 下拉保存后也不会刷新。
   if (tplMode.value === 'daily') {
     const f = dailyRule.value ? dailyFormatOf(dailyRule.value, ch.type) : 'auto'
     return f === 'auto' ? autoDailyFormat(ch.type) : f
   }
+  // rule 模式：格式=弹框格式行当前选择；缺省按类型映射。
+  const sel = tplFormats.value[tplChannelTab.value]
+  if (sel) return sel
   return ch.type === 'webhook' ? 'json' : 'html'
 })
 const setTplFormat = (v: string): void => { tplFormats.value = { ...tplFormats.value, [tplChannelTab.value]: v } }
@@ -933,6 +934,7 @@ const tplLengthLimit = computed<number>(() => {
   if (typ === 'email') return 4000
   return 0
 })
+const tplByteLength = computed(() => utf8ByteLength(tplText.value))
 
 // 全量通道 DTO（enabled/last_test_ok/style_config 单源）：rules 端点只回启用通道
 // （投递语义），停用通道经此补齐发送至选项的禁用态，同时作为日报模板草稿来源。
@@ -1221,7 +1223,6 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     '| :--- | ---: |',
     row(L.clusterStatus, 'cluster_status'),
     row(L.uptime, 'uptime'),
-    row(L.threatDb, 'threat_db'),
     row(L.appVersion, 'app_version'),
     '',
     `**${L.nodesSummary}**`,
@@ -1233,7 +1234,6 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     '| :--- | ---: |',
     row(L.requests, 'requests'),
     row(L.allowed, 'allowed'),
-    row(L.logged, 'logged'),
     row(L.distinctIps, 'distinct_ips'),
     row(L.bandwidth, 'bandwidth'),
     row(L.peakQps, 'peak_qps'),
@@ -1243,9 +1243,11 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     `| ${L.metricHeader} | ${L.valueHeader} |`,
     '| :--- | ---: |',
     row(L.blocked, 'blocked'),
+    row(L.logged, 'logged'),
     row(L.attackTop, 'attack_top'),
     row(L.cc, 'cc_triggered'),
     row(L.autoban, 'autoban'),
+    row(L.threatDb, 'threat_db'),
     '',
     `**${L.topIps}**`,
     '{{top_ips}}',
@@ -1287,7 +1289,6 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     L.wxCluster,
     line(L.clusterStatus, 'cluster_status'),
     line(L.uptime, 'uptime'),
-    line(L.wxThreatDb, 'threat_db'),
     line(L.wxAppVersion, 'app_version'),
     `${L.nodesSummary}${c}`,
     '{{nodes_summary}}',
@@ -1295,13 +1296,13 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     L.secOverview,
     line(L.requests, 'requests'),
     line(L.allowed, 'allowed'),
-    line(L.logged, 'logged'),
     line(L.distinctIps, 'distinct_ips'),
     line(L.wxBandwidth, 'bandwidth'),
     line(L.wxPeakQps, 'peak_qps'),
     '',
     L.secSecurity,
     line(L.blocked, 'blocked'),
+    line(L.logged, 'logged'),
     line(L.attackTop, 'attack_top'),
     `${L.topIps}${c}`,
     '{{top_ips}}',
@@ -1309,6 +1310,7 @@ const defaultDailyTplFor = (typ: string, lang: TplLang): string => {
     '{{top_paths}}',
     line(L.cc, 'cc_triggered'),
     line(L.autoban, 'autoban'),
+    line(L.wxThreatDb, 'threat_db'),
     '',
     L.secCert,
     line(L.certStatus, 'cert_status'),
@@ -1441,8 +1443,8 @@ const saveDailyTplFromDialog = async (): Promise<void> => {
     const full = dailyFullChannels.value.find(c => c.id === ch.id)
     if (!full) continue
     const draft = tplTexts.value[String(ch.id)] ?? ''
-    if (isBotChannel(ch.type) && draft.trim().length > 2000) { ElMessage.error(t('app.notification.daily.templateTooLong')); return }
-    if (ch.type === 'email' && draft.trim().length > 4000) { ElMessage.error(t('app.notification.daily.bodyTemplateTooLong')); return }
+    if (isBotChannel(ch.type) && utf8ByteLength(draft) > 2000) { ElMessage.error(t('app.notification.daily.templateTooLong')); return }
+    if (ch.type === 'email' && utf8ByteLength(draft) > 4000) { ElMessage.error(t('app.notification.daily.bodyTemplateTooLong')); return }
     const plan = planDailyChannelStyle({
       raw: full.style_config,
       type: ch.type,

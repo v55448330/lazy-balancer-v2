@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -326,13 +327,15 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 			return
 		}
 	}
-	if len(req.MCPIPWhitelist) > apiKeyMaxWhitelistEntries {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_640c6b1a", apiKeyMaxWhitelistEntries), MessageKey: "k_640c6b1a"})
-		return
-	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_411bbeb0", apimsg.ErrMsg(c, err))})
+		return
+	}
+	// 上限按归一化去重后的实际集合计数：257 条重复 CIDR 的唯一集合只有 1 条，
+	// 不应在去重前误拒。
+	if len(whitelist) > apiKeyMaxWhitelistEntries {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_640c6b1a", apiKeyMaxWhitelistEntries), MessageKey: "k_640c6b1a"})
 		return
 	}
 	whitelistJSON, err := encodeMCPIPWhitelist(whitelist)
@@ -497,20 +500,23 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		}
 	}
 	var whitelistJSON *string
+	var normalizedWhitelist []string
 	// 归一化后的白名单条目数（审计 delta 的「变更后条数」必须与库内落值
 	// 同源：请求原值含重复/未压缩 CIDR，直接计数会虚报）。
 	whitelistCount := 0
 	if req.MCPIPWhitelist != nil {
-		if len(*req.MCPIPWhitelist) > apiKeyMaxWhitelistEntries {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_640c6b1a", apiKeyMaxWhitelistEntries), MessageKey: "k_640c6b1a"})
-			return
-		}
 		whitelist, err := services.NormalizeCIDRs(*req.MCPIPWhitelist)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_411bbeb0", apimsg.ErrMsg(c, err))})
 			return
 		}
+		// 上限按去重后的实际集合计数（与落库/审计同源）。
+		if len(whitelist) > apiKeyMaxWhitelistEntries {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_640c6b1a", apiKeyMaxWhitelistEntries), MessageKey: "k_640c6b1a"})
+			return
+		}
 		whitelistCount = len(whitelist)
+		normalizedWhitelist = whitelist
 		encoded, err := encodeMCPIPWhitelist(whitelist)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_42f1000c"), MessageKey: "k_42f1000c"})
@@ -565,7 +571,9 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	if req.MCPEnabled != nil {
 		afterMCPEnabled = *req.MCPEnabled
 	}
-	whitelistChanged := req.MCPIPWhitelist != nil && whitelistJSON != nil && *whitelistJSON != beforeWhitelist
+	// 白名单是集合语义：同一集合重排不得误判为特权变更/审计变化。
+	whitelistChanged := req.MCPIPWhitelist != nil &&
+		!sameAPIKeyWhitelist(normalizedWhitelist, apiKeyWhitelistValues(beforeWhitelist))
 	// 重新启用特权 Key（禁用→启用且启用后具备写/MCP 能力）与「收回只读」
 	// 对称：启用=恢复可写/MCP 可达性，属授予动作。只读 Key 的启用不构成
 	// 特权变更（仍不可写）。
@@ -664,9 +672,9 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	if req.ReadOnly != nil && *req.ReadOnly != (beforeReadOnly == 1) {
 		changes = append(changes, "只读："+boolOnOff(beforeReadOnly == 1)+"→"+boolOnOff(*req.ReadOnly))
 	}
-	if req.MCPIPWhitelist != nil && whitelistJSON != nil {
+	if req.MCPIPWhitelist != nil {
 		beforeCount := apiKeyWhitelistCount(beforeWhitelist)
-		if beforeCount != whitelistCount || *whitelistJSON != beforeWhitelist {
+		if whitelistChanged || beforeCount != whitelistCount {
 			changes = append(changes, fmt.Sprintf("IP 白名单（约束全部 REST 与 MCP）：%d 条→%d 条", beforeCount, whitelistCount))
 		}
 	}
@@ -705,6 +713,35 @@ func apiKeyWhitelistCount(raw string) int {
 		return 0
 	}
 	return len(items)
+}
+
+// apiKeyWhitelistValues 解析库内白名单 JSON（空/畸形=空集合）。
+func apiKeyWhitelistValues(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil
+	}
+	return items
+}
+
+// sameAPIKeyWhitelist 按集合比较（顺序不敏感）；白名单约束语义与展示顺序无关。
+func sameAPIKeyWhitelist(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	left := append([]string(nil), a...)
+	right := append([]string(nil), b...)
+	sort.Strings(left)
+	sort.Strings(right)
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeMCPIPWhitelist(whitelist []string) (string, error) {
