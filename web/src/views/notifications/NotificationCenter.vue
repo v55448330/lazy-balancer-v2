@@ -446,6 +446,7 @@ import {
   type DailyRenderMode,
 } from '@/utils/channelStyle'
 import { dailySampleValues } from '@/utils/dailySamples'
+import { mergeChannelTemplateDrafts, toggleDailyModules } from '@/utils/notificationDrafts'
 import { formatDate } from '@/utils/date'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
@@ -696,15 +697,7 @@ const dailyModuleChecked = computed<string[]>(() =>
 const toggleDailyModule = (checked: Array<string | number> | string | number | undefined): void => {
   const on = Array.isArray(checked) ? checked.map(String) : checked !== undefined ? [String(checked)] : []
   if (!dailyDraft.value) return
-  const next = new Set(dailyDraft.value.items)
-  for (const mod of dailyModules.value) {
-    const isOn = on.includes(mod.id)
-    for (const it of mod.items) {
-      if (isOn) next.add(it)
-      else next.delete(it)
-    }
-  }
-  dailyDraft.value.items = [...next]
+  dailyDraft.value.items = toggleDailyModules(dailyDraft.value.items, dailyModules.value, on)
 }
 const testingDaily = ref(false)
 const dailyFormatLabel = (v: string): string => {
@@ -1522,11 +1515,18 @@ const saveTemplate = async (): Promise<void> => {
   try {
     // 每通道模板部分更新（不动启用态/级别/时间/通道选择——通道选择已前移到表格内联）。
     // 仅提交与预置（任一语言）/事件级模板不同的草稿（空差异=沿用默认链）。
-    const tpls: Record<string, string> = {}
-    for (const ch of userChannels.value) {
-      const draft = tplTexts.value[String(ch.id)] ?? ''
-      if (draft && draft !== defaultTplFor(ch.type, 'zh') && draft !== defaultTplFor(ch.type, 'en')) tpls[String(ch.id)] = draft
-    }
+    // 只重建本次展示的通道；未展示（停用）通道的既有模板原样保留。
+    // 草稿等于默认或事件级 body 时删除该键，避免把 body 钉成 per-channel 副本。
+    const tpls = mergeChannelTemplateDrafts(
+      tplEditingRule.value.channel_templates,
+      tplTabChannels.value.map(ch => ({
+        channelId: String(ch.id),
+        text: tplTexts.value[String(ch.id)] ?? '',
+        defaultZh: defaultTplFor(ch.type, 'zh'),
+        defaultEn: defaultTplFor(ch.type, 'en'),
+        bodyTemplate: tplEditingRule.value?.body_template ?? '',
+      })),
+    )
     await request.post(ruleWriteUrl(tplEditingRule.value.id), { channel_templates: tpls })
     tplEditingRule.value.channel_templates = tpls
     mfaAwareSuccess(t('app.notification.rules.saved'))

@@ -516,6 +516,9 @@ func (s *ClusterService) UpdateNodeSiteCoordinates(ctx context.Context, nodeID i
 	var currentLat, currentLon float64
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(server_map_lat,0), COALESCE(server_map_lon,0) FROM nodes WHERE id=? AND `+masterRoleConditionSQL, nodeID).Scan(&currentLat, &currentLon); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// nodeWriteMissError 走独立连接复核角色；必须先退出本事务，
+			// 否则单连接池会等到请求 ctx 超时（同 DeleteNode/RegistrationStatus）。
+			_ = tx.Rollback()
 			return s.nodeWriteMissError(ctx)
 		}
 		return fmt.Errorf("读取节点站点坐标: %w", err)
@@ -532,6 +535,7 @@ func (s *ClusterService) UpdateNodeSiteCoordinates(ctx context.Context, nodeID i
 		return fmt.Errorf("读取节点站点坐标更新结果: %w", err)
 	}
 	if updated != 1 {
+		_ = tx.Rollback()
 		return s.nodeWriteMissError(ctx)
 	}
 	// 坐标是 node-local 下发数据，必须 bump 版本触发从节点拉取；与节点行同事务。

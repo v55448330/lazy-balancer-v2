@@ -213,6 +213,20 @@ func TestClusterService_UpdateNodeSiteCoordinates_noopDoesNotBump(t *testing.T) 
 	}
 }
 
+// 单连接池下写未命中：nodeWriteMissError 必须先用同一事务连接回滚复核，
+// 不能持事务再取独立连接（池耗尽时会等满请求 ctx 才失败）。
+func TestClusterService_UpdateNodeSiteCoordinates_missingNodeOnSingleConnPool(t *testing.T) {
+	service, database := newClusterTestService(t)
+	database.SetMaxOpenConns(1)
+	// 让事务先占住唯一连接：节点不存在走 nodeWriteMissError 分支。
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := service.UpdateNodeSiteCoordinates(ctx, 999, 1, 2)
+	if !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("err=%v, want ErrNodeNotFound（事务内独立连接会造成单连接池等待）", err)
+	}
+}
+
 // 静态锚点：pin 路径推导命名核对（sha256(host) hex 文件名），
 // 防止测试与生产路径推导漂移。
 func TestClusterService_pinPathDerivationMatchesTOFUNaming(t *testing.T) {

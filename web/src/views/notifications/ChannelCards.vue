@@ -470,6 +470,7 @@ const saveDrawer = async (): Promise<void> => {
           targetValue: drawerForm.value.targetValue,
           type: drawerForm.value.type,
           targetMasked: editing.target_masked === true,
+          originalTarget: editing.target,
         }),
         style_config: buildStyleConfig(),
       })

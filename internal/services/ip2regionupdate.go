@@ -835,6 +835,38 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 	if !needV4 {
 		v4Source = ip2regionLivePath
 	}
+	// v6 显式校验/TOFU 必须在构造双协议 searcher 之前完成：构造器对损坏
+	// v6 只降级禁用，不报错；若先构造后被门拒绝，被拒工件仍会进入内存 searcher。
+	if stagedV6 != "" {
+		// v6 显式校验门（与 v4 的 openValidatedIP2RegionSearcherForUpdate 同
+		// 强度）：双协议 searcher 构造对损坏 v6 是「降级禁用」语义（不报错），
+		// 安装段必须独立显性校验——不合格工件到此拒装并记源失败，绝不 rename
+		// 进 live（否则损坏 v6 会在役且源状态误报 success）。
+		if verr := validateIP2RegionV6XDB(stagedV6); verr != nil {
+			m.v6InstallAttempted = true
+			m.v6InstallSucceeded = false
+			m.v6InstallError = fmt.Sprintf("校验失败: %v", verr)
+			SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
+			Logf("warn", "ip2region update: IPv6 库校验失败（拒绝安装，继续 IPv4 安装）: %v", verr)
+			stagedV6 = ""
+		}
+	}
+	if stagedV6 != "" {
+		// v6 TOFU 基线（独立键，与 v4 基线互不覆盖）。mismatch 拒装 v6
+		//（记源状态，v4 不受影响）；I/O 类记录失败降级为留痕。
+		if ierr := recordDownloadIntegrity(ip2RegionXDBOriginURLFor("v6", tag), stagedV6, "IP数据库"); ierr != nil {
+			if errors.Is(ierr, errDownloadIntegrityMismatch) {
+				m.v6InstallAttempted = true
+				m.v6InstallSucceeded = false
+				m.v6InstallError = fmt.Sprintf("完整性校验失败: %v", ierr)
+				SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
+				Logf("warn", "ip2region update: IPv6 库完整性基线不匹配（拒绝安装，继续 IPv4 安装）: %v", ierr)
+				stagedV6 = ""
+			} else {
+				Logf("error", "ip2region update: failed to record v6 download integrity: %v", ierr)
+			}
+		}
+	}
 	v6ForSearcher := stagedV6
 	if v6ForSearcher == "" {
 		v6ForSearcher = ip2RegionV6PathForAttach()
@@ -869,36 +901,6 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 				return ierr
 			}
 			Logf("error", "ip2region update: failed to record download integrity: %v", ierr)
-		}
-	}
-	if stagedV6 != "" {
-		// v6 显式校验门（与 v4 的 openValidatedIP2RegionSearcherForUpdate 同
-		// 强度）：双协议 searcher 构造对损坏 v6 是「降级禁用」语义（不报错），
-		// 安装段必须独立显性校验——不合格工件到此拒装并记源失败，绝不 rename
-		// 进 live（否则损坏 v6 会在役且源状态误报 success）。
-		if verr := validateIP2RegionV6XDB(stagedV6); verr != nil {
-			m.v6InstallAttempted = true
-			m.v6InstallSucceeded = false
-			m.v6InstallError = fmt.Sprintf("校验失败: %v", verr)
-			SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
-			Logf("warn", "ip2region update: IPv6 库校验失败（拒绝安装，继续 IPv4 安装）: %v", verr)
-			stagedV6 = ""
-		}
-	}
-	if stagedV6 != "" {
-		// v6 TOFU 基线（独立键，与 v4 基线互不覆盖）。mismatch 拒装 v6
-		//（记源状态，v4 不受影响）；I/O 类记录失败降级为留痕。
-		if ierr := recordDownloadIntegrity(ip2RegionXDBOriginURLFor("v6", tag), stagedV6, "IP数据库"); ierr != nil {
-			if errors.Is(ierr, errDownloadIntegrityMismatch) {
-				m.v6InstallAttempted = true
-				m.v6InstallSucceeded = false
-				m.v6InstallError = fmt.Sprintf("完整性校验失败: %v", ierr)
-				SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
-				Logf("warn", "ip2region update: IPv6 库完整性基线不匹配（拒绝安装，继续 IPv4 安装）: %v", ierr)
-				stagedV6 = ""
-			} else {
-				Logf("error", "ip2region update: failed to record v6 download integrity: %v", ierr)
-			}
 		}
 	}
 

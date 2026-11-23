@@ -32,6 +32,36 @@ test('未脱敏态保持原行为：目标为空同样提交（与后端校验�
   assert.equal(payload.target, JSON.stringify({ email: '' }))
 })
 
+test('未脱敏通道编辑保留原始 target 中的 bot 凭据', () => {
+  const payload = channelEditPayload({
+    name: 'qq-a',
+    targetValue: 'openid-new',
+    type: 'qq',
+    targetMasked: false,
+    originalTarget: JSON.stringify({ openid: 'openid-old', appid: 'app-1', secret: 'secret-1' }),
+  })
+  assert.ok(payload.target, 'target 必须提交')
+  assert.deepEqual(JSON.parse(payload.target), {
+    openid: 'openid-new',
+    appid: 'app-1',
+    secret: 'secret-1',
+  }, '只更新接收者键，不得销毁 per-channel appid/secret')
+  const wx = channelEditPayload({
+    name: 'wx-a',
+    targetValue: 'receiver-new',
+    type: 'wx_clawbot',
+    targetMasked: false,
+    originalTarget: JSON.stringify({ receiver: 'old', token: 'tok', baseurl: 'https://wx.test', account_id: 'acc' }),
+  })
+  assert.ok(wx.target, 'wx target 必须提交')
+  assert.deepEqual(JSON.parse(wx.target), {
+    receiver: 'receiver-new',
+    token: 'tok',
+    baseurl: 'https://wx.test',
+    account_id: 'acc',
+  })
+})
+
 test('类型→target 键映射与通道 target JSON 契约一致', () => {
   assert.equal(channelTargetKey('webhook'), 'url')
   assert.equal(channelTargetKey('email'), 'email')
@@ -43,6 +73,7 @@ test('类型→target 键映射与通道 target JSON 契约一致', () => {
 test('ChannelCards 接线：target_masked 置空目标 + 占位提示 + 保存经 channelEditPayload', () => {
   const text = code('src/views/notifications/ChannelCards.vue')
   assert.match(text, /target_masked/, '必须消费后端脱敏标记')
+  assert.match(text, /originalTarget: editing\.target/, '非脱敏编辑必须把原始 target 交给合并函数以保留 bot 凭据')
   assert.match(text, /channelEditPayload\(/, '编辑保存体必须经纯函数（脱敏态省略 target）')
   assert.match(text, /targetMaskedPlaceholder/, '脱敏目标输入框必须有占位提示')
   assert.match(text, /style_config: buildStyleConfig\(\)/, '样式仍按全量覆盖提交')

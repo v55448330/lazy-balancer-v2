@@ -143,6 +143,43 @@ func TestIP2RegionUpdate_installReusesValidatedSearcher(t *testing.T) {
 	}
 }
 
+// v6 暂存校验失败后，热换 searcher 必须继续挂载 live v6（旧库），
+// 不能把已拒绝的暂存 v6 构造进内存后再丢弃。
+func TestIP2RegionUpdate_v6ValidationFailureReloadsLiveV6(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	setIP2RegionV6EnabledForTest(t, true)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	v6Live := filepath.Join(filepath.Dir(ip2regionLivePath), "ip2region_v6.xdb")
+	writeTestXDBV6(t, v6Live, defaultV6TestSegments())
+	withIP2RegionV6Paths(t, v6Live, filepath.Join(filepath.Dir(v6Live), "missing-v6-dist.xdb"))
+
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	m.downloadXDBV6 = func(_ context.Context, _ string, dest string, _ downloadProgressFunc) error {
+		return os.WriteFile(dest, []byte("not an xdb at all"), 0644)
+	}
+	oldReload := reloadIP2RegionSearcher
+	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
+	var reloaded *ip2regionService.Ip2Region
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
+		reloaded = searcher
+		return nil
+	}
+
+	// 注入 v6 下载校验失败（v4 正常安装），随后热换必须带回旧 live v6。
+	if err := m.downloadAndInstall(context.Background(), "v3.1.0", true, true); err != nil {
+		t.Fatalf("download and install: %v", err)
+	}
+	if reloaded == nil {
+		t.Fatal("v6 校验失败后仍必须热换 searcher（v4 已安装）")
+	}
+	defer reloaded.Close()
+	region, err := reloaded.Search("240e:56:1:2::9")
+	if err != nil || !strings.Contains(region, "杭州市") {
+		t.Fatalf("v6 search=%q err=%v, want live 杭州市（拒绝的暂存库不得进入 searcher）", region, err)
+	}
+}
+
 // 取消落在「安装段已落盘、Caddy 重载尚未执行」的窗口：未重载即未生效——
 // live xdb、版本行、sidecar 必须回滚到同代基线，reloader 不得被调用。
 func TestIP2RegionUpdateRun_cancelAfterInstallRollsBackSameGeneration(t *testing.T) {

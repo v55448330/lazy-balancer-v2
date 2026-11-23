@@ -2356,6 +2356,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 显式值交保存门 400，未提交或存量死值才允许自愈清零。
 	dynamicDNSSubmitted := req.DynamicDNS != nil
 	customRoutesEnabledSubmitted := req.CustomRoutesEnabled != nil
+	pathRulesSubmitted := req.PathRules != nil
+	dnsServerSubmitted := req.EnableDnsServer != nil || req.DnsServer != nil
 	proxyDialTimeoutSubmitted := req.ProxyDialTimeout != nil
 	proxyResponseHeaderTimeoutSubmitted := req.ProxyResponseHeaderTimeout != nil
 	proxyReadTimeoutSubmitted := req.ProxyReadTimeout != nil
@@ -2576,8 +2578,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if !customRoutesEnabledSubmitted {
 				req.CustomRoutesEnabled = &disabled
 			}
-			emptyPathRules := []models.PathRule{}
-			req.PathRules = &emptyPathRules
+			if !pathRulesSubmitted {
+				emptyPathRules := []models.PathRule{}
+				req.PathRules = &emptyPathRules
+			}
 			if !proxyDialTimeoutSubmitted {
 				req.ProxyDialTimeout = &zero
 			}
@@ -2604,8 +2608,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if !dynamicDNSSubmitted {
 				req.DynamicDNS = &disabled
 			}
-			req.EnableDnsServer = &disabled
-			req.DnsServer = &empty
+			if !dnsServerSubmitted {
+				req.EnableDnsServer = &disabled
+				req.DnsServer = &empty
+			}
 			req.DnsFamily = ""
 			// 显式提交的健康检查域名不在切换路径静默清零——交保存门 400
 			// （与 CreateRule 同契约）；未提交的存量 HTTP 值仍按死配置自愈。

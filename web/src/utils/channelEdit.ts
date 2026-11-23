@@ -12,6 +12,8 @@ interface ChannelEditDraft {
   type: string
   /** 通道行 DTO 的 target_masked（后端标记：target 已脱敏）。 */
   targetMasked: boolean
+  /** 未脱敏通道的原始 target JSON：保留 appid/secret/token 等非接收者凭据。 */
+  originalTarget?: string
 }
 
 interface ChannelEditPayload {
@@ -36,7 +38,19 @@ export const channelEditPayload = (draft: ChannelEditDraft): ChannelEditPayload 
   const payload: ChannelEditPayload = { name: draft.name.trim() }
   const target = draft.targetValue.trim()
   if (!(draft.targetMasked && target === '')) {
-    payload.target = JSON.stringify({ [channelTargetKey(draft.type)]: target })
+    let merged: Record<string, unknown> = {}
+    if (draft.originalTarget) {
+      try {
+        const parsed = JSON.parse(draft.originalTarget) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          merged = { ...(parsed as Record<string, unknown>) }
+        }
+      } catch {
+        // 非法原始 target 只提交接收者键，由后端校验兜底。
+      }
+    }
+    merged[channelTargetKey(draft.type)] = target
+    payload.target = JSON.stringify(merged)
   }
   return payload
 }

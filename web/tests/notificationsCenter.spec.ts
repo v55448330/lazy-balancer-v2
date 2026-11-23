@@ -183,7 +183,8 @@ test('统一模板弹框+停用通道联动+事件级别分区+正文语言切�
   assert.match(text, /const onTplLangChange = \(v: string \| number \| boolean \| undefined\): void =>/, '切换即载入该语言预设')
   assert.match(text, /const defaultTplFor = \(typ: string, lang: TplLang\): string =>/, '事件预置 zh/en 双版本')
   assert.match(text, /const defaultDailyTplFor = \(typ: string, lang: TplLang\): string =>/, '日报预置 zh/en 双版本')
-  assert.match(text, /draft !== defaultTplFor\(ch\.type, 'zh'\) && draft !== defaultTplFor\(ch\.type, 'en'\)/, '任一语言预置均视为默认（不冗余落库）')
+  assert.match(text, /mergeChannelTemplateDrafts\(/, '模板保存必须合并不展示通道的既有键（停用通道不丢模板）')
+  assert.match(text, /bodyTemplate: tplEditingRule\.value\?\.body_template/, '事件级 body 不钉成 per-channel 副本')
   assert.match(text, /tplChannelLabel/, '通道切换必须带「通道」标签词条')
   assert.match(text, /class="tpl-channel-row">\s*<span class="tpl-format-label">\{\{ t\('app\.notification\.rules\.tplChannelLabel'\) \}\}/, '通道切换行带 label')
 

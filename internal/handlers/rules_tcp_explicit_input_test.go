@@ -170,6 +170,9 @@ func TestUpdateRule_httpToTCPExplicitHTTPOnlyFieldsRejected(t *testing.T) {
 	}{
 		{name: "dynamic_dns", value: "true", want: "动态上游"},
 		{name: "custom_routes_enabled", value: "true", want: "自定义路径规则"},
+		{name: "path_rules", value: `[{"match_type":"prefix","path":"/x"}]`, want: "自定义路径规则"},
+		{name: "enable_dns_server", value: "true", want: "DNS 服务发现"},
+		{name: "dns_server", value: `"1.1.1.1"`, want: "DNS 服务发现"},
 		{name: "proxy_dial_timeout", value: "1", want: "HTTP 代理超时"},
 	}
 	for _, tc := range cases {
