@@ -141,6 +141,9 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 FAILURES=()
+# 发版 builder 可覆盖：DNS 污染期默认 lazy-builder 解析 proxy.golang.org 失败，
+# 用 lazy-builder-proxy（已带 HTTP(S)_PROXY driver opt）完成 buildx。
+BUILDER="${RELEASE_BUILDER:-lazy-builder}"
 
 step() { echo ""; echo "=== $1 ==="; }
 pass() { echo "  ✓ $1"; }
@@ -208,7 +211,7 @@ fi
 
 # ── ④ compose 本地构建+部署+env 抽查 ──
 step "④ compose 本地构建+部署"
-( docker compose build > /dev/null 2>&1 ) && pass "compose build 成功" || fail "compose build 失败"
+( docker compose build --builder "$BUILDER" > /dev/null 2>&1 ) && pass "compose build 成功" || fail "compose build 失败"
 ( docker compose up -d > /dev/null 2>&1 ) && pass "compose up 成功" || fail "compose up 失败"
 sleep 25
 LOCAL_HEALTH="$(docker inspect lazy-balancer --format '{{.State.Health.Status}}' 2>/dev/null || echo down)"
@@ -232,7 +235,7 @@ else
   IMAGE_TAGS="$(release_image_tags "$TAG" "$CHANNEL")"
   TAG_ARGS=""
   for t in $IMAGE_TAGS; do TAG_ARGS="$TAG_ARGS -t \"$t\""; done
-  ( eval "$PROXY_ARGS docker buildx build --builder lazy-builder --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --build-arg VERSION=\"${TAG%%-*}\" $TAG_ARGS --push . > /tmp/finalize-push.log 2>&1" ) \
+  ( eval "$PROXY_ARGS docker buildx build --builder \"$BUILDER\" --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --build-arg VERSION=\"${TAG%%-*}\" $TAG_ARGS --push . > /tmp/finalize-push.log 2>&1" ) \
     && pass "buildx 推送成功（${IMAGE_TAGS}）" || fail "buildx 推送失败（见 /tmp/finalize-push.log）"
   # 推送后强拉对账（daemon 缓存可能 stale）；拉取失败不终止——⑥ 一次性容器
   # 终验才是权威判据（无代理环境 pull 走直连可能失败）。

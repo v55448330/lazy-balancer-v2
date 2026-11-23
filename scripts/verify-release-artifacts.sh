@@ -30,6 +30,9 @@ check_asset "today_detected_tcp" "总览检测列 TCP 拆分字段"
 # 二进制特征核验（R-17 第 2 条：UI 资产 + 二进制逐项 grep）：后端 JSON 键是
 # 产线构建幸存的字面量（struct tag 不受压缩影响），与 UI 侧同一特征串互为印证。
 check_bin "today_detected_tcp" "总览检测列 TCP 拆分字段（后端 struct tag）"
+check_asset "引用的地址列表已删除" "触发详情：已删除名单提示（audit158 B01）"
+check_bin "认证网关地址" "forward_auth 地址写入门（audit158 B11）"
+check_bin "生成自签名证书序列号失败" "自签证书熵源错误上抛（audit158 B10）"
 # 特征串选串规则：只允许产线构建幸存的字面量（API JSON 键、用户可见文案）；
 # 压缩混淆会改写局部标识符（todayDetectedSplit/heatLegendTicks 即误选例）。
 # 批次身份由 build-info.json 的 commit 字段承载（必须=本批次 commit）。
