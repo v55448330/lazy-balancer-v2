@@ -147,7 +147,7 @@ var catalog = []catalogEntry{
 	{EvtIngestRecovered, LevelInfo, true, "安全事件摄取恢复", "安全事件摄取已恢复（降级原因：%s）"},
 	// sys.daily_report 不进目录：日报已拆独立区块（per-user 配置+直接落投递，
 	// 不走订阅矩阵事件订阅面）；事件键保留供投递记录展示。
-	{EvtNotifyChannelDown, LevelWarn, true, "通知通道离线", "通知通道「%s」已离线（%s）——事件将暂存重投"},
+	{EvtNotifyChannelDown, LevelWarn, true, "通知通道离线", "通知通道「%s」已离线（%s）——离线期间事件投递失败，恢复后可手动重发"},
 	{EvtNotifyChannelRecovered, LevelInfo, true, "通知通道恢复", "通知通道已恢复（%s），投递正常"},
 	{EvtTaskSucceeded, LevelInfo, false, "任务执行成功", "任务类型「%s」任务「%s」执行成功"},
 	{EvtTaskFailed, LevelWarn, true, "任务执行失败", "任务类型「%s」任务「%s」执行失败：%s"},
@@ -223,6 +223,10 @@ type CatalogItem struct {
 // sys.* 与 notify.*（通道自监控）归入「系统」）。
 func catalogGroup(id string) string {
 	switch {
+	// 精确键必须排在 cfg. 前缀之前：cfg.caddy_lifecycle 属服务生命周期，
+	// 归「系统」，前缀分支抢先会让该 case 永远不可达。
+	case id == EvtCaddyLifecycle:
+		return "系统"
 	case strings.HasPrefix(id, "auth."), strings.HasPrefix(id, "apikey."):
 		return "认证"
 	case strings.HasPrefix(id, "cfg."):
@@ -237,8 +241,6 @@ func catalogGroup(id string) string {
 		return "任务"
 	case strings.HasPrefix(id, "notify."):
 		return "通知"
-	case id == EvtCaddyLifecycle:
-		return "系统" // 服务生命周期，不属配置内容
 	default:
 		return "系统"
 	}

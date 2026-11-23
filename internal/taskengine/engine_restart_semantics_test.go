@@ -46,7 +46,7 @@ func waitNotRunning(t *testing.T, e *Engine, id string, timeout time.Duration, w
 func TestEngine_SetRoleReassertionDoesNotReviveStoppedDaemon(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{}, 4)
-	e.Register(Descriptor{ID: "t-ra", Family: "t", Name: "常驻A", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-ra", Family: "t", Name: "常驻A", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error {
 			started <- struct{}{}
 			<-rc.Ctx.Done()
@@ -61,8 +61,8 @@ func TestEngine_SetRoleReassertionDoesNotReviveStoppedDaemon(t *testing.T) {
 	e.SetRole(true)
 	e.StopLoop("t-ra")
 	waitNotRunning(t, e, "t-ra", time.Second, "StopLoop 后 daemon 应停止")
-	// 停止后 300ms 内不得复活（误栽 pendingRestart 的复活面）
-	time.Sleep(300 * time.Millisecond)
+	// 直接驱动 30 个 tick 不得复活（误栽 pendingRestart 的复活面）。
+	driveTicks(e, 30)
 	if e.IsRunning("t-ra") {
 		t.Fatal("用户停止的 daemon 被 pendingRestart 复活——SetRole 重申不得栽重启意图")
 	}
@@ -75,7 +75,7 @@ func TestEngine_SetRoleReassertionDoesNotReviveStoppedDaemon(t *testing.T) {
 func TestEngine_DemoteTripleSetRoleDoesNotReviveOnSlave(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{}, 4)
-	e.Register(Descriptor{ID: "t-mo", Family: "t", Name: "主常驻", Kind: KindDaemon, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-mo", Family: "t", Name: "主常驻", Kind: KindDaemon, RunsOn: RoleMasterOnly,
 		Run: func(rc RunContext) error {
 			started <- struct{}{}
 			<-rc.Ctx.Done()
@@ -92,7 +92,7 @@ func TestEngine_DemoteTripleSetRoleDoesNotReviveOnSlave(t *testing.T) {
 	e.SetRole(false)
 	e.SetRole(false)
 	waitNotRunning(t, e, "t-mo", time.Second, "demote 后 master-only daemon 不得在从节点继续/复活运行")
-	time.Sleep(300 * time.Millisecond)
+	driveTicks(e, 30)
 	if e.IsRunning("t-mo") {
 		t.Fatal("demote 后 master-only daemon 在从节点复活——违反禁签发不变量")
 	}
@@ -104,7 +104,7 @@ func TestEngine_DemoteTripleSetRoleDoesNotReviveOnSlave(t *testing.T) {
 func TestEngine_StopPreventsRestart(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{}, 4)
-	e.Register(Descriptor{ID: "t-sp", Family: "t", Name: "常驻S", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-sp", Family: "t", Name: "常驻S", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error {
 			started <- struct{}{}
 			<-rc.Ctx.Done()
@@ -126,7 +126,7 @@ func TestEngine_StopPreventsRestart(t *testing.T) {
 func TestEngine_PeriodicRunsPromptlyAfterPromote(t *testing.T) {
 	e := newTestEngine(t)
 	ran := make(chan struct{}, 4)
-	e.Register(Descriptor{ID: "t-pd", Family: "t", Name: "周期P", Kind: KindPeriodic, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-pd", Family: "t", Name: "周期P", Kind: KindPeriodic, RunsOn: RoleMasterOnly,
 		IntervalFn: func() time.Duration { return time.Hour },
 		Run: func(rc RunContext) error {
 			select {
@@ -153,7 +153,7 @@ func TestEngine_PeriodicRunsPromptlyAfterPromote(t *testing.T) {
 // Then 每次 daemon 最终停止（首停信号不得丢失）。
 func TestEngine_StopLoopImmediatelyAfterStartEventuallyStops(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-w", Family: "t", Name: "常驻W", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-w", Family: "t", Name: "常驻W", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error { <-rc.Ctx.Done(); return nil }})
 	e.SetRole(true)
 	for i := 0; i < 20; i++ {
@@ -171,7 +171,7 @@ func TestEngine_StopLoopImmediatelyAfterStartEventuallyStops(t *testing.T) {
 // Then panic 被隔离为 failed 行（不得杀进程）。
 func TestEngine_TaskRunPanicRecordsFailed(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-panic", Family: "t", Name: "恐慌任务", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-panic", Family: "t", Name: "恐慌任务", Kind: KindOneshot,
 		Run: func(rc RunContext) error { panic("boom") }})
 	_, err := e.RunSync("t-panic", "manual", "tester")
 	if err == nil {
@@ -195,7 +195,7 @@ func TestEngine_TaskRunPanicRecordsFailed(t *testing.T) {
 func TestEngine_DaemonRunPanicRecordsFailedWithBackoff(t *testing.T) {
 	e := newTestEngineWithOptions(t, Options{TickInterval: 10 * time.Millisecond,
 		DaemonRestartDelays: []time.Duration{200 * time.Millisecond, 200 * time.Millisecond}})
-	e.Register(Descriptor{ID: "t-dpanic", Family: "t", Name: "恐慌常驻", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-dpanic", Family: "t", Name: "恐慌常驻", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error { panic("daemon boom") }})
 	e.SetRole(true)
 	e.StartLoop("t-dpanic")
@@ -229,7 +229,7 @@ func TestEngine_RestartOnRoleFlip_ReplacesGeneration(t *testing.T) {
 	SetLogDir(t.TempDir())
 	t.Cleanup(func() { SetLogDir(oldLogDir) })
 	roleAtStart := make(chan bool, 8)
-	e.Register(Descriptor{ID: "t-flip", Family: "t", Name: "分支常驻", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-flip", Family: "t", Name: "分支常驻", Kind: KindDaemon, RunsOn: RoleAny,
 		RestartOnRoleFlip: true,
 		Run: func(rc RunContext) error {
 			roleAtStart <- e.isMaster()
@@ -285,7 +285,7 @@ func TestEngine_RestartOnRoleFlip_ReplacesGeneration(t *testing.T) {
 func TestEngine_RoleFlipWithoutFlagNoRestart(t *testing.T) {
 	e := newTestEngine(t)
 	starts := make(chan struct{}, 4)
-	e.Register(Descriptor{ID: "t-steady", Family: "t", Name: "无Flag常驻", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-steady", Family: "t", Name: "无Flag常驻", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error {
 			starts <- struct{}{}
 			<-rc.Ctx.Done()
@@ -296,10 +296,11 @@ func TestEngine_RoleFlipWithoutFlagNoRestart(t *testing.T) {
 	<-starts
 	e.SetRole(false)
 	e.SetRole(false) // 生产三连重申
+	driveTicks(e, 30)
 	select {
 	case <-starts:
 		t.Fatal("未声明 RestartOnRoleFlip 的常驻不得因角色翻转重启")
-	case <-time.After(300 * time.Millisecond):
+	default:
 	}
 	if !daemonRunning(e, "t-steady") {
 		t.Fatal("角色翻转后常驻应保持原代运行")
@@ -317,7 +318,7 @@ func TestEngine_DemoteCancelsInFlightScheduled(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	e.Register(Descriptor{ID: "t-sched", Family: "t", Name: "定时", Kind: KindScheduled, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-sched", Family: "t", Name: "定时", Kind: KindScheduled, RunsOn: RoleMasterOnly,
 		// 配套：Scheduled 注册必须带 NextSlotFn（远期槽——
 		// tick 不触发，本测试经 Trigger 驱动在途形态）。
 		NextSlotFn: func() time.Time { return time.Now().Add(time.Hour) },
@@ -356,7 +357,7 @@ func TestEngine_StopLoopPreservesConsumedSlotWatermark(t *testing.T) {
 	pastSlot := time.Now().Add(-time.Hour)
 	started := make(chan struct{}, 1)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-stop-sched", Family: "t", Name: "停止定时", Kind: KindScheduled, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-stop-sched", Family: "t", Name: "停止定时", Kind: KindScheduled, RunsOn: RoleAny,
 		NextSlotFn: func() time.Time { return pastSlot },
 		Run: func(RunContext) error {
 			runs.Add(1)
@@ -400,7 +401,7 @@ func TestEngine_RapidRoleFlipRestartsMasterOnlyDaemon(t *testing.T) {
 	// Given：master-only daemon 第一代运行中。
 	e := newTestEngine(t)
 	starts := make(chan struct{}, 2)
-	e.Register(Descriptor{ID: "t-flip-fast", Family: "t", Name: "快速翻转", Kind: KindDaemon, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-flip-fast", Family: "t", Name: "快速翻转", Kind: KindDaemon, RunsOn: RoleMasterOnly,
 		Run: func(rc RunContext) error {
 			starts <- struct{}{}
 			<-rc.Ctx.Done()
@@ -434,7 +435,7 @@ func TestEngine_DemoteCancelsInFlightPeriodic(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	e.Register(Descriptor{ID: "t-periodic", Family: "t", Name: "周期", Kind: KindPeriodic, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-periodic", Family: "t", Name: "周期", Kind: KindPeriodic, RunsOn: RoleMasterOnly,
 		// 配套：Periodic 注册必须带 IntervalFn（长间隔——
 		// tick 不触发，本测试经 Trigger 驱动在途形态）。
 		IntervalFn: func() time.Duration { return time.Hour },

@@ -66,11 +66,12 @@ func TestEngine_ScheduledSuccessConsumesStaleSlot(t *testing.T) {
 	case <-time.After(waitRunCeiling):
 		t.Fatal("首槽未执行")
 	}
-	// 负断言同样事件驱动：观察窗口（≈30 ticks）内再出现一次执行即失败。
+	// 负断言同样确定性：直接驱动 35 个 tick，期间再出现一次执行即失败。
+	driveTicks(e, 35)
 	select {
 	case <-ran:
 		t.Fatalf("同一过期槽成功落定后仍重投（执行 %d 次）", runs.Load())
-	case <-time.After(350 * time.Millisecond):
+	default:
 	}
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("同一过期槽成功落定后不得重投, got %d, want 1", got)
@@ -122,10 +123,11 @@ func TestEngine_ScheduledAdvancedPastSlotRefiresOnce(t *testing.T) {
 			t.Fatalf("第 %d 次执行未发生（新过期槽被本轮收尾消费）", i+1)
 		}
 	}
+	driveTicks(e, 30)
 	select {
 	case <-ran:
 		t.Fatalf("新槽消费后仍重投（执行 %d 次, want 2）", runs.Load())
-	case <-time.After(300 * time.Millisecond):
+	default:
 	}
 	if got := runs.Load(); got != 2 {
 		t.Fatalf("新槽消费后不得再重投, got %d, want 2", got)
@@ -169,12 +171,75 @@ func TestEngine_ScheduledUserCancelConsumesSlot(t *testing.T) {
 		return lr != nil && lr.Status == "cancelled"
 	})
 	// 取消落定后槽仍过期（业务未推进）——本槽已消费，不得重投。
-	time.Sleep(350 * time.Millisecond)
+	driveTicks(e, 35)
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("用户取消后同一过期槽不得重投, got %d, want 1", got)
 	}
 	if got := countRuns(t, "t-cancel"); got != 1 {
 		t.Fatalf("task_runs 落行 %d, want 1（仅被取消轮）", got)
+	}
+}
+
+// Given 在途 Scheduled 自动轮已被系统性中止（demote/导入排空/引擎停止同源：
+// 系统先以 nil 原因取消 ctx），Run 尚未返回。
+// When 用户 Cancel 在系统中止之后到达。
+// Then 不得消费本槽——业务按系统性中止不推进槽，消费会把「恢复后到期轮
+// 补跑」语义永久压掉（回归）。
+func TestEngine_SystemCancelThenUserCancelKeepsDueSlot(t *testing.T) {
+	e := newTestEngine(t)
+	pastSlot := time.Now().Add(-time.Minute)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	var runs atomic.Int32
+	if err := e.Register(Descriptor{ID: "t-sys-user", Family: "t", Name: "系统后用户取消",
+		Kind: KindScheduled, Cancelable: true, RunsOn: RoleAny,
+		NextSlotFn: func() time.Time { return pastSlot },
+		Run: func(rc RunContext) error {
+			runs.Add(1)
+			startOnce.Do(func() { close(started) })
+			<-rc.Ctx.Done()
+			<-release // 保持 running=true，把用户 Cancel 逼进在途窗口
+			return rc.Ctx.Err()
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	e.SetRole(true)
+	e.StartLoop("t-sys-user")
+	select {
+	case <-started:
+	case <-time.After(waitRunCeiling):
+		t.Fatal("自动轮未启动")
+	}
+	// 冻结 tick：后续只验证 Cancel 的槽消费语义，不让后台 tick 在轮末重投。
+	e.PauseScheduling()
+	// 模拟系统性中止先到（demote/导入排空路径：cancel(nil) + 标记）。
+	r := regOf(t, e, "t-sys-user")
+	r.mu.Lock()
+	c := r.cancel
+	r.runCancelSystem = true
+	r.mu.Unlock()
+	if c == nil {
+		t.Fatal("在途轮缺 cancel 句柄")
+	}
+	c(nil)
+	// 迟到的用户 Cancel：接受请求，但不得消费排程槽。
+	if !e.Cancel("t-sys-user") {
+		t.Fatal("在途可取消任务 Cancel 应返回 true")
+	}
+	r.mu.Lock()
+	done := r.schedDoneSlot
+	r.mu.Unlock()
+	close(release)
+	waitForEngine(t, "取消落定", 2*time.Second, func() bool {
+		lr := e.LatestRun("t-sys-user")
+		return lr != nil && lr.Status != "running"
+	})
+	if !done.IsZero() {
+		t.Fatalf("schedDoneSlot=%v，want 零值（系统先中止后用户 Cancel 不得消费槽）", done)
+	}
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("执行次数=%d, want 1", got)
 	}
 }
 

@@ -55,7 +55,7 @@ func TestEngine_EnabledFnFalseSkipsPeriodicIntervalEvaluation(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.StartLoop("t-enp-skip-interval")
-	time.Sleep(300 * time.Millisecond)
+	driveTicks(e, 30)
 	if n := intervalCalls.Load(); n != 0 {
 		t.Fatalf("EnabledFn=false 期间 IntervalFn 不得求值（每 tick DB 读取空转），got %d 次", n)
 	}
@@ -76,7 +76,7 @@ func TestEngine_EnabledFnPanicSkipsPeriodicIntervalEvaluation(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.StartLoop("t-enp-panic")
-	time.Sleep(300 * time.Millisecond)
+	driveTicks(e, 30)
 	if n := intervalCalls.Load(); n != 0 {
 		t.Fatalf("EnabledFn panic（fail-closed false）期间 IntervalFn 不得求值，got %d 次", n)
 	}

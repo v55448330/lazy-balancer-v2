@@ -13,6 +13,7 @@ package services
 // 建表注释；读路径（总览正常请求）在 handlers securityOverviewNormalHTTPDiff。
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -49,7 +50,10 @@ func (m *MetricsService) accumulateDailyAgg(byRule map[string]*ruleLabelAggregat
 // 时刻以覆盖日界跨天；生产路径经 accumulateDailyAgg 传 time.Now）。local_date
 // 按配置时区（CurrentLocation）取日历日——总览读窗口同源，双端一致。
 func (m *MetricsService) accumulateDailyAggAt(byRule map[string]*ruleLabelAggregate, now time.Time) error {
-	if db.MetricsDB == nil {
+	// 单次快照：关停窗口 db.Close() 会并发把 MetricsDB 置 nil，入口判空后
+	// 再逐处解引用 db.MetricsDB 会 TOCTOU panic。本方法全程只认局部句柄。
+	metricsDB := db.MetricsDB
+	if metricsDB == nil {
 		return errMetricsDBUnavailable
 	}
 	if len(byRule) == 0 {
@@ -65,12 +69,12 @@ func (m *MetricsService) accumulateDailyAggAt(byRule map[string]*ruleLabelAggreg
 	for ruleID := range byRule {
 		ruleIDs = append(ruleIDs, ruleID)
 	}
-	prev, err := loadCounterCheckpoints(ruleIDs)
+	prev, err := loadCounterCheckpoints(metricsDB, ruleIDs)
 	if err != nil {
 		return fmt.Errorf("load metrics counter checkpoints: %w", err)
 	}
 
-	tx, err := db.MetricsDB.Begin()
+	tx, err := metricsDB.Begin()
 	if err != nil {
 		return fmt.Errorf("begin daily agg batch: %w", err)
 	}
@@ -120,7 +124,7 @@ func (m *MetricsService) accumulateDailyAggAt(byRule map[string]*ruleLabelAggreg
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
+		db.RollbackLeakedTx(metricsDB, db.MetricsPoolMaxOpen)
 		return fmt.Errorf("commit daily agg batch: %w", err)
 	}
 	return nil
@@ -142,7 +146,9 @@ func nonNegativeCounter(v int64) uint64 {
 }
 
 // loadCounterCheckpoints 读给定规则的已入账水位（无行规则不入 map=冷启动）。
-func loadCounterCheckpoints(ruleIDs []string) (map[string]counterCheckpoint, error) {
+// database 由调用方一次性快照传入——不得在循环内重读 db.MetricsDB（关停
+// 窗口置 nil 会 TOCTOU panic）。
+func loadCounterCheckpoints(database *sql.DB, ruleIDs []string) (map[string]counterCheckpoint, error) {
 	out := make(map[string]counterCheckpoint, len(ruleIDs))
 	for start := 0; start < len(ruleIDs); start += 500 {
 		end := start + 500
@@ -156,7 +162,7 @@ func loadCounterCheckpoints(ruleIDs []string) (map[string]counterCheckpoint, err
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		rows, err := db.MetricsDB.Query(`SELECT rule_id, requests_total, requests_blocked, requests_logged
+		rows, err := database.Query(`SELECT rule_id, requests_total, requests_blocked, requests_logged
 			FROM metrics_counter_checkpoint WHERE rule_id IN (`+strings.Join(placeholders, ",")+`)`, args...)
 		if err != nil {
 			return nil, err

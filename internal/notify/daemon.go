@@ -285,8 +285,10 @@ func EnqueueTestDelivery(userID int64, eventType string) error {
 	// 样例参数：目录模板参数序契约的通用占位（真实形态可读）
 	// Node 必须带（用户裁定 2026-11-22）：模板来源区「所属节点」行在测试
 	// 消息里此前恒空——与真实事件形态分叉，测试失真。
+	// 参数序契约最多 7 位（sec.blocked_aggregate 的 TOP 路径）：少填第 7 位
+	// 会让测试消息渲染成 %!s(MISSING)，与真实事件形态失真。
 	sample := Event{Type: eventType, Level: entry.Level, Node: MasterNodeLabel(), Fields: map[string]string{
-		"1": "example.com", "2": "示例详情", "3": "样例来源", "4": "3", "5": "样例", "6": "样例",
+		"1": "example.com", "2": "示例详情", "3": "样例来源", "4": "3", "5": "样例", "6": "样例", "7": "样例",
 	}}
 	title := "【测试】" + renderTitle(entry, sample)
 	body := renderBody(entry, sample)

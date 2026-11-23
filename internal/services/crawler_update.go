@@ -444,7 +444,12 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 					TaskLogfWarn("crawlerbot-update", "failed", "角色读取失败，无法判定中止原因（降级/手动取消不可判定），终止爬虫地址更新")
 					return errors.New("角色读取失败，无法判定中止原因")
 				} else if !master {
+					// 本源已置 running（下载前已落库）：降级中止必须收尾，
+					// 否则行长期停在「运行中」。
 					outcome = "skipped"
+					// 写失败由终态写自身 error 留痕；本轮返回值仍是 skipped
+					// （语义=降级中止，不是源失败）。
+					_ = markCrawlerSourceSkipped(src.Name, "节点已降级为从节点（保留上次快照）")
 					TaskLogfWarn("crawlerbot-update", "skipped", "节点已降级为从节点，终止爬虫地址更新（已完成源保留）")
 					return taskengine.ErrTaskSkipped
 				}
@@ -493,11 +498,14 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 		if gerr := updateRunWriteGate(ctx); gerr != nil {
 			if errors.Is(gerr, errRunRoleUndecidable) {
 				outcome = "failed"
+				// 行已置 running：终止前必须写终态（写失败由终态写自身留痕）。
+				_ = markCrawlerSourceFailed(src.Name, rc.Trigger, "角色读取失败（结果未写库，保留上次快照）")
 				TaskLogfWarn("crawlerbot-update", "failed", "角色读取失败，无法判定本节点是否主节点，源 %s 结果未写库，终止爬虫地址更新", src.Name)
 				return gerr
 			}
 			if errors.Is(gerr, taskengine.ErrTaskSkipped) {
 				outcome = "skipped"
+				_ = markCrawlerSourceSkipped(src.Name, "节点已降级为从节点（保留上次快照）")
 				TaskLogfWarn("crawlerbot-update", "skipped", "节点已降级为从节点，源 %s 结果未写库（从节点零写，由集群同步收敛）", src.Name)
 				return gerr
 			}
@@ -724,9 +732,22 @@ func markCrawlerSourceSuccess(name, trigger string, entryCount int) error {
 // 到期源槽（advanceSourceSlotsAfterUserCancel），demote/导入排空/进程停止的
 // 取消则两者都不推进。返回落库错误（取消轮本身已记终态，调用方仅留痕）。
 func markCrawlerSourceCancelled(name string) error {
-	_, err := db.DB.Exec(`UPDATE security_crawler_sources SET update_status='cancelled', message='已手动取消（保留上次快照）', finished_at=datetime('now') WHERE name=?`, name)
+	return markCrawlerSourceTerminal(name, "cancelled", "已手动取消（保留上次快照）")
+}
+
+// markCrawlerSourceSkipped 节点降级等「非失败中止」终态：源行必须离开
+// running（旧实现降级分支直接 return，行长期显示「运行中」且无收尾时间，
+// 面板把已中止的一轮当成仍在下载）。
+func markCrawlerSourceSkipped(name, message string) error {
+	return markCrawlerSourceTerminal(name, "skipped", message)
+}
+
+// markCrawlerSourceTerminal 非排程推进类终态写：只落 status/message/finished_at
+// （失败计数与排程槽由 failed/success 专属写路径维护）。
+func markCrawlerSourceTerminal(name, status, message string) error {
+	_, err := db.DB.Exec(`UPDATE security_crawler_sources SET update_status=?, message=?, finished_at=datetime('now') WHERE name=?`, status, message, name)
 	if err != nil {
-		Logf("error", "crawlerbot-update: 源 %s 写取消态失败: %v", name, err)
+		Logf("error", "crawlerbot-update: 源 %s 写 %s 终态失败: %v", name, status, err)
 	}
 	return err
 }

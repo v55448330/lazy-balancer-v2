@@ -578,7 +578,12 @@ func securityEventsBackscanDocumentStart(path string, from int64) (int64, error)
 			start = 0
 		}
 		buf := make([]byte, pos-start)
-		n, _ := f.ReadAt(buf, start)
+		n, readErr := f.ReadAt(buf, start)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			// 读错误（权限/IO/文件被截断以外的异常）不得吞掉：回扫定位失准会
+			// 让轮转把跨界事务的前后两半分到不同文件，单事务静默丢一半。
+			return from, fmt.Errorf("回扫审计日志 %s（偏移 %d）: %w", path, start, readErr)
+		}
 		if n > 0 {
 			if hasNext && buf[n-1] == '\n' && nextFirst == '{' {
 				return pos, nil // "\n{" 跨块边界：`{` 在 pos 处

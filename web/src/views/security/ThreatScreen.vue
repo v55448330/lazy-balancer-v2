@@ -318,6 +318,7 @@ import { usePollingTask } from '@/composables/usePollingTask'
 import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { useCountUp } from '@/composables/useCountUp'
 import { formatDate } from '@/utils/date'
+import { isSiteConfigured } from '@/utils/siteLocation'
 import { eventActionFull, eventActionShort } from '@/utils/eventAction'
 import { formatInt } from '@/utils/formatInt'
 import { trafficDelta, formatRecentRate, hourlyBucketLabel, bucketTerminology, l4TrafficDelta, type TrafficBaseline } from '@/utils/threatScreenMetrics'
@@ -866,7 +867,9 @@ async function loadServerCentroid(): Promise<void> {
     serverLatLon[0] = res.data?.server_map_lat ?? 0
     serverLatLon[1] = res.data?.server_map_lon ?? 0
     configLoadFailed.value = false
-    siteConfigured.value = typeof res.data?.server_map_lat === 'number' && typeof res.data?.server_map_lon === 'number'
+    // 后端字段恒为 float64（未设置=0 值），只看 typeof number 恒真；0,0 是
+    // 未设置哨兵，须走单源判据（赤道/本初子午线单点坐标仍算已配置）。
+    siteConfigured.value = isSiteConfigured(res.data?.server_map_lat, res.data?.server_map_lon)
     if (siteConfigured.value) {
       threatMap?.setServer([serverLatLon[1], serverLatLon[0]])
       tgtReadout.value = `${Math.abs(serverLatLon[0]).toFixed(2)}°${serverLatLon[0] >= 0 ? 'N' : 'S'} ${Math.abs(serverLatLon[1]).toFixed(2)}°${serverLatLon[1] >= 0 ? 'E' : 'W'}`

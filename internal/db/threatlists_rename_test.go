@@ -108,6 +108,72 @@ func TestThreatSystemListRename_renamesUserConflictAndTakesCanonicalName(t *test
 	}
 }
 
+// 改名目标自身被占用：用户行占规范名后要被改名为「规范名（用户 <id>）」，
+// 但该目标名可能已被另一行占用（手造同名/中断迁移残留）。system=0 无唯一
+// 索引，直接落库会产出同名双行——读侧按 name 查询重复命中。必须探测占用并
+// 追加后缀直到唯一。
+func TestThreatSystemListRename_avoidCollisionOnRenameTarget(t *testing.T) {
+	openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	newName := ThreatListNameBySource("ustc")
+	if _, err := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES
+		('威胁情报库-中科大黑 IP', '旧', '恶意 IP', '[]', 1, datetime('now'), datetime('now')),
+		(?, '占规范名的用户行', '恶意 IP', '[]', 0, datetime('now'), datetime('now'))`, newName); err != nil {
+		t.Fatal(err)
+	}
+	var conflictID int64
+	if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE system=0 AND name=?`, newName).Scan(&conflictID); err != nil {
+		t.Fatal(err)
+	}
+	// 预占改名目标：此前实现直接 UPDATE 成该名 → 同名双行。
+	occupied := fmt.Sprintf("%s（用户 %d）", newName, conflictID)
+	if _, err := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES
+		(?, '已占用改名目标的用户行', '恶意 IP', '[]', 0, datetime('now'), datetime('now'))`, occupied); err != nil {
+		t.Fatal(err)
+	}
+
+	drainSystemAuditBuffer()
+	if err := migrateThreatSystemListNames(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Then 规范名由 system 行接管；冲突用户行改名后与任何行都不同名
+	var canonicalSystem int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE system=1 AND name=?`, newName).Scan(&canonicalSystem); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalSystem != 1 {
+		t.Fatalf("规范名 system=1 行=%d, want 1", canonicalSystem)
+	}
+	var renamedName string
+	if err := DB.QueryRow(`SELECT name FROM security_ip_lists WHERE id=?`, conflictID).Scan(&renamedName); err != nil {
+		t.Fatal(err)
+	}
+	if renamedName == occupied {
+		t.Fatalf("冲突用户行改名=%q 与已占用行同名（产生同名双行）", renamedName)
+	}
+	if !strings.HasPrefix(renamedName, fmt.Sprintf("%s（用户 %d", newName, conflictID)) {
+		t.Fatalf("冲突用户行改名=%q, want 以「%s（用户 %d」为基础形", renamedName, newName, conflictID)
+	}
+	var dupNames int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM (SELECT name FROM security_ip_lists WHERE system=0 GROUP BY name HAVING COUNT(*)>1)`).Scan(&dupNames); err != nil {
+		t.Fatal(err)
+	}
+	if dupNames != 0 {
+		t.Fatalf("system=0 同名双行=%d 组, want 0", dupNames)
+	}
+	// And 被占名的原行内容未被触碰
+	var occupiedCnt int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, occupied).Scan(&occupiedCnt); err != nil {
+		t.Fatal(err)
+	}
+	if occupiedCnt != 1 {
+		t.Fatalf("已占用行=%d, want 1（改名不得覆盖他人行）", occupiedCnt)
+	}
+}
+
 // system=1 占名冲突：规范名已被另一 system=1 行占用时（如上一次迁移中断的
 // 残留形态），保留双方、跳过接管并告警留痕——不得撞唯一索引中止启动。
 func TestThreatSystemListRename_skipsTakeoverWhenCanonicalHeldBySystemRow(t *testing.T) {

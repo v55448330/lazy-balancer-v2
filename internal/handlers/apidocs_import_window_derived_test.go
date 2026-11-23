@@ -89,14 +89,22 @@ func derivedImportWindowGatedRoutes(t *testing.T) map[string]string {
 	for name := range directGated {
 		gated[name] = true
 	}
-	for name, calls := range callees {
-		if gated[name] {
-			continue
-		}
-		for callee := range calls {
-			if directGated[callee] {
-				gated[name] = true
-				break
+	// 传递闭包（不是只沿一层调用边）：helper 可能再经另一层 helper 才触达门
+	//（如 clusterNodeAction → 某公共动作 helper → rejectWriteDuringImport）。
+	// 固定点迭代直到不再扩张，避免深层间接 handler 逃过派生集合而文档缺 409
+	//（2026-11 全量附录 P3：导入窗口文档派生只沿一层调用边）。
+	for changed := true; changed; {
+		changed = false
+		for name, calls := range callees {
+			if gated[name] {
+				continue
+			}
+			for callee := range calls {
+				if gated[callee] {
+					gated[name] = true
+					changed = true
+					break
+				}
 			}
 		}
 	}

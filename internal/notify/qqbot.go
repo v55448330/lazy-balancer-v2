@@ -95,13 +95,17 @@ func qqEnumerateBots() []qqBotCred {
 			}
 		}
 	}
-	// 待绑定凭据（最新扫码）对同 appid 覆盖陈旧 secret（重扫同 bot 防旧 secret
-	// 掩蔽致鉴权 100016）；新 appid 追加。保持全局在前的首 bot 序。
-	for _, b := range PendingBindQQCreds() {
+	// 待绑定凭据：新 appid 一律追加（连接测试到确认前的提前建连死锁靠它破）；
+	// 同名 appid 只在绑定会话 confirmed 后才覆盖——未确认就覆盖会让在线全局
+	// bot 被重建会话（凭据变更→worker 回收重启），扫码期间入站断流。
+	for _, p := range pendingBindQQCreds() {
+		b := p.cred
 		replaced := false
 		for i := range bots {
 			if bots[i].AppID == b.AppID {
-				bots[i].Secret = b.Secret
+				if p.confirmed {
+					bots[i].Secret = b.Secret
+				}
 				replaced = true
 				break
 			}

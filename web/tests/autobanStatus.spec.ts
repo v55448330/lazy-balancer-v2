@@ -505,3 +505,14 @@ test('时长标签单源：库值→词条，未知值原样回显，空值占�
   assert.equal(autobanDurationLabel('weird'), 'weird')
   assert.equal(autobanDurationLabel(''), '—')
 })
+
+test('自动封禁状态加载中不得渲染「仅主节点可修改」黄条', () => {
+  const page = code('src/views/security/SecurityEvents.vue')
+  // blocked reason 依赖 is_master（初值 false）——加载期必须先隐藏，否则主节点
+  // 首屏闪现「仅主节点可修改」再消失（与徽章同一初值陷阱）。
+  assert.match(
+    page,
+    /v-else-if="!autobanStatusLoading && autobanBlockedReason"/,
+    '加载中黄条必须被 autobanStatusLoading 门控',
+  )
+})

@@ -350,7 +350,8 @@ func TestWxInboundSecondLoginOnboardsBot(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target) VALUES (7, 'wx_clawbot', 'botB', ?)`, pinned); err != nil {
 		t.Fatalf("保存第二 bot 通道失败: %v", err)
 	}
-	// Then 第二 bot 入站会话自动上线，首 bot 不受影响
+	// Then 第二 bot 入站会话自动上线（首批 getupdates 成功后置在线），首 bot 不受影响
+	m.waitPollBufs(t, "T2", 1)
 	waitLinkConnected(t, func() (bool, string, time.Time) { return WxLinkStatusFor("B2") }, true)
 	if c, _, _ := WxLinkStatusFor("B1"); !c {
 		t.Error("第二 bot 上线波及首 bot")

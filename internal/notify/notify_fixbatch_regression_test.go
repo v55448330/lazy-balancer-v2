@@ -63,6 +63,7 @@ func newDailyTestDBs(t *testing.T) {
 	})
 
 	ddl := []string{
+		`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'user', is_enabled INTEGER NOT NULL DEFAULT 1)`,
 		`CREATE TABLE notification_daily (user_id INTEGER PRIMARY KEY, config TEXT NOT NULL DEFAULT '', updated_at TEXT)`,
 		`CREATE TABLE notification_deliveries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,

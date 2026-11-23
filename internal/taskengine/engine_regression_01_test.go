@@ -21,14 +21,14 @@ import (
 func TestEngine_ScheduleFnPanicDoesNotKillLoop(t *testing.T) {
 	e := newTestEngine(t)
 	var healthyRuns atomic.Int32
-	e.Register(Descriptor{ID: "t-panic-slot", Family: "t", Name: "槽 panic", Kind: KindScheduled, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-panic-slot", Family: "t", Name: "槽 panic", Kind: KindScheduled, RunsOn: RoleAny,
 		NextSlotFn: func() time.Time { panic("injected slot panic") },
 		Run:        func(RunContext) error { return nil }})
-	e.Register(Descriptor{ID: "t-panic-enabled", Family: "t", Name: "开关 panic", Kind: KindScheduled, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-panic-enabled", Family: "t", Name: "开关 panic", Kind: KindScheduled, RunsOn: RoleAny,
 		EnabledFn:  func() bool { panic("injected enabled panic") },
 		NextSlotFn: func() time.Time { return time.Now().Add(-time.Minute) },
 		Run:        func(RunContext) error { return nil }})
-	e.Register(Descriptor{ID: "t-healthy", Family: "t", Name: "健康循环", Kind: KindPeriodic, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-healthy", Family: "t", Name: "健康循环", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { return 10 * time.Millisecond },
 		Run:        func(RunContext) error { healthyRuns.Add(1); return nil }})
 	e.StartLoop("t-panic-slot")
@@ -112,7 +112,7 @@ func TestEngine_DescribeAllStableCategoryAndIDOrder(t *testing.T) {
 		{"backup-task", "备份"},
 		{"unknown-cat", "未知分类"},
 	} {
-		e.Register(Descriptor{ID: d.id, Family: "t", Name: d.id, Category: d.category,
+		mustRegisterTaskForTest(t, e, Descriptor{ID: d.id, Family: "t", Name: d.id, Category: d.category,
 			Kind: KindOneshot, RunsOn: RoleAny, Run: func(RunContext) error { return nil }})
 	}
 
@@ -158,7 +158,7 @@ func TestEngine_TickDoesNotClobberConcurrentlyWrittenSlot(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	fresh := time.Now().Add(time.Hour).Truncate(time.Second)
-	e.Register(Descriptor{ID: "t-slot-race", Family: "t", Name: "槽竞态", Kind: KindScheduled, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-slot-race", Family: "t", Name: "槽竞态", Kind: KindScheduled, RunsOn: RoleAny,
 		NextSlotFn: func() time.Time {
 			if calls.Add(1) == 1 {
 				close(entered)
@@ -185,7 +185,7 @@ func TestEngine_TickDoesNotClobberConcurrentlyWrittenSlot(t *testing.T) {
 	}
 	close(release) // 放行陈旧求值
 	// 陈旧求值若覆盖新槽，槽立即「到期」→ tick 额外投递一次 Run（task_runs 增行）。
-	time.Sleep(300 * time.Millisecond)
+	driveTicks(e, 30)
 
 	if n := countRuns(t, "t-slot-race"); n != 1 {
 		t.Fatalf("tick 用陈旧求值覆盖并发写回的新槽，额外投递执行：task_runs=%d want 1（仅手动）", n)
@@ -199,7 +199,7 @@ func TestEngine_TickDoesNotClobberConcurrentlyWrittenSlot(t *testing.T) {
 func TestEngine_RearmLoopRespectsUserStopUnlessWork(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-rearm", Family: "t", Name: "唤醒", Kind: KindPeriodic, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-rearm", Family: "t", Name: "唤醒", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { return time.Hour },
 		Run:        func(RunContext) error { runs.Add(1); return nil }})
 	e.StartLoop("t-rearm")

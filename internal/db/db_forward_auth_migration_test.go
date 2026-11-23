@@ -74,14 +74,14 @@ func TestInitialize_normalizesForwardAuthRows(t *testing.T) {
 	if enabled, upstream, _, _ := readRow("lb_fablank"); enabled != 0 {
 		t.Fatalf("blank-upstream row=(%d,%q), want enabled=0（纯空白 upstream 穿透迁移会拖垮配置生成）", enabled, upstream)
 	}
-	// 纯空白 uri/身份头行 → 回填确定默认（渲染对两者都有非空校验：uri 须 /
-	// 开头、身份头清单禁空白项，穿透即配置生成期显性失败）。回填是合并 SET
-	// （既有语义：任一列命中即双列收敛默认，四件套 canonical 一致）。
-	if _, _, uri, headers := readRow("lb_fawsuri"); uri != DefaultForwardAuthURI || headers != DefaultForwardAuthCopyHeaders {
-		t.Fatalf("ws-uri row=(%q,%q), want 双列默认回填（纯空白 uri 穿透迁移会拖垮配置生成）", uri, headers)
+	// 纯空白列 → 只回填该列默认（渲染对两者都有非空校验：uri 须 / 开头、
+	// 身份头清单禁空白项，穿透即配置生成期显性失败）；另一列的非空自定义值
+	// 必须原样保留——一空一自定义行不得被双列覆盖（回归）。
+	if _, _, uri, headers := readRow("lb_fawsuri"); uri != DefaultForwardAuthURI || headers != "/api/verify" {
+		t.Fatalf("ws-uri row=(%q,%q), want uri 回填默认且自定义身份头保留 /api/verify", uri, headers)
 	}
-	if _, _, uri, headers := readRow("lb_fawshead"); uri != DefaultForwardAuthURI || headers != DefaultForwardAuthCopyHeaders {
-		t.Fatalf("ws-headers row=(%q,%q), want 双列默认回填（纯空白身份头清单穿透迁移会拖垮配置生成）", uri, headers)
+	if _, _, uri, headers := readRow("lb_fawshead"); uri != "/api/verify" || headers != DefaultForwardAuthCopyHeaders {
+		t.Fatalf("ws-headers row=(%q,%q), want 自定义 uri 保留 /api/verify 且身份头回填默认", uri, headers)
 	}
 	// enabled=0 行开关不动，空 uri/copy_headers 回填确定默认（canonical 稳定）
 	if enabled, upstream, uri, headers := readRow("lb_faoff"); enabled != 0 || upstream != "" ||

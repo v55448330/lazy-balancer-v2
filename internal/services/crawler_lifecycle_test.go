@@ -208,9 +208,9 @@ func TestCrawlerRunUpdate_cancelMarksSourceCancelled(t *testing.T) {
 	}
 }
 
-// 下载在途降级为从节点（demote 同时取消 ctx）：任务落 skipped、源行不被改写
-// （从节点只读不变量）、名单不写。
-func TestCrawlerRunUpdate_demoteSkipsWithoutWriting(t *testing.T) {
+// 下载在途降级为从节点（demote 同时取消 ctx）：任务落 skipped、源行显式落
+// skipped 终态（不得残留 running）、名单不写。
+func TestCrawlerRunUpdate_demoteMarksSourceSkippedWithoutListWrite(t *testing.T) {
 	_, database := newClusterTestService(t)
 	oldFile := crawlerIPListFile
 	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
@@ -259,8 +259,8 @@ func TestCrawlerRunUpdate_demoteSkipsWithoutWriting(t *testing.T) {
 	if err := database.QueryRow(`SELECT update_status FROM security_crawler_sources WHERE name='googlebot'`).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "running" {
-		t.Fatalf("降级后从节点不得改写源行终态: status=%q, want running（未落终态）", status)
+	if status != "skipped" {
+		t.Fatalf("降级后源行须显式落 skipped 终态，不得残留 running: status=%q", status)
 	}
 	var lists int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=?`, CrawlerIPListName("googlebot")).Scan(&lists); err != nil {

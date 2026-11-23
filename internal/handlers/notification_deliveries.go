@@ -57,6 +57,18 @@ func maskDeliveryBody(body string) string {
 	return string(runes[:200]) + "…（截断）"
 }
 
+// crossOwnerMaskedError 非属主可见的错误占位：错误原文可能携带 webhook URL
+// token、内网地址与远端响应体（含外部数据），只做长度截断仍会泄漏。属主
+// 排障看完整错误；跨属主（含管理员全平台视图）只看状态与占位。
+const crossOwnerMaskedError = "（错误详情仅属主可见）"
+
+func maskCrossOwnerDeliveryError(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	return crossOwnerMaskedError
+}
+
 // ListNotificationDeliveries GET /notification/deliveries——投递流水恒全量
 // （投递记录不区分用户视角；用户/通道维度经行内 username+channels 呈现）。
 // 跨属主正文截断脱敏；?status= ∈ pending/sent/partial/failed/dead；分页 ?page/&page_size
@@ -138,6 +150,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		}
 		if d.UserID != uid {
 			d.Body = maskDeliveryBody(d.Body)
+			d.Error = maskCrossOwnerDeliveryError(d.Error)
 		}
 		d.Channels = []deliveryChannelDTO{}
 		out = append(out, d)
@@ -174,6 +187,9 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 						ch.ChannelName = "通道 #" + strconv.FormatInt(ch.ChannelID, 10)
 					}
 					if idx, ok := byDelivery[deliveryID]; ok {
+						if out[idx].UserID != uid {
+							ch.Error = maskCrossOwnerDeliveryError(ch.Error)
+						}
 						out[idx].Channels = append(out[idx].Channels, ch)
 					}
 				}

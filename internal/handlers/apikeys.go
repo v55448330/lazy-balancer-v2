@@ -722,7 +722,7 @@ func encodeMCPIPWhitelist(whitelist []string) (string, error) {
 // （今日调用/错误率/趋势/最近调用；MCP 列沿用 /notification/mcp/stats）。
 func (h *Handlers) GetAccessOverview(c *gin.Context) {
 	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_83dc5539"), MessageKey: "k_83dc5539"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rest": services.GetRESTCallOverview()}})

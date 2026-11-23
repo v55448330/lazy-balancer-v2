@@ -20,6 +20,20 @@ func preserveDatabaseHandles(t *testing.T) {
 	})
 }
 
+// preserveMetricsDBHandle 恢复进入前的 MetricsDB 句柄，并只关闭本用例新建
+// 的句柄。只 Close 不归位会残留「已关闭但非 nil」的全局句柄：同包后续用例
+// 会把 sql: database is closed 当成真实错误。
+func preserveMetricsDBHandle(t *testing.T) {
+	t.Helper()
+	old := MetricsDB
+	t.Cleanup(func() {
+		if MetricsDB != nil && MetricsDB != old {
+			_ = MetricsDB.Close()
+		}
+		MetricsDB = old
+	})
+}
+
 // Initialize/SetDB 系列测试必须同时恢复三个包级句柄与原子 currentDB，
 // 且只能关闭本用例新建的句柄；非 nil 哨兵可确定性暴露顺序依赖。
 func TestDatabaseFixtures_restoreAllHandlesAndCloseOnlyTemporaryDBs(t *testing.T) {

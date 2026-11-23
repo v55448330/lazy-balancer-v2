@@ -13,11 +13,27 @@ func TestNormalizeName(t *testing.T) {
 		{"Example.COM.", "example.com"},
 		{"_acme-challenge.example.com.", "_acme-challenge.example.com"},
 		{"example.com..", "example.com."},
+		// 点前空白：去点后必须再次去空白（旧实现残留尾空白且非幂等）。
+		{"example.com .", "example.com"},
+		{"  example.com .  ", "example.com"},
+		{"example.com.\t", "example.com"},
 		{"", ""},
 		{".", ""},
 	} {
-		if got := NormalizeName(tc.in); got != tc.want {
+		got := NormalizeName(tc.in)
+		if got != tc.want {
 			t.Errorf("NormalizeName(%q)=%q, want %q", tc.in, got, tc.want)
+		}
+	}
+	// 幂等只对良构输入成立：契约显式保留连续尾点中的一个（畸形态留给上层
+	// 拒绝），多尾点输入的二次归一会再去一个点，不属于本契约。
+	for _, in := range []string{
+		"example.com", "Example.COM", "  example.com  ", "example.com.",
+		"example.com .", "  example.com .  ", "example.com.\t", "",
+	} {
+		once := NormalizeName(in)
+		if again := NormalizeName(once); again != once {
+			t.Errorf("NormalizeName 非幂等：%q → %q → %q", in, once, again)
 		}
 	}
 }

@@ -93,6 +93,28 @@ self_test() {
   if grep -q '② 前端构建' "$fixture/out.log"; then echo "SELFTEST FAIL: 基线失败后仍执行了后续步骤" >&2; fail=1; fi
   if ! grep -q '基线对账失败' "$fixture/out.log"; then echo "SELFTEST FAIL: 基线失败未给出立即退出原因" >&2; fail=1; fi
   rm -rf "$fixture"
+
+  # 未跟踪文件（git diff 不可见）同样必须让基线立即失败：docker build 的
+  # COPY 会把它们带进镜像。
+  local fixture_untracked rc_untracked
+  fixture_untracked="$(mktemp -d "${TMPDIR:-/tmp}/finalize-selftest.XXXXXX")"
+  mkdir -p "$fixture_untracked/scripts" "$fixture_untracked/web"
+  cp "$0" "$fixture_untracked/scripts/release-finalize.sh"
+  set +e
+  (
+    cd "$fixture_untracked" || exit 1
+    git init -q && git config user.email selftest@local && git config user.name selftest || exit 1
+    printf 'base\n' > .gitkeep
+    git add -A && git commit -qm base || exit 1
+    printf 'untracked\n' > leftover.txt
+    bash scripts/release-finalize.sh --tag v9.9.9-beta --push-channel beta --skip-cloud >"$fixture_untracked/out.log" 2>&1
+  )
+  rc_untracked=$?
+  set -e
+  if [[ "$rc_untracked" -ne 1 ]]; then echo "SELFTEST FAIL: 未跟踪文件应让基线立即退出 1，实际 rc=$rc_untracked" >&2; fail=1; fi
+  if ! grep -q '未跟踪文件' "$fixture_untracked/out.log"; then echo "SELFTEST FAIL: 未跟踪文件未给出拒绝原因" >&2; fail=1; fi
+  if grep -q '② 前端构建' "$fixture_untracked/out.log"; then echo "SELFTEST FAIL: 未跟踪文件失败后仍执行了后续步骤" >&2; fail=1; fi
+  rm -rf "$fixture_untracked"
   if [[ "$fail" == "0" ]]; then echo "SELFTEST: OK（latest 仅 stable 推送；基线失败立即退出）"; fi
   return "$fail"
 }
@@ -141,6 +163,12 @@ baseline_gate() {
 step "① 基线对账（HEAD/dist/tag）"
 HEAD="$(git rev-parse HEAD)"
 git diff --quiet HEAD || fail "工作树不干净：存在未提交变更"
+# 未跟踪文件同样会被 docker build 的 COPY 带进镜像（脚本/配置/生成物），
+# `git diff HEAD` 看不见它们——基线不干净会让未提交代码随发布发出。
+UNTRACKED="$(git ls-files --others --exclude-standard)"
+if [[ -n "$UNTRACKED" ]]; then
+  fail "工作树存在未跟踪文件（会被 COPY 进镜像）：$(printf '%s' "$UNTRACKED" | head -5 | tr '\n' ' ')"
+fi
 DIST_STAMP="$(python3 -c "import json;print(json.load(open('web/dist/build-info.json'))['commit'])" 2>/dev/null || echo MISSING)"
 if [[ "$DIST_STAMP" == "$HEAD" ]]; then
   pass "dist 构建戳 == HEAD ($HEAD)"
@@ -209,6 +237,15 @@ V_LIMIT="$(docker exec lb-finalize sh -c 'echo $GOMEMLIMIT' 2>/dev/null || echo 
 [[ "$V_GOGC" == "300" && "$V_LIMIT" == "1500MiB" ]] && pass "GOGC/GOMEMLIMIT env 生效" || fail "GC env=$V_GOGC/$V_LIMIT"
 V_BI="$(docker exec lb-finalize sh -c 'grep -o "\"commit\": \"[^\"]*\"" /app/ui/build-info.json | head -1' 2>/dev/null | grep -o '[0-9a-f]\{12\}' | head -1 || echo MISSING)"
 [[ "$V_BI" == "${HEAD:0:12}" ]] && pass "终验构建戳 == HEAD" || fail "终验构建戳=$V_BI ≠ HEAD"
+# R-17 产物包含性验证（UI 资产 + 二进制特征串 + build-info commit 一致性）：
+# 脚本存在但没有调用方时会退化成装饰——终验容器销毁前必须跑一次。
+if [[ -x "$REPO_ROOT/scripts/verify-release-artifacts.sh" ]]; then
+  ( bash "$REPO_ROOT/scripts/verify-release-artifacts.sh" lb-finalize "$HEAD" > /tmp/finalize-artifacts.log 2>&1 ) \
+    && pass "发布产物包含性验证（R-17）" \
+    || fail "发布产物包含性验证失败（见 /tmp/finalize-artifacts.log）"
+else
+  fail "scripts/verify-release-artifacts.sh 缺失或不可执行（R-17 无法执行）"
+fi
 ( docker rm -f lb-finalize > /dev/null 2>&1 )
 
 # ── 汇总 ──

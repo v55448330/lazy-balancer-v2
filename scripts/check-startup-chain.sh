@@ -161,7 +161,13 @@ while IFS= read -r target; do
   target_count=$((target_count + 1))
   case "$target" in
     /*) ;;
-    *) continue ;;  # 相对路径/变量展开的 exec 不进入镜像路径对账面
+    *)
+      # 相对路径/变量展开的 exec 无法静态核对（`exec "$BIN"`、`exec ./bin/x`）：
+      # 静默跳过会让本门在该形态下空转（注入变量目标即逃逸）。入口脚本必须
+      # exec 镜像内绝对路径——不可静态判定即判红。
+      echo "FAIL: 入口脚本 exec 目标不是镜像内绝对路径（变量展开/相对路径无法核对）: $target" >&2
+      exit 1
+      ;;
   esac
   if ! image_provides "$target"; then
     echo "FAIL: 入口脚本 exec 的目标不在 Dockerfile 提供的镜像路径中: $target" >&2

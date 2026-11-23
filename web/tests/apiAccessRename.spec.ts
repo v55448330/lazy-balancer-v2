@@ -102,6 +102,11 @@ test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断�
   assert.match(text, /v-if="isAdmin" :label="t\('app\.notification\.deliveries\.colAction'\)"/)
   const dialogBlock = text.slice(text.indexOf('const disconnect ='), text.indexOf('defineExpose'))
   assert.match(dialogBlock, /ElMessageBox\.confirm/, '强制断开必须先确认')
+  // 只读节点不得「可点但静默 return」：按钮按只读门禁用，写门与全站单源
+  // （readOnlyReason !== null，覆盖 slave/non-admin/unknown）。
+  assert.match(text, /const writeBlocked = computed\(\(\) => authStore\.readOnlyReason !== null\)/, '写门必须消费 readOnlyReason 单源')
+  assert.match(text, /:disabled="writeBlocked"/, '断开按钮必须按只读门禁用')
+  assert.match(text, /authStore\.readOnlyMessage/, '禁用原因必须可提示')
   // 全局开关已归接入卡（Keys.vue）：会话表不得残留第二开关入口
   assert.doesNotMatch(text, /v-model="mcpEnabled"/, '开关单源=接入卡，会话表禁止回潮')
 })

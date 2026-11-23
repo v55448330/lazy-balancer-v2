@@ -16,6 +16,24 @@ func waitForEngine(t *testing.T, what string, timeout time.Duration, cond func()
 	}
 }
 
+// mustRegisterTaskForTest 测试注册失败必须响亮（Register 校验/重名/停止态
+// 错误被丢弃会让用例在「任务实际未注册」的空转态假绿；（回归） 全量附录）。
+func mustRegisterTaskForTest(t *testing.T, e *Engine, d Descriptor) {
+	t.Helper()
+	if err := e.Register(d); err != nil {
+		t.Fatalf("注册任务 %s 失败: %v", d.ID, err)
+	}
+}
+
+// driveTicks 确定性驱动 n 个调度 tick：负断言（「窗口内不得再执行」）不得
+// 依赖 300–350ms 墙钟窗口——慢机/调度抖动会让窗口内 tick 数不可控，且「没
+// 观察到」不等于「不会发生」（回归） 全量附录：墙钟负断言）。
+func driveTicks(e *Engine, n int) {
+	for range n {
+		e.tick()
+	}
+}
+
 func waitForEngineSignal(t *testing.T, what string, ch <-chan struct{}) {
 	t.Helper()
 	select {

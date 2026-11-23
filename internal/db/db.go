@@ -435,11 +435,14 @@ func Initialize(dataDir string) (err error) {
 	if err := runMigrations(); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
-	if err := backfillHumanEventPolicyAttribution(); err != nil {
-		return fmt.Errorf("failed to backfill human event policy attribution: %w", err)
-	}
+	// 删除迁移先行：human_pass（挑战成功=放行结果）行先清理，再回填人机
+	// 事件归属——反序会让回填扫描/改写随后即被删除的行（纯白写，且把
+	// 待删行计入回填 marker）。
 	if err := cleanupHumanPassEvents(); err != nil {
 		return fmt.Errorf("failed to cleanup human pass events: %w", err)
+	}
+	if err := backfillHumanEventPolicyAttribution(); err != nil {
+		return fmt.Errorf("failed to backfill human event policy attribution: %w", err)
 	}
 	if err := migrateSyncSwitches(); err != nil {
 		return fmt.Errorf("failed to migrate sync switches: %w", err)
@@ -2960,7 +2963,8 @@ var startupMigrationWriteTx atomic.Int64
 //   - 覆盖：经 execMigrationWriteIfNeeded（探测门）登记的全部 DML——默认值
 //     回填、时间戳归一、孤儿行清理、权重/NTLM 归一、空名单归一、同步开关、
 //     CA 时间戳、内置拦截页种子、威胁源种子/display_name 跟进；以及
-//     withWriteTx（写事务计数）打开的全部迁移事务（整表重建/去重回填等）。
+//     withWriteTx（写事务计数）打开的全部迁移事务（整表重建/去重回填等）；
+//     以及 ensureNewColumns 第二趟的同表依赖回填（裸 DB.Exec，补列当刻一次）。
 //   - 不覆盖（有意）：createTables 的 DDL 整包（CREATE TABLE/INDEX IF NOT
 //     EXISTS + 两处无条件种子 DML：1 号默认拦截页 INSERT OR IGNORE 与
 //     security_ip2region_version (1,'unknown',1) 版本行 INSERT OR IGNORE）
@@ -3539,7 +3543,8 @@ func normalizeNtlmTakeoverConsistencyMigration() error {
 //	canonical 形态稳定（集群 rules 节哈希主从对齐的基础），开关关闭行同样
 //	回填（渲染零消费，仅消除「同一终态两种存储形态」）；判定按 TRIM——
 //	纯空白形态与空串同判（渲染对 uri/身份头清单都有非空语义校验，空白
-//	穿透会在配置生成期显性失败，与治理目标相悖）；
+//	穿透会在配置生成期显性失败，与治理目标相悖）；两列各自独立回填，
+//	非空自定义列保持原值（一空一自定义行不得被双列覆盖）；
 //
 // ② enabled=1 且 upstream 为空/纯空白、或协议非 http → enabled=0（渲染安全
 //
@@ -3549,17 +3554,35 @@ func normalizeNtlmTakeoverConsistencyMigration() error {
 // 集群同步侧不需单独处理——主端归一后经快照收敛从端。
 func normalizeForwardAuthConsistencyMigration() error {
 	res, err := execMigrationWriteIfNeeded(updateWhere("lb_rules",
-		"forward_auth_uri = '"+DefaultForwardAuthURI+"', forward_auth_copy_headers = '"+DefaultForwardAuthCopyHeaders+"'",
-		`TRIM(COALESCE(forward_auth_uri,''))='' OR TRIM(COALESCE(forward_auth_copy_headers,''))=''`))
+		"forward_auth_uri = '"+DefaultForwardAuthURI+"'",
+		`TRIM(COALESCE(forward_auth_uri,''))=''`))
+	if err != nil {
+		return err
+	}
+	// 逐列独立回填：任一列为空只补该列，另一列的非空自定义值必须保留。
+	// 曾把两列合并进一条 SET（谓词「任一列为空」）：一空一自定义的行会把
+	// 自定义列一并覆盖成默认值（回归）。
+	filled := 0
+	if res != nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			filled += int(n)
+		}
+	}
+	res, err = execMigrationWriteIfNeeded(updateWhere("lb_rules",
+		"forward_auth_copy_headers = '"+DefaultForwardAuthCopyHeaders+"'",
+		`TRIM(COALESCE(forward_auth_copy_headers,''))=''`))
 	if err != nil {
 		return err
 	}
 	if res != nil {
 		if n, _ := res.RowsAffected(); n > 0 {
-			detail := fmt.Sprintf("启动迁移：已为 %d 条规则的认证网关空 uri/身份头清单回填默认值", n)
-			log.Print(detail)
-			recordSystemAudit("启动迁移", "负载规则", detail)
+			filled += int(n)
 		}
+	}
+	if filled > 0 {
+		detail := fmt.Sprintf("启动迁移：已为 %d 条规则的认证网关空 uri/身份头清单回填默认值", filled)
+		log.Print(detail)
+		recordSystemAudit("启动迁移", "负载规则", detail)
 	}
 	res, err = execMigrationWriteIfNeeded(updateWhere("lb_rules", "forward_auth_enabled=0", `forward_auth_enabled=1 AND (
 		TRIM(COALESCE(forward_auth_upstream,''))='' OR protocol<>'http')`))
@@ -4396,6 +4419,13 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 	}
 	// 两趟：先补齐全部列，再执行回填——回填可能引用同表他列（如
 	// api_read_only 继承 read_only），字母序单趟会让回填先于被引用列补列。
+	//
+	// 回填是「补列当刻的一次性派生」，只对本次真正新增的列执行。列已存在
+	// （升级后重启的常态）时不得重跑：回填 SQL 语义是「把运行期可编辑值压回
+	// 派生默认」（如 api_read_only=read_only），重跑会把用户设置的非对称只读
+	// 配置压平——（回归） 即此路径（api_read_only=0/mcp_read_only=1 重启后
+	// 恢复为 0/0）。
+	addedThisRun := map[string]struct{}{}
 	for _, col := range keys {
 		dtype := columns[col]
 		parts := strings.Split(col, ".")
@@ -4421,11 +4451,18 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 			return err
 		}
 		existing[name] = struct{}{}
+		addedThisRun[col] = struct{}{}
 	}
-	// 第二趟：被延后的同表依赖回填（此时全部登记列已补齐）。
+	// 第二趟：被延后的同表依赖回填（此时全部登记列已补齐）。只回填本次新增
+	// 的列——列已存在时回填必须视为已完成（见上方 addedThisRun 说明）。
+	// 裸 DB.Exec 计入零写口径：否则重跑回填在「二次启动零写」测试里不可见，
+	// （回归） 这类「每启动重写用户值」的回归会被静默放过。
 	for _, col := range keys {
 		backfill := backfills[col]
 		if backfill == "" {
+			continue
+		}
+		if _, added := addedThisRun[col]; !added {
 			continue
 		}
 		parts := strings.Split(col, ".")
@@ -4433,6 +4470,7 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 		if !referencesSameTableColumn(backfill, table, name, columns) {
 			continue
 		}
+		startupMigrationWriteStatements.Add(1)
 		if _, err := DB.Exec(backfill); err != nil {
 			return fmt.Errorf("failed to backfill column %s: %w", col, err)
 		}
@@ -6298,6 +6336,15 @@ func retireCCResponse() error {
 // 早期 ingest-human 未写 policy_id/rule_name/policy_name，触发详情会把合法 CC
 // 挑战显示成“本次事件无策略归属”；按 rule_caddy_id 回填当时绑定的阶段 2
 // 策略。metrics_meta 标记保证只跑一次。
+//
+// 口径要点：
+//   - 规则查无（sql.ErrNoRows：规则已删）→ 默认归属「人机验证」，不阻断启动；
+//     其它查询错误必须向上返回且不置 marker——吞错后置 marker 会让入库失败
+//     的历史事件永久停在「无策略归属」。
+//   - 归属回填与 marker 写入同一事务批处理：逐行自动提交下，中途失败会留下
+//     部分行已改、marker 未置位的半迁移态，下次启动还会重跑并重复写。
+//   - human_pass（挑战成功=放行结果，非安全事件）不参与回填——这些行随后由
+//     删除迁移清理，先回填纯属白写；调用序也保证删除迁移先行。
 func backfillHumanEventPolicyAttribution() error {
 	if MetricsDB == nil || DB == nil {
 		return nil
@@ -6311,9 +6358,10 @@ func backfillHumanEventPolicyAttribution() error {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	rows, err := MetricsDB.Query(`SELECT id, COALESCE(rule_caddy_id,'') FROM security_events WHERE event_type='human' AND COALESCE(policy_id,0)<=0`)
+	rows, err := MetricsDB.Query(`SELECT id, COALESCE(rule_caddy_id,'') FROM security_events
+		WHERE event_type='human' AND COALESCE(policy_id,0)<=0 AND COALESCE(rule_triggered,'')<>'human_pass'`)
 	if err != nil {
-		return err
+		return fmt.Errorf("query human events pending attribution: %w", err)
 	}
 	type pending struct {
 		id     int64
@@ -6324,13 +6372,13 @@ func backfillHumanEventPolicyAttribution() error {
 		var p pending
 		if err := rows.Scan(&p.id, &p.ruleID); err != nil {
 			rows.Close()
-			return err
+			return fmt.Errorf("scan human event pending attribution: %w", err)
 		}
 		items = append(items, p)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		return fmt.Errorf("iterate human events pending attribution: %w", err)
 	}
 	rows.Close()
 	type attribution struct {
@@ -6339,6 +6387,11 @@ func backfillHumanEventPolicyAttribution() error {
 		policyName string
 	}
 	cache := map[string]attribution{}
+	tx, err := MetricsDB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin human event attribution backfill: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	updated := 0
 	for _, item := range items {
 		attr, ok := cache[item.ruleID]
@@ -6350,13 +6403,20 @@ func backfillHumanEventPolicyAttribution() error {
 				// stage2 会让升级库中 mixed 策略的历史人机事件永久
 				// policy_id=0（触发详情「无策略归属」）。stage2 优先、mixed
 				// 兜底（渲染层按内容特征选属主，不看 policy_type）。
-				_ = DB.QueryRow(`SELECT COALESCE(r.name,''), CASE WHEN p.id IS NOT NULL THEN b.policy_id ELSE 0 END, CASE WHEN p.id IS NOT NULL THEN p.name ELSE '' END
+				err := DB.QueryRow(`SELECT COALESCE(r.name,''), CASE WHEN p.id IS NOT NULL THEN b.policy_id ELSE 0 END, CASE WHEN p.id IS NOT NULL THEN p.name ELSE '' END
 					FROM lb_rules r
 					LEFT JOIN security_policy_bindings b ON b.rule_caddy_id=r.caddy_id
 					LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type IN ('stage2','mixed')
 					WHERE r.caddy_id=?
 					ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 WHEN p.policy_type='mixed' THEN 1 ELSE 2 END, b.rank, b.policy_id
 					LIMIT 1`, item.ruleID).Scan(&attr.ruleName, &attr.policyID, &attr.policyName)
+				switch {
+				case err == nil:
+				case errors.Is(err, sql.ErrNoRows):
+					// 规则已删：按「人机验证」默认归属保留事件。
+				default:
+					return fmt.Errorf("lookup attribution of human event %d (rule %q): %w", item.id, item.ruleID, err)
+				}
 			}
 			cache[item.ruleID] = attr
 		}
@@ -6364,13 +6424,16 @@ func backfillHumanEventPolicyAttribution() error {
 		if ruleName == "" {
 			ruleName = "人机验证"
 		}
-		if _, err := MetricsDB.Exec(`UPDATE security_events SET policy_id=?, rule_name=?, policy_name=? WHERE id=?`, attr.policyID, ruleName, attr.policyName, item.id); err != nil {
-			return err
+		if _, err := tx.Exec(`UPDATE security_events SET policy_id=?, rule_name=?, policy_name=? WHERE id=?`, attr.policyID, ruleName, attr.policyName, item.id); err != nil {
+			return fmt.Errorf("update human event %d attribution: %w", item.id, err)
 		}
 		updated++
 	}
-	if _, err := MetricsDB.Exec(`INSERT OR REPLACE INTO metrics_meta (key,value) VALUES (?,?)`, marker, strconv.Itoa(updated)); err != nil {
-		return err
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO metrics_meta (key,value) VALUES (?,?)`, marker, strconv.Itoa(updated)); err != nil {
+		return fmt.Errorf("persist human event attribution marker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit human event attribution backfill: %w", err)
 	}
 	if updated > 0 {
 		log.Printf("回填人机挑战事件策略归属: %d 条", updated)

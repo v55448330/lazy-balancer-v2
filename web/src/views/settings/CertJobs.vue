@@ -259,13 +259,15 @@ const total = ref(0)
 const retryingJobIds = ref(new Set<number>())
 
 // ── 需人工横幅（可关闭）+ 筛选 ─────────────────────────────
-let dismissedManualFingerprints = loadCertManualBannerDismissed()
+// 关闭指纹必须存 ref：普通 let 集合不参与响应式依赖，dismiss 后 computed
+// 不重算，横幅关不掉（用户点 × 无反应）。
+const dismissedManualFingerprints = ref(loadCertManualBannerDismissed())
 const manualFilterActive = ref(false)
 
 const manualRows = computed(() => jobs.value.filter((row) => certJobManualNeeded(row, renewalAttemptsCap.value)))
 // 横幅只列未被关闭指纹命中的行：同一行 updated_at 再变化（新一轮失败）→ 新指纹重现。
 const manualBannerRows = computed(() =>
-  manualRows.value.filter((row) => !dismissedManualFingerprints.has(certManualBannerFingerprint(row))))
+  manualRows.value.filter((row) => !dismissedManualFingerprints.value.has(certManualBannerFingerprint(row))))
 // 「查看」= 本页需人工行筛选（服务端分页不动；命中集为空自动退出筛选态）。
 const filteredJobs = computed(() => (manualFilterActive.value ? manualRows.value : jobs.value))
 
@@ -278,11 +280,11 @@ const showManualOnly = (): void => {
 }
 
 const dismissManualBanner = (): void => {
-  dismissedManualFingerprints = new Set([
-    ...dismissedManualFingerprints,
+  dismissedManualFingerprints.value = new Set([
+    ...dismissedManualFingerprints.value,
     ...manualBannerRows.value.map((row) => certManualBannerFingerprint(row)),
   ])
-  saveCertManualBannerDismissed(dismissedManualFingerprints)
+  saveCertManualBannerDismissed(dismissedManualFingerprints.value)
 }
 
 const logDialogVisible = ref(false)

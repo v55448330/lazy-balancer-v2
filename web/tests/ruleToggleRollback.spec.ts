@@ -47,3 +47,12 @@ test('在途门与只读门仍在（双击不叠双请求）', () => {
   assert.match(toggle, /if \(ruleTogglePending\.value\[rule\.caddy_id\]\) return/, '在途守卫')
   assert.match(toggle, /ruleTogglePending\.value\[rule\.caddy_id\] = false/, 'finally 释放占位')
 })
+
+test('用户取消确认框：只回滚本地开关，不触发全量回读', () => {
+  const toggle = member(code(RULES), 'const toggleRule = async (rule: Rule) =>')
+  const catchBlock = toggle.slice(toggle.indexOf('} catch'))
+  assert.match(catchBlock, /if \(e === 'cancel' \|\| e === 'close'\) return/, '取消/关闭必须早退（取消不是失败）')
+  const early = catchBlock.indexOf("if (e === 'cancel'")
+  const reread = catchBlock.indexOf('void fetchRules()')
+  assert.ok(early > 0 && reread > early, '回读只应在真实请求失败分支执行')
+})

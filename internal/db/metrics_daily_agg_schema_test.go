@@ -21,11 +21,11 @@ func countMetricsTableRowsDailyAgg(t *testing.T, table string) int {
 }
 
 func TestInitMetricsSchema_createsDailyAggAndCheckpointTables(t *testing.T) {
+	preserveMetricsDBHandle(t)
 	path := t.TempDir() + "/daily-agg.db"
 	if err := InitializeMetricsDB(path); err != nil {
 		t.Fatalf("initialize metrics database: %v", err)
 	}
-	t.Cleanup(func() { _ = MetricsDB.Close() })
 
 	for _, table := range []string{"metrics_daily_agg", "metrics_counter_checkpoint"} {
 		var n int
@@ -103,6 +103,7 @@ func TestInitMetricsSchema_createsDailyAggAndCheckpointTables(t *testing.T) {
 // 幂等：重复初始化不报错、既有数据不复活也不丢失（存量库每次启动都会重放
 // initMetricsSchema）。
 func TestInitMetricsSchema_dailyAggIdempotent(t *testing.T) {
+	preserveMetricsDBHandle(t)
 	path := t.TempDir() + "/daily-agg-idem.db"
 	if err := InitializeMetricsDB(path); err != nil {
 		t.Fatalf("initialize metrics database: %v", err)
@@ -114,7 +115,6 @@ func TestInitMetricsSchema_dailyAggIdempotent(t *testing.T) {
 	if err := InitializeMetricsDB(path); err != nil {
 		t.Fatalf("re-initialize metrics database: %v", err)
 	}
-	t.Cleanup(func() { _ = MetricsDB.Close() })
 	if got := countMetricsTableRowsDailyAgg(t, "metrics_daily_agg"); got != 1 {
 		t.Fatalf("metrics_daily_agg rows=%d after re-init, want 1（重放不得灌回/清空既有行）", got)
 	}

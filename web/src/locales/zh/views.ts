@@ -921,6 +921,7 @@ export default {
       'expiredNote': '，其中 {count} 条已到期（保存后自动移除）',
       'headerNameInvalid': '请求头名仅允许字母、数字与 "-"（1-64 字符），留空则匹配全部头的值',
       'importDone': '导入完成：成功 {count} 条，保存后生效',
+      'importDoneWithInvalid': '导入完成：成功 {count} 条，保存后生效；另有 {invalid} 条非法行已跳过（第 {lines} 行）',
       'ipListDeleteConfirm': '确定删除 IP 地址列表"{name}"？',
       'ipListSaveConfirm': '确定{action} IP 地址列表「{name}」（{count} 条条目{note}）？',
       'loadEntriesFailLater': '加载列表条目失败，请稍后重试',

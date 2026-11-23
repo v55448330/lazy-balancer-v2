@@ -143,7 +143,12 @@ func dispatch(evt Event) {
 	}
 	selections := subscriptionChannelSelectionsFor(evt.Type, userIDs)
 	for _, uid := range userIDs {
-		insertDeliveryPending(uid, evt)
+		// 显式 '[]'=不投递：不得先落 pending 再由投递 Daemon 判 dead——那些
+		// 注定失败的行会稀释概览成功率分母（用户裁定「全不选=不订阅」）。
+		sel := selections[uid]
+		if !sel.explicitEmpty {
+			insertDeliveryPending(uid, evt)
+		}
 		// MCP 实时推送与通道投递同源过滤：显式空选接收通道（channel_ids='[]'，
 		// 用户裁定「全不选=不订阅」）的用户不再收推送——旧实现无条件推送，
 		// 用户关掉全部通道后仍被 MCP 会话打扰。

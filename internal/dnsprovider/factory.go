@@ -69,11 +69,17 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 	if mode == "" {
 		mode = env.Mode
 	}
+	// app_id+app_token 只对 DNSPod 折叠（该族的 UI 双字段形态）。不得提前折叠
+	// 成 apiToken：Cloudflare 行若同时带历史 app_id/app_token（旧备份/带外写入），
+	// 覆盖会把真实 CF token 换成一对本族不识别的 "app_id,app_token"，签发侧
+	// 持续认证失败且保存前验证同样假绿。
+	hasAppPair := env.AppID != "" && env.AppToken != ""
 	apiToken := env.APIToken
-	if env.AppID != "" && env.AppToken != "" {
-		apiToken = env.AppID + "," + env.AppToken
+	dnspodToken := apiToken
+	if hasAppPair {
+		dnspodToken = env.AppID + "," + env.AppToken
 	}
-	hasToken := apiToken != ""
+	hasToken := apiToken != "" || hasAppPair
 	hasSecret := env.SecretID != "" && env.SecretKey != ""
 	hasAccess := env.AccessKeyID != "" && env.AccessKeySecret != ""
 
@@ -110,10 +116,10 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 
 	switch strings.ToLower(mode) {
 	case "dnspod":
-		if !hasToken {
+		if dnspodToken == "" {
 			return DNSCredentials{}, fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
 		}
-		return DNSCredentials{Mode: "dnspod", APIToken: apiToken}, nil
+		return DNSCredentials{Mode: "dnspod", APIToken: dnspodToken}, nil
 	case "tencent", "tencent_cloud":
 		if !hasSecret {
 			return DNSCredentials{}, fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
@@ -125,7 +131,9 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 		}
 		return DNSCredentials{Mode: "aliyun", AccessKeyID: env.AccessKeyID, AccessKeySecret: env.AccessKeySecret}, nil
 	case "cloudflare":
-		if !hasToken {
+		// 只认游离 api_token（UI 形态）；app_id/app_token 是 DNSPod 字段，
+		// 不得覆盖本族 token（见上方 hasAppPair 注释）。
+		if apiToken == "" {
 			return DNSCredentials{}, fmt.Errorf("Cloudflare 认证方式需要提供 API Token")
 		}
 		return DNSCredentials{Mode: "cloudflare", APIToken: apiToken}, nil

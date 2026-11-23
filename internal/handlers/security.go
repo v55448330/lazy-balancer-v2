@@ -4601,6 +4601,28 @@ func formatIP2RegionLocation(region string) string {
 	return strings.Join(parts, "·")
 }
 
+// regionLocationParts 从 ip2region 原始 region 结构化产出 (国家, 省简称)，
+// 供威胁大屏省级聚合使用。**不得**解析 formatIP2RegionLocation 的展示串：
+// ISP-only 行（中国|0|0|阿里|CN）展示为「中国·阿里」，二次按「·」拆分会把
+// ISP 当成省名污染省级统计（回归）。海外返回中文化国家名
+// （与展示口径一致），不产出省份；Reserved/畸形返回空。
+func regionLocationParts(region string) (country, province string) {
+	fields := strings.Split(region, "|")
+	if len(fields) < 5 || fields[0] == "" || fields[0] == "0" {
+		return "", ""
+	}
+	if fields[0] == "Reserved" {
+		return "", ""
+	}
+	if fields[0] != "中国" {
+		return geoipnames.CountryChinese(fields[0]), ""
+	}
+	if p := strings.TrimSpace(fields[1]); p != "" && p != "0" {
+		province = ip2RegionShortenName(p)
+	}
+	return "中国", province
+}
+
 // isReservedIP 判定保留/私网/回环/链路本地/未指定/组播及特殊用途地址
 // （判据单源在 services.IsReservedClientIP：攻击光流环的入环过滤与本节
 // 各消费面必须逐点相等，否则会出现「入口不排、出口才排」的配额挤占）。

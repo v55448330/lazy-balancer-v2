@@ -220,7 +220,10 @@ func (s *SyncService) doSmall(req *http.Request) (*http.Response, error) {
 // 反代重定向）说明主节点地址形态需人工修正（通常是启用 HTTPS 后仍填 http://）。
 // 这类响应既不是协议成功，也不是可解码的 JSON——所有调用点必须先按失败处理。
 func isHTTPRedirect(status int) bool {
-	return status >= http.StatusMultipleChoices && status < http.StatusBadRequest
+	// 304 Not Modified 落在 3xx 区间但不是重定向（无 Location、客户端应沿用
+	// 缓存）：误判会让「主节点地址形态需改 https」提示对着一个正常响应出现。
+	return status >= http.StatusMultipleChoices && status < http.StatusBadRequest &&
+		status != http.StatusNotModified
 }
 
 func (s *SyncService) doWithClient(req *http.Request, client *http.Client) (*http.Response, error) {

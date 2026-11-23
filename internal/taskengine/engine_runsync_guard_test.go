@@ -18,7 +18,7 @@ import (
 func TestRunSync_rejectsDaemonKind(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-rsd", Family: "t", Name: "常驻D", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-rsd", Family: "t", Name: "常驻D", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(true)
 
@@ -39,7 +39,7 @@ func TestRunSync_rejectsDaemonKind(t *testing.T) {
 func TestRunSync_masterOnlyRejectedOnSlave(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-rsm", Family: "t", Name: "主仅M", Kind: KindScheduled, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-rsm", Family: "t", Name: "主仅M", Kind: KindScheduled, RunsOn: RoleMasterOnly,
 		// 配套：Scheduled 注册必须带 NextSlotFn（远期槽——
 		// tick 不触发，本测试只验 RunSync 角色门）。
 		NextSlotFn: func() time.Time { return time.Now().Add(time.Hour) },
@@ -62,7 +62,7 @@ func TestRunSync_masterOnlyRejectedOnSlave(t *testing.T) {
 func TestTrigger_masterOnlyRejectedOnSlave(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-trm", Family: "t", Name: "主仅T", Kind: KindOneshot, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-trm", Family: "t", Name: "主仅T", Kind: KindOneshot, RunsOn: RoleMasterOnly,
 		Run: func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(false) // 从节点
 
@@ -79,7 +79,7 @@ func TestRunNow_rechecksRoleAtExecutionEntry(t *testing.T) {
 	// Given：从节点角色 + MasterOnly 描述符（绕过 Trigger/RunSync 外层守卫直调 runNow）。
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-race-role", Family: "t", Name: "角色复查", Kind: KindOneshot, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-race-role", Family: "t", Name: "角色复查", Kind: KindOneshot, RunsOn: RoleMasterOnly,
 		Run: func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(false)
 
@@ -98,7 +98,7 @@ func TestRunNow_rechecksRoleAtExecutionEntry(t *testing.T) {
 func TestRunSync_oneshotStillExecutes(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-rso", Family: "t", Name: "单次O", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-rso", Family: "t", Name: "单次O", Kind: KindOneshot,
 		Run: func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(true)
 

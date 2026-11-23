@@ -56,13 +56,20 @@ func clusterEventDedupRecord(batchID string) bool {
 
 // parseReportEventTime 解析上报事件的原始发生时刻（RFC3339Nano/RFC3339）；
 // 空串/畸形返回零值（Publish 侧回退当前时刻，不因坏时间戳丢事件）。
+// 未来时刻同样按零值处理：created_at 落在远未来会让 7 天过期/保留清理永不
+// 命中（从节点时钟错乱或恶意载荷即可把事件钉在保留边界之外，回归
+// （回归）；Publish 对零值回填当前时刻，事件正常参与过期。
 func parseReportEventTime(raw string) time.Time {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return time.Time{}
 	}
+	now := time.Now()
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
 		if t, err := time.Parse(layout, raw); err == nil {
+			if t.After(now) {
+				return time.Time{}
+			}
 			return t
 		}
 	}

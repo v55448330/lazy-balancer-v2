@@ -98,6 +98,10 @@ var synchronizedWriteClassificationCases = []synchronizedWriteClassificationCase
 	// 同步写（触发器降级态会把它误伤成 500）。
 	{"POST", "/api/v1/security/overview/threat-screen/collector", false},
 	{"DELETE", "/api/v1/security/overview/threat-screen/collector", false},
+	// MCP 会话断开只删本地 mcp_sessions 行（非同步表）——不得按 /security
+	// 前缀误分类为同步写（触发器降级态会误伤成 500，（回归）。
+	{"POST", "/api/v1/security/mcp-sessions/:id/disconnect", false},
+	{"POST", "/api/v1/security/mcp-sessions/mcp-session-3f/disconnect", false},
 	{"GET", "/api/v1/security/policies", false},
 	{"GET", "/api/v1/security/custom-rules", false},
 	// 登录锁传播：密码登录与 MFA 验证步均写

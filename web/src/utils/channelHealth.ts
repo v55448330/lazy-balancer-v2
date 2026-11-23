@@ -20,8 +20,10 @@ interface ChannelHealthInput {
 export const channelHealthState = (ch: ChannelHealthInput): ChannelHealthState => {
   if (!ch.enabled) return 'disabled'
   if ((ch.type === 'qq' || ch.type === 'wx_clawbot') && ch.link_connected === false) return 'link_down'
-  // 微信须接收者先建立会话才能主动发送；会话未就绪（或已知测试失败）优先提示刷新会话。
-  if (ch.type === 'wx_clawbot' && !(ch.session_ready === true && ch.last_test_ok !== false)) return 'session_stale'
+  // 微信须接收者先建立会话才能主动发送；会话未就绪优先提示刷新会话。
+  // 但会话已就绪时的测试失败必须走 test_failed（此前把 last_test_ok===false
+  // 也折叠成「会话待刷新」，把真实失败原因藏起来、误导排查方向）。
+  if (ch.type === 'wx_clawbot' && ch.session_ready !== true) return 'session_stale'
   if (!ch.last_test_at) return 'unverified'
   if (ch.last_test_ok === false) return 'test_failed'
   return 'ready'

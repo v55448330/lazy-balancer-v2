@@ -330,7 +330,10 @@ func loadCaddyEndpoints() (map[int]struct{}, map[string]struct{}) {
 	if db.DB == nil {
 		return ports, upstreams
 	}
-	if rows, err := db.DB.Query(`SELECT listen_port FROM lb_rules`); err == nil {
+	// 只收启用规则的监听端口：禁用规则不参与渲染（caddy.go WHERE enabled=1），
+	// 其端口不应再被当作 Caddy 流量——否则停用规则后该端口上的其他连接
+	// 会被误判为 Caddy 端点（2026-11 全量附录 P3）。
+	if rows, err := db.DB.Query(`SELECT listen_port FROM lb_rules WHERE enabled IN ('1',1)`); err == nil {
 		for rows.Next() {
 			var p int
 			if rows.Scan(&p) == nil && p > 0 {

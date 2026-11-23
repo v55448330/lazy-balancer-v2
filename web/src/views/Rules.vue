@@ -3845,6 +3845,9 @@ const toggleRule = async (rule: Rule) => {
     // 只拨回本地状态会让页面与服务端长期相反——规则列表没有轮询可以兜底，
     // 回读是唯一能收敛到服务端事实的路径（与 Users 启停失败同口径）。
     rule.enabled = !nextEnabled
+    // 用户取消确认框不是失败：服务端状态未变，回滚本地开关即闭环；此时
+    // 再发全量 GET 纯属多余请求（且会让「取消」看起来像发生了写操作）。
+    if (e === 'cancel' || e === 'close') return
     void fetchRules()
   } finally {
     ruleTogglePending.value[rule.caddy_id] = false

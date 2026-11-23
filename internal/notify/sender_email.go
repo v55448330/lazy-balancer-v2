@@ -55,18 +55,22 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 			subject = renderStyleTemplate(cfg.SubjectTemplate, msg, ts)
 		}
 	}
+	// Content-Type 决策必须先于正文渲染：日报模板模式未显式声明 body_format
+	// 时，emailHTMLBody 仍可能按实际渲染格式（ContentFormat=html）发 text/html，
+	// 此时正文必须走 HTML 转义渲染器，否则占位符值（TOP 路径/正文）原样拼进
+	// HTML 即注入面。
+	htmlBody := emailHTMLBody(cfg.BodyTemplate, cfg.BodyFormat, msg)
 	body := msg.Body
 	if cfg.BodyTemplate != "" && !msg.TemplateApplied && !msg.dailyTemplatesSuppressed() {
 		// HTML 模板走转义渲染（占位符值 HTML 转义，模板字面量保持声明形态）：
 		// 事件正文/日报变量来自外部输入，原样拼进 HTML 即注入面。
-		if cfg.BodyFormat == "html" {
+		if htmlBody {
 			body = renderStyleTemplateHTML(cfg.BodyTemplate, msg, ts)
 		} else {
 			body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
 		}
 	}
 	tlsEnabled, insecure := smtpTLSOptions()
-	htmlBody := emailHTMLBody(cfg.BodyTemplate, cfg.BodyFormat, msg)
 	if htmlBody && msg.EventType != EvtDailyReport && cfg.BodyTemplate == "" {
 		body = wrapEmailHTML(msg, subject, body, ts)
 	}

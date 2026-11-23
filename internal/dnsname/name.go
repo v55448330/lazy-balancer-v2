@@ -19,8 +19,12 @@ import "strings"
 // NormalizeName 归一 DNS 名：去首尾空白、小写、去掉一个末尾点（DNS 名大小写
 // 不敏感且尾点可省略）。只去一个尾点——连续尾点（畸形输入）不是合法 FQDN，
 // 保留一个可让上层按自身口径拒绝，而不是在这里静默吞掉。
+//
+// 去尾点后必须再次去空白：输入 `example.com .`（点前带空白）在去点后残留
+// `example.com `，旧实现直接返回该形态——同一名字的归一结果依赖调用次数
+// （非幂等），登记键/账本键与权威应答比较会出现二次归一后才相等的假失配。
 func NormalizeName(name string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	return strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(name), ".")))
 }
 
 // RelativeTo 返回 name 相对 zone 的子域名（`_acme-challenge.www.example.com`

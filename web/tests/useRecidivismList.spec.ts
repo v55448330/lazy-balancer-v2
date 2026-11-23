@@ -236,3 +236,29 @@ test('取数失败：清空 records/total 并置 loadError；重试恢复', asyn
   assert.equal(list.loadError.value, false)
   assert.equal(list.records.value.length, 1)
 })
+
+test('仅 IP 变化后重开必须重新取数（防抖复位不得吞掉 open 的取数）', async () => {
+  const { calls, fetchPage } = makeFetch([
+    { records: [], total: 9 },
+    { records: [row('45.33.32.77')], total: 1 },
+    { records: [], total: 9 },
+  ])
+  const list = useRecidivismList(fetchPage)
+  list.open()
+  await flushMicrotasks()
+
+  // 仅搜索词变化（hidePermanent/page 保持默认），防抖后取到过滤结果。
+  list.ipQuery.value = '45.33'
+  await nextTick(); await flushMicrotasks()
+  await waitDebounce()
+  assert.equal(calls.at(-1)?.ip, '45.33')
+  const before = calls.length
+
+  // 重开：ip 复位为空是唯一变化——旧实现 suppressIpReset 吞掉防抖取数，
+  // 又因 hidePermanent/page 未变不触发结构 watch，列表停留在上次搜索结果。
+  list.open()
+  await nextTick(); await flushMicrotasks()
+  await waitDebounce()
+  assert.equal(calls.length - before, 1, '仅 IP 复位重开也必须取数（一次）')
+  assert.deepEqual(calls.at(-1), { hidePermanent: true, ip: '', page: 1, pageSize: 20 })
+})

@@ -154,14 +154,16 @@ test('首载与恢复可见批次：正常/攻击光流都只消费五分钟内�
   assert.ok(normal.indexOf('flowSince = nextFlowCursor(flowSince, data)') > normal.indexOf('freshFlowEvents(events, now)'), '过滤陈旧事件后仍须推进游标')
 })
 
-test('实时事件窗口与站点坐标边界：脏时间丢弃，(0,0) 是合法配置', () => {
+test('实时事件窗口与站点坐标边界：脏时间丢弃，0,0 是未设置哨兵', () => {
   const screen = code('src/views/security/ThreatScreen.vue')
   const feed = section(screen, 'const windowFeed = computed', 'const sevFilter')
   assert.match(feed, /Number\.isFinite\(t\) && t >= cutoff/, '解析失败的事件不得永久留在窗口')
   assert.doesNotMatch(feed, /!Number\.isFinite\(t\) \|\| t >= cutoff/)
   const load = section(screen, 'async function loadServerCentroid', 'async function retryConfigLoad')
-  assert.match(load, /server_map_lat !== undefined|typeof res\.data\?\.server_map_lat === 'number'/, '站点是否配置必须看字段存在性')
-  assert.doesNotMatch(load, /serverLatLon\[0\] !== 0 \|\| serverLatLon\[1\] !== 0/, '(0,0) 不得被当成未配置')
+  // 后端字段恒为 float64（未配置=0 值）：字段存在性恒真，不能作为判据。
+  // 0,0 是未设置哨兵（后端 models 注释），须走 isSiteConfigured 单源判据。
+  assert.match(load, /isSiteConfigured\(res\.data\?\.server_map_lat, res\.data\?\.server_map_lon\)/, '站点是否配置必须走单源判据')
+  assert.doesNotMatch(load, /typeof res\.data\?\.server_map_lat === 'number'/, '只看 typeof number 恒真（未配置也返回 0）')
 })
 
 

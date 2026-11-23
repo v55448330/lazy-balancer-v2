@@ -521,8 +521,11 @@ const channelPickTitle = (ch: RuleChannel): string | undefined =>
 const enabledChannelIds = (): number[] => channelOptions.value.filter(c => c.enabled !== false).map(c => c.id)
 // 可发送就绪（2026-11-22 用户裁定）：微信会话失效（会话待刷新）后不再允许
 // 选择/发送——选择显示自动取消，直到重新绑定且会话就绪后恢复可选。
+// 未测试通道不在此列：后端把「未测」视为可投递（规则草稿保留 channel_ids），
+// 前端只以提示（channelUntestedHint）引导先测试，不得剪枝/禁选——否则一次
+// 无关保存就会把未测通道写成显式空集，永久停止投递。
 const channelSendable = (ch: RuleChannel): boolean =>
-  ch.enabled !== false && ch.last_test_ok === true && !(ch.type === 'wx_clawbot' && ch.session_ready === false)
+  ch.enabled !== false && !(ch.type === 'wx_clawbot' && ch.session_ready === false)
 const pruneChannelIds = (ids: number[]): number[] => ids.filter(id => { const c = channelOptions.value.find(x => x.id === id); return !!c && channelSendable(c) })
 const baselineChannelIds = (ids?: number[]): number[] => pruneChannelIds(ids ?? enabledChannelIds())
 const eventCatalog = ref<CatalogEvent[]>([])

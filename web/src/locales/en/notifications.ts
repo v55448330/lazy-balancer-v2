@@ -146,7 +146,7 @@ export default {
         'sec.lib_settings_changed': 'Alerts when security-library auto-update, schedule, or data-source switches change.',
         'sec.ingest_degraded': 'Alerts when security-event ingestion becomes abnormal and events may be lost; check the audit log promptly.',
         'sec.ingest_recovered': 'Alerts when security-event ingestion recovers.',
-        'notify.channel_down': 'Alerts when a notification channel (QQ, WeChat, etc.) disconnects; events are queued for retry.',
+        'notify.channel_down': 'Alerts when a notification channel (QQ, WeChat, etc.) disconnects; deliveries fail while offline and can be resent manually from the delivery log.',
         'notify.channel_recovered': 'Alerts when a notification channel recovers and delivery is normal again.',
         'notify.channel_changed': 'Alerts when a notification channel is created, changed, or deleted.',
         'notify.rule_changed': 'Alerts when a notification subscription rule is created, changed, or deleted.',

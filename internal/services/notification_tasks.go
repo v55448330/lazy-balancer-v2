@@ -36,6 +36,10 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		Category:    "通知",
 		Kind:        taskengine.KindDaemon,
 		RunsOn:      taskengine.RoleAny,
+		// Run 体按角色分流（从=spool 重传节拍 / 主=投递主循环），角色真实翻转
+		// 必须换代重启：不声明则 promote 后旧代仍跑从分支，投递主循环永不启动
+		// （回归）。
+		RestartOnRoleFlip: true,
 		Run: func(rc taskengine.RunContext) error {
 			// 集群集中汇聚（2026-11-22 用户裁定）：通道/订阅/日报配置只在主节点，
 			// 从节点不本地投递（无通道配置=空转），只承载事件 spool 重传循环；

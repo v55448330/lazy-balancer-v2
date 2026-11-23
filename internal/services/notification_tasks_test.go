@@ -14,6 +14,8 @@ package services
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +31,40 @@ func mustLoadLoc(t *testing.T, name string) *time.Location {
 		t.Fatalf("load %s: %v", name, err)
 	}
 	return loc
+}
+
+// TestNotificationDeliveryRestartsOnPromote 钉 （回归）
+// 是 RoleAny 常驻且 Run 体按角色分流（从=spool 重传节拍 / 主=投递主循环），
+// 角色真实翻转必须换代重启——否则 promote 后旧代仍跑从分支，投递主循环
+// 永不启动。
+func TestNotificationDeliveryRestartsOnPromote(t *testing.T) {
+	setupIsolatedDB(t)
+	te := taskengine.NewEngine(taskengine.Options{TickInterval: time.Hour})
+	t.Cleanup(te.Stop)
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(t.TempDir())
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	registerNotificationTasks(te)
+
+	const id = "notification-delivery"
+	readLog := func() string {
+		b, _ := os.ReadFile(taskengine.TaskLogPath(id))
+		return string(b)
+	}
+	te.SetRole(false) // 从节点：spool 重传分支
+	te.StartLoop(id)
+	waitForCond(t, 3*time.Second, func() bool {
+		return strings.Contains(readLog(), "[start]")
+	})
+	// promote：换代重启，旧代 [done] stopped 后新代投递主循环启动。
+	te.SetRole(true)
+	waitForCond(t, 3*time.Second, func() bool {
+		s := readLog()
+		return strings.Count(s, "[start]") >= 2 && strings.Contains(s, "[done] stopped")
+	})
+	if got := strings.Count(readLog(), "[start]"); got < 2 {
+		t.Fatalf("promote 后 daemon 未换代重启：[start] 行数=%d, want >=2", got)
+	}
 }
 
 func TestDailyReportSlotSemantics(t *testing.T) {

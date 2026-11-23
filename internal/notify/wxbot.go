@@ -160,7 +160,7 @@ func wxEnumerateBots() []wxBotCred {
 	}
 	// 二登待钉住凭据（wxConfirmedPin）：提前建连破「连接测试↔保存门控」死锁。
 	wxCtxMu.Lock()
-	pin := wxConfirmedPin
+	pin := wxFreshPinLocked()
 	wxCtxMu.Unlock()
 	if pin != nil {
 		add(*pin)
@@ -189,6 +189,29 @@ func wxEnumerateBots() []wxBotCred {
 	return bots
 }
 
+const (
+	// wxConfirmedPinTTL 扫码确认凭据的待钉住保留期：用户扫码后未保存通道
+	// （关闭弹框/换页）不得让该 bot 被 supervisor 永久枚举建连（幽灵入站）。
+	wxConfirmedPinTTL = 10 * time.Minute
+	// wxPendingQRTTL 登录二维码有效期：过期后 bind-state 不得继续视为
+	// 「扫码进行中」（否则入站接收者捕获永久被屏蔽）。
+	wxPendingQRTTL = 5 * time.Minute
+)
+
+// wxFreshPinLocked 取未过期的待钉住凭据快照（wxCtxMu 必须已持有）；过期即
+// 清除并返回 nil——用户扫码后未保存通道的 bot 不得被 supervisor 永久枚举建连。
+func wxFreshPinLocked() *wxBotCred {
+	if wxConfirmedPin == nil {
+		return nil
+	}
+	if !wxConfirmedPinAt.IsZero() && time.Since(wxConfirmedPinAt) > wxConfirmedPinTTL {
+		wxConfirmedPin, wxConfirmedPinAt = nil, time.Time{}
+		return nil
+	}
+	c := *wxConfirmedPin
+	return &c
+}
+
 // wxWakeCh 凭据/钉住变更唤醒信号（WxPinChannelTarget 钉住成功/
 // WxQRLoginPoll 扫码确认后投递；非阻塞，循环未运行时弃置——下轮对账自然读新凭据）。
 var wxWakeCh = make(chan struct{}, 1)
@@ -213,13 +236,11 @@ func WxPinChannelTarget(targetJSON string) string {
 		return targetJSON
 	}
 	wxCtxMu.Lock()
-	var pending *wxBotCred
-	if wxConfirmedPin != nil {
-		c := *wxConfirmedPin
-		pending = &c
+	pending := wxFreshPinLocked()
+	if pending != nil {
 		// 钉住即消费：清除本次扫码凭据，防止下一个新通道弹框再自动回填
 		// 上一次扫码者的旧 id（用户实测"多次填旧 id"脏状态根因）。
-		wxConfirmedPin = nil
+		wxConfirmedPin, wxConfirmedPinAt = nil, time.Time{}
 	}
 	wxCtxMu.Unlock()
 	cred, ok := loadWxBotCred()
@@ -278,10 +299,12 @@ var (
 	// 多 bot 入站会话互不共用游标/会话令牌（二登不重置首 bot）。
 	wxContextTokens = map[string]map[string]string{}
 	wxUpdatesBufs   = map[string]string{}
-	wxPendingQR     string // 进行中的扫码登录二维码令牌
+	wxPendingQR     string    // 进行中的扫码登录二维码令牌
+	wxPendingQRAt   time.Time // 二维码生成时刻（TTL 判定；过期不再视为进行中）
 	// wxConfirmedPin 最近一次扫码确认的新凭据（全局已配置时二登不落全局，
 	// 凭据在此待通道保存钉住；首登落全局时清空）。wxCtxMu 守护。
-	wxConfirmedPin *wxBotCred
+	wxConfirmedPin   *wxBotCred
+	wxConfirmedPinAt time.Time // pin 生成时刻（TTL：未保存通道不得永久枚举幽灵 bot）
 	// wxPendingInbound 最近一条入站私聊（通道向导「发送任意消息捕获
 	// receiver」闭环的领取槽）：单 bot 场景全局单槽，领取即清；时间窗外
 	// 视为过期不交付。
@@ -326,7 +349,16 @@ func WxBotLoggedIn() bool {
 func WxQRLoginActive() bool {
 	wxCtxMu.Lock()
 	defer wxCtxMu.Unlock()
-	return wxPendingQR != ""
+	if wxPendingQR == "" {
+		return false
+	}
+	if !wxPendingQRAt.IsZero() && time.Since(wxPendingQRAt) > wxPendingQRTTL {
+		// 过期二维码不再视为「扫码进行中」：bind-state 的入站接收者捕获
+		// 不能因为一个被放弃的扫码会话永久被屏蔽。
+		wxPendingQR, wxPendingQRAt = "", time.Time{}
+		return false
+	}
+	return true
 }
 
 // WxDefaultReceiver 仅取「本次扫码确认」凭据的扫码者 wxid（wxConfirmedPin）。
@@ -334,7 +366,7 @@ func WxQRLoginActive() bool {
 // bot 接收者，保存后凭据/接收者错配致测试失败（用户实测根因）。入站捕获仍可覆盖。
 func WxDefaultReceiver() string {
 	wxCtxMu.Lock()
-	pin := wxConfirmedPin
+	pin := wxFreshPinLocked()
 	wxCtxMu.Unlock()
 	if pin != nil && pin.UserID != "" {
 		return pin.UserID
@@ -433,12 +465,31 @@ func PruneWxContextTokens(maxAge time.Duration) (int, error) {
 	rows.Close()
 	cutoff := time.Now().Add(-maxAge).Unix()
 	deleted := 0
+	var pruned [][2]string // botKey, receiver（删除 DB 行后同步清内存）
 	for _, k := range keys {
 		if wxContextDecodeTime(GetSetting(k)) < cutoff {
 			if _, err := db.DB.Exec(`DELETE FROM notify_settings WHERE key=?`, k); err == nil {
 				deleted++
+				rest := strings.TrimPrefix(k, wxContextKeyPrefix)
+				if botKey, receiver, ok := strings.Cut(rest, ":"); ok {
+					pruned = append(pruned, [2]string{botKey, receiver})
+				}
 			}
 		}
+	}
+	if len(pruned) > 0 {
+		// 内存残留会让 WxSessionReady/发送侧在 DB 已判过期后仍认为就绪
+		// （就绪判定反转）——DB 与内存必须同批失效。
+		wxCtxMu.Lock()
+		for _, p := range pruned {
+			if m := wxContextTokens[p[0]]; m != nil {
+				delete(m, p[1])
+				if len(m) == 0 {
+					delete(wxContextTokens, p[0])
+				}
+			}
+		}
+		wxCtxMu.Unlock()
 	}
 	return deleted, nil
 }
@@ -464,13 +515,14 @@ func WxSessionReady(targetJSON string) bool {
 		return false
 	}
 	stored := GetSetting(wxContextKey(key, cfg.Receiver))
-	parts := strings.SplitN(stored, wxContextSep, 2)
-	if len(parts) == 2 {
-		if ts, err := strconv.ParseInt(parts[1], 10, 64); err == nil && ts > 0 {
-			if time.Since(time.Unix(ts, 0)) > 12*time.Hour {
-				return false
-			}
-		}
+	ts := wxContextDecodeTime(stored)
+	if ts <= 0 {
+		// 无持久化时间戳（遗留值/仅内存命中）=无法证明新鲜：按未就绪处理，
+		// 由 PruneWxContextTokens 清理；否则 TTL 对遗留值永不生效。
+		return false
+	}
+	if time.Since(time.Unix(ts, 0)) > 12*time.Hour {
+		return false
 	}
 	return true
 }
@@ -786,7 +838,7 @@ func wxBotWorkerRun(ctx context.Context, cred wxBotCred, link *botLinkState) (fa
 			return false
 		}
 		started := time.Now()
-		err := wxBotSession(ctx, cred, link)
+		err := wxBotSession(ctx, cred, link, attempt == 0)
 		if ctx.Err() != nil {
 			return false
 		}
@@ -824,16 +876,18 @@ type wxInMsg struct {
 // wxBotSession 长轮询会话：getupdates 循环（游标 per-bot 进程内存态）→逐条分发。
 // ret/errcode 非 0 视为失败；-14=登录态过期（errWxSessionExpired fail-loud 上抛）。
 // cred/link=会话所属 bot 的凭据与连接态（per-bot 隔离）。
-func wxBotSession(ctx context.Context, cred wxBotCred, link *botLinkState) error {
+func wxBotSession(ctx context.Context, cred wxBotCred, link *botLinkState, markOnlineAtStart bool) error {
 	key := wxCredKey(cred)
 	base := cred.BaseURL
 	if base == "" {
 		base = wxAPIBaseDefault
 	}
-	// 扫码已验证凭据，会话启动即视为在线（连接测试快速通过，不等首批 getupdates
-	// 长轮询 ~35s 才置在线——QQ WebSocket READY 即时而 wx 慢的根因）；若首批
-	// getupdates 返回 -14/错误再由 worker 置离线。
-	link.set(true, "")
+	// 首次会话启动即置在线（通道刚保存/扫码确认，UI 不等 ~35s 长轮询）；
+	// 重连轮不预先置 true，避免每轮重试制造 true→false 假沿。首批 getupdates
+	// 成功后仅纠正状态，不重复发 recovered。
+	if markOnlineAtStart {
+		link.set(true, "")
+	}
 	first := true
 	for { //scope-exempt: daemon-run-body-loop（getupdates 长轮询挂起 ~35s，无 ticker）
 		if ctx.Err() != nil {
@@ -958,9 +1012,10 @@ func WxQRLoginStart(ctx context.Context) (qrURL string, err error) {
 	}
 	wxCtxMu.Lock()
 	wxPendingQR = qr.Qrcode
+	wxPendingQRAt = time.Now()
 	// 新扫码会话丢弃旧凭据 pin 与旧入站捕获：防新通道未扫码即回填上一个
 	// 会话/旧 bot 的接收者（用户实测"未扫码跳 wxid"根因）。
-	wxConfirmedPin = nil
+	wxConfirmedPin, wxConfirmedPinAt = nil, time.Time{}
 	wxPendingInbound = wxInboundCapture{}
 	wxCtxMu.Unlock()
 	return qr.QRImgContent, nil
@@ -1011,6 +1066,15 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 	if json.Unmarshal(raw, &pr) != nil || pr.Status == "" {
 		return "", false, fmt.Errorf("扫码状态响应解析失败: %.256s", string(raw))
 	}
+	if pr.Status == "expired" || pr.Status == "cancelled" {
+		// 二维码过期/被放弃：清除进行中状态（含 TTL 时间戳），下一轮轮询
+		// 返回 idle，bind-state 恢复入站接收者捕获。
+		wxCtxMu.Lock()
+		if wxPendingQR == qr {
+			wxPendingQR, wxPendingQRAt = "", time.Time{}
+		}
+		wxCtxMu.Unlock()
+	}
 	if pr.Status == "confirmed" {
 		if pr.BotToken == "" {
 			return pr.Status, false, fmt.Errorf("扫码确认响应缺 bot_token: %.256s", string(raw))
@@ -1025,14 +1089,16 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 			wxUpdatesBufs = map[string]string{}
 			wxContextTokens = map[string]map[string]string{}
 			wxConfirmedPin = &cred // 首登亦置 pin：本次扫码者 wxid 供自动回填（保存时消费）
-			wxPendingQR = ""
+			wxConfirmedPinAt = time.Now()
+			wxPendingQR, wxPendingQRAt = "", time.Time{}
 			wxCtxMu.Unlock()
 		} else {
 			// 二登：不覆盖全局（覆盖=首 bot 长轮询掉线根因），不清首 bot
 			// 会话态；新凭据待通道保存钉住。
 			wxCtxMu.Lock()
 			wxConfirmedPin = &cred
-			wxPendingQR = ""
+			wxConfirmedPinAt = time.Now()
+			wxPendingQR, wxPendingQRAt = "", time.Time{}
 			wxCtxMu.Unlock()
 		}
 		wakeWxBotConnection()

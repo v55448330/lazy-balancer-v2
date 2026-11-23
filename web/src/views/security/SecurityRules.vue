@@ -806,6 +806,7 @@ import { IP_LIST_MAX_ENTRIES, canSaveIpList, mergeConcurrentBanEntries, needsEmp
 import { CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, conditionTargetLabel, headerNameSaveAllowed, patternByteLength, patternOverLimit } from '@/utils/customRuleLimits'
 import {formatIpListEntryLine, parseIpListEntryLine} from '@/utils/ipListCsv'
 import { computeImportOutcome } from '@/utils/ipListImport'
+import { compileJSRegex } from '@/utils/regexPreview'
 import { popperViewportSafe } from '@/utils/popper'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { saveBlob } from '@/utils/download'
@@ -864,6 +865,7 @@ const toggleSourceFlag = async (
   val: boolean,
   refresh: () => Promise<void>,
 ): Promise<void> => {
+  if (writeBlocked()) return
   const key = sourceFlagKey(library, row.id)
   if (sourceFlagSaving.value.has(key)) return
   if (!val) {
@@ -1053,6 +1055,7 @@ const applyLibAutoUpdate = async (key: string, val: boolean): Promise<void> => {
   else if (key === 'crawler') await request.put('/security/crawler-lib/auto-update', { auto_update: val })
 }
 const toggleLibAutoUpdate = async (row: LibRow, val: boolean): Promise<void> => {
+  if (writeBlocked()) return
   if (autoUpdateSaving.value.has(row.key)) return
   if (!val) {
     try {
@@ -1152,6 +1155,8 @@ interface ThreatUpdateInfo { running: boolean; trigger: string; started_at: stri
 const authStore = useAuthStore()
 const isSlaveNode = computed(() => authStore.isSlaveNode)
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+// 写函数函数级只读门单源：按钮 disabled 只挡交互层，键盘/程序化调用仍可达。
+const writeBlocked = (): boolean => isReadOnly.value || isSlaveNode.value
 
 const users = ref<UserListItem[]>([])
 // 更新者显示名走 utils/updaterName 单源
@@ -1202,6 +1207,7 @@ const ip2regionSourceTagType = (status: string) => {
   return 'info' as const
 }
 const toggleIP2RegionV6 = async (val: boolean | string | number) => {
+  if (writeBlocked()) return
   if (ip2regionInfo.value.v6_enabled === val) return
   savingIP2RegionV6.value = true
   try {
@@ -1542,6 +1548,7 @@ const mergeFreshAutobanEntries = async (id: number, entries: IPListEntry[]): Pro
 }
 
 const saveIpList = async () => {
+  if (writeBlocked()) return
   if (savingIpList.value) return
   const name = ipListForm.value.name.trim()
   if (!name) { ElMessage.warning(t('common.app.views.secRules.msgs.nameRequired')); return }
@@ -1606,6 +1613,7 @@ const saveIpList = async () => {
 
 const deletingIpListId = ref<number | null>(null)
 const deleteIpList = (row: IPListRow) => {
+  if (writeBlocked()) return
   // 重入守卫（同 SecurityPolicies deletingPolicyId 范式）：快速双击
   // 不再叠加双确认框→双 DELETE 误报
   if (deletingIpListId.value !== null) return
@@ -1664,6 +1672,14 @@ const onImportEntriesFileChange = (event: Event): void => {
     if (outcome.duplicates.length > 0) {
       importDuplicates.value = outcome.duplicates
       importDuplicateVisible.value = true
+    } else if (outcome.invalidLines.length > 0) {
+      // 无重复但存在非法行：只报「成功 N 条」会让用户误以为整份文件都已导入
+      // （非法行被静默跳过）。成功数与非法行号必须同一条提示里点名。
+      ElMessage.warning(t('common.app.views.secRules.msgs.importDoneWithInvalid', {
+        count: outcome.newEntries.length,
+        invalid: outcome.invalidLines.length,
+        lines: pendingInvalidLineNos.value,
+      }))
     } else {
       mfaAwareSuccess(t('common.app.views.secRules.msgs.importDone', { count: outcome.newEntries.length }))
       return
@@ -1801,50 +1817,8 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
   return compiled
 }
 
-function compileJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
-	// +:合法性以后端 RE2(coraza)为准。
-	// RE2 支持:组合内联 flag(?im)/中置 flag(a(?i)b)/flag 组((?i:...))/
-	// 命名组((?P<name>))/flag 取反((?-i));不支持 lookaround/反向引用。
-	if (/\(\?<?[=!]/.test(pattern) || /\\[1-9]/.test(pattern) || /\\k</.test(pattern)) {
-		return { re: null, valid: false }
-	}
-	// lead 捕获含取反 '-'——白名单 {i,m,s,U,-} 真正
-	// 生效(此前捕获组不含 '-',取反形态连 lead 都匹配不上)。
-	const lead = pattern.match(/^\(\?([-a-zA-Z]+)\)/)
-	if (lead && !/^(?:[imsU]+(?:-[imsU]+)?|-[imsU]+)$/.test(lead[1])) {
-		return { re: null, valid: false }
-	}
-	let src = pattern
-	let flags = ''
-	if (lead) {
-		// +:RE2 取反语义——'-' 后的 flag 关闭、前缀
-		// 开启;JS 无原生取反,预览近似:'-' 前的正向 flag 照收(!negated
-		// 守卫),'-' 后的跳过(不重置累积——(?i-s) 保留 i、丢弃 s,比全清
-		// 更接近 RE2);纯取反((?-i))不加任何 flag(全默认)。
-		let negated = false
-		for (const f of lead[1].toLowerCase()) {
-			if (f === '-') { negated = true; continue }
-			if (!negated && (f === 'i' || f === 'm' || f === 's') && !flags.includes(f)) flags += f
-		}
-		src = src.slice(lead[0].length)
-	}
-	src = src.replace(/\(\?P</g, '(?<')
-	// 中置内联 flag((?i)a(?m)b)——JS 不识别,剥离后重试(RE2 合法)。
-	const midFlagStripped = src.replace(/\(\?(?:[imsU]+(?:-[imsU]+)?|-[imsU]+)\)(?=[^)]|$)/g, '')
-	// flag 组((?i:...))——JS 不识别,替换为普通分组后再试;真语法错误
-	// (未闭合括号等)在三段试编译全失败后判 invalid,不再被兜底掩盖。
-	const flagGroupsOpened = src.replace(/\(\?[-imsU]+:/g, '(')
-	const candidates = [src, midFlagStripped, flagGroupsOpened]
-	for (const candidate of candidates) {
-		try {
-			return { re: new RegExp(candidate, flags), valid: true }
-		} catch {
-			continue
-		}
-	}
-	return { re: null, valid: false }
-}
-
+// 编译实现单源见 utils/regexPreview.ts（RE2 合法形态/中置 flag 剥离/取反语义
+// 与测试钉在一处）；本组件只保留按 pattern 的记忆化包装，避免双源漂移。
 const fetchCRS = async () => {
   const seq = ++crsInfoSeq
   try {
@@ -1998,6 +1972,7 @@ const ensureScheduleTz = async () => {
 
 const savingCRSSchedule = ref(false)
 const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  if (writeBlocked()) return
   if (crsScheduleHint.value) { ElMessage.warning(crsScheduleHint.value); return }
   savingCRSSchedule.value = true
   try {
@@ -2009,6 +1984,7 @@ const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string })
 
 const savingIP2RegionSchedule = ref(false)
 const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  if (writeBlocked()) return
   if (ip2regionScheduleHint.value) { ElMessage.warning(ip2regionScheduleHint.value); return }
   savingIP2RegionSchedule.value = true
   try {
@@ -2020,6 +1996,7 @@ const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: str
 
 const savingThreatSchedule = ref(false)
 const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  if (writeBlocked()) return
   if (threatScheduleHint.value) { ElMessage.warning(threatScheduleHint.value); return }
   savingThreatSchedule.value = true
   try {
@@ -2031,6 +2008,7 @@ const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string
 
 const savingCrawlerSchedule = ref(false)
 const saveCrawlerSchedule = async ({ days, time }: { days: number[]; time: string }) => {
+  if (writeBlocked()) return
   if (crawlerScheduleHint.value) { ElMessage.warning(crawlerScheduleHint.value); return }
   savingCrawlerSchedule.value = true
   try {
@@ -2102,7 +2080,7 @@ const openRuleDialog = (row?: CustomRule) => {
 }
 
 const saveCustomRule = async () => {
-  if (isReadOnly.value || savingRule.value) return
+  if (writeBlocked() || savingRule.value) return
   if (!ruleForm.value.name.trim()) { ElMessage.warning(t('common.app.views.secRules.msgs.ruleNameRequired')); return }
   if (!ruleForm.value.conditions.length) { ElMessage.warning(t('common.app.views.secRules.msgs.needCondition')); return }
   // 上限与后端写侧门同源（条件数/pattern 字节）：不前置拦截只能等 400，且无字段定位。
@@ -2143,6 +2121,7 @@ const saveCustomRule = async () => {
 
 const deletingCustomRuleId = ref<number | null>(null)
 const deleteCustomRule = (row: CustomRule) => {
+  if (writeBlocked()) return
   // 重入守卫（同 SecurityPolicies deletingPolicyId 范式）：快速双击
   // 不再叠加双确认框→双 DELETE 误报
   if (deletingCustomRuleId.value !== null) return

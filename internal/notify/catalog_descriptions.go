@@ -68,7 +68,7 @@ var catalogDescriptions = map[string]string{
 	"sec.lib_settings_changed":      "修改安全库自动更新开关、定时设置或数据源开关时提醒。",
 	"sec.ingest_degraded":           "安全事件入库出现异常时提醒，可能丢失安全事件，需尽快检查审计日志。",
 	"sec.ingest_recovered":          "安全事件入库从异常恢复时提醒。",
-	"notify.channel_down":           "QQ、微信等通知通道断开时提醒，事件会暂存并重投。",
+	"notify.channel_down":           "QQ、微信等通知通道断开时提醒；断开期间事件投递会失败，恢复后可在投递记录手动重发。",
 	"notify.channel_recovered":      "通知通道恢复、投递正常时提醒。",
 	"notify.channel_changed":        "通知通道新建、修改或删除时提醒。",
 	"notify.rule_changed":           "通知订阅规则新建、修改或删除时提醒。",

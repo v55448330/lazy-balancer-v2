@@ -312,4 +312,22 @@ func TestNewProviderFromCredentials_cloudflareFamily(t *testing.T) {
 	if _, err := NewProviderFromCredentials(`{"mode":"cloudflare"}`); err == nil || !strings.Contains(err.Error(), "API Token") {
 		t.Fatalf("cloudflare 缺 token error=%v, want 含 API Token 的缺失文案", err)
 	}
+
+	// 旧备份/带外写入可能让 CF 行同时带 DNSPod 的 app_id/app_token：该对字段
+	// 不得覆盖真实 CF token（曾提前折叠成 apiToken，导致认证持续失败）。
+	provider, err = NewProviderFromCredentials(`{"mode":"cloudflare","api_token":"cf-token","app_id":"123","app_token":"abc"}`)
+	if err != nil {
+		t.Fatalf("cloudflare with stray app pair: %v", err)
+	}
+	cfProvider, ok = provider.(*cloudflare.Provider)
+	if !ok {
+		t.Fatalf("provider=%T, want *cloudflare.Provider（mode=cloudflare 优先）", provider)
+	}
+	if cfProvider.String() != wantString {
+		t.Fatalf("provider=%s, want 凭据 cf-token（app_id/app_token 不得覆盖 CF token）", cfProvider.String())
+	}
+	// 只有 app 对、没有游离 token 的 CF 行：缺失拒绝，不得把 app 对当 token。
+	if _, err := NewProviderFromCredentials(`{"mode":"cloudflare","app_id":"123","app_token":"abc"}`); err == nil || !strings.Contains(err.Error(), "API Token") {
+		t.Fatalf("cloudflare app-pair-only error=%v, want 含 API Token 的缺失文案", err)
+	}
 }

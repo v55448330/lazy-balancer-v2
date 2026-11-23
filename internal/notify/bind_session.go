@@ -70,15 +70,35 @@ func StartBindSessionWithCred(userID int64, typ, scannerID, botKey, secret strin
 	}
 }
 
-// PendingBindQQCreds 活跃绑定会话携带的 QQ 待绑定凭据（supervisor 枚举用）。
-func PendingBindQQCreds() []qqBotCred {
+// pendingQQCred 待绑定 QQ 凭据 + 会话是否已确认（confirmed）。未确认只允许
+// 追加新 appid（破连接测试死锁），不得覆盖同名全局/在线 bot 的凭据。
+type pendingQQCred struct {
+	cred      qqBotCred
+	confirmed bool
+}
+
+// pendingBindQQCreds 活跃绑定会话携带的 QQ 待绑定凭据（枚举内部用，带 phase）。
+func pendingBindQQCreds() []pendingQQCred {
 	bindSessionMu.Lock()
 	defer bindSessionMu.Unlock()
-	var out []qqBotCred
+	var out []pendingQQCred
 	for _, s := range bindSessions {
 		if s.Type == "qq" && s.BotKey != "" && s.BotSecret != "" {
-			out = append(out, qqBotCred{AppID: s.BotKey, Secret: s.BotSecret})
+			out = append(out, pendingQQCred{
+				cred:      qqBotCred{AppID: s.BotKey, Secret: s.BotSecret},
+				confirmed: s.Phase == "confirmed",
+			})
 		}
+	}
+	return out
+}
+
+// PendingBindQQCreds 活跃绑定会话携带的 QQ 待绑定凭据（supervisor 枚举用）。
+func PendingBindQQCreds() []qqBotCred {
+	pending := pendingBindQQCreds()
+	out := make([]qqBotCred, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, p.cred)
 	}
 	return out
 }
@@ -108,14 +128,30 @@ func ClearBindSessionsByUser(userID int64) {
 // PruneBindSessions 清理超 maxAge 未更新的绑定会话（保留期兜底，防泄漏）。
 func PruneBindSessions(maxAge time.Duration) int {
 	bindSessionMu.Lock()
-	defer bindSessionMu.Unlock()
 	cutoff := time.Now().Add(-maxAge)
 	n := 0
+	var expiredWxBots []string
 	for k, s := range bindSessions {
 		if s.UpdatedAt.Before(cutoff) {
 			delete(bindSessions, k)
 			n++
+			if s.Type == "wx_clawbot" && s.BotKey != "" {
+				expiredWxBots = append(expiredWxBots, s.BotKey)
+			}
 		}
+	}
+	bindSessionMu.Unlock()
+	// 会话过期=绑定流程已放弃：匹配的待钉住凭据同步失效，否则 supervisor
+	// 仍会枚举该 bot 建连（幽灵入站）；锁序 bindSessionMu→wxCtxMu 与
+	// AbortBindSession 一致（先释放 bind 锁再取 wx 锁）。
+	if len(expiredWxBots) > 0 {
+		wxCtxMu.Lock()
+		for _, botKey := range expiredWxBots {
+			if wxConfirmedPin != nil && wxConfirmedPin.AccountID == botKey {
+				wxConfirmedPin, wxConfirmedPinAt = nil, time.Time{}
+			}
+		}
+		wxCtxMu.Unlock()
 	}
 	return n
 }
@@ -130,7 +166,7 @@ func AbortBindSession(typ, scannerID, botKey string) {
 	if typ == "wx_clawbot" {
 		wxCtxMu.Lock()
 		if wxConfirmedPin != nil && wxConfirmedPin.AccountID == botKey {
-			wxConfirmedPin = nil
+			wxConfirmedPin, wxConfirmedPinAt = nil, time.Time{}
 		}
 		wxCtxMu.Unlock()
 		wakeWxBotConnection()
@@ -216,7 +252,7 @@ func brandAppName() string {
 // 用）。首登/二登均置 pin（见 WxQRLoginPoll），无 pin 回退全局首 bot。
 func WxScanIdentity() (scannerID, botKey string) {
 	wxCtxMu.Lock()
-	pin := wxConfirmedPin
+	pin := wxFreshPinLocked()
 	wxCtxMu.Unlock()
 	if pin != nil {
 		return pin.UserID, pin.AccountID

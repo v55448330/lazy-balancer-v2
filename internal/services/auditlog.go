@@ -291,6 +291,22 @@ var auditCleanupBatchSize = 5000
 // 且摘要保留真实部分计数（已删批次不可逆）。
 var errAuditDBUnavailable = errors.New("审计数据库未初始化")
 
+// auditRetentionCutoff 计算审计日志保留 cutoff：按日历月回退，并把日钳到
+// 目标月份的最后一天。time.AddDate(0,-N,0) 在月末会溢出（5-31 回退 1 月 →
+// Go 归一为 5-1，而非 4-30），cutoff 偏移最多 3 天——保留期语义随运行日期
+// 漂移（同一 N 月配置在不同日期保留时长不同）。
+func auditRetentionCutoff(now time.Time, months int) time.Time {
+	year, month, day := now.Date()
+	// 先落到目标月的 1 号（Date 对越界月份做归一），再钳日。
+	firstOfTarget := time.Date(year, month-time.Month(months), 1, 0, 0, 0, 0, now.Location())
+	lastDay := time.Date(firstOfTarget.Year(), firstOfTarget.Month()+1, 0, 0, 0, 0, 0, now.Location()).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(firstOfTarget.Year(), firstOfTarget.Month(), day,
+		now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), now.Location())
+}
+
 // CleanupAuditLogs 按保留月数清理审计日志，返回删除条数（SPEC §6.5 摘要行数据源）。
 // 失败必须上抛：maintenance-retention 的审计步据此落 failed 终态，且失败轮不得写
 // 「清理完成」（此前失败静默返回 0——任务监控全绿、摘要谎报完成）。
@@ -303,7 +319,7 @@ func CleanupAuditLogs(ctx context.Context) (int, error) {
 		// 保留期口径未知时一条都不删：按更短默认删除是不可逆的证据损失。
 		return 0, monthsErr
 	}
-	cutoff := time.Now().UTC().AddDate(0, -retentionMonths, 0).Format("2006-01-02 15:04:05")
+	cutoff := auditRetentionCutoff(time.Now().UTC(), retentionMonths).Format("2006-01-02 15:04:05")
 	total := 0
 	for {
 		// 每批重读句柄（与指标孤儿清理同源）：nil 时返回可见错误，已删批次

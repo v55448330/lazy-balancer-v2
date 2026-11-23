@@ -93,7 +93,7 @@ func TestEngine_SingletonTriggerRejectedWhileRunning(t *testing.T) {
 func TestEngine_CancelMarksCancelled(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{})
-	e.Register(Descriptor{ID: "t-cancel", Family: "t", Name: "可取消", Kind: KindPeriodic, Cancelable: true,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-cancel", Family: "t", Name: "可取消", Kind: KindPeriodic, Cancelable: true,
 		IntervalFn: func() time.Duration { return time.Hour }, // TASK-L2 配套（Trigger 驱动）
 		Run: func(rc RunContext) error {
 			close(started)
@@ -139,7 +139,7 @@ func TestEngine_RecoverOrphansMarksInterrupted(t *testing.T) {
 func TestEngine_RoleGateSlaveOnlyOnMasterSkips(t *testing.T) {
 	e := newTestEngine(t)
 	var ran atomic.Bool
-	e.Register(Descriptor{ID: "t-role", Family: "t", Name: "从节点任务", Kind: KindPeriodic, RunsOn: RoleSlaveOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-role", Family: "t", Name: "从节点任务", Kind: KindPeriodic, RunsOn: RoleSlaveOnly,
 		IntervalFn: func() time.Duration { return 20 * time.Millisecond },
 		Run:        func(rc RunContext) error { ran.Store(true); return nil }})
 	e.StartLoop("t-role")
@@ -150,6 +150,30 @@ func TestEngine_RoleGateSlaveOnlyOnMasterSkips(t *testing.T) {
 	}
 }
 
+// Given slave-only 任务 + 当前为从节点。
+// When 调度 tick 到期。
+// Then 必须执行（角色门正向分支覆盖，（回归） 全量附录）。
+func TestEngine_RoleGateSlaveOnlyOnSlaveRuns(t *testing.T) {
+	e := newTestEngine(t)
+	ran := make(chan struct{}, 1)
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-role-slave", Family: "t", Name: "从节点任务", Kind: KindPeriodic, RunsOn: RoleSlaveOnly,
+		IntervalFn: func() time.Duration { return 20 * time.Millisecond },
+		Run: func(rc RunContext) error {
+			select {
+			case ran <- struct{}{}:
+			default:
+			}
+			return nil
+		}})
+	e.SetRole(false) // 从节点
+	e.StartLoop("t-role-slave")
+	select {
+	case <-ran:
+	case <-time.After(waitRunCeiling):
+		t.Fatal("从节点上 slave-only 任务必须执行（角色门正向分支）")
+	}
+}
+
 // Given 动态间隔任务(interval=500ms)。
 // When IntervalFn 中途返回 20ms（tick 每轮重读间隔——变更自然生效）。
 // Then 后续按新间隔执行（300ms 内 ≥2 次）。
@@ -157,7 +181,7 @@ func TestEngine_DynamicIntervalReread(t *testing.T) {
 	e := newTestEngine(t)
 	mu := make(chan struct{}, 32)
 	var fast atomic.Bool
-	e.Register(Descriptor{ID: "t-dyn", Family: "t", Name: "动态", Kind: KindPeriodic, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-dyn", Family: "t", Name: "动态", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration {
 			if fast.Load() {
 				return 20 * time.Millisecond
@@ -190,7 +214,7 @@ func TestEngine_DynamicIntervalReread(t *testing.T) {
 func TestEngine_LoopStopStart(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int64
-	e.Register(Descriptor{ID: "t-loop", Family: "t", Name: "常驻", Kind: KindPeriodic, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-loop", Family: "t", Name: "常驻", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { return 20 * time.Millisecond },
 		Run:        func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(true)
@@ -234,7 +258,7 @@ func TestEngine_LoopStopStart(t *testing.T) {
 // Then 历史行含 trigger/status/duration 与 task_id。
 func TestEngine_HistoryRecordShape(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-hist", Family: "t", Name: "历史", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-hist", Family: "t", Name: "历史", Kind: KindOneshot,
 		Run: func(rc RunContext) error { time.Sleep(30 * time.Millisecond); return nil }})
 	if err := e.Trigger("t-hist", "manual", "alice"); err != nil {
 		t.Fatalf("trigger: %v", err)
@@ -265,7 +289,7 @@ func TestEngine_ScheduledFiresAtSlotAndRecomputes(t *testing.T) {
 	var runs atomic.Int32
 	var slot atomic.Value                        // time.Time
 	slot.Store(time.Now().Add(10 * time.Second)) // 远期——slot 翻转前零执行
-	e.Register(Descriptor{ID: "t-sched", Family: "t", Name: "定时", Kind: KindScheduled,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-sched", Family: "t", Name: "定时", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return slot.Load().(time.Time) },
 		Run: func(rc RunContext) error {
 			runs.Add(1)
@@ -308,7 +332,7 @@ func TestEngine_DaemonLifecycle(t *testing.T) {
 	e := newTestEngine(t)
 	var starts atomic.Int32
 	inLoop := make(chan struct{}, 8)
-	e.Register(Descriptor{ID: "t-daemon", Family: "t", Name: "常驻", Kind: KindDaemon,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-daemon", Family: "t", Name: "常驻", Kind: KindDaemon,
 		Run: func(rc RunContext) error {
 			starts.Add(1)
 			inLoop <- struct{}{}
@@ -367,7 +391,7 @@ func TestEngine_DaemonLifecycle(t *testing.T) {
 func TestEngine_PeriodicRecordsEveryCycle(t *testing.T) {
 	e := newTestEngine(t)
 	executed := make(chan struct{}, 64)
-	e.Register(Descriptor{ID: "t-per", Family: "t", Name: "循环", Kind: KindPeriodic,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-per", Family: "t", Name: "循环", Kind: KindPeriodic,
 		IntervalFn: func() time.Duration { return 30 * time.Millisecond },
 		Run:        func(rc RunContext) error { executed <- struct{}{}; return nil }})
 	e.SetRole(true)
@@ -407,7 +431,7 @@ func TestEngine_PeriodicRecordsEveryCycle(t *testing.T) {
 func TestEngine_OneshotOnlyByTrigger(t *testing.T) {
 	e := newTestEngine(t)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-one", Family: "t", Name: "触发", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-one", Family: "t", Name: "触发", Kind: KindOneshot,
 		Run: func(rc RunContext) error { runs.Add(1); return nil }})
 	e.SetRole(true)
 	e.StartLoop("t-one") // 即使开循环开关——Oneshot 不进周期调度
@@ -423,10 +447,10 @@ func TestEngine_OneshotOnlyByTrigger(t *testing.T) {
 	}
 }
 
-// Given 注册的任务带 EnabledFn/StatusFn/NextSlotFn（含 DB 读取）。
+// Given 注册的任务带 StatusFn/NextSlotFn（含 DB 读取）。
 // When DescribeAll 在「跨 goroutine 写者就位」的强制碰撞形态下枚举：
-// EnabledFn 首次调用时暂停在探针点，等写者 goroutine 真实 pending 在引擎
-// 写锁上再放行——若 DescribeAll 持读锁跨 Fn 调用，写者待命会使 EnabledFn 内
+// StatusFn 首次调用时暂停在探针点，等写者 goroutine 真实 pending 在引擎
+// 写锁上再放行——若 DescribeAll 持读锁跨 Fn 调用，写者待命会使 StatusFn 内
 // 的 RLock（IsRunning）永久阻塞（Go RWMutex 写者优先）。同 goroutine 的
 // RLock 嵌套因重入性侦破不了该缺陷形态，故必须跨 goroutine 编排。
 // Then 不自锁；元数据含四类型字段。
@@ -436,7 +460,7 @@ func TestEngine_DescribeAllReleasesLockBeforeFnCalls(t *testing.T) {
 	release := make(chan struct{})
 	var armed, fnLockStuck atomic.Bool
 	armed.Store(true)
-	e.Register(Descriptor{ID: "t-meta", Family: "t", Name: "元数据", Kind: KindScheduled,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-meta", Family: "t", Name: "元数据", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return time.Now().Add(time.Hour) },
 		StatusFn: func() string {
 			if armed.CompareAndSwap(true, false) {
@@ -548,7 +572,7 @@ func TestEngine_TriggerUnknownIDReturnsErrNotFound(t *testing.T) {
 func TestEngine_TriggerRejectsDaemon(t *testing.T) {
 	e := newTestEngine(t)
 	ran := false
-	e.Register(Descriptor{ID: "t-daemon", Family: "t", Name: "常驻", Kind: KindDaemon,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-daemon", Family: "t", Name: "常驻", Kind: KindDaemon,
 		Run: func(rc RunContext) error { ran = true; return nil }})
 	// When/Then：Trigger 返回错误且 Run 不执行（runNow 同步执行——无竞态）
 	if err := e.Trigger("t-daemon", "manual", ""); err == nil {
@@ -563,7 +587,7 @@ func TestEngine_TriggerRejectsDaemon(t *testing.T) {
 // History SELECT 透出；auto/startup 触发（operator 空）落空串。
 func TestEngine_HistoryCarriesOperator(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-op-hist", Family: "t", Name: "历史", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-op-hist", Family: "t", Name: "历史", Kind: KindOneshot,
 		Run: func(rc RunContext) error { return nil }})
 	if err := e.Trigger("t-op-hist", "manual", "alice"); err != nil {
 		t.Fatalf("trigger: %v", err)
@@ -589,7 +613,7 @@ func TestEngine_HistoryCarriesOperator(t *testing.T) {
 // Then 行 started_at 反映真实开始时刻（started_at+duration 不越过 finished_at）。
 func TestEngine_FailedRunStartsAtRealStart(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-fail", Family: "t", Name: "失败", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-fail", Family: "t", Name: "失败", Kind: KindOneshot,
 		Run: func(rc RunContext) error { time.Sleep(100 * time.Millisecond); return errors.New("boom") }})
 	_ = e.Trigger("t-fail", "manual", "")
 	lr := e.LatestRun("t-fail")
@@ -608,7 +632,7 @@ func TestEngine_FailedRunStartsAtRealStart(t *testing.T) {
 func TestEngine_DaemonRoleGateLifecycle(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{}, 8)
-	e.Register(Descriptor{ID: "t-md", Family: "t", Name: "主节点常驻", Kind: KindDaemon, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-md", Family: "t", Name: "主节点常驻", Kind: KindDaemon, RunsOn: RoleMasterOnly,
 		Run: func(rc RunContext) error {
 			started <- struct{}{}
 			<-rc.Ctx.Done()
@@ -661,7 +685,7 @@ func TestEngine_DaemonRoleGateLifecycle(t *testing.T) {
 func TestEngine_DaemonFailureRecordsFailedRow(t *testing.T) {
 	e := newTestEngine(t)
 	booted := make(chan struct{})
-	e.Register(Descriptor{ID: "t-dfail", Family: "t", Name: "异常常驻", Kind: KindDaemon,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-dfail", Family: "t", Name: "异常常驻", Kind: KindDaemon,
 		Run: func(rc RunContext) error {
 			close(booted)
 			time.Sleep(50 * time.Millisecond)
@@ -690,7 +714,7 @@ func TestEngine_DaemonFailureRecordsFailedRow(t *testing.T) {
 func TestEngine_StartLoopConcurrentSingleDaemonStart(t *testing.T) {
 	e := newTestEngine(t)
 	starts := make(chan struct{}, 32)
-	e.Register(Descriptor{ID: "t-race", Family: "t", Name: "并发启动", Kind: KindDaemon,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-race", Family: "t", Name: "并发启动", Kind: KindDaemon,
 		Run: func(rc RunContext) error {
 			starts <- struct{}{}
 			<-rc.Ctx.Done()
@@ -725,7 +749,7 @@ func TestEngine_DaemonRestartBackToBackStartsSecondRun(t *testing.T) {
 	e := newTestEngine(t)
 	starts := make(chan struct{}, 4)
 	block := make(chan struct{})
-	e.Register(Descriptor{ID: "t-rst", Family: "t", Name: "重启", Kind: KindDaemon,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-rst", Family: "t", Name: "重启", Kind: KindDaemon,
 		Run: func(rc RunContext) error {
 			starts <- struct{}{}
 			<-rc.Ctx.Done()
@@ -758,7 +782,7 @@ func TestEngine_CancelHookPathLandsCancelled(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{})
 	hookFired := make(chan struct{}, 1)
-	e.Register(Descriptor{ID: "t-chk", Family: "t", Name: "Hook取消", Kind: KindOneshot, Cancelable: true,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-chk", Family: "t", Name: "Hook取消", Kind: KindOneshot, Cancelable: true,
 		CancelHook: func() bool { hookFired <- struct{}{}; return true },
 		Run: func(rc RunContext) error {
 			close(started)
@@ -789,7 +813,7 @@ func TestEngine_BootSyncTasksRunOnceWithStartupRow(t *testing.T) {
 	e := newTestEngine(t)
 	ran := 0
 	done := make(chan struct{})
-	e.Register(Descriptor{ID: "boot-one", Family: "startup", Name: "启动", Kind: KindOneshot, RunsOn: RoleAny, BootSync: true,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "boot-one", Family: "startup", Name: "启动", Kind: KindOneshot, RunsOn: RoleAny, BootSync: true,
 		Run: func(rc RunContext) error { ran++; close(done); return nil }})
 	e.RunBootSyncTasks()
 	waitForEngineSignal(t, "BootSync 执行", done)
@@ -813,7 +837,7 @@ func TestEngine_DaemonLifecycleHooksRealStartStop(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{}, 1)
 	stopped := make(chan struct{}, 1)
-	e.Register(Descriptor{ID: "hook-d", Family: "t", Name: "挂钩", Kind: KindDaemon,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "hook-d", Family: "t", Name: "挂钩", Kind: KindDaemon,
 		Run: func(rc RunContext) error {
 			started <- struct{}{}
 			<-rc.Ctx.Done()
@@ -846,7 +870,7 @@ func TestEngine_DaemonLifecycleHooksRealStartStop(t *testing.T) {
 // 主节点照常采纳（真实业务态）。
 func TestEngine_StatusMirrorRoleGated(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-mirror", Family: "t", Name: "主镜像", Kind: KindPeriodic, RunsOn: RoleMasterOnly,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-mirror", Family: "t", Name: "主镜像", Kind: KindPeriodic, RunsOn: RoleMasterOnly,
 		IntervalFn: func() time.Duration { return time.Hour },
 		StatusFn:   func() string { return "running" },
 		Run:        func(rc RunContext) error { return nil }})
@@ -884,7 +908,7 @@ func TestEngine_StatusMirrorRoleGated(t *testing.T) {
 func TestEngine_CaddyRestartTriggerWritesStartLine(t *testing.T) {
 	e := newTestEngine(t)
 	setLogDirForTest(t, t.TempDir())
-	e.Register(Descriptor{ID: "t-restart", Family: "startup", Name: "系统配置载入", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-restart", Family: "startup", Name: "系统配置载入", Kind: KindOneshot,
 		Run: func(rc RunContext) error { return nil }})
 
 	if _, err := e.RunSync("t-restart", "caddy-restart", ""); err != nil {
@@ -909,7 +933,7 @@ func TestEngine_TickEvaluatesNextSlotOutsideRegistrationLock(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	var entered atomic.Int32
-	e.Register(Descriptor{ID: "t-slot", Family: "t", Name: "定时", Kind: KindScheduled,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-slot", Family: "t", Name: "定时", Kind: KindScheduled,
 		NextSlotFn: func() time.Time {
 			entered.Store(1)
 			<-release
@@ -966,7 +990,7 @@ func TestEngine_TickEvaluatesIntervalOutsideRegistrationLock(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	var entered atomic.Int32
-	e.Register(Descriptor{ID: "t-int", Family: "t", Name: "循环", Kind: KindPeriodic,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-int", Family: "t", Name: "循环", Kind: KindPeriodic,
 		IntervalFn: func() time.Duration {
 			entered.Store(1)
 			<-release
@@ -1069,7 +1093,7 @@ func TestEngine_StartLoopAfterStopDoesNotStartDaemon(t *testing.T) {
 	// Given：已停止的引擎与一个未启动 daemon。
 	e := newTestEngine(t)
 	var starts atomic.Int32
-	e.Register(Descriptor{ID: "t-stop-start", Family: "t", Name: "停止后启动", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-stop-start", Family: "t", Name: "停止后启动", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(RunContext) error { starts.Add(1); return nil }})
 	e.Stop()
 
@@ -1090,7 +1114,7 @@ func TestEngine_ConcurrentStopStartLoopDoesNotStartDaemon(t *testing.T) {
 	// Given：Stop 与 StartLoop 并发，调用顺序由调度器随机交错。
 	e := newTestEngine(t)
 	var starts atomic.Int32
-	e.Register(Descriptor{ID: "t-stop-race", Family: "t", Name: "停止竞态", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-stop-race", Family: "t", Name: "停止竞态", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error {
 			starts.Add(1)
 			<-rc.Ctx.Done()
@@ -1111,7 +1135,7 @@ func TestEngine_ConcurrentStopStartLoopDoesNotStartDaemon(t *testing.T) {
 func TestEngine_StartDaemonStoppedRollsBackRegistration(t *testing.T) {
 	// Given：已停止引擎和一个已预登记 running/cancel 的注册项。
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-stopped-register", Family: "t", Name: "停止登记", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-stopped-register", Family: "t", Name: "停止登记", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(RunContext) error { return nil }})
 	r := regOf(t, e, "t-stopped-register")
 	ctx, cancel := context.WithCancelCause(context.Background())

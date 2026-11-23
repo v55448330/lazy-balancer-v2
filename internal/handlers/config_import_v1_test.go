@@ -211,8 +211,8 @@ func TestImportV1Config_multiDomainServerNameJoinsWithoutEmptySegments(t *testin
 	if err := db.DB.QueryRow(`SELECT domain FROM lb_rules WHERE name='multi-domain'`).Scan(&domain); err != nil {
 		t.Fatalf("query imported rule: %v", err)
 	}
-	if domain != "a.test, b.test" {
-		t.Fatalf("domain=%q, want %q（逐段剥逗号后拼接，无空段）", domain, "a.test, b.test")
+	if domain != "a.test,b.test" {
+		t.Fatalf("domain=%q, want %q（逐段剥逗号后按 db.CanonicalDomains 规范拼接，无空段）", domain, "a.test,b.test")
 	}
 }
 

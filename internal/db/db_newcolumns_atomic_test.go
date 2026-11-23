@@ -143,3 +143,108 @@ func TestOrderNewColumnKeys_rejectsBackfillKeyWithoutColumn(t *testing.T) {
 		t.Fatalf("已登记 backfill 键不得报错: %v", err)
 	}
 }
+
+// 同表依赖回填只对「本次新增」的列执行：列已存在时回填视为已完成。此前第二趟
+// 不区分新增/存量，无条件重跑——api_keys.api_read_only/mcp_read_only 的回填
+// （=read_only）会在每次启动把用户设置的非对称只读压平（回归）。
+func TestEnsureNewColumns_deferredBackfillRunsOnlyForNewlyAddedColumns(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE probe (id INTEGER PRIMARY KEY, base INTEGER DEFAULT 0, derived INTEGER DEFAULT 0)`); err != nil {
+		t.Fatalf("create probe table: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO probe (id,base,derived) VALUES (1,5,9)`); err != nil {
+		t.Fatalf("seed probe row: %v", err)
+	}
+	columns := map[string]string{
+		"probe.base":    "INTEGER DEFAULT 0",
+		"probe.derived": "INTEGER DEFAULT 0",
+	}
+	backfills := map[string]string{
+		"probe.base":    "UPDATE probe SET base=5",
+		"probe.derived": "UPDATE probe SET derived=base",
+	}
+
+	before := startupMigrationWriteStatements.Load()
+	if err := ensureNewColumns(columns, backfills); err != nil {
+		t.Fatalf("ensureNewColumns: %v", err)
+	}
+
+	// Then 存量列不被回填覆盖（运行期值 9 保留），也不产生写语句。
+	var derived int
+	if err := database.QueryRow(`SELECT derived FROM probe WHERE id=1`).Scan(&derived); err != nil {
+		t.Fatalf("read derived: %v", err)
+	}
+	if derived != 9 {
+		t.Fatalf("derived=%d, want 9（列已存在时不得重跑一次性回填）", derived)
+	}
+	if got := startupMigrationWriteStatements.Load() - before; got != 0 {
+		t.Fatalf("存量列回填写语句=%d, want 0", got)
+	}
+}
+
+// 第二趟裸 DB.Exec 回填必须计入零写口径：否则「二次启动零写」测试看不见重跑
+// 回填，（回归） 这类每启动重写用户值的回归会被静默放过（回归）。
+func TestEnsureNewColumns_deferredBackfillCountsWriteStatement(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE probe (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("create probe table: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO probe (id) VALUES (1)`); err != nil {
+		t.Fatalf("seed probe row: %v", err)
+	}
+	columns := map[string]string{
+		"probe.base":    "INTEGER DEFAULT 0",
+		"probe.derived": "INTEGER DEFAULT 0",
+	}
+	backfills := map[string]string{
+		"probe.base":    "UPDATE probe SET base=5",
+		"probe.derived": "UPDATE probe SET derived=base",
+	}
+
+	before := startupMigrationWriteStatements.Load()
+	if err := ensureNewColumns(columns, backfills); err != nil {
+		t.Fatalf("ensureNewColumns: %v", err)
+	}
+
+	// Then 新列回填生效（derived=base=5），写语句计数 +1（可被零写门观测）。
+	var derived int
+	if err := database.QueryRow(`SELECT derived FROM probe WHERE id=1`).Scan(&derived); err != nil {
+		t.Fatalf("read derived: %v", err)
+	}
+	if derived != 5 {
+		t.Fatalf("derived=%d, want 5（新列回填必须执行）", derived)
+	}
+	if got := startupMigrationWriteStatements.Load() - before; got != 1 {
+		t.Fatalf("新列回填写语句=%d, want 1（裸 Exec 必须计入零写口径）", got)
+	}
+}
+
+// 端到端回归（回归）：升级后重启不得把非对称只读配置压平为 read_only。
+func TestInitialize_restartPreservesAsymmetricAPIReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	preserveDatabaseHandles(t)
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if _, err := DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,api_enabled,read_only,api_read_only,mcp_read_only)
+		VALUES ('asymmetric','hash-asym','lb_sk_asym',1,1,1,1,1,0,1)`); err != nil {
+		t.Fatalf("seed asymmetric api key: %v", err)
+	}
+
+	// When 进程重启（Close → Initialize，走第二趟回填路径）。
+	if err := Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("reinitialize: %v", err)
+	}
+
+	// Then 非对称只读原样保留：REST 可写（api_read_only=0）、MCP 只读=1。
+	var apiRO, mcpRO int
+	if err := DB.QueryRow(`SELECT COALESCE(api_read_only,0), COALESCE(mcp_read_only,0) FROM api_keys WHERE name='asymmetric'`).Scan(&apiRO, &mcpRO); err != nil {
+		t.Fatalf("read api key read-only axes: %v", err)
+	}
+	if apiRO != 0 || mcpRO != 1 {
+		t.Fatalf("api_read_only=%d mcp_read_only=%d, want 0/1（重启不得把非对称只读压平为 read_only）", apiRO, mcpRO)
+	}
+}

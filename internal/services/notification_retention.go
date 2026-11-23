@@ -58,7 +58,9 @@ func NotificationDeliveryRetentionCleanup(ctx context.Context) (NotificationDeli
 		}
 		select {
 		case <-ctx.Done():
-			return result, nil
+			// 取消/关停不是「清理完成」：本轮只删了部分行，必须返回可见错误
+			// （与审计清理同口径），否则任务摘要把中断轮谎报成功。
+			return result, ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -75,7 +77,7 @@ func NotificationDeliveryRetentionCleanup(ctx context.Context) (NotificationDeli
 		}
 		select {
 		case <-ctx.Done():
-			return result, nil
+			return result, ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

@@ -14,6 +14,13 @@ func init() {
 
 	// 通知中心 REST（订阅/投递/设置）响应词条：zh 母本 + en 译文成对。
 	Register("k_20b2245c", "仅管理员可管理通知设置", "Only administrators can manage notification settings")
+	// API Key 接入统计（REST 采集）非管理员 403——与「通知设置」文案区分，
+	// 此前误复用通知设置文案指向无关页面（回归）。
+	Register("k_83dc5539", "仅管理员可查看接入统计", "Only administrators can view access statistics")
+	// 审计日志深翻页 400（i18n 化；此前 fmt.Sprintf 直写中文绕过词条表）。
+	Register("k_c17e3275", "结果过多（超过 %d 页），请使用时间范围/用户/动作筛选缩小范围", "Too many results (more than %d pages); narrow the range by time range, user, or action")
+	// Caddy 生命周期控制（启停/重启）嵌入式装配缺 cfg 的 503 降级文案。
+	Register("k_26fd2037", "服务配置未初始化", "Service configuration is not initialized")
 	Register("k_74125a73", "订阅事件不在目录中: %s", "Subscription event is not in the catalog: %s")
 	Register("k_3ae60346", "订阅级别必须为 info/warn/critical", "Subscription level must be info/warn/critical")
 	Register("k_0d569dd0", "不支持的投递状态过滤: %s", "Unsupported delivery status filter: %s")
@@ -43,8 +50,8 @@ func init() {
 	Register("k_435eb4ab", "仅可测试自己的通知通道", "You can only test your own notification channels")
 	Register("k_8e353bc9", "测试消息发送失败: %s", "Failed to send the test message: %s")
 	Register("k_4bde3724", "测试消息已发送", "Test message sent")
-	Register("k_1d8f5b94", "未知事件组: %s", "Unknown event group: %s")
+	Register("k_9be13c70", "未知事件组: %s", "Unknown event group: %s")
 	// 规则保存：非空通道选择经就绪门清洗后为空（全部已停用/未通过测试/微信会话待刷新）。
 	Register("k_6287f2db", "选定的通知通道均不可用（已停用/未通过测试/微信会话待刷新）", "None of the selected notification channels is available (disabled, not passing the test, or the WeChat session needs to be refreshed)")
-	Register("k_53f42807", "无效规则 ID: %s", "Invalid rule ID: %s")
+	Register("k_958958af", "无效规则 ID: %s", "Invalid rule ID: %s")
 }

@@ -921,6 +921,7 @@ export default {
       'expiredNote': ', of which {count} have expired (removed automatically on save)',
       'headerNameInvalid': 'Header names allow letters, digits and "-" only (1-64 characters); leave empty to match all header values',
       'importDone': 'Import finished: {count} entries imported; they take effect on save',
+      'importDoneWithInvalid': 'Import finished: {count} entries imported; {invalid} invalid lines were skipped (lines {lines})',
       'ipListDeleteConfirm': 'Delete IP address list "{name}"?',
       'ipListSaveConfirm': '{action} IP address list "{name}" ({count} entries{note})?',
       'loadEntriesFailLater': 'Failed to load list entries; please retry later',

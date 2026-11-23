@@ -148,7 +148,9 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		criticalAt = *req.AttackCriticalAt
 		changed = append(changed, notify.KeyAttackCriticalAt)
 	}
-	if warnAt <= 0 || criticalAt <= warnAt {
+	// warn 不得低于 info 起点（否则窗口内先 warn 后 info，级别倒序）；critical
+	// 必须严格高于 warn。写入侧拒绝而非静默抬升——GET 回读与保存值必须一致。
+	if warnAt < notify.MinBlockedWarnAt || criticalAt <= warnAt {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_04f0eea4"), MessageKey: "k_04f0eea4"})
 		return
 	}

@@ -165,6 +165,16 @@ test('C7 备注超过 100 字拒绝导入（带行号报错，不静默截断）
   assert.match(onLoad, /invalidLines\.slice\(0, 10\)\.join/, '非法行必须行号点名')
   assert.match(src, /invalidSuffix/, '重复弹窗必须携带非法行行号（词条键调用）')
   assert.ok(code('src/locales/zh/views.ts').includes('（第 {lines} 行）'), '行号点名原文必须在 zh 母本词条中')
+  // 无重复行但存在非法行：不得只报「成功 N 条」让用户误以为全部导入。
+  assert.match(onLoad, /outcome\.invalidLines\.length > 0/, '无重复分支必须显式处理非法行')
+  assert.match(onLoad, /importDoneWithInvalid/, '非法行必须同一条提示里点名（成功数+非法数+行号）')
+  for (const locale of ['zh', 'en'] as const) {
+    assert.match(
+      code(`src/locales/${locale}/views.ts`),
+      /'importDoneWithInvalid':/,
+      `${locale} 词条必须存在（parity）`,
+    )
+  }
 })
 
 test('C8 JSON 字符串数组统一 trim 并丢弃空项', () => {

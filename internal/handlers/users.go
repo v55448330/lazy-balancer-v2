@@ -576,6 +576,19 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_6e6e79d5"), MessageKey: "k_6e6e79d5"})
 		return
 	}
+	// 通知表随用户连带清理：通道是已删账号仍可继续收安全事件的外部投递面
+	// （投递侧不 JOIN users），订阅行在重建同名账号时会串用旧意志——二者都
+	// 必须在删除事务内一并移除（回归）。投递流水保留：它是
+	// 安全事件留痕，不是可再触达的凭据面。
+	for _, stmt := range []string{
+		"DELETE FROM notification_channels WHERE user_id = ?",
+		"DELETE FROM notification_subscriptions WHERE user_id = ?",
+	} {
+		if _, err := tx.ExecContext(c.Request.Context(), stmt, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_6e6e79d5"), MessageKey: "k_6e6e79d5"})
+			return
+		}
+	}
 	for _, keyID := range cascadeKeyIDs {
 		purgeAPIKeyWhitelistCache(keyID)
 	}

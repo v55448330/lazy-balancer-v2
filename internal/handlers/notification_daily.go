@@ -178,15 +178,17 @@ func (h *Handlers) GetDailyTargets(c *gin.Context) {
 		} `json:"channels"`
 	}
 
+	// LEFT JOIN：无 notification_daily 行=默认启用（与 GetDailyConfig 同口径），
+	// JOIN 会把从未保存过日报配置的用户整行排除，投递目标页与实际调度分叉。
 	query := `SELECT DISTINCT u.id, u.username
 		FROM users u
-		JOIN notification_daily nd ON nd.user_id = u.id
-			AND COALESCE(json_extract(nd.config,'$.enabled'),1)=1`
+		LEFT JOIN notification_daily nd ON nd.user_id = u.id
+		WHERE COALESCE(json_extract(nd.config,'$.enabled'),1)=1`
 	args := []any{}
 	if !admin {
 		// 非管理员只看自己：此前拼了 WHERE 却没传参——Query 缺参恒报错，
 		// 普通用户调用直接 500（「查询日报投递目标失败」）。
-		query += ` WHERE u.id=?`
+		query += ` AND u.id=?`
 		args = append(args, contextUserID(c))
 	}
 	query += ` ORDER BY u.id`

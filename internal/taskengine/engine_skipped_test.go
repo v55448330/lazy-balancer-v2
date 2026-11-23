@@ -56,7 +56,7 @@ func TestTerminalStatusScheduleSlotFailurePrecedesCancellation(t *testing.T) {
 // 任务日志 [done] 行，task_runs.message 恒空，任务历史页丢失「为何跳过」。
 func TestRunNow_skippedRunCarriesSkipReason(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-skip-msg", Family: "t", Name: "跳过留痕", Kind: KindOneshot,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-skip-msg", Family: "t", Name: "跳过留痕", Kind: KindOneshot,
 		Run: func(RunContext) error {
 			return fmt.Errorf("配置降级中，本轮跳过: %w", ErrTaskSkipped)
 		}})

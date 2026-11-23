@@ -236,7 +236,10 @@ func migrateThreatSystemListNames() error {
 			}
 			rows.Close()
 			for _, id := range ids {
-				renamed := fmt.Sprintf("%s（用户 %d）", sl.Name, id)
+				renamed, err := uniqueThreatListRenameTarget(sl.Name, id)
+				if err != nil {
+					return err
+				}
 				if _, err := DB.Exec(`UPDATE security_ip_lists SET name=?, updated_at=datetime('now') WHERE id=?`, renamed, id); err != nil {
 					return fmt.Errorf("rename conflicting user list %d: %w", id, err)
 				}
@@ -275,6 +278,24 @@ func sameThreatListTakeoverFingerprints(a, b map[string]struct{}) bool {
 		}
 	}
 	return true
+}
+
+// uniqueThreatListRenameTarget 为被改名的冲突用户名单生成唯一名称。基础形
+// 「<规范名>（用户 <id>）」本身可能已被占用（用户手造同名/上一次迁移中断的
+// 残留）；system=0 行没有 name 唯一索引，直接落库会产出同名双行，读侧按
+// name 查询重复命中。逐个追加 -2/-3… 直到不再与其它行同名。
+func uniqueThreatListRenameTarget(canonical string, id int64) (string, error) {
+	candidate := fmt.Sprintf("%s（用户 %d）", canonical, id)
+	for dup := 2; ; dup++ {
+		var taken int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=? AND id<>?`, candidate, id).Scan(&taken); err != nil {
+			return "", fmt.Errorf("check rename target %q for user list %d: %w", candidate, id, err)
+		}
+		if taken == 0 {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s（用户 %d-%d）", canonical, id, dup)
+	}
 }
 
 // ThreatListNameBySource 源名 → 名单名（未登记返回空串）。

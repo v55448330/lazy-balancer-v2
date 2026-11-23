@@ -172,4 +172,18 @@ if bash "$gate" "$baseline_entry" "$landing_df" >/dev/null 2>"$work/h3.err"; the
   fail "目录前缀匹配过宽：/opt/bin/ 落点不得让 /usr/local/bin/lazy-balancer 通过"
 fi
 
-echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git / stage-scope / bare-command / pause / copy-landing mutations rejected)"
+# ── I) exec 变量形态不得静默跳过（可注入任意目标逃逸路径清单）──────────
+var_entry="$work/entrypoint-var-exec.sh"
+sed 's|^exec /usr/local/bin/lazy-balancer "\$@"$|exec "$BIN" "$@"|' "$baseline_entry" >"$var_entry"
+if ! grep -q 'exec "\$BIN"' "$var_entry"; then
+  fail "变量 exec 变异注入失败（exec 目标未改写，用例会空转）"
+fi
+if bash "$gate" "$var_entry" "$repo_root/Dockerfile" >/dev/null 2>"$work/i.err"; then
+  fail "exec 变量形态必须判红（旧实现 continue 静默跳过，路径清单对账面空转）"
+fi
+grep -q '不是镜像内绝对路径' "$work/i.err" || {
+  cat "$work/i.err" >&2
+  fail "变量 exec 失败必须点名原因"
+}
+
+echo "startup chain gate selftest ok (baseline pass; syntax / exec-typo / non-git / stage-scope / bare-command / pause / copy-landing / var-exec mutations rejected)"

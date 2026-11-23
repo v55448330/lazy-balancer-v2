@@ -61,7 +61,7 @@ func TestRunBootSyncTasks_roleGateSkipsRoleMismatch(t *testing.T) {
 	e := newTestEngine(t)
 	var ran atomic.Int32
 	release := make(chan struct{})
-	e.Register(Descriptor{ID: "t-bs-any", Family: "t", Name: "对照", Kind: KindOneshot, BootSync: true, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-bs-any", Family: "t", Name: "对照", Kind: KindOneshot, BootSync: true, RunsOn: RoleAny,
 		Run: func(rc RunContext) error { ran.Add(1); close(release); return nil }})
 	e.mu.Lock()
 	e.regs["t-bs-mo"] = &registration{desc: Descriptor{

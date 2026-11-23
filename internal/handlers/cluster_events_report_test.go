@@ -371,6 +371,29 @@ func TestHandleClusterEventReport_carriesOriginalTimeOriginHop(t *testing.T) {
 	}
 }
 
+// 未来时刻不得原样入总线：created_at 落在远未来会让 7 天过期/保留清理永不
+// 命中。parseReportEventTime 按零值返回，Publish 回填当前时刻（回归
+// （回归）。
+func TestHandleClusterEventReport_futureEventTimeClampedToZero(t *testing.T) {
+	withIsolatedGlobal(t)
+	h := newBackupTestHandlers(t)
+	seedClusterNodeForReport(t, 48, "slave-future")
+	var captured []notify.Event
+	oldPublish := clusterEventPublish
+	clusterEventPublish = func(evt notify.Event) { captured = append(captured, evt) }
+	t.Cleanup(func() { clusterEventPublish = oldPublish })
+
+	router := clusterReportRouter(t, h, 48, "/cluster/events/report", h.HandleClusterEventReport)
+	rec := postClusterJSON(router, "/cluster/events/report",
+		`{"node":"slave-future","events":[{"type":"cfg.caddy_apply_failed","time":"2999-01-01T00:00:00Z"}]}`)
+	if rec.Code != http.StatusOK || len(captured) != 1 {
+		t.Fatalf("status=%d captured=%d body=%s", rec.Code, len(captured), rec.Body.String())
+	}
+	if !captured[0].Time.IsZero() {
+		t.Fatalf("未来事件时间=%s, want 零值（Publish 回填当前时刻，避免永不进过期）", captured[0].Time)
+	}
+}
+
 // 节点行查询失败分型：库读故障（非 sql.ErrNoRows）不是「身份未登记」——403
 // 会让从节点把不可自愈的库故障当身份问题处理并停止上报。只破坏 nodes 查询
 // （角色门读 global_config 仍可用），确保断言落在「身份读取分型」而非角色门。

@@ -1828,7 +1828,21 @@ func caddyLifecycleApplyFailureResult(note string) string {
 	return "失败（配置应用未生效）：" + truncateCaddyLifecycleReason(note)
 }
 
+// caddyLifecycleConfigMissing 报告嵌入式/测试装配未注入 cfg 的降级态并写出
+// 503（生产装配恒注入 cfg，故不可达；裸解引用只会在装配缺失时 panic）。
+// 启停/重启都依赖 cfg.CaddyAdminURL，缺失时无法判定控制端点，不能假装成功。
+func (h *Handlers) caddyLifecycleConfigMissing(c *gin.Context) bool {
+	if h.cfg != nil {
+		return false
+	}
+	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_26fd2037"), MessageKey: "k_26fd2037"})
+	return true
+}
+
 func (h *Handlers) StartCaddy(c *gin.Context) {
+	if h.caddyLifecycleConfigMissing(c) {
+		return
+	}
 	// 导入窗口 fast-fail（与 ReloadCaddy 同门，且必须在取 caddyOpMu 之前）：
 	// 导入全程持锁，排队请求会在导入提交后才执行——启停按陈旧意图落地。
 	if rejectWriteDuringImport(c, "启停 Caddy 服务（配置导入进行中）") {
@@ -1857,6 +1871,9 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 }
 
 func (h *Handlers) StopCaddy(c *gin.Context) {
+	if h.caddyLifecycleConfigMissing(c) {
+		return
+	}
 	// Stop 是不可逆的可用性动作（pause 文件同时抑制监督器自愈）：导入窗口内
 	// 排队到导入提交后再停，会在用户以为「还原成功」的时刻中断全部流量。
 	if rejectWriteDuringImport(c, "启停 Caddy 服务（配置导入进行中）") {
@@ -1875,6 +1892,9 @@ func (h *Handlers) StopCaddy(c *gin.Context) {
 }
 
 func (h *Handlers) RestartCaddy(c *gin.Context) {
+	if h.caddyLifecycleConfigMissing(c) {
+		return
+	}
 	if rejectWriteDuringImport(c, "启停 Caddy 服务（配置导入进行中）") {
 		return
 	}

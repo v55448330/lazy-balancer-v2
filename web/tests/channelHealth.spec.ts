@@ -45,11 +45,29 @@ test('其余优先级不受影响：停用/连接离线/会话失效/就绪', ()
   )
   assert.equal(
     channelHealthState({ type: 'wx_clawbot', enabled: true, session_ready: true, last_test_at: '2026-11-22 10:00', last_test_ok: false }),
-    'session_stale',
-    '会话在线但已知测试失败同样提示会话待刷新',
+    'test_failed',
+    '微信会话在线但测试失败=验证失败，不得误导为「会话待刷新」',
   )
   assert.equal(
     channelHealthState({ type: 'wx_clawbot', enabled: true, session_ready: true, last_test_at: '2026-11-22 10:00', last_test_ok: true }),
     'ready',
+  )
+})
+
+test('wx 优先级：会话未就绪优先于测试结果；会话就绪时测试失败=验证失败', () => {
+  // 会话未就绪：即使测试通过也无法主动发送 → 会话待刷新
+  assert.equal(
+    channelHealthState({ type: 'wx_clawbot', enabled: true, session_ready: false, last_test_at: '2026-11-22 10:00', last_test_ok: true }),
+    'session_stale',
+  )
+  // 会话未就绪且测试失败：根因仍是会话（先刷新会话再复测）
+  assert.equal(
+    channelHealthState({ type: 'wx_clawbot', enabled: true, session_ready: false, last_test_at: '2026-11-22 10:00', last_test_ok: false }),
+    'session_stale',
+  )
+  // 会话就绪但测试失败：暴露真实失败原因（不再折叠成「会话待刷新」）
+  assert.equal(
+    channelHealthState({ type: 'wx_clawbot', enabled: true, session_ready: true, last_test_at: '2026-11-22 10:00', last_test_ok: false }),
+    'test_failed',
   )
 })

@@ -22,7 +22,7 @@ func TestEngine_ScheduledStaleSlotFailureBackoff(t *testing.T) {
 	e := newTestEngine(t)
 	pastSlot := time.Now().Add(-time.Minute)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-stale-slot", Family: "t", Name: "早退不推进槽", Kind: KindScheduled,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-stale-slot", Family: "t", Name: "早退不推进槽", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return pastSlot }, // Run 早退不推进槽的形态
 		Run: func(rc RunContext) error {
 			runs.Add(1)
@@ -31,7 +31,8 @@ func TestEngine_ScheduledStaleSlotFailureBackoff(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop("t-stale-slot")
 
-	time.Sleep(350 * time.Millisecond)
+	waitForEngine(t, "首轮失败", 2*time.Second, func() bool { return runs.Load() == 1 })
+	driveTicks(e, 35)
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("350ms 窗口内执行 %d 次, want 1（首档退避必须精确生效）", got)
 	}
@@ -52,7 +53,7 @@ func TestEngine_ScheduledAdvancedSlotFailureNoBackoff(t *testing.T) {
 	var slot atomic.Value
 	slot.Store(time.Now().Add(-time.Second))
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-adv-slot", Family: "t", Name: "失败但推进槽", Kind: KindScheduled,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-adv-slot", Family: "t", Name: "失败但推进槽", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return slot.Load().(time.Time) },
 		Run: func(rc RunContext) error {
 			runs.Add(1)
@@ -67,7 +68,7 @@ func TestEngine_ScheduledAdvancedSlotFailureNoBackoff(t *testing.T) {
 		t.Fatalf("首轮执行次数=%d, want 1", runs.Load())
 	}
 	// 失败但槽已推进——不触发退避也不重投（等效既有「槽推进即不重投」语义）。
-	time.Sleep(350 * time.Millisecond)
+	driveTicks(e, 35)
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("失败但槽已推进不得触发退避/重投, got %d", got)
 	}
@@ -111,7 +112,7 @@ func TestEngine_ScheduledSuccessClearsBackoff(t *testing.T) {
 		t.Fatalf("成功轮未清零退避: streak=%d retry=%v", s.streak, s.retry)
 	}
 	// 成功消费本槽后不得再重投（槽消费语义与本文件首个用例同口径）。
-	time.Sleep(350 * time.Millisecond)
+	driveTicks(e, 35)
 	if got := runs.Load(); got != 2 {
 		t.Fatalf("成功消费本槽后重投：执行 %d 次, want 2", got)
 	}

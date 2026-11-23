@@ -180,7 +180,7 @@ test('CC 卡实时挑战入口：运行态会话而非事件日志回放', () =>
   assert.match(page, /openChallengeLive/, 'CC 卡必须有实时挑战入口')
   assert.doesNotMatch(page, /overview\.cc\.tag/, '右上角静态「挑战 / 封禁」标签应被实时入口替代')
   assert.match(page, /'\/security\/human\/live'/, '必须消费 lbhuman 运行态端点')
-  assert.match(page, /scope: challengeLiveScope\.value/, '必须区分 active/recent 作用域')
+  assert.match(page, /const scope = challengeLiveScope\.value/, '必须区分 active/recent 作用域（发起时快照）')
   assert.match(page, /challengeLiveActiveCount/, '必须显示等待中数量')
   assert.match(page, /remaining_ms/, '必须显示真实 TTL 倒计时')
   assert.match(page, /expires_at_ms/, '必须显示过期时间')
@@ -196,4 +196,14 @@ test('CC 卡实时挑战入口：运行态会话而非事件日志回放', () =>
   assert.match(page, /pass_expires_at_ms/, '已通过行必须显示放行到期时刻')
   assert.match(page, /livePassExpiresAt/, '放行到期文案键')
   assert.match(page, /challenge-live-countdown is-pass/, '放行倒计时用通过色区分等待验证')
+})
+
+test('实时挑战弹框 scope 切换：序号守卫丢弃过期响应（避免旧作用域覆盖新视图）', () => {
+  const page = code('src/views/security/SecurityOverview.vue')
+  const fn = page.slice(page.indexOf('const fetchChallengeLive = async'), page.indexOf('const stopChallengeTimer'))
+  assert.match(page, /let challengeLiveSeq = 0/, '必须有请求序号（模块级）')
+  assert.match(fn, /const seq = \+\+challengeLiveSeq/, '每次取数递增序号')
+  assert.match(fn, /const scope = challengeLiveScope\.value/, '请求作用域快照（响应按发起时作用域判定）')
+  assert.match(fn, /if \(seq !== challengeLiveSeq\) return/, '过期响应必须早退')
+  assert.match(fn, /params: \{ scope \}/, '请求参数用快照 scope（不得请求后再读当前值）')
 })

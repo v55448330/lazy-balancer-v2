@@ -1,7 +1,7 @@
 package services
 
 // taskengine_wire_runtime.go —— 运行期生命周期任务（runtime lifecycle daemons）
-// 的注册与装配：把 6 项曾游离在引擎外的自建循环（metrics 采集/rollup warmer/
+// 的注册与装配：把 7 项曾游离在引擎外的自建循环（metrics 采集/rollup warmer/
 // caddy-restart 监听/限流桶清扫/apikey usage flusher/运行日志阈值 + 时区刷新）
 // 按 task-engine 标准 v2.2 归口为注册任务。唯一许可的执行形态=Daemon +
 // taskengine.RunTicker（或 Periodic）。

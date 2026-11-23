@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/atomicfile"
@@ -177,7 +178,7 @@ func clusterForwardLoop(ch chan clusterForwardJob) {
 				log.Printf("WARN: 集群事件上报被永久拒绝（%v），事件 %s 丢弃", err, job.evt.Type)
 				continue
 			}
-			spoolClusterEvent(job.evt)
+			enqueueClusterForwardSpool(job.evt)
 		}
 	}
 }
@@ -200,6 +201,27 @@ func drainClusterForwardQueueOnStop() {
 			}
 			spoolClusterEvent(job.evt)
 		default:
+			drainClusterForwardSpoolOnStop()
+			return
+		}
+	}
+}
+
+// drainClusterForwardSpoolOnStop 关停时把异步落盘队列剩余事件同步落盘（停机
+// 路径允许阻塞；正常路径调用方恒不触盘）。未起队列时零动作。
+func drainClusterForwardSpoolOnStop() {
+	clusterForwardSpoolMu.RLock()
+	ch := clusterForwardSpoolCh
+	write := clusterForwardSpoolWriter
+	clusterForwardSpoolMu.RUnlock()
+	if ch == nil {
+		return
+	}
+	for {
+		select {
+		case evt := <-ch:
+			write(evt)
+		default:
 			return
 		}
 	}
@@ -221,7 +243,8 @@ func enqueueClusterForward(evt Event, role clusterForwardRoleInfo) {
 	select {
 	case ch <- clusterForwardJob{evt: evt, role: role}:
 	default:
-		spoolClusterEvent(evt) // 队列满：落盘重传（不阻塞事件源、不丢事件）
+		// 队列满：交给异步有界落盘队列（调用方绝不触盘/fsync/spool 扫描）。
+		enqueueClusterForwardSpool(evt)
 	}
 }
 
@@ -437,6 +460,54 @@ func postClusterEventReport(masterURL, token string, report ClusterEventReport) 
 // ── spool：故障兜底（2s 轮询重传，正常路径零轮询）──
 
 const clusterForwardSpoolMaxFiles = 1000 // 上限防御（超限丢最老，事件通知非审计面）
+
+// clusterForwardSpoolQueueSize 落盘队列容量：队列满时 Publish 走此异步有界
+// 通道，而不是在事件源 goroutine 上同步 fsync 两次+扫描 spool（违反「恒
+// 非阻塞」注释；安全事件摄取/登录路径不得被磁盘抖动卡住）。溢出才丢弃计数。
+const clusterForwardSpoolQueueSize = 256
+
+var (
+	clusterForwardSpoolOnce    sync.Once
+	clusterForwardSpoolMu      sync.RWMutex
+	clusterForwardSpoolCh      chan Event
+	clusterForwardSpoolWriter  = spoolClusterEvent // testseam：用例替换为阻塞写验证非阻塞
+	clusterForwardSpoolDropped atomic.Int64
+)
+
+func clusterForwardSpoolQueue() chan Event {
+	clusterForwardSpoolOnce.Do(func() {
+		ch := make(chan Event, clusterForwardSpoolQueueSize)
+		clusterForwardSpoolMu.Lock()
+		clusterForwardSpoolCh = ch
+		clusterForwardSpoolMu.Unlock()
+		go clusterForwardSpoolLoop(ch)
+	})
+	clusterForwardSpoolMu.RLock()
+	defer clusterForwardSpoolMu.RUnlock()
+	return clusterForwardSpoolCh
+}
+
+func clusterForwardSpoolLoop(ch chan Event) {
+	for evt := range ch {
+		clusterForwardSpoolMu.RLock()
+		write := clusterForwardSpoolWriter
+		clusterForwardSpoolMu.RUnlock()
+		write(evt)
+	}
+}
+
+// enqueueClusterForwardSpool 非阻塞落盘入队（调用方恒不触盘）：队列满即丢弃
+// 并计数留痕——事件通知非审计面，宁可丢也不阻塞安全事件摄取。
+func enqueueClusterForwardSpool(evt Event) {
+	ch := clusterForwardSpoolQueue()
+	select {
+	case ch <- evt:
+	default:
+		clusterForwardSpoolDropped.Add(1)
+		log.Printf("WARN: 集群事件落盘队列已满（容量 %d），事件 %s 丢弃（累计 %d）",
+			clusterForwardSpoolQueueSize, evt.Type, clusterForwardSpoolDropped.Load())
+	}
+}
 
 // spoolClusterEvent 主节点不可达时落盘（文件名=纳秒时序，批次单事件）。
 func spoolClusterEvent(evt Event) {

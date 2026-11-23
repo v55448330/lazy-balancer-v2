@@ -724,6 +724,10 @@ type securityEventsMappingsCacheEntry struct {
 	rules      map[string]securityEventsRuleRef
 	bindings   map[string][]int
 	policyByID map[int]*models.SecurityPolicy
+	// 派生匹配器随映射代际缓存：信任并集/CRS 排除只在 (DB, cluster_version)
+	// 变化时重建，避免每 2s 摄取 pass 重读名单并聚合前缀。
+	trustMatcher *securityEventsTrustMatcher
+	crsExclusion map[int]securityEventsPolicyCRSExclusions
 }
 
 var securityEventsMappingsCache = struct {
@@ -893,8 +897,26 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	if err := polRows.Err(); err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: iterate policies: %w", err)
 	}
-	securityEventsMappingsCache.entry = securityEventsMappingsCacheEntry{database: database, version: version, loaded: true, rules: rules, bindings: bindings, policyByID: policyByID}
+	trustMatcher := securityEventsBuildTrustMatcher(bindings, policyByID)
+	crsExclusion := securityEventsBuildCRSExclusionMatcher(policyByID)
+	securityEventsMappingsCache.entry = securityEventsMappingsCacheEntry{
+		database: database, version: version, loaded: true,
+		rules: rules, bindings: bindings, policyByID: policyByID,
+		trustMatcher: trustMatcher, crsExclusion: crsExclusion,
+	}
 	return rules, bindings, policyByID, nil
+}
+
+// securityEventsCachedMatchers 返回当前映射代际的信任/CRS 匹配器。映射装载
+// 已构建并缓存；未命中（理论上只在测试手工清缓存后）按传入快照现场构建。
+func securityEventsCachedMatchers(bindings map[string][]int, policyByID map[int]*models.SecurityPolicy) (*securityEventsTrustMatcher, map[int]securityEventsPolicyCRSExclusions) {
+	securityEventsMappingsCache.Lock()
+	entry := securityEventsMappingsCache.entry
+	securityEventsMappingsCache.Unlock()
+	if entry.loaded && entry.trustMatcher != nil && entry.crsExclusion != nil {
+		return entry.trustMatcher, entry.crsExclusion
+	}
+	return securityEventsBuildTrustMatcher(bindings, policyByID), securityEventsBuildCRSExclusionMatcher(policyByID)
 }
 
 // securityEventsPolicyCRSExclusions 是摄取热路径的排除判定快照：JSON 只在
@@ -2437,8 +2459,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	for _, ref := range rules {
 		rulesByID[ref.caddyID] = ref
 	}
-	trustMatcher := securityEventsBuildTrustMatcher(bindings, policyByID)
-	crsExclusionMatcher := securityEventsBuildCRSExclusionMatcher(policyByID)
+	trustMatcher, crsExclusionMatcher := securityEventsCachedMatchers(bindings, policyByID)
 	// host→rule 映射在 pass 生命周期内稳定（rules/绑定映射本 pass 一次性
 	// 加载）——无注入头事件的逐事件 IDNA（CanonicalDomains 含 punycode
 	// 分配）在积压补采万级事件时是纯重复劳动，pass 内记忆化（map 随
@@ -2551,6 +2572,10 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	}
 	// 攻击流光流批次：与日志事务提交点对齐，回滚路径不喂。
 	var attackFlowBatch []threatScreenAttackFlowItem
+	// 通知副作用与日志事务提交点对齐：拦截聚合/挑战计数/CC 触发必须等到
+	// 本批 commit 成功再执行。行插入成功但提交失败（回滚重放）时，旧实现
+	// 已提前计数——重放会让阈值提前达成/重复 CC 通知。
+	var notifyAfterCommit []func()
 	// 本批光流条目按请求去重键的索引：改判（logged→blocked）时同批条目
 	// 必须原地换 action/规则——否则大屏光流显示「检测」而事件列表显示
 	// 「拦截」。跨批形态已在原 pass 提交，无法回改（见改判分支注释）。
@@ -2575,6 +2600,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 			return err
 		}
 		securityEventsIngestCommits.Add(1)
+		// 提交成功后才触发本批通知副作用（回滚路径不执行、不计数）。
+		for _, fn := range notifyAfterCommit {
+			fn()
+		}
+		notifyAfterCommit = nil
 		passInsertedTotal += batchInserted
 		batchInserted = 0
 		if batchMutatedRows {
@@ -2894,18 +2924,28 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				// entryAutobanAction 记录本行实际喂入的动作（跨 pass 改判决策依据）。
 				entryAutobanAction := autobanFedUnknown
 				if affected == 1 {
-					// 通知挂钩（真实插入才计数；fire-and-forget 不影响摄取）：
+					// 通知挂钩（真实插入才入队；批提交成功后再触发，见
+					// notifyAfterCommit）：
 					//   - blocked=拦截事件 → 拦截聚合；
 					//   - challenged × cc_ 前缀=WAF 侧 evalCC 触发事件 → CC 触发
 					//     （级联抑制/逐 IP 去抖在 notify 包内收敛）。改判升级的
 					//   行不在此路径（dedupe 改判分支），拦截聚合口径=首次落库。
-					if rec.Action == "blocked" {
-						notify.RecordBlockedEvent(rule.name, rec.ClientIP, rec.URI)
-					} else if rec.Action == "challenged" {
-						// 挑战计数进已开启的拦截聚合窗口（规模指标，不单独发通知）。
-						notify.RecordChallengeEvent(rec.RuleTriggered, rec.ClientIP)
-						if strings.HasPrefix(rec.RuleTriggered, "cc_") {
-							notify.PublishCCTriggered(rec.ClientIP, AutobanCCTriggerReasonLabel(strings.TrimPrefix(rec.RuleTriggered, "cc_")))
+					switch rec.Action {
+					case "blocked":
+						ruleName, clientIP, uri := rule.name, rec.ClientIP, rec.URI
+						notifyAfterCommit = append(notifyAfterCommit, func() {
+							notifyRecordBlockedEvent(ruleName, clientIP, uri)
+						})
+					case "challenged":
+						ruleTriggered, clientIP := rec.RuleTriggered, rec.ClientIP
+						notifyAfterCommit = append(notifyAfterCommit, func() {
+							notifyRecordChallengeEvent(ruleTriggered, clientIP)
+						})
+						if strings.HasPrefix(ruleTriggered, "cc_") {
+							reason := AutobanCCTriggerReasonLabel(strings.TrimPrefix(ruleTriggered, "cc_"))
+							notifyAfterCommit = append(notifyAfterCommit, func() {
+								notifyPublishCCTriggered(clientIP, reason)
+							})
 						}
 					}
 					batchMessagesDropped += uint64(rec.messagesDropped)
@@ -3026,6 +3066,14 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 // （nil=未装配，测试/嵌入形态零成本）。钩子在批事务成功提交后同步调用，
 // 实现必须非阻塞。
 var SecurityEventsRowMutatedHook func()
+
+// 摄取通知副作用入口（测试缝：钉住「只在批事务提交成功后触发」——提交失败
+// 重放同一事务不得重复计数/提前 CC）。生产恒为 notify 包实现。
+var (
+	notifyRecordBlockedEvent   = notify.RecordBlockedEvent
+	notifyRecordChallengeEvent = notify.RecordChallengeEvent
+	notifyPublishCCTriggered   = notify.PublishCCTriggered
+)
 
 // securityEventsUpgradeDedupedEvent 把同一请求已落库的检测行改判为拦截
 // 结论：action/评分/触发规则/策略归因整体替换为拦截引擎的值（展示必须自洽

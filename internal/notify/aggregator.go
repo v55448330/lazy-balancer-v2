@@ -15,6 +15,7 @@ package notify
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,10 @@ const (
 	challengeSummaryAt = 50  // 挑战统计：5 分钟 ≥50 次才发摘要（事件本身默认关）
 
 )
+
+// MinBlockedWarnAt 拦截聚合 warn 阈值下限=info 起点。低于它时 warn 会在
+// info 之前触发，同一窗口出现 warn→info 的级别倒序（配置/校验单源）。
+const MinBlockedWarnAt = blockedInfoAt
 
 // blockedThresholdsFn 阈值来源（测试缝；生产=BlockedThresholds，读取
 // notify_settings）。窗口开启时取一次——窗口内配置变更下一窗口生效，
@@ -121,7 +126,50 @@ func RecordChallengeEvent(reason, ip string) {
 		w.challenges++
 	}
 	blockedMu.Unlock()
-	recordChallengeSummary(reason, ip)
+	recordChallengeSummary(challengeReasonLabel(reason), ip)
+}
+
+// challengeReasonLabel 挑战原因展示标签归一：摄取两条路径分别传机器 ID
+// （cc_rps_spike / human_failed / WAF 规则号）与展示名（规则名），直接计数会
+// 让 TOP 原因同时出现两种形态。已知机器 token 映射中文标签，数字规则号加
+// 「规则 」前缀，其余（已是展示名）原样透传。
+func challengeReasonLabel(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
+	}
+	if _, err := strconv.Atoi(reason); err == nil {
+		return "规则 " + reason
+	}
+	if token, ok := strings.CutPrefix(reason, "cc_"); ok {
+		if label := ccChallengeReasonLabel(token); label != "" {
+			return label
+		}
+		return "CC 挑战"
+	}
+	switch reason {
+	case "human_failed":
+		return "人机验证失败"
+	case "human_challenge":
+		return "人机验证挑战"
+	case "cc_rate_reject":
+		return "限流拒绝"
+	}
+	return reason
+}
+
+// ccChallengeReasonLabel CC 触发原因 token → 中文标签（与自动封禁备注同一
+// 词表；notify 包不得反向依赖 services，故在本包维护展示映射）。
+func ccChallengeReasonLabel(token string) string {
+	switch token {
+	case "session_anomaly":
+		return "会话异常"
+	case "rps_spike":
+		return "突刺"
+	case "4xx_ratio":
+		return "4xx激增"
+	}
+	return ""
 }
 
 // recordAutobanInWindow 自动封禁计数（PublishAutobanTriggered 内调用）：

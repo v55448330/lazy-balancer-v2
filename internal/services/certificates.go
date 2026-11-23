@@ -741,6 +741,14 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 			s.timerMu.Unlock()
 			return ErrCertificateQueueInactive
 		}
+		// 规则屏障与登记必须原子：deploymentRetrySchedulable 在锁外判定，
+		// 「判定通过 → 规则被禁用（BlockJobsForRule）→ 这里登记 timer」的
+		// 窗口会把已禁用规则的部署重试留在调度器里（禁用动作的取消扫描已
+		// 错过该 job）。锁内二次确认，命中即拒绝登记。
+		if manager := GetCAQueueManager(); manager != nil && manager.IsRuleBlocked(ruleID) {
+			s.timerMu.Unlock()
+			return ErrCertificateDeploymentRetryBlocked
+		}
 		if previous := s.deploymentTimers[jobID]; previous != nil {
 			previous.canceled = true
 			previous.cancel()
@@ -956,7 +964,11 @@ func (s *CertificateService) resumeDeploymentRetries() {
 	}
 	s.timersPaused = false
 	s.timerMu.Unlock()
-	s.rescanDroppedDeploymentRetries()
+	if rescheduled, err := s.rescanDroppedDeploymentRetries(); err != nil {
+		// 恢复路径没有 task_runs 承载失败态：丢错会让 DB 故障期的补扫静默
+		// 停摆（恢复后仍无重试），必须留可见痕迹（下一周期/Resume 重试）。
+		Logf("warn", "恢复部署重试补扫失败（已重排 %d 项，下一周期重试）: %v", rescheduled, err)
+	}
 }
 
 // deploymentWindowNullSettle：downloaded 行重试窗口为 NULL 时的沉降阈值。

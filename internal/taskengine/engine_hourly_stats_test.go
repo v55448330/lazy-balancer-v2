@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // 内嵌 tzdata：DST 形状用例不依赖宿主 zoneinfo（不得静默 skip）
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -90,7 +91,7 @@ func TestEngine_Stats24hHourlySeries(t *testing.T) {
 	t.Run("DST时区", func(t *testing.T) {
 		berlin, err := time.LoadLocation("Europe/Berlin")
 		if err != nil {
-			t.Skipf("tzdata 不可用，跳过 DST 形状: %v", err)
+			t.Fatalf("加载 Europe/Berlin 失败（time/tzdata 已内嵌）: %v", err)
 		}
 		runHourlySeriesShape(t, berlin)
 	})

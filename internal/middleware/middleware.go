@@ -1667,8 +1667,11 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 		c.Set("api_key_api_enabled", identity.APIEnabled)
 		c.Set("api_key_read_only", readOnly)
 		// 双协议只读：REST 路径看 api_read_only，/mcp 路径看 mcp_read_only
-		//（legacy read_only 保留供 MCP 可见性合并口径）。
-		if strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
+		//（legacy read_only 保留供 MCP 可见性合并口径）。内部 MCP 工具转发
+		//（trustedInternalMCP）是 MCP 调用的执行回合——必须沿用 MCP 轴：
+		// 否则 mcp_read_only=1、api_read_only=0 的 Key 经 tools/call 转发到
+		// REST 后按 API 轴放行，写工具绕过只读（回归）。
+		if strings.HasPrefix(c.FullPath(), "/api/v1/mcp") || trustedInternalMCP {
 			c.Set("api_key_read_only", identity.MCPReadOnly)
 		} else {
 			c.Set("api_key_read_only", identity.APIReadOnly)

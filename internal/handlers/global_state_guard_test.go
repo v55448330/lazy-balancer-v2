@@ -189,6 +189,7 @@ func captureHandlerGlobalSeams() map[string]any {
 		"clusterServiceControlClientFactory": handlerGlobalPointer(clusterServiceControlClientFactory),
 		// 证书任务缝。
 		"cancelCertJob":              handlerGlobalPointer(cancelCertJob),
+		"deleteCertJobPreLockHook":   handlerGlobalPointer(deleteCertJobPreLockHook),
 		"certJobLogPathForRule":      handlerGlobalPointer(certJobLogPathForRule),
 		"createOrRequeueCertJob":     handlerGlobalPointer(createOrRequeueCertJob),
 		"requeueNonTerminalCertJobs": handlerGlobalPointer(requeueNonTerminalCertJobs),

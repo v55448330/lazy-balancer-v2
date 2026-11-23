@@ -58,7 +58,9 @@ export interface NotificationDelivery {
 
 export type NotificationDeliveriesResponse = APIResponse<{ deliveries: NotificationDelivery[]; total: number }>
 
-/** GET /notification/settings（管理员）：secret 只回配置布尔，不回明文。 */
+/** GET /notification/settings（管理员）：secret 只回配置布尔，不回明文。
+ * 形状对齐 internal/handlers/notification_settings.go：QQ/微信凭据不回显
+ * （单源=扫码绑定自动落库），阈值是 int（JSON number）。 */
 interface NotificationSettings {
   smtp: {
     host: string
@@ -69,23 +71,18 @@ interface NotificationSettings {
     tls: boolean
     insecure: boolean
   }
-  qq: {
-    appid: string
-    secret_configured: boolean
-  }
-  wx_bot_cred_configured: boolean
   mcp_enabled: boolean
-  attack_warn_at: string
-  attack_critical_at: string
+  api_enabled: boolean
+  attack_warn_at: number
+  attack_critical_at: number
 }
 
 export type NotificationSettingsResponse = APIResponse<NotificationSettings>
 
 /**
- * PUT /notification/settings 请求体。secret 值留空=不修改（提交时省略键）。
- * TODO(协议-校准): 契约仅定义 GET 形状；PUT 的 secret 键名（pass/secret/wx
- * 凭据键）与 attack_warn_at/attack_critical_at 的写路径语义未定，按 GET 嵌套
- * 同形提交，联调时与 N4 对齐后修正。
+ * PUT /notification/settings 请求体（部分更新：仅出现的键生效）。
+ * secret 值留空=不修改（提交时省略键）。QQ 凭据不走本端点（扫码绑定自动
+ * 落库）；阈值整体校验 0<warn<critical。
  */
 export interface NotificationSettingsPayload {
   smtp?: {
@@ -97,11 +94,10 @@ export interface NotificationSettingsPayload {
     tls?: boolean
     insecure?: boolean
   }
-  qq?: {
-    appid?: string
-    secret?: string
-  }
   mcp_enabled?: boolean
+  api_enabled?: boolean
+  attack_warn_at?: number
+  attack_critical_at?: number
 }
 
 /** GET /notification/mcp/stats（管理员）。 */

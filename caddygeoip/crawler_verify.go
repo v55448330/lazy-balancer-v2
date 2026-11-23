@@ -413,6 +413,10 @@ type crawlerIPRangeSnapshot struct {
 var (
 	crawlerFileCacheMu   sync.Mutex
 	crawlerFileCacheSnap *crawlerIPRangeSnapshot
+	// crawlerFileCacheLoadMu 是 TTL 到期重读的 singleflight：命中快速路径仍
+	// 无锁；未命中者串行进入，等锁期间别人已落定新快照则直接复用——避免
+	// 并发判定各自读 4MiB 文件并解析（360 引擎段全量聚合）。
+	crawlerFileCacheLoadMu sync.Mutex
 )
 
 const crawlerIPListReloadInterval = 10 * time.Minute
@@ -475,6 +479,24 @@ func loadCrawlerIPRangeSnapshot() *crawlerIPRangeSnapshot {
 	crawlerFileCacheMu.Lock()
 	snap := crawlerFileCacheSnap
 	if snap != nil {
+		ttl := crawlerIPListRetryInterval
+		if snap.ok {
+			ttl = crawlerIPListReloadInterval
+		}
+		if now.Sub(snap.loadedAt) <= ttl {
+			crawlerFileCacheMu.Unlock()
+			return snap
+		}
+	}
+	crawlerFileCacheMu.Unlock()
+
+	// singleflight：TTL 到期后并发请求只允许一个真正读盘+解析，其余等锁后
+	// 复用其落定结果（双检在锁内完成）。快速路径（快照仍新鲜）不经过本锁。
+	crawlerFileCacheLoadMu.Lock()
+	defer crawlerFileCacheLoadMu.Unlock()
+	now = time.Now()
+	crawlerFileCacheMu.Lock()
+	if snap := crawlerFileCacheSnap; snap != nil {
 		ttl := crawlerIPListRetryInterval
 		if snap.ok {
 			ttl = crawlerIPListReloadInterval

@@ -82,11 +82,23 @@ func TestRunTicker_returnsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wake := make(chan struct{})
 	done := make(chan struct{})
+	started := make(chan struct{}, 1)
 	go func() {
 		defer close(done)
-		RunTicker(ctx, time.Hour, wake, func(context.Context) {})
+		RunTicker(ctx, time.Hour, wake, func(context.Context) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+		})
 	}()
-	waitForEngine(t, "bootstrap 首跑", 2*time.Second, func() bool { return true })
+	// 必须等 bootstrap 真实执行后再取消——否则取消可能抢在首跑前，
+	// 用例退化为「未启动也能通过」的恒真断言。
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTicker bootstrap 首跑未发生")
+	}
 	cancel()
 	select {
 	case <-done:

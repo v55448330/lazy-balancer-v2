@@ -45,6 +45,8 @@
             type="danger"
             plain
             :loading="disconnectingId === scope.row.session_id"
+            :disabled="writeBlocked"
+            :title="writeBlocked ? authStore.readOnlyMessage : undefined"
             @click="disconnect(scope.row as McpSession)"
           >
             {{ t('app.notification.keysSessions.disconnect') }}
@@ -69,8 +71,10 @@ const { t } = useI18n()
 const authStore = useAuthStore()
 
 const isAdmin = computed(() => authStore.user?.role === 'admin')
-// 会话强制断开是管理员写路径；非管理员固定 ?mine=1 只看自己的会话
-const writeBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
+// 会话强制断开是管理员写路径；非管理员固定 ?mine=1 只看自己的会话。
+// 写门与全站单源：任何只读原因（slave/non-admin/unknown）都不得写入——
+// 此前只挡 slave/unknown，按钮在其它只读态可点、函数静默 return。
+const writeBlocked = computed(() => authStore.readOnlyReason !== null)
 
 const sessions = ref<McpSession[]>([])
 const loading = ref(false)

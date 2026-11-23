@@ -15,7 +15,7 @@ func TestEngine_DaemonAbnormalExitRelaunchesBoundedThenStops(t *testing.T) {
 	e := newTestEngineWithOptions(t, Options{TickInterval: 10 * time.Millisecond,
 		DaemonRestartDelays: []time.Duration{20 * time.Millisecond, 30 * time.Millisecond}})
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-crash", Family: "t", Name: "崩溃常驻", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-crash", Family: "t", Name: "崩溃常驻", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(RunContext) error { runs.Add(1); return errors.New("boom") }})
 
 	e.StartLoop("t-crash")
@@ -62,7 +62,7 @@ func TestEngine_DaemonManualRestartResetsAbnormalBudget(t *testing.T) {
 	e := newTestEngineWithOptions(t, Options{TickInterval: 10 * time.Millisecond,
 		DaemonRestartDelays: []time.Duration{20 * time.Millisecond}})
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-crash2", Family: "t", Name: "崩溃常驻2", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-crash2", Family: "t", Name: "崩溃常驻2", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(RunContext) error { runs.Add(1); return errors.New("boom") }})
 	e.StartLoop("t-crash2")
 	deadline := time.Now().Add(3 * time.Second)
@@ -99,7 +99,7 @@ func TestEngine_DaemonRearmAfterStopStartsFreshRestartBudget(t *testing.T) {
 		DaemonRestartDelays: []time.Duration{20 * time.Millisecond}})
 	var runs atomic.Int32
 	const id = "t-rearm-fresh-budget"
-	e.Register(Descriptor{ID: id, Family: "t", Name: "唤醒后新预算", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: id, Family: "t", Name: "唤醒后新预算", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(RunContext) error { runs.Add(1); return errors.New("boom") }})
 
 	e.StartLoop(id)
@@ -128,7 +128,7 @@ func TestEngine_DaemonAbnormalExitRechecksCtxBeforeBudget(t *testing.T) {
 	var runs atomic.Int32
 	release := make(chan struct{})
 	entered := make(chan struct{})
-	e.Register(Descriptor{ID: "t-crash-demote", Family: "t", Name: "崩溃×降级常驻", Kind: KindDaemon,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-crash-demote", Family: "t", Name: "崩溃×降级常驻", Kind: KindDaemon,
 		RunsOn: RoleMasterOnly, RestartOnRoleFlip: true,
 		Run: func(rc RunContext) error {
 			runs.Add(1)
@@ -165,10 +165,10 @@ func TestEngine_DaemonAbnormalExitRechecksCtxBeforeBudget(t *testing.T) {
 // 任务元数据，不得让任务监控整页 500（修复前裸调 Ever*/NextSlot/EnabledFn）。
 func TestEngine_MetadataFnPanicIsolated(t *testing.T) {
 	e := newTestEngine(t)
-	e.Register(Descriptor{ID: "t-meta-panic", Family: "t", Name: "元数据 panic", Kind: KindPeriodic, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-meta-panic", Family: "t", Name: "元数据 panic", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { panic("interval panic") },
 		Run:        func(RunContext) error { return nil }})
-	e.Register(Descriptor{ID: "t-meta-slot-panic", Family: "t", Name: "槽 panic", Kind: KindScheduled, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-meta-slot-panic", Family: "t", Name: "槽 panic", Kind: KindScheduled, RunsOn: RoleAny,
 		NextSlotFn: func() time.Time { panic("slot panic") },
 		Run:        func(RunContext) error { return nil }})
 

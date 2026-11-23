@@ -29,7 +29,7 @@ func TestEngine_DaemonCrashRowCountsIn24hWindow(t *testing.T) {
 		DaemonRestartDelays: []time.Duration{time.Hour}})
 	booted := make(chan struct{})
 	crashed := make(chan struct{})
-	e.Register(Descriptor{ID: "t-longcrash", Family: "t", Name: "长运行崩溃常驻", Kind: KindDaemon, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-longcrash", Family: "t", Name: "长运行崩溃常驻", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(RunContext) error {
 			close(booted)
 			<-crashed

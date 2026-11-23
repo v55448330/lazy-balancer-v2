@@ -45,6 +45,12 @@ var deleteCertJobPreDisableHook func(jobID int)
 // 之前触发，用于模拟「行在删除窗口内被并发移离 disabled」。
 var deleteCertJobPreRestoreHook func(jobID int)
 
+// deleteCertJobPreLockHook 是测试专用钩子：在 DeleteCertJob 取得 caddyOpMu
+// 之前触发。并发用例用它在「即将取锁」处确定性停驻删除请求，替代固定的
+// 墙钟等待（慢机上删除 goroutine 可能在 300ms 内还没跑到锁，导致负向断言
+// 假通过/假失败，（回归）。
+var deleteCertJobPreLockHook func(jobID int)
+
 // certJobLogPathForRule 解析规则的任务日志路径（测试缝：镜像 cancelCertJob 的
 // var 先例，测试可重定向到临时目录；生产恒为 services.CertJobLogPath）。
 var certJobLogPathForRule = services.CertJobLogPath
@@ -871,6 +877,9 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	// →删除 全程（与 EnableRule 的互斥域不变，翻转与 DELETE 仍同一临界区）；
 	// 在途取消等待（qm.CancelJob ≤30s）移出临界区（见下方取消点注释），
 	// 本函数按「标志 + defer 闭包」释放，见下。
+	if deleteCertJobPreLockHook != nil {
+		deleteCertJobPreLockHook(id)
+	}
 	h.caddyOpMu.Lock()
 	// 释放走「标志 + defer 闭包」：临界区内有 9 个显式出口（404/409/500 各态）
 	// 与一处失败恢复重取锁，纯手动配对时任何一个新增出口忘写 Unlock 都会把

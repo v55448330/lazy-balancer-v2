@@ -21,7 +21,7 @@
       <div v-if="autobanStatusError" class="info-note-bar autoban-warn-bar">
         <span class="info-note-desc">{{ t('app.security.events.statusLoadFail') }}</span>
       </div>
-      <div v-else-if="autobanBlockedReason" class="info-note-bar">
+      <div v-else-if="!autobanStatusLoading && autobanBlockedReason" class="info-note-bar">
         <span class="info-note-desc">{{ autobanBlockedReason }}</span>
       </div>
       <div class="autoban-bar">

@@ -36,10 +36,11 @@ func configuredRequestBodyBytes() int64 {
 }
 
 // guardConfiguredJSONBody 与 guardAuthJSONBody 同构：ContentLength 预检 413 +
-// MaxBytesReader 包装 + **预读一次 body**（chunked/未知长度超限只能在读时
-// 发现：留给调用方的 ShouldBindJSON 会把超限错误一并折成 400，与预检 413
-// 文案分叉）。预读失败即回 413/400 并中止；成功则回填 body 供 binding 照常
-// 消费。上限取「请求体大小」配置项，供未设独立上限的写/读探测端点统一使用；
+// MaxBytesReader 包装。只有 **长度未知**（chunked/ContentLength<0）时才预读
+// 一次 body——那类请求的超限只能在读时发现，留给调用方的 ShouldBindJSON 会把
+// 超限错误折成 400，与预检 413 文案分叉；已知长度且未超限时直接交给 binding
+// 流式读取，不再把整个（可达 128MB）body 预读进内存（2026-11 全量附录 P3）。
+// 上限取「请求体大小」配置项，供未设独立上限的写/读探测端点统一使用；
 // 返回 false 时调用方立即 return。
 func guardConfiguredJSONBody(c *gin.Context) bool {
 	limit := configuredRequestBodyBytes()
@@ -48,6 +49,11 @@ func guardConfiguredJSONBody(c *gin.Context) bool {
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+	if c.Request.ContentLength >= 0 {
+		// 已知长度且通过预检：MaxBytesReader 仍是上限兜底（Content-Length 可
+		// 撒谎），但无需预读——body 由调用方 binding 正常流式消费。
+		return true
+	}
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError

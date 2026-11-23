@@ -640,6 +640,9 @@ const challengeLiveError = ref(false)
 const challengeLiveUpdated = ref('')
 const challengeAutoRefresh = ref(true)
 let challengeLiveTimer: ReturnType<typeof setInterval> | undefined
+// 请求序号：active/recent 切换或关闭后，旧作用域的迟到响应不得覆盖新视图。
+let challengeLiveSeq = 0
+let challengeLiveInFlightScope: 'active' | 'recent' | null = null
 
 const challengeStatusTone = (row: ChallengeEvent): 'primary' | 'success' | 'danger' | 'info' => {
   if (row.status === 'passed') return 'success'
@@ -668,21 +671,31 @@ const formatLiveAttempts = (row: ChallengeEvent): string => row.max_attempts > 1
   ? `${row.attempts}/${row.max_attempts}`
   : String(row.attempts)
 const fetchChallengeLive = async (): Promise<void> => {
-  if (challengeLiveLoading.value) return
+  // 作用域快照：参数与响应归属都按发起时的值判定。切换 scope 时若上一个
+  // 同 scope 请求仍在途则合并（单飞），否则新开序号让旧响应过期。
+  const scope = challengeLiveScope.value
+  if (challengeLiveLoading.value && challengeLiveInFlightScope === scope) return
+  const seq = ++challengeLiveSeq
+  challengeLiveInFlightScope = scope
   challengeLiveLoading.value = true
   try {
     const res = await request.get<APIResponse<{ now_ms: number; active_count: number; sessions: ChallengeEvent[] }>>('/security/human/live', {
-      params: { scope: challengeLiveScope.value },
+      params: { scope },
       silent: true,
     })
+    if (seq !== challengeLiveSeq) return
     challengeEvents.value = res.data?.sessions || []
     challengeLiveActiveCount.value = res.data?.active_count || 0
     challengeLiveUpdated.value = formatChartTimeInConfigTz(Date.now())
     challengeLiveError.value = false
   } catch {
+    if (seq !== challengeLiveSeq) return
     challengeLiveError.value = true
   } finally {
-    challengeLiveLoading.value = false
+    if (seq === challengeLiveSeq) {
+      challengeLiveLoading.value = false
+      challengeLiveInFlightScope = null
+    }
   }
 }
 const stopChallengeTimer = () => {
@@ -704,7 +717,14 @@ const openChallengeLive = () => {
 }
 const onChallengeVisibleChange = (visible: boolean) => {
   challengeLiveVisible.value = visible
-  if (visible) void fetchChallengeLive()
+  if (visible) {
+    void fetchChallengeLive()
+  } else {
+    // 关闭弹框：作废在途响应，避免迟到帧写回已关闭视图的计数/列表。
+    challengeLiveSeq++
+    challengeLiveInFlightScope = null
+    challengeLiveLoading.value = false
+  }
   syncChallengeTimer()
 }
 

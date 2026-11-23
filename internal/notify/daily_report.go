@@ -247,7 +247,15 @@ func SaveDailyConfig(cfg DailyConfig) error {
 // 与任务页「立即执行」不带标记=立即全员强发，不受槽约束。
 // 返回渲染成功的用户数。
 func DeliverDailyForAll(ctx context.Context, now time.Time) (int, error) {
-	rows, err := db.DB.Query(`SELECT user_id FROM notification_daily WHERE COALESCE(json_extract(config,'$.enabled'),1)=1`)
+	// 无 notification_daily 行=GetDailyConfig 默认「启用+09:00」：调度候选必须
+	// 与读侧默认一致，否则界面显示启用而定时日报永不发送。有显式行的用户
+	// 仍按其 enabled 过滤；无行用户按默认启用纳入。
+	rows, err := db.DB.Query(`SELECT nd.user_id FROM notification_daily nd
+		WHERE COALESCE(json_extract(nd.config,'$.enabled'),1)=1
+		UNION
+		SELECT u.id FROM users u
+		WHERE NOT EXISTS (SELECT 1 FROM notification_daily nd2 WHERE nd2.user_id=u.id)
+		ORDER BY 1`)
 	if err != nil {
 		return 0, err
 	}
@@ -415,7 +423,11 @@ func dailyValues(data DailyData) map[string]string {
 // NextSlotFn 的槽集合来源。
 func AllDailySendTimes() ([]string, error) {
 	rows, err := db.DB.Query(`SELECT DISTINCT COALESCE(json_extract(config,'$.send_time'),'09:00')
-		FROM notification_daily WHERE COALESCE(json_extract(config,'$.enabled'),1)=1 ORDER BY 1`)
+		FROM notification_daily WHERE COALESCE(json_extract(config,'$.enabled'),1)=1
+		UNION
+		SELECT '09:00' FROM users u
+		WHERE NOT EXISTS (SELECT 1 FROM notification_daily nd WHERE nd.user_id=u.id)
+		ORDER BY 1`)
 	if err != nil {
 		return nil, err
 	}

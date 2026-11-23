@@ -147,6 +147,11 @@ func BlockedThresholds() (warnAt, criticalAt int) {
 	if c, err := strconv.Atoi(m[KeyAttackCriticalAt]); err == nil && c > 0 {
 		criticalAt = c
 	}
+	// warn 低于 info 起点会让同一窗口先 warn 后 info（级别倒序）：抬到 info
+	// 起点；抬升后 critical 不再高于 warn 则整体回落内置默认。
+	if warnAt < blockedInfoAt {
+		warnAt = blockedInfoAt
+	}
 	if criticalAt <= warnAt {
 		return blockedWarnAt, blockedCriticalAt
 	}

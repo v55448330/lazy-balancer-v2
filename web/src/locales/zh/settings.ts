@@ -847,6 +847,8 @@ export default {
           "wed": "周三",
           "thu": "周四",
           "fri": "周五",
+          "sat": "周六",
+          "sun": "周日",
           "subtitle": "定时将配置备份到服务器 backup 目录（仅主节点）",
           "enable": "启用",
           "enableHint": "调度器仅主节点运行；主从切换后自动开始，无需重启进程",

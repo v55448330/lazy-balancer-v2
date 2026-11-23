@@ -484,6 +484,7 @@ func TestDeleteCertJob_allows_issued_job_when_rule_not_auto_renewing(t *testing.
 }
 
 func TestDeleteCertJob_aborts_when_rule_reenabled_during_delete(t *testing.T) {
+	withIsolatedGlobal(t)
 	// TOCTOU：守卫读到 enabled=0 放行后 EnableRule（持
 	// caddyOpMu）完成启用，删除照常执行 → 规则无任务行、续签永久断链。
 	// 修复：守卫检查与状态翻转/删除全程持 caddyOpMu 与 EnableRule 互斥——
@@ -497,8 +498,19 @@ func TestDeleteCertJob_aborts_when_rule_reenabled_during_delete(t *testing.T) {
 	}
 	router := gin.New()
 	router.DELETE("/jobs/:id", h.DeleteCertJob)
-	// 模拟 EnableRule 临界区进行中：持 caddyOpMu，删除请求必须排队等待
+	// 模拟 EnableRule 临界区进行中：持 caddyOpMu，删除请求必须排队等待。
+	// 用 pre-lock 钩子把删除 goroutine 确定性停在取锁之前，替代固定的
+	// 300ms 墙钟窗口——慢机上 goroutine 可能还没跑到锁，负向断言会假通过
+	//（回归）。
 	h.caddyOpMu.Lock()
+	preLockReached := make(chan struct{})
+	allowAcquire := make(chan struct{})
+	oldHook := deleteCertJobPreLockHook
+	deleteCertJobPreLockHook = func(int) {
+		close(preLockReached)
+		<-allowAcquire
+	}
+	t.Cleanup(func() { deleteCertJobPreLockHook = oldHook })
 	responses := make(chan int, 1)
 	go func() {
 		response := httptest.NewRecorder()
@@ -506,17 +518,20 @@ func TestDeleteCertJob_aborts_when_rule_reenabled_during_delete(t *testing.T) {
 		responses <- response.Code
 	}()
 	select {
-	case code := <-responses:
+	case <-preLockReached:
+	case <-time.After(5 * time.Second):
 		h.caddyOpMu.Unlock()
-		t.Fatalf("删除未与 EnableRule 临界区互斥，提前完成 status=%d", code)
-	case <-time.After(300 * time.Millisecond):
+		t.Fatal("删除请求未到达取锁点（夹具前置失败）")
 	}
-	// EnableRule 完成：规则转为启用后释放临界区
+	// 此刻删除仍停在锁外；EnableRule 完成：规则转为启用后释放临界区，
+	// 随后放行删除 goroutine 去取锁（它必须复核到 enabled=1 并 409）。
 	if _, err := db.DB.Exec("UPDATE lb_rules SET enabled=1 WHERE caddy_id='lb_race'"); err != nil {
 		h.caddyOpMu.Unlock()
+		close(allowAcquire)
 		t.Fatal(err)
 	}
 	h.caddyOpMu.Unlock()
+	close(allowAcquire)
 	// Then：守卫复核到 enabled=1 必须 409，任务行保留
 	select {
 	case code := <-responses:
@@ -1288,10 +1303,11 @@ func TestDeleteCertJob_recoveryKeepsCanonicalLockOrder(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("并发方未取得 caddyOpMu（夹具前置失败）")
 	}
-	// 给 T2 足够时间排到桶锁上——修复前 T1 解阻后会在此反向取 caddyOpMu。
-	// 这是负面条件的夹具窗口（T2 尚未排队时只会削弱断言，不会误红），
-	// 留 2s 余量以适应负载较高的 CI/并行测试（墙钟上界放宽，不改变锁序判定）。
-	time.Sleep(2 * time.Second)
+	// 无需再等 T2 排到桶锁：secondEntered 已保证 T2 持有 caddyOpMu。修复前
+	// T1 会持 operationLock 反向取 caddyOpMu → 等 T2；T2 的 lock.Lock() 再等
+	// T1 → 必然死锁（与 T2 何时调用 lock.Lock() 无关）。修复后 T1 先释放
+	// operationLock，T2 得以完成并释放 caddyOpMu。固定的 2s 墙钟窗口因此
+	// 删除（慢机不退化，（回归）。
 	close(allowCancelReturn)
 
 	select {

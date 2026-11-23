@@ -847,6 +847,8 @@ export default {
           "wed": "Wed",
           "thu": "Thu",
           "fri": "Fri",
+          "sat": "Sat",
+          "sun": "Sun",
           "subtitle": "Back up configuration to the server's backup directory on a schedule (master only)",
           "enable": "Enabled",
           "enableHint": "The scheduler runs on the master only; after a master/standby switch it starts automatically — no process restart",

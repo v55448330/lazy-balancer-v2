@@ -314,7 +314,8 @@ func TestEngine_ScheduledSkippedSlotGetsBoundedBackoff(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop("t-skip-slot")
 
-	time.Sleep(350 * time.Millisecond)
+	waitForEngine(t, "首轮跳过落定", 2*time.Second, func() bool { return runs.Load() == 1 })
+	driveTicks(e, 35)
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("350ms 窗口内执行 %d 次, want 1（跳过轮须共用首档退避）", got)
 	}

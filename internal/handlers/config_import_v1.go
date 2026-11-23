@@ -381,6 +381,18 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 			warnings = append(warnings, fmt.Sprintf("规则 %s 的域名为空，已跳过导入", f.ProxyName))
 			continue
 		}
+		// 落库前把域名归一为规范形式（小写/punycode/去重/逗号无空格）：v1 导入
+		// 是唯一未走 db.CanonicalDomains 的规则写入口，大小写/IDN 变体入库后
+		// 在下次重启执行 migrateCanonicalDomains 前破坏库内域名不变量
+		//（回归）。非法形态（含通配）与既有软跳过同口径。
+		if rule.Protocol == "http" {
+			canonicalDomain, err := db.CanonicalDomains(rule.Domain)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 的域名 %q 无效，已跳过导入: %v", f.ProxyName, f.ServerName, err))
+				continue
+			}
+			rule.Domain = canonicalDomain
+		}
 		if rule.HealthFails <= 0 {
 			rule.HealthFails = db.DefaultHealthCheckUnhealthyThreshold
 		}

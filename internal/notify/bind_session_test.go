@@ -181,6 +181,14 @@ func TestEnumerateFreshBindSecretOverridesStaleGlobal(t *testing.T) {
 	t.Cleanup(clearBindSessions)
 	seedQQGlobalCred(t, "APP_SAME", "SECRET_OLD")
 	StartBindSessionWithCred(7, "qq", "oSame", "APP_SAME", "SECRET_NEW")
+	// 同名 appid 只在绑定会话确认后才允许覆盖全局凭据：未确认就覆盖会让
+	// 在线 bot 被重建会话（扫码期间入站断流）。未确认形态见
+	// TestPendingQQCredDoesNotOverrideExistingBotBeforeConfirm。
+	bindSessionMu.Lock()
+	for _, s := range bindSessions {
+		s.Phase = "confirmed"
+	}
+	bindSessionMu.Unlock()
 	bots := qqEnumerateBots()
 	if len(bots) == 0 || bots[0].AppID != "APP_SAME" {
 		t.Fatalf("首 bot 应为全局 APP_SAME, got %+v", bots)

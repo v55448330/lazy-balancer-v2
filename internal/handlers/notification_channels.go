@@ -107,6 +107,9 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 		if r.UserID != uid {
 			r.Target = maskChannelTarget(r.Type, r.Target)
 			r.TargetMasked = true
+			// headers 里的 Authorization/X-Api-Key 同样是凭据：只掩码 target
+			// 会让管理员排障视图直接读出他人 webhook token。
+			r.StyleConfig = maskChannelStyleHeaders(r.StyleConfig)
 		}
 		out = append(out, r)
 	}
@@ -128,6 +131,77 @@ func maskChannelTarget(typ, target string) string {
 		}
 		return "***"
 	}
+}
+
+// styleSensitiveHeaders 需要跨属主掩码的请求头：认证/密钥类（含 X-* 自定义）
+// 全部视为凭据；内容协商类保留原值供排障识别请求形态。
+func styleHeaderSensitive(name string) bool {
+	switch strings.ToLower(name) {
+	case "content-type", "accept", "user-agent", "cache-control":
+		return false // 内容协商类：无凭据，保留供排障识别
+	}
+	return true // Authorization/X-Api-Key/X-* 自定义头均可能携带 token
+}
+
+// maskChannelStyleHeaders 非属主视角的 style_config 脱敏：仅掩码 headers
+// 值（Authorization/X-Api-Key 等凭据原样返回=管理员排障读走 token）。
+func maskChannelStyleHeaders(styleJSON string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(styleJSON), &m) != nil {
+		return styleJSON
+	}
+	headers, ok := m["headers"].(map[string]any)
+	if !ok || len(headers) == 0 {
+		return styleJSON
+	}
+	for k, v := range headers {
+		if !styleHeaderSensitive(k) {
+			continue
+		}
+		if s, ok := v.(string); ok && s != "" {
+			headers[k] = "***"
+		}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return styleJSON
+	}
+	return string(b)
+}
+
+// restoreMaskedStyleHeaders 旧前端把列表里的掩码值当真实值回写时，用既有
+// style_config 还原被掩码的头值（与服务端 target 回写兜底同纪律：前端版本
+// 不得决定数据安全/完整性）。
+func restoreMaskedStyleHeaders(raw json.RawMessage, current string) json.RawMessage {
+	var sub, cur map[string]any
+	if json.Unmarshal(raw, &sub) != nil || json.Unmarshal([]byte(current), &cur) != nil {
+		return raw
+	}
+	subHeaders, ok := sub["headers"].(map[string]any)
+	if !ok {
+		return raw
+	}
+	curHeaders, ok := cur["headers"].(map[string]any)
+	if !ok {
+		return raw
+	}
+	restored := false
+	for k, v := range subHeaders {
+		if s, ok := v.(string); ok && s == "***" {
+			if prev, ok := curHeaders[k].(string); ok && prev != "" {
+				subHeaders[k] = prev
+				restored = true
+			}
+		}
+	}
+	if !restored {
+		return raw
+	}
+	b, err := json.Marshal(sub)
+	if err != nil {
+		return raw
+	}
+	return b
 }
 
 // targetContainsMaskedValue 提交的 target JSON 中是否有字符串值等于脱敏串
@@ -315,8 +389,8 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	uid := contextUserID(c)
 	admin := isAdminRequest(c)
 	var owner int64
-	var typ, name, currentTarget string
-	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget); err != nil {
+	var typ, name, currentTarget, currentStyle string
+	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,''), COALESCE(style_config,'{}') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget, &currentStyle); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
 		return
 	}
@@ -342,6 +416,9 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	normalizedStyle := ""
 	hasStyle := false
 	if len(req.StyleConfig) > 0 {
+		// 列表对非属主掩码 headers 值：旧前端原样回写时还原既有真实值，
+		// 避免把 "***" 写进 Authorization 破坏投递。
+		req.StyleConfig = restoreMaskedStyleHeaders(req.StyleConfig, currentStyle)
 		normalized, err := validateChannelStyle(typ, req.StyleConfig)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})

@@ -82,16 +82,19 @@ export function useRecidivismList(fetchPage: RecidivismFetch) {
   // 显式 fetch。避免「显式 fetch + watch 再 fetch」的双发。
   // ipQuery 复位会触发防抖 watch——用 suppressIpReset 标记抑制这次冗余防抖
   // 取数（复位取数已由 [hidePermanent,page,pageSize] watch / 显式 fetch 承载）。
+  // 判据只看结构筛选（hidePermanent/page）：仅搜索词变化的会话重开时结构
+  // watch 不触发，必须走显式 fetch——旧判据把 ipQuery 变化也算「已由 watch
+  // 承载」，叠加 suppressIpReset 后既不取数也不清旧结果（列表停留在旧行）。
   // watch 为 pre-flush 异步回调，标记由回调消费（非同步块）。
   let suppressIpReset = false
   const open = (): void => {
-    const changed = hidePermanent.value !== true || ipQuery.value !== '' || page.value !== 1
+    const structuralChanged = hidePermanent.value !== true || page.value !== 1
     if (ipQuery.value !== '') suppressIpReset = true
     hidePermanent.value = true
     ipQuery.value = ''
     page.value = 1
     clearTimeout(ipDebounce) // 丢弃复位前在途的键击防抖
-    if (!changed) void fetchRecords()
+    if (!structuralChanged) void fetchRecords()
   }
 
   // 筛选/翻页/改页大小携参重取；筛选变化先回首页。watch 默认 pre-flush

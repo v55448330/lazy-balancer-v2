@@ -21,7 +21,7 @@ func TestEngine_EnabledFnFalseSkipsPeriodicScheduling(t *testing.T) {
 	e := newTestEngine(t)
 	var enabled atomic.Bool
 	ran := make(chan struct{}, 4)
-	e.Register(Descriptor{ID: "t-enp", Family: "t", Name: "业务门周期", Kind: KindPeriodic, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-enp", Family: "t", Name: "业务门周期", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { return 20 * time.Millisecond },
 		EnabledFn:  func() bool { return enabled.Load() },
 		Run: func(rc RunContext) error {
@@ -33,7 +33,7 @@ func TestEngine_EnabledFnFalseSkipsPeriodicScheduling(t *testing.T) {
 		}})
 	e.StartLoop("t-enp")
 	// 形状①：业务关——数百毫秒 tick 内零执行零 task_runs（曾空转落行）
-	time.Sleep(300 * time.Millisecond)
+	driveTicks(e, 30)
 	if n := countRuns(t, "t-enp"); n != 0 {
 		t.Fatalf("EnabledFn=false 期间不得调度落行，got %d 行", n)
 	}
@@ -58,7 +58,7 @@ func TestEngine_EnabledFnFalseSkipsScheduledScheduling(t *testing.T) {
 	e := newTestEngine(t)
 	var enabled atomic.Bool
 	ran := make(chan struct{}, 4)
-	e.Register(Descriptor{ID: "t-ens", Family: "t", Name: "业务门定时", Kind: KindScheduled, RunsOn: RoleAny,
+	mustRegisterTaskForTest(t, e, Descriptor{ID: "t-ens", Family: "t", Name: "业务门定时", Kind: KindScheduled, RunsOn: RoleAny,
 		NextSlotFn: func() time.Time { return time.Now().Add(-time.Hour) },
 		EnabledFn:  func() bool { return enabled.Load() },
 		Run: func(rc RunContext) error {
@@ -69,7 +69,7 @@ func TestEngine_EnabledFnFalseSkipsScheduledScheduling(t *testing.T) {
 			return nil
 		}})
 	e.StartLoop("t-ens")
-	time.Sleep(300 * time.Millisecond)
+	driveTicks(e, 30)
 	if n := countRuns(t, "t-ens"); n != 0 {
 		t.Fatalf("EnabledFn=false 期间槽到期也不得调度落行，got %d 行", n)
 	}

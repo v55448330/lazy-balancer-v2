@@ -465,7 +465,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			}
 		}
 		if len(eventIDs) == 0 {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_1d8f5b94", group), MessageKey: "k_1d8f5b94"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_9be13c70", group), MessageKey: "k_9be13c70"})
 			return
 		}
 		// 级别白名单与订阅矩阵端点同源（validSubLevel）：此前原样落库，
@@ -517,6 +517,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			// 此前一律当无行用默认值覆盖，DB 故障窄窗会清掉真实配置。
 			var curLevel, curTpl, curIDs, curTpls string
 			curEnabled := 0
+			rowExisted := true
 			err := tx.QueryRow(`SELECT COALESCE(min_level,''), COALESCE(body_template,''),
 				COALESCE(channel_ids,''), COALESCE(channel_templates,''), COALESCE(enabled,1) FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev).Scan(&curLevel, &curTpl, &curIDs, &curTpls, &curEnabled)
 			if err != nil {
@@ -529,12 +530,15 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				}
 				curLevel, curTpl, curIDs, curTpls = "info", "", "", ""
 				curEnabled = 1
+				rowExisted = false
 			}
 			// 部分更新（仅模板/级别）不得误启用已停用行；显式启用/选中才置 1。
 			if wantOn {
 				curEnabled = 1
 			}
-			if req.MinLevel != nil {
+			// 组级 min_level 只作为「新订阅事件的起始门槛」：已有行保留逐事件
+			// 级别（组内事件可在订阅矩阵逐条配置，组保存不得用单一值回写全部）。
+			if req.MinLevel != nil && (!rowExisted || strings.TrimSpace(curLevel) == "") {
 				curLevel = *req.MinLevel
 			}
 			if req.BodyTemplate != nil {
@@ -587,7 +591,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		}
 
 	default:
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_53f42807", ruleID), MessageKey: "k_53f42807"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_958958af", ruleID), MessageKey: "k_958958af"})
 		return
 	}
 
@@ -640,7 +644,7 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 	}
 	ruleID := c.Param("id")
 	if len(ruleID) < 7 || ruleID[:6] != "group:" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_53f42807", ruleID), MessageKey: "k_53f42807"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_958958af", ruleID), MessageKey: "k_958958af"})
 		return
 	}
 	group := ruleID[6:]
@@ -653,7 +657,7 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 		}
 	}
 	if eventType == "" {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_1d8f5b94", group), MessageKey: "k_1d8f5b94"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_9be13c70", group), MessageKey: "k_9be13c70"})
 		return
 	}
 	proxy := ""

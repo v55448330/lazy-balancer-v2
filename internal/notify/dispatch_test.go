@@ -85,6 +85,12 @@ CREATE TABLE notification_subscriptions (
 	updated_by INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (user_id, event_type)
 );
+CREATE TABLE users (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	username TEXT NOT NULL DEFAULT '',
+	role TEXT NOT NULL DEFAULT 'user',
+	is_enabled INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE notification_deliveries (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	user_id INTEGER NOT NULL,

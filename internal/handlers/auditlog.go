@@ -377,8 +377,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// 偏移，同一参数在故障窗口内外的状态码分叉也无从排障。降级分支只回显
 	// 合法页码。
 	if page > auditLogDeepPageLimit {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf(
-			"结果过多（超过 %d 页），请使用时间范围/用户/动作筛选缩小范围", auditLogDeepPageLimit)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_c17e3275", auditLogDeepPageLimit), MessageKey: "k_c17e3275"})
 		return
 	}
 	// 与 GetAuditLogOptions 同口径的 nil 守卫。降级形态与正常路径同键集：

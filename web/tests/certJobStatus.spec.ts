@@ -258,3 +258,12 @@ test('CertJobs.vue 消费面接线：派生 hover/failed-only 重试列/冷却�
   assert.match(page, /cert_renewal_attempts/, '上限必须读 /config')
   assert.match(page, /CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK/, '读取失败时用兜底上限')
 })
+
+test('需人工横幅关闭必须响应式（指纹集合是 ref，非普通 let）', () => {
+  const page = code('src/views/settings/CertJobs.vue')
+  // 普通 let 集合不参与响应式依赖：dismiss 后 computed 不重算，横幅关不掉。
+  assert.match(page, /const dismissedManualFingerprints = ref\(loadCertManualBannerDismissed\(\)\)/, '关闭指纹必须存 ref')
+  assert.match(page, /dismissedManualFingerprints\.value\.has\(/, '读取必须经 .value')
+  assert.match(page, /dismissedManualFingerprints\.value = new Set\(/, '关闭时替换 ref 值触发重算')
+  assert.match(page, /saveCertManualBannerDismissed\(dismissedManualFingerprints\.value\)/, '持久化取 .value')
+})

@@ -77,7 +77,7 @@
           <template #default="{ row }">{{ fmtDuration(row.duration_ms) }}</template>
         </el-table-column>
         <el-table-column :label="t('app.dashboard.connColCat')" width="70">
-          <template #default="{ row }"><span class="conn-cat-badge" :class="'is-' + row.category">{{ catLabel(row.category) }}</span></template>
+          <template #default="{ row }"><span class="conn-cat-badge" :class="'is-' + rowCat(row)">{{ catLabel(rowCat(row)) }}</span></template>
         </el-table-column>
         <el-table-column :label="t('app.dashboard.connColProto2')" width="70">
           <template #default="{ row }"><span class="conn-mono">{{ schemeShort(row.scheme) }}</span></template>
@@ -127,6 +127,7 @@ import { generalizeUA } from '@/utils/uaGeneralize'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
+import { connectionFilterCategory } from '@/utils/connectionCategories.ts'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -212,8 +213,14 @@ const statCounts = computed(() => {
 })
 
 const rows = computed<Array<{ category: string }>>(() => (reqMon.value ? requests.value : connections.value))
+// 行分类 → 筛选键同源映射：连接视图行是 socket 状态族（established/time_wait），
+// 请求视图行已是 active/closing（映射幂等）。不映射时默认 active 恒匹配不到。
+const rowCat = (row: unknown): string => {
+  const category = (row as { category?: unknown } | null | undefined)?.category
+  return connectionFilterCategory(typeof category === 'string' ? category : '')
+}
 const filteredEntries = computed(() =>
-  category.value === 'all' ? rows.value : rows.value.filter((e) => e.category === category.value),
+  category.value === 'all' ? rows.value : rows.value.filter((e) => connectionFilterCategory(e.category) === category.value),
 )
 const pagedEntries = computed(() => filteredEntries.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 

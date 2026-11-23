@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code } from './_helpers.ts'
+import { code, section } from './_helpers.ts'
 import { PAGE_IDS } from '../src/utils/pageIds.ts'
 
 const leafKeys = (node: unknown, prefix = ''): string[] => {
@@ -98,12 +98,12 @@ test('规则编辑契约：行内草稿保存+每通道模板部分更新，不�
   // 最低级别列已下线（事件可选后不再需要）；行草稿仍保留 min_level（默认 info 随保存）
   assert.doesNotMatch(text, /app\.notification\.rules\.minLevel/, '最低级别列已下线')
   assert.match(text, /min_level/, '行草稿仍保留 min_level（默认 info 随保存）')
-  // 事件/发送至列=点击浮层内的 bordered 多选（绑定行草稿；未测试通道禁选+提示）
+  // 事件/发送至列=点击浮层内的 bordered 多选（绑定行草稿；停用/会话待刷新禁选，未测仅提示）
   assert.match(text, /<el-popover[^>]*trigger="click"/, '事件/发送至列必须为点击浮层多选')
   assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.events"/, '事件列必须为浮层多选（绑定行草稿）')
   assert.match(text, /el-checkbox-group v-model="ruleDraftOf\(asRule\(row\)\)\.channel_ids"/, '发送至列必须为浮层多选（绑定行草稿）')
   assert.match(text, /<el-checkbox[^>]*border size="small"/, '多选组必须为 bordered 复选组')
-  assert.match(text, /:disabled="!channelSendable\(ch\)"/, '未测试/停用/会话待刷新通道禁选（channelSendable 单源）')
+  assert.match(text, /:disabled="!channelSendable\(ch\)"/, '停用/会话待刷新通道禁选（未测通道保留可投递；channelSendable 单源）')
   // 每日摘要独立卡片（不混事件规则表格）+ 三字段卡内联编辑
   assert.match(text, /daily-card/, '每日摘要必须独立卡片')
   assert.match(text, /el-time-select v-model="dailyDraft\.send_time"/, '投递时间必须卡内联编辑')
@@ -389,4 +389,28 @@ test('事件订阅浮层与通道配置项 hover 必带说明（避免只凭标�
   for (const key of ['helpName', 'helpType', 'helpTarget', 'helpMethod', 'helpHeaders', 'helpSubject', 'helpBodyFormat']) {
     assert.match(cards, new RegExp(`help${key.replace(/^help/, '')}`), `通道配置项 ${key} 缺少 hover 说明`)
   }
+})
+
+test('未测通道不剪枝：channelSendable 不再要求 last_test_ok，未测仅提示', () => {
+  const nc = code('src/views/notifications/NotificationCenter.vue')
+  const sendable = section(nc, 'const channelSendable = (ch: RuleChannel): boolean =>', 'const pruneChannelIds')
+  assert.doesNotMatch(sendable, /last_test_ok/, '未测试通道必须保留在草稿（后端语义：未测≠不可投递）')
+  assert.match(sendable, /ch\.enabled !== false/, '停用通道仍然禁选')
+  assert.match(sendable, /ch\.type === 'wx_clawbot' && ch\.session_ready === false/, '微信会话失效仍禁选（2026-11-22 裁定）')
+  assert.match(nc, /channelUntestedHint/, '未测仍是可提示态（不是禁选/剪枝）')
+})
+
+test('通知设置 DTO 与后端 JSON 同形：api_enabled/数值阈值，无 qq 旧凭据字段', () => {
+  const types = code('src/types/notifications.ts')
+  const settings = section(types, 'interface NotificationSettings {', '\n}')
+  assert.match(settings, /api_enabled:\s*boolean/, '后端 GET 返回 api_enabled（Keys 全局开关消费）')
+  assert.match(settings, /attack_warn_at:\s*number/, '阈值后端是 int（JSON number），不得声明 string')
+  assert.match(settings, /attack_critical_at:\s*number/, '阈值后端是 int（JSON number）')
+  assert.doesNotMatch(settings, /wx_bot_cred_configured/, '后端不回显 wx 凭据布尔（凭据单源=扫码绑定）')
+  assert.doesNotMatch(settings, /\bqq:\s*\{/, '后端不回显 qq 凭据对象（已删除手工字段）')
+  const payload = section(types, 'export interface NotificationSettingsPayload {', '\n}')
+  assert.match(payload, /api_enabled\?:\s*boolean/, 'PUT 支持 api_enabled')
+  assert.match(payload, /attack_warn_at\?:\s*number/, 'PUT 阈值是 int')
+  assert.match(payload, /attack_critical_at\?:\s*number/, 'PUT 阈值是 int')
+  assert.doesNotMatch(payload, /\bqq\?:\s*\{/, 'PUT 不接受 qq 凭据（后端没有该路径）')
 })

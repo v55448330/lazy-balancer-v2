@@ -1302,7 +1302,7 @@ func aggregateEvents(tx *sql.Tx, from, to time.Time, afterID int64) (map[threatR
 		if !services.SecurityEventCountsAsAttack(action, ruleTriggered) {
 			continue
 		}
-		country, province := threatLocationParts(enrichIPLocation(ip))
+		country, province := enrichIPLocationParts(ip)
 		// top_rules 维度优先 rule_triggered（真正的 WAF/CRS/自定义规则 ID），
 		// 无归属时才回退负载规则名；混用两者会让「TOP 命中规则」名不副实
 		//
@@ -1626,9 +1626,12 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 					return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
 				}
 			}
-		} else if newTotal == 0 && oldTotal == 0 {
-			return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
 		}
+		// 不复用「newTotal==0 && oldTotal==0 → 只落高水位」早退：主 rollup
+		// 固化期排除保留/私网/空地址，本分钟可能只含这些行（newTotal=0），
+		// 但总览两表口径**包含**它们（ovTotal>0）。早退会跳过整分钟总览
+		// 重固，7 日趋势/Top IP 静默少计这些分钟。fall through 到整写路径：
+		// 主表 DELETE+空 INSERT 幂等，overviewFullRewrite 重写两新表。
 	}
 	if _, err := tx.Exec(`DELETE FROM security_event_rollup WHERE minute = ?`, minuteStr); err != nil {
 		return err
@@ -1671,23 +1674,6 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 		}
 	}
 	return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
-}
-
-// threatLocationParts 归属地字符串 → (国家, 省简称)；中国省供省级聚合。
-func threatLocationParts(location string) (string, string) {
-	parts := strings.SplitN(location, "·", 3)
-	country := ""
-	province := ""
-	if len(parts) > 0 {
-		country = strings.TrimSpace(parts[0])
-	}
-	if country == "保留地址" {
-		return "", ""
-	}
-	if country == "中国" && len(parts) > 1 {
-		province = strings.TrimSpace(parts[1])
-	}
-	return country, province
 }
 
 // trafficCountry/trafficSnapshot Caddy admin /lb/traffic-stats 响应形状

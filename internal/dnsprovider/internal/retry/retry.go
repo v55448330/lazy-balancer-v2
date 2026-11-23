@@ -26,6 +26,9 @@ const (
 	defaultAttempts       = 3
 	defaultInitialBackoff = time.Second
 	defaultMaxBackoff     = 30 * time.Second
+	// maxRetryDrainBytes 是重试前响应体排水上限：排空才能复用连接，但异常
+	// 大响应体（限流页/错误页偶发巨型 body）不得把退避路径变成整段读取。
+	maxRetryDrainBytes = 64 << 10
 )
 
 // retryAfterCap 是服务器 Retry-After 被采纳的等待封顶：限流窗口是服务端
@@ -128,6 +131,11 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		if after := After(response.Header.Get("Retry-After")); after > wait {
 			wait = min(after, retryAfterCap)
 		}
+		// 复用连接前必须先排水：直接 Close 会把仍有未读字节的响应体对应的
+		// 连接标记为不可复用（net/http 语义），连续重试每次都新建 TLS 连接。
+		// 有界排水（丢弃，最多 maxRetryDrainBytes）——异常大响应体不得让
+		// 退避路径变成整段读取。
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxRetryDrainBytes))
 		if closeErr := response.Body.Close(); closeErr != nil {
 			// Body already consumed or broken connection: stop retrying and
 			// surface this response instead of racing a half-closed body.

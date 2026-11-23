@@ -37,9 +37,23 @@ func CertJobLogDir() string {
 	}
 	target := filepath.Join(dir, "certjobs")
 	if certJobLogMigrated.CompareAndSwap(false, true) {
-		migrateLegacyCertJobLogs(filepath.Dir(dir), target)
+		for _, root := range certJobLogLegacyRoots(dir) {
+			migrateLegacyCertJobLogs(root, target)
+		}
 	}
 	return target
+}
+
+// certJobLogLegacyRoots 旧日志根候选：固化期写入位置是固定 legacy 根
+// （/app/logs），自定义日志根部署下父目录不是它——只扫父目录会漏迁旧文件
+// （旧文件从此脱离清理面）。当前父目录也保留为候选：LogDir 曾在历史版本
+// 指向其他路径时，旧文件可能落在当时的父目录。
+func certJobLogLegacyRoots(dir string) []string {
+	roots := []string{legacyCertJobLogRoot}
+	if parent := filepath.Dir(dir); parent != legacyCertJobLogRoot {
+		roots = append(roots, parent)
+	}
+	return roots
 }
 
 // certJobLogMigrateLink 是旧目录迁移的落位原语（测试缝：var 而非直接调用，

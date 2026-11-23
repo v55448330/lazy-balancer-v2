@@ -42,6 +42,18 @@ export function coordsForSiteLocation(key: string): { lat: number; lon: number }
   return { lat: Number(choice.lat.toFixed(4)), lon: Number(choice.lon.toFixed(4)) }
 }
 
+/**
+ * 本站坐标是否已配置。后端 models.ServerMapLat/Lon 为 float64 且 0,0=未设置
+ * （未配置时字段仍是 0 值，JSON 里恒为 number）——只判 typeof number 恒真，
+ * 会把未配置站点当已配置，信标落在几内亚湾 (0,0)。赤道/本初子午线单点坐标
+ * （lat=0 或 lon=0 但不同时为 0）仍是合法配置。
+ */
+export function isSiteConfigured(lat: unknown, lon: unknown): boolean {
+  if (typeof lat !== 'number' || typeof lon !== 'number') return false
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false
+  return !(lat === 0 && lon === 0)
+}
+
 /** 近似球面距离（km）；仅用于回显最近地点，不参与业务判定。 */
 function siteDistanceKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
   const rad = Math.PI / 180

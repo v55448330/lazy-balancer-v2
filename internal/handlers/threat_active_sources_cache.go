@@ -216,6 +216,8 @@ const enrichLocationCacheMax = 8192
 
 type enrichLocationCacheEntry struct {
 	location   string
+	country    string
+	province   string
 	generation int64
 }
 
@@ -245,22 +247,42 @@ func enrichIPLocation(ip string) string {
 	return enrichIPLocationCached(ip)
 }
 
-// enrichIPLocationCached 缓存版实现：键含 GeoIP 数据代际，代际变更整体失效。
-func enrichIPLocationCached(ip string) string {
+// loadEnrichLocation 返回 IP 的缓存条目（展示串 + 结构化国家/省），键含 GeoIP
+// 数据代际，代际变更整体失效。一次查询同时产出展示与聚合两种视图，避免
+// 聚合侧二次拆展示串。
+func loadEnrichLocation(ip string) enrichLocationCacheEntry {
 	gen := services.GeoIPDataGeneration()
 	enrichLocationCache.Lock()
 	if e, ok := enrichLocationCache.entries[ip]; ok && e.generation == gen {
-		location := e.location
 		enrichLocationCache.Unlock()
-		return location
+		return e
 	}
 	enrichLocationCache.Unlock()
-	location := formatIP2RegionLocation(enrichIPLocationLookup(ip))
+	region := enrichIPLocationLookup(ip)
+	entry := enrichLocationCacheEntry{location: formatIP2RegionLocation(region), generation: gen}
+	entry.country, entry.province = regionLocationParts(region)
 	enrichLocationCache.Lock()
 	if len(enrichLocationCache.entries) >= enrichLocationCacheMax {
 		enrichLocationCache.entries = make(map[string]enrichLocationCacheEntry)
 	}
-	enrichLocationCache.entries[ip] = enrichLocationCacheEntry{location: location, generation: gen}
+	enrichLocationCache.entries[ip] = entry
 	enrichLocationCache.Unlock()
-	return location
+	return entry
+}
+
+// enrichIPLocationCached 缓存版实现。
+func enrichIPLocationCached(ip string) string {
+	return loadEnrichLocation(ip).location
+}
+
+// enrichIPLocationParts 返回 IP 的结构化归属 (国家, 省简称)，与展示串共用同一
+// 代际缓存。威胁大屏省级聚合必须用它而非解析展示串：ISP-only 行展示为
+// 「中国·阿里」，二次按「·」拆分会把 ISP 当省名（回归）。
+// 保留地址/空 IP 返回空。
+func enrichIPLocationParts(ip string) (country, province string) {
+	if ip == "" || isReservedIP(ip) {
+		return "", ""
+	}
+	entry := loadEnrichLocation(ip)
+	return entry.country, entry.province
 }

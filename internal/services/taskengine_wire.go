@@ -8,6 +8,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -298,12 +299,15 @@ const sourceUpdateStatusRunning = "running"
 // 终态——不归一则规则库页与任务视图恒显「更新中」（运行/取消按钮失效），
 // 直到下一个排程槽才自愈。UPDATE 带旧值条件，避免与并发终态写相互覆盖。
 func normalizeInterruptedUpdateStatuses() {
-	if db.DB == nil {
+	// 关停窗口内 db.DB 可能被置 nil：单次快照后全流程使用局部句柄，
+	// 判空与解引用之间不得再读包级变量（回归）。
+	database := db.DB
+	if database == nil {
 		return
 	}
 	for _, family := range interruptedUpdateStatusFamilies {
 		if family.perSourceRow {
-			normalizeInterruptedSourceStatusRows(family.table, family.taskID)
+			normalizeInterruptedSourceStatusRows(database, family.table, family.taskID)
 			continue
 		}
 		row, ok, err := versionTableStatusRowOf(family.table)
@@ -316,7 +320,7 @@ func normalizeInterruptedUpdateStatuses() {
 		if !ok || !family.active(row.status) {
 			continue
 		}
-		res, err := db.DB.Exec(`UPDATE `+family.table+
+		res, err := database.Exec(`UPDATE `+family.table+
 			` SET update_status='failed', message='（进程重启回收）', finished_at=datetime('now') WHERE id=1 AND update_status=?`,
 			row.status)
 		if err != nil {
@@ -333,8 +337,8 @@ func normalizeInterruptedUpdateStatuses() {
 
 // normalizeInterruptedSourceStatusRows 按行集归一源表族的活动态（源表无 id=1
 // 单行约定，状态列逐行写）。幂等：WHERE 只命中活动行，无命中即静默。
-func normalizeInterruptedSourceStatusRows(table, taskID string) {
-	res, err := db.DB.Exec(`UPDATE `+table+
+func normalizeInterruptedSourceStatusRows(database *sql.DB, table, taskID string) {
+	res, err := database.Exec(`UPDATE `+table+
 		` SET update_status='failed', message='（进程重启回收）', finished_at=datetime('now') WHERE update_status=?`,
 		sourceUpdateStatusRunning)
 	if err != nil {
@@ -361,8 +365,12 @@ func normalizeUnregisteredThreatSourceSlots() {
 	if len(names) == 0 {
 		return
 	}
+	database := db.DB
+	if database == nil {
+		return
+	}
 	clause, args := sourceNameSetClause("name", names, true)
-	res, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=NULL
+	res, err := database.Exec(`UPDATE security_threat_sources SET next_update=NULL
 		WHERE update_enabled=1 AND NULLIF(next_update,'') IS NOT NULL`+clause, args...)
 	if err != nil {
 		Logf("warn", "威胁源表注册表外启用行槽清理失败（不影响调度读侧收窄）: %v", err)
@@ -482,19 +490,24 @@ func runCertScanRound(ctx context.Context) error {
 
 	var failed []string
 	var skipped []string
-	record := func(name string, err error) {
+	steps := []struct {
+		name string
+		err  error
+	}{
+		{"续期扫描", scanErr},
+		{"状态对账", reconcileErr},
+	}
+	for _, st := range steps {
 		switch {
-		case err == nil:
-		case errors.Is(err, taskengine.ErrTaskSkipped):
-			skipped = append(skipped, name)
+		case st.err == nil:
+		case errors.Is(st.err, taskengine.ErrTaskSkipped):
+			skipped = append(skipped, st.name)
 		default:
-			failed = append(failed, name+": "+err.Error())
+			failed = append(failed, st.name+": "+st.err.Error())
 		}
 	}
-	record("续期扫描", scanErr)
-	record("状态对账", reconcileErr)
 	if len(failed) > 0 {
-		return fmt.Errorf("证书扫描任务部分失败（%d/2 步）：%s", len(failed), strings.Join(failed, "；"))
+		return fmt.Errorf("证书扫描任务部分失败（%d/%d 步）：%s", len(failed), len(steps), strings.Join(failed, "；"))
 	}
 	if len(skipped) > 0 {
 		return fmt.Errorf("%s本轮跳过: %w", strings.Join(skipped, "、"), taskengine.ErrTaskSkipped)
@@ -532,9 +545,11 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// 放开写面）。并发角色翻转由后续 SetRole 正常收敛。
 	var roleMaster bool
 	roleErr := errors.New("数据库未初始化")
-	for attempt := 0; attempt < 2 && db.DB != nil; attempt++ {
-		if roleMaster, roleErr = RoleOf(context.Background(), db.DB); roleErr == nil {
-			break
+	if database := db.DB; database != nil {
+		for range 2 {
+			if roleMaster, roleErr = RoleOf(context.Background(), database); roleErr == nil {
+				break
+			}
 		}
 	}
 	if roleErr != nil {
@@ -904,12 +919,14 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			if m == nil || !m.IsRunning() {
 				return ""
 			}
-			// nil 库守卫——空状态 fail-closed。
-			if db.DB == nil {
+			// nil 库守卫——空状态 fail-closed。单次句柄快照避免判空后
+			// 关停窗口再读 db.DB（回归）。
+			database := db.DB
+			if database == nil {
 				return ""
 			}
 			var status string
-			if err := db.DB.QueryRow("SELECT COALESCE(update_status,'') FROM security_ip2region_version WHERE id=1").Scan(&status); err != nil {
+			if err := database.QueryRow("SELECT COALESCE(update_status,'') FROM security_ip2region_version WHERE id=1").Scan(&status); err != nil {
 				// 读失败不得静默：状态列会回落「执行实态」，与「确实空闲」不可
 				// 区分（运行按钮可点，点击由单飞 CAS 兜住），且排障无信号。
 				// 按失败态转换留痕（同 taskMonitorCertJobsLogKey 范式）。
@@ -1045,12 +1062,13 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// registerRuntimeLifecycleTasks 内同口径执行）：
 	// - 循环共 8 个，本清单默认启动 6 个（cert-waiting-ca 除外——默认关闭，
 	//   证书扫描唤醒；autoban 除外——调度唯一前提=业务启用，见下）
-	// - 常驻共 10 个，本清单启动 3 个（系统启动即运行；关闭调度=启动也不运行；
+	// - 常驻共 13 个，本清单启动 6 个（系统启动即运行；关闭调度=启动也不运行；
 	//   其余 7 个运行期常驻在 registerRuntimeLifecycleTasks 启动）
-	// - 定时 5 个启动排程（threat/crs/ip2region/auto-backup——EnabledFn/
-	//   NextSlotFn 内含开关判断；notification-node-stats-report——RunsOn=
-	//   SlaveOnly，主节点由角色门拦停，从节点必须默认开启上报；crawlerbot-update
-	//   不在本清单，调度由 SyncBusinessTaskDrivers 按业务开关对齐）
+	// - 定时共 7 个，本清单启动 6 个（threat/crs/ip2region/auto-backup——
+	//   EnabledFn/NextSlotFn 内含开关判断；notification-daily-report；
+	//   notification-node-stats-report——RunsOn=SlaveOnly，主节点由角色门拦停，
+	//   从节点必须默认开启上报；crawlerbot-update 不在本清单，调度由
+	//   SyncBusinessTaskDrivers 按业务开关对齐）
 	// 默认启动前先读偏好——显式停止的 daemon 必须在任何
 	// StartLoop 副作用（启动记录/首轮执行）之前跳过；否则先启动再 StopLoop
 	// 会留下假启动记录并可能实际跑一轮。
@@ -1429,14 +1447,15 @@ const SecurityVersionImportSentinel = "__lazy_balancer_import_seed__"
 // auto_update（与「未导入=零行，由 rearm 补真实种子」的终态一致）。幂等：
 // 非哨兵行零改动；读/写失败仅告警（下次启动重试，不阻断启动）。
 func healSecurityVersionImportSentinels() {
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		return
 	}
 	for _, tc := range []struct{ table, seedVersion string }{
 		{"security_crs_version", CRSBundledVersion},
 		{"security_ip2region_version", "unknown"},
 	} {
-		if _, err := db.DB.Exec(`UPDATE `+tc.table+` SET version=?, auto_update=TRUE WHERE id=1 AND version=?`, tc.seedVersion, SecurityVersionImportSentinel); err != nil {
+		if _, err := database.Exec(`UPDATE `+tc.table+` SET version=?, auto_update=TRUE WHERE id=1 AND version=?`, tc.seedVersion, SecurityVersionImportSentinel); err != nil {
 			Logf("warn", "启动自愈：%s 导入哨兵行改写失败: %v", tc.table, err)
 		}
 	}
@@ -1447,7 +1466,8 @@ func healSecurityVersionImportSentinels() {
 // threatNextSlot 与既有排程写侧同函数同口径）。已有槽的行、开关关闭的行
 // 一律不动；武装失败仅告警不阻断启动（下一排程保存路径会自愈）。
 func armSecurityLibraryFirstSlots() {
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		return
 	}
 	now := time.Now().UTC()
@@ -1457,13 +1477,13 @@ func armSecurityLibraryFirstSlots() {
 		{"security_crs_version", CRSBundledVersion},
 		{"security_ip2region_version", "unknown"},
 	} {
-		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO `+tc.table+` (id, version, auto_update) VALUES (1, ?, TRUE)`, tc.seedVersion); err != nil {
+		if _, err := database.Exec(`INSERT OR IGNORE INTO `+tc.table+` (id, version, auto_update) VALUES (1, ?, TRUE)`, tc.seedVersion); err != nil {
 			Logf("warn", "首槽武装：%s 种子行写入失败: %v", tc.table, err)
 			continue
 		}
 		var autoUpdate int
 		var nextUpdate string
-		if err := db.DB.QueryRow(`SELECT COALESCE(auto_update,1), COALESCE(next_update,'') FROM `+tc.table+` WHERE id=1`).Scan(&autoUpdate, &nextUpdate); err != nil {
+		if err := database.QueryRow(`SELECT COALESCE(auto_update,1), COALESCE(next_update,'') FROM `+tc.table+` WHERE id=1`).Scan(&autoUpdate, &nextUpdate); err != nil {
 			// 读失败与同函数写失败同口径留痕：静默 continue 会让启动武装
 			// 跳过无排障信号（自动更新停摆无从定位）。
 			Logf("warn", "首槽武装：%s 版本行读取失败（本轮跳过武装）: %v", tc.table, err)
@@ -1472,7 +1492,7 @@ func armSecurityLibraryFirstSlots() {
 		if autoUpdate != 1 || nextUpdate != "" {
 			continue
 		}
-		if _, err := db.DB.Exec(`UPDATE `+tc.table+` SET next_update=? WHERE id=1`, versionTableNextSlot(tc.table, now)); err != nil {
+		if _, err := database.Exec(`UPDATE `+tc.table+` SET next_update=? WHERE id=1`, versionTableNextSlot(tc.table, now)); err != nil {
 			Logf("warn", "首槽武装：%s 写入 next_update 失败: %v", tc.table, err)
 		}
 	}
@@ -1487,7 +1507,8 @@ func armSecurityLibraryFirstSlots() {
 // 写点，武装它会让读侧「最早槽」被排除后仍留下无意义的惰性槽，并与启动期
 // 清理互相抵消（清空→武装补回→下次启动再清空）。
 func ArmThreatFirstSlots() {
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		// 同族 DB 入口的 nil 守卫：装配缺失时静默返回（无调度可武装），
 		// 不得 panic 到调用方（handlers/security_threat、services/threatupdate）。
 		return
@@ -1497,7 +1518,7 @@ func ArmThreatFirstSlots() {
 	}
 	nameClause, args := sourceNameSetClause("name", threatSourceRegistryNames(), false)
 	args = append([]any{threatNextSlot(time.Now().UTC())}, args...)
-	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(next_update,'')=''`+nameClause, args...); err != nil {
+	if _, err := database.Exec(`UPDATE security_threat_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(next_update,'')=''`+nameClause, args...); err != nil {
 		Logf("warn", "首槽武装：security_threat_sources 写入 next_update 失败: %v", err)
 	}
 }

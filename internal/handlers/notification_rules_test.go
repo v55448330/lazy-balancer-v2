@@ -69,7 +69,8 @@ func TestUpdateNotificationRule_partialUpdatePreservesState(t *testing.T) {
 		t.Fatalf("body_template=%q, want 模板落库", tpl)
 	}
 
-	// 只调级别：不得清空模板
+	// 组级 min_level 只是新订阅事件的起始门槛：已有行不得被单一值回写覆盖
+	// （逐事件级别可在订阅矩阵独立配置），模板同样必须保留。
 	status, out = doNotifyRequest(t, r, http.MethodPost, "/notification/rules/"+gid, `{"min_level":"critical"}`)
 	if status != http.StatusOK || out["code"].(float64) != 0 {
 		t.Fatalf("级别保存 status=%d body=%v", status, out)
@@ -77,8 +78,8 @@ func TestUpdateNotificationRule_partialUpdatePreservesState(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT min_level, body_template FROM notification_subscriptions WHERE user_id=7 AND event_type='cert.failed'`).Scan(&level, &tpl); err != nil {
 		t.Fatalf("回读订阅: %v", err)
 	}
-	if level != "critical" || tpl != "{{title}} custom" {
-		t.Fatalf("级别保存后 level=%q tpl=%q, want critical+模板保留", level, tpl)
+	if level != "warn" || tpl != "{{title}} custom" {
+		t.Fatalf("组保存后 level=%q tpl=%q, want warn（逐事件级别保留）+模板保留", level, tpl)
 	}
 
 	// 显式停用=停用行（保留更新用户/时间；投递侧按 enabled=0 过滤）

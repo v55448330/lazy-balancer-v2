@@ -62,10 +62,30 @@ func TestEnrichIPLocation_reservedIPs(t *testing.T) {
 	}
 }
 
-func TestThreatLocationParts_reservedIsNotCountry(t *testing.T) {
-	country, province := threatLocationParts("保留地址")
-	if country != "" || province != "" {
-		t.Fatalf("reserved location must not aggregate as a country: (%q,%q)", country, province)
+func TestRegionLocationParts_doesNotTreatISPAsProvince(t *testing.T) {
+	cases := []struct {
+		name         string
+		region       string
+		wantCountry  string
+		wantProvince string
+	}{
+		{name: "china full", region: "中国|广东省|深圳市|电信|CN", wantCountry: "中国", wantProvince: "广东"},
+		{name: "china province only", region: "中国|山东省|0|0|CN", wantCountry: "中国", wantProvince: "山东"},
+		// ISP-only（省/市段为 0）：展示串是「中国·阿里」，但阿里是 ISP 不是省，
+		// 省级聚合必须留空（回归）。
+		{name: "china isp only", region: "中国|0|0|阿里|CN", wantCountry: "中国", wantProvince: ""},
+		{name: "overseas", region: "United States|California|0|Google LLC|US", wantCountry: "美国", wantProvince: ""},
+		{name: "reserved", region: "Reserved|Reserved|Reserved|0|0", wantCountry: "", wantProvince: ""},
+		{name: "malformed", region: "0|0|0|0|0", wantCountry: "", wantProvince: ""},
+		{name: "empty", region: "", wantCountry: "", wantProvince: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			country, province := regionLocationParts(tc.region)
+			if country != tc.wantCountry || province != tc.wantProvince {
+				t.Fatalf("regionLocationParts(%q)=(%q,%q), want (%q,%q)", tc.region, country, province, tc.wantCountry, tc.wantProvince)
+			}
+		})
 	}
 }
 
