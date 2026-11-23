@@ -290,3 +290,10 @@ test('N 统计单飞锁在重试入口移交所有权（重试后不得永久冻
   const seq = start.indexOf('const requestSeq = ++ruleLogRequestSeq')
   assert.ok(reset > 0 && seq > reset, '重试先清锁再取新 seq（旧在途请求的 finally 因 seq 失配不会释放）')
 })
+
+
+test('O PROXY V2 长说明使用块级 form-tip-line（不得行内导致换行错位）', () => {
+  const block = section(page, 'label="PROXY V2"', 'caddyGlobalOverride')
+  assert.match(block, /<div class="form-tip-line">\{\{ t\('common\.app\.rules\.wizard\.proxyV2Hint'\) \}\}<\/div>/)
+  assert.doesNotMatch(block, /form-tip-inline[^\n]*proxyV2Hint/, '长说明不得再用行内后缀样式')
+})

@@ -22,11 +22,10 @@ import (
 )
 
 const (
-	blockedWindow      = 5 * time.Minute
-	blockedInfoAt      = 10  // 窗口累计 ≥10 → info（最低触发阈值；低于此不通知）
-	blockedWarnAt      = 50  // 窗口累计 ≥50 → warn（内置默认；可被 notify_settings 阈值覆盖）
-	blockedCriticalAt  = 200 // 窗口累计 ≥200 → critical（内置默认；可被 notify_settings 阈值覆盖）
-	challengeSummaryAt = 50  // 挑战统计：5 分钟 ≥50 次才发摘要（事件本身默认关）
+	blockedWindow     = 5 * time.Minute
+	blockedInfoAt     = 10  // 窗口累计 ≥10 → info（最低触发阈值；低于此不通知）
+	blockedWarnAt     = 50  // 窗口累计 ≥50 → warn（内置默认；可被 notify_settings 阈值覆盖）
+	blockedCriticalAt = 200 // 窗口累计 ≥200 → critical（内置默认；可被 notify_settings 阈值覆盖）
 
 )
 
@@ -118,15 +117,15 @@ func recordBlocked(ruleName string, extra ...string) []Event {
 }
 
 // RecordChallengeEvent 摄取到 action=challenged 事件时调用（主路径与 IPC
-// 路径）。累加到已开启的拦截聚合窗口，并单独累计挑战统计窗口（≥50 次才
-// 发 sec.challenge_summary；该事件默认关，避免挑战流量逐请求通知）。
-func RecordChallengeEvent(reason, ip string) {
+// 路径）。failed 表示本次挑战验证失败（human_failed / IPC kind=fail）；
+// 挑战统计与拦截聚合共用 10/50/200 阈值，正文同时披露发放与失败数。
+func RecordChallengeEvent(reason, ip string, failed ...bool) {
 	blockedMu.Lock()
 	if w := blockedCurrent; w != nil {
 		w.challenges++
 	}
 	blockedMu.Unlock()
-	recordChallengeSummary(challengeReasonLabel(reason), ip)
+	recordChallengeSummary(challengeReasonLabel(reason), ip, len(failed) > 0 && failed[0])
 }
 
 // challengeReasonLabel 挑战原因展示标签归一：摄取两条路径分别传机器 ID
@@ -333,10 +332,14 @@ func topRules(m map[string]int, n int) []ruleCount {
 // ---- 挑战统计窗口（sec.challenge_summary；默认关） ----
 
 type challengeWindowState struct {
-	start     time.Time
-	count     int
-	topReason map[string]int
-	topIP     map[string]int
+	start      time.Time
+	count      int
+	failed     int
+	infoAt     int
+	warnAt     int
+	criticalAt int
+	topReason  map[string]int
+	topIP      map[string]int
 }
 
 var (
@@ -345,16 +348,23 @@ var (
 	challengeInitWheel sync.Once
 )
 
-func recordChallengeSummary(reason, ip string) {
+func recordChallengeSummary(reason, ip string, failed bool) {
 	challengeInitWheel.Do(func() { go challengeFlushLoop() })
 	challengeMu.Lock()
 	defer challengeMu.Unlock()
 	now := time.Now()
 	if challengeCurrent == nil || now.Sub(challengeCurrent.start) >= blockedWindow {
-		challengeCurrent = &challengeWindowState{start: now, topReason: map[string]int{}, topIP: map[string]int{}}
+		warnAt, criticalAt := blockedThresholdsFn()
+		challengeCurrent = &challengeWindowState{
+			start: now, topReason: map[string]int{}, topIP: map[string]int{},
+			infoAt: blockedInfoAt, warnAt: warnAt, criticalAt: criticalAt,
+		}
 	}
 	w := challengeCurrent
 	w.count++
+	if failed {
+		w.failed++
+	}
 	if reason != "" {
 		w.topReason[reason]++
 	}
@@ -372,24 +382,46 @@ func challengeFlushLoop() {
 }
 
 func flushChallengeWindow() {
+	if evt := takeChallengeWindowEvent(); evt != nil {
+		Publish(*evt)
+	}
+}
+
+// takeChallengeWindowEvent 取走挑战窗口并构造摘要（无阈值=不发布）。测试
+// 可直接断言级别与发放/失败字段，不必依赖总线。
+func takeChallengeWindowEvent() *Event {
 	challengeMu.Lock()
 	w := challengeCurrent
 	challengeCurrent = nil
 	challengeMu.Unlock()
-	if w == nil || w.count < challengeSummaryAt {
-		return
+	if w == nil {
+		return nil
+	}
+	peak := w.count
+	if w.failed > peak {
+		peak = w.failed
+	}
+	if w.infoAt <= 0 || peak < w.infoAt {
+		return nil
+	}
+	level := LevelInfo
+	if w.criticalAt > 0 && peak >= w.criticalAt {
+		level = LevelCritical
+	} else if w.warnAt > 0 && peak >= w.warnAt {
+		level = LevelWarn
 	}
 	span := blockedSpanLabel(time.Since(w.start))
-	Publish(Event{
-		Type: EvtChallengeSummary, Level: LevelWarn,
+	return &Event{
+		Type: EvtChallengeSummary, Level: level,
 		Title: "挑战统计",
-		Body: fmt.Sprintf("%s内挑战 %d 次（TOP 原因：%s；TOP IP：%s）",
-			span, w.count, topCounts(w.topReason, 3, "×"), topCounts(w.topIP, 3, "×")),
+		Body: fmt.Sprintf("%s内挑战发放 %d 次 / 失败 %d 次（TOP 原因：%s；TOP IP：%s）",
+			span, w.count, w.failed, topCounts(w.topReason, 3, "×"), topCounts(w.topIP, 3, "×")),
 		Fields: map[string]string{
 			"1": span,
 			"2": fmt.Sprint(w.count),
-			"3": topCounts(w.topReason, 3, "×"),
-			"4": topCounts(w.topIP, 3, "×"),
+			"3": fmt.Sprint(w.failed),
+			"4": topCounts(w.topReason, 3, "×"),
+			"5": topCounts(w.topIP, 3, "×"),
 		},
-	})
+	}
 }

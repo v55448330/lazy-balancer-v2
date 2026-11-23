@@ -297,20 +297,33 @@ func TestBlockedAggregateCountsChallengesAndAutobans(t *testing.T) {
 func TestChallengeSummaryThreshold(t *testing.T) {
 	resetBlockedStateForTest(t)
 	ensureBusStoppedForTest(t)
-	before := DroppedCount()
-	for i := 0; i < 49; i++ {
-		recordChallengeSummary("cc_rate", "203.0.113.20")
+	for i := 0; i < 9; i++ {
+		recordChallengeSummary("cc_rate", "203.0.113.20", false)
 	}
-	flushChallengeWindow()
-	if got := DroppedCount() - before; got != 0 {
-		t.Fatalf("低于挑战阈值发布 %d 条, want 0", got)
+	if evt := takeChallengeWindowEvent(); evt != nil {
+		t.Fatalf("低于挑战阈值发布 %+v, want nil", evt)
 	}
+	for i := 0; i < 10; i++ {
+		recordChallengeSummary("cc_rate", "203.0.113.21", false)
+	}
+	evt := takeChallengeWindowEvent()
+	if evt == nil || evt.Level != LevelInfo {
+		t.Fatalf("达到 10 次阈值=%+v, want info", evt)
+	}
+	if !strings.Contains(evt.Body, "挑战发放 10 次 / 失败 0 次") {
+		t.Fatalf("挑战摘要正文=%q, want 发放/失败计数", evt.Body)
+	}
+
+	resetBlockedStateForTest(t)
 	for i := 0; i < 50; i++ {
-		recordChallengeSummary("cc_rate", "203.0.113.21")
+		recordChallengeSummary("human_failed", "203.0.113.22", true)
 	}
-	flushChallengeWindow()
-	if got := DroppedCount() - before; got != 1 {
-		t.Fatalf("达到挑战阈值发布 %d 条, want 1", got)
+	evt = takeChallengeWindowEvent()
+	if evt == nil || evt.Level != LevelWarn {
+		t.Fatalf("50 次挑战失败=%+v, want warn", evt)
+	}
+	if !strings.Contains(evt.Body, "失败 50 次") {
+		t.Fatalf("挑战失败摘要正文=%q, want 失败 50", evt.Body)
 	}
 }
 

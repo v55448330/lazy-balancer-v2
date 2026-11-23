@@ -551,7 +551,7 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	d.LoginOK, d.LoginFailed, d.MFAFailed = readAuthCounters(d.Date)
 	// 集群从节点昨日统计（2026-11-22 主节点集中汇聚；已批准从节点逐行列出，
 	// 当日未上报的标「未上报」——数据缺失可见，不静默).
-	d.NodesSummary = collectNodesSummary(ctx, d.Date)
+	d.NodesSummary = collectNodesSummary(ctx, d.Date, d)
 	return d, nil
 }
 
@@ -560,7 +560,7 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 // （数据缺失可见，不静默）；单机/未声明集群（无已批准从节点行）返回空串=
 // 该行整项在渲染层省略。孤儿统计行（节点已删除/未批准）不渲染——nodes 是
 // 集群声明的唯一事实源。查询失败返回可见降级文案并留痕，不伪装成「无节点」。
-func collectNodesSummary(ctx context.Context, date string) string {
+func collectNodesSummary(ctx context.Context, date string, master ...DailyData) string {
 	if db.DB == nil {
 		return ""
 	}
@@ -618,17 +618,7 @@ func collectNodesSummary(ctx context.Context, date string) string {
 			lines = append(lines, fmt.Sprintf("%s：数据损坏", node))
 			continue
 		}
-		line := fmt.Sprintf("%s：请求 %d · 拦截 %d · 独立IP %d", node, st.Requests, st.Blocked, st.DistinctIPs)
-		if st.TopRule != "" && st.TopRule != "无" {
-			line += " · TOP 规则 " + st.TopRule
-		}
-		if st.CCTriggered > 0 {
-			line += fmt.Sprintf(" · CC %d", st.CCTriggered)
-		}
-		if st.Autobans > 0 {
-			line += fmt.Sprintf(" · 自动封禁 %d", st.Autobans)
-		}
-		lines = append(lines, line)
+		lines = append(lines, formatNodeStatsLine(node, st))
 	}
 	if err := rows.Err(); err != nil {
 		taskLogWarn(ctx, "daily", "各节点统计读取中断（date=%s）: %v", date, err)
@@ -637,7 +627,32 @@ func collectNodesSummary(ctx context.Context, date string) string {
 	if len(lines) == 0 {
 		return ""
 	}
+	// 集群有从节点时把主节点作为第一行：主节点本地统计不在 nodes 表/上报
+	// 快照里，旧实现只列从节点，阅读者会误以为主节点没有流量。单机（无
+	// 已批准从节点）仍返回空，避免「各节点摘要」与全局概览重复。
+	if len(master) > 0 {
+		m := master[0]
+		lines = append([]string{formatNodeStatsLine(MasterNodeLabel(), ClusterNodeStats{
+			Requests: m.Requests, Blocked: m.Blocked, DistinctIPs: m.DistinctIPs,
+			TopRule: m.TopRule, CCTriggered: m.CCTriggered, Autobans: m.Autobans,
+		})}, lines...)
+	}
 	return strings.Join(lines, "\n")
+}
+
+// formatNodeStatsLine 节点统计单行格式（节点摘要四格式共用；空 TOP 规则不输出）。
+func formatNodeStatsLine(node string, st ClusterNodeStats) string {
+	line := fmt.Sprintf("%s：请求 %d · 拦截 %d · 独立IP %d", node, st.Requests, st.Blocked, st.DistinctIPs)
+	if st.TopRule != "" && st.TopRule != "无" {
+		line += " · TOP 规则 " + st.TopRule
+	}
+	if st.CCTriggered > 0 {
+		line += fmt.Sprintf(" · CC %d", st.CCTriggered)
+	}
+	if st.Autobans > 0 {
+		line += fmt.Sprintf(" · 自动封禁 %d", st.Autobans)
+	}
+	return line
 }
 
 // peakWindowRequests 昨日采样窗峰值请求数（相邻全局累计采样的最大增量）。
@@ -799,11 +814,11 @@ var dailySections = []struct {
 	items []string
 }{
 	// 顺序（2026-11-22 用户裁定第四轮）：先答「服务是否正常」再看统计——
-	// 服务状态（集群节点/运行时长/库版本）→ 流量概览 → 安全风险 → 证书 →
+	// 服务状态（集群节点/运行时长/应用版本）→ 流量概览 → 安全风险（含威胁库）→ 证书 →
 	// 接入任务 → 用户认证。四格式与 DailyModules 共用本单源。
-	{"🖥", "服务状态", []string{"cluster_status", "nodes_summary", "uptime", "threat_db", "app_version"}},
-	{"🌐", "全局概览", []string{"requests", "allowed", "logged", "distinct_ips", "bandwidth", "peak_qps"}},
-	{"🛡", "安全风险", []string{"blocked", "attack_top", "top_ips", "top_paths", "cc_triggered", "autoban"}},
+	{"🖥", "服务状态", []string{"cluster_status", "nodes_summary", "uptime", "app_version"}},
+	{"🌐", "全局概览", []string{"requests", "allowed", "distinct_ips", "bandwidth", "peak_qps"}},
+	{"🛡", "安全风险", []string{"blocked", "logged", "attack_top", "top_ips", "top_paths", "cc_triggered", "autoban", "threat_db"}},
 	{"🔒", "证书状态", []string{"cert_status", "cert_expiring"}},
 	{"🔌", "接入与任务", []string{"api_calls", "mcp_calls", "task_status", "backup_status"}},
 	{"👤", "用户认证", []string{"login_status"}},
@@ -861,7 +876,6 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 		raw, _ := json.MarshalIndent(obj, "", "  ")
 		return string(raw)
 	case "html":
-		escBR := func(s string) string { return strings.ReplaceAll(html.EscapeString(s), "\n", "<br>") }
 		// 版式（2026-11-22 第四轮裁定）：表头带/数据周期行/分区/指标表/页脚
 		// 共用同一 28px 内容列（旧版表头全宽+分区 24px 缩进+周期条独立内边距
 		// 三种错位）；分区用色条标题+分隔线，不再嵌套缩进卡。
@@ -885,15 +899,8 @@ func renderDailyFromValues(date string, values map[string]string, items []string
 			}
 			fmt.Fprintf(&b, `<div style="%spadding:16px 0 14px;">`, divider)
 			fmt.Fprintf(&b, `<div style="display:inline-block;width:4px;height:14px;background:%s;margin-right:8px;vertical-align:-1px;"></div><span style="font-size:14px;font-weight:600;color:#0f172a;">%s %s</span>`, accent, sec.emoji, html.EscapeString(sec.title))
-			b.WriteString(`<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">`)
-			for ri, r := range rows {
-				bg := "#ffffff"
-				if ri%2 == 1 {
-					bg = "#f8fafc"
-				}
-				fmt.Fprintf(&b, `<tr style="background:%s;"><td style="padding:7px 10px 7px 12px;color:#64748b;border-bottom:1px solid #f1f5f9;vertical-align:top;white-space:nowrap;">%s</td><td align="right" style="padding:7px 0 7px 10px;color:#0f172a;font-weight:600;border-bottom:1px solid #f1f5f9;">%s</td></tr>`, bg, html.EscapeString(r[0]), escBR(r[1]))
-			}
-			b.WriteString(`</table></div>`)
+			b.WriteString(renderDailyHTMLSection(sec.title, rows))
+			b.WriteString(`</div>`)
 		}
 		fmt.Fprintf(&b, `<p style="margin:8px 0 18px;color:#94a3b8;font-size:11px;text-align:center;">此邮件由 %s 通知中心自动发送</p></div></div>`, html.EscapeString(brand))
 		return b.String()
@@ -1020,6 +1027,157 @@ func mdMultiValueTable(item, value string) (string, bool) {
 		return b.String(), true
 	}
 	return "", false
+}
+
+// renderDailyHTMLSection 按分区内容选择版式：状态块/指标网格/明细表。
+// 邮件客户端只支持内联样式与 table 布局，故不复用前端卡片组件。
+func renderDailyHTMLSection(title string, rows [][3]string) string {
+	esc := html.EscapeString
+	kv := map[string]string{}
+	for _, r := range rows {
+		kv[r[2]] = r[1]
+	}
+	has := func(id string) bool { return kv[id] != "" }
+	kpi := func(id string) string {
+		if !has(id) {
+			return ""
+		}
+		label, value := "", kv[id]
+		for _, r := range rows {
+			if r[2] == id {
+				label = r[0]
+				break
+			}
+		}
+		return `<td width="50%" style="background:#f8fafc;border:1px solid #e2e8f0;padding:10px 12px;vertical-align:top;"><div style="color:#64748b;font-size:11px;">` + esc(label) + `</div><div style="color:#0f172a;font-size:17px;font-weight:700;margin-top:3px;">` + esc(value) + `</div></td>`
+	}
+	grid := func(ids []string) string {
+		var cells []string
+		for _, id := range ids {
+			if c := kpi(id); c != "" {
+				cells = append(cells, c)
+			}
+		}
+		if len(cells) == 0 {
+			return ""
+		}
+		var b strings.Builder
+		b.WriteString(`<table role="presentation" style="width:100%;border-collapse:separate;border-spacing:6px;margin-top:8px;">`)
+		for i := 0; i < len(cells); i += 2 {
+			b.WriteString(`<tr>`)
+			b.WriteString(cells[i])
+			if i+1 < len(cells) {
+				b.WriteString(cells[i+1])
+			} else {
+				b.WriteString(`<td width="50%"></td>`)
+			}
+			b.WriteString(`</tr>`)
+		}
+		b.WriteString(`</table>`)
+		return b.String()
+	}
+	metaTable := func(ids []string) string {
+		var b strings.Builder
+		b.WriteString(`<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;">`)
+		for _, id := range ids {
+			if !has(id) {
+				continue
+			}
+			label := ""
+			for _, r := range rows {
+				if r[2] == id {
+					label = r[0]
+					break
+				}
+			}
+			fmt.Fprintf(&b, `<tr><td style="padding:5px 8px;color:#64748b;border-bottom:1px solid #f1f5f9;white-space:nowrap;">%s</td><td align="right" style="padding:5px 0;color:#0f172a;font-weight:600;border-bottom:1px solid #f1f5f9;">%s</td></tr>`, esc(label), esc(kv[id]))
+		}
+		b.WriteString(`</table>`)
+		return b.String()
+	}
+	multiTable := func(id, head string) string {
+		lines := strings.Split(kv[id], "\n")
+		if id == "nodes_summary" {
+			type nr struct{ node, req, blocked, ips, note string }
+			var out []nr
+			for _, ln := range lines {
+				m := nodesSummaryLine.FindStringSubmatch(ln)
+				if m == nil {
+					return metaTable([]string{id})
+				}
+				out = append(out, nr{m[1], m[2], m[3], m[4], strings.TrimPrefix(strings.TrimSpace(m[5]), "· ")})
+			}
+			var b strings.Builder
+			b.WriteString(`<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;"><tr style="background:#f8fafc;">` + `<th align="left" style="padding:6px;color:#64748b;font-weight:600;">节点</th><th align="right" style="padding:6px;color:#64748b;font-weight:600;">请求</th><th align="right" style="padding:6px;color:#64748b;font-weight:600;">拦截</th><th align="right" style="padding:6px;color:#64748b;font-weight:600;">独立IP</th><th align="left" style="padding:6px;color:#64748b;font-weight:600;">备注</th></tr>`)
+			for _, r := range out {
+				fmt.Fprintf(&b, `<tr><td style="padding:6px;border-top:1px solid #f1f5f9;">%s</td><td align="right" style="padding:6px;border-top:1px solid #f1f5f9;">%s</td><td align="right" style="padding:6px;border-top:1px solid #f1f5f9;">%s</td><td align="right" style="padding:6px;border-top:1px solid #f1f5f9;">%s</td><td style="padding:6px;border-top:1px solid #f1f5f9;color:#64748b;">%s</td></tr>`, esc(r.node), esc(r.req), esc(r.blocked), esc(r.ips), esc(r.note))
+			}
+			b.WriteString(`</table>`)
+			return b.String()
+		}
+		var b strings.Builder
+		b.WriteString(`<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;"><tr style="background:#f8fafc;"><th align="left" style="padding:6px;color:#64748b;font-weight:600;">` + esc(head) + `</th><th align="right" style="padding:6px;color:#64748b;font-weight:600;">次数</th></tr>`)
+		for _, ln := range lines {
+			i := strings.LastIndex(ln, "×")
+			if i < 0 {
+				return metaTable([]string{id})
+			}
+			fmt.Fprintf(&b, `<tr><td style="padding:6px;border-top:1px solid #f1f5f9;">%s</td><td align="right" style="padding:6px;border-top:1px solid #f1f5f9;">%s</td></tr>`, esc(strings.TrimSpace(ln[:i])), esc(strings.TrimSpace(ln[i+len("×"):])))
+		}
+		b.WriteString(`</table>`)
+		return b.String()
+	}
+	switch title {
+	case "服务状态":
+		var b strings.Builder
+		if has("cluster_status") {
+			color := "#16a34a"
+			if !strings.Contains(kv["cluster_status"], "正常") {
+				color = "#d97706"
+			}
+			fmt.Fprintf(&b, `<div style="margin-top:10px;background:#f8fafc;border:1px solid #e2e8f0;padding:10px 12px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%%;background:%s;margin-right:8px;"></span><span style="color:#64748b;font-size:12px;">集群状态</span><span style="float:right;color:#0f172a;font-size:13px;font-weight:700;">%s</span></div>`, color, esc(kv["cluster_status"]))
+		}
+		if has("nodes_summary") {
+			b.WriteString(`<div style="margin-top:10px;color:#64748b;font-size:11px;">各节点摘要</div>`)
+			b.WriteString(multiTable("nodes_summary", "节点"))
+		}
+		b.WriteString(metaTable([]string{"uptime", "app_version"}))
+		return b.String()
+	case "全局概览":
+		return grid([]string{"requests", "allowed", "distinct_ips", "bandwidth", "peak_qps"})
+	case "安全风险":
+		var b strings.Builder
+		b.WriteString(grid([]string{"blocked", "logged", "cc_triggered", "autoban"}))
+		b.WriteString(metaTable([]string{"attack_top", "threat_db"}))
+		if has("top_ips") {
+			b.WriteString(`<div style="margin-top:10px;color:#64748b;font-size:11px;">TOP 攻击源 IP</div>`)
+			b.WriteString(multiTable("top_ips", "攻击源 IP"))
+		}
+		if has("top_paths") {
+			b.WriteString(`<div style="margin-top:10px;color:#64748b;font-size:11px;">TOP 攻击路径</div>`)
+			b.WriteString(multiTable("top_paths", "攻击路径"))
+		}
+		return b.String()
+	case "证书状态":
+		var b strings.Builder
+		b.WriteString(grid([]string{"cert_status"}))
+		if has("cert_expiring") {
+			b.WriteString(`<div style="margin-top:10px;color:#64748b;font-size:11px;">临期证书</div>`)
+			b.WriteString(multiTable("cert_expiring", "域名"))
+		}
+		return b.String()
+	case "接入与任务":
+		return grid([]string{"api_calls", "mcp_calls", "task_status", "backup_status"})
+	case "用户认证":
+		return grid([]string{"login_status"})
+	}
+	return metaTable(func() []string {
+		var ids []string
+		for _, r := range rows {
+			ids = append(ids, r[2])
+		}
+		return ids
+	}())
 }
 
 // nodesSummaryLine 节点摘要行契约：`节点：请求 N · 拦截 N · 独立IP N[ · 附加]`

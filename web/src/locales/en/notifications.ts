@@ -131,7 +131,7 @@ export default {
         'sys.startup_abnormal': 'Alerts when the panel fails to start or exits unexpectedly, with the reason.',
         'sys.restart_requested': 'Alerts when a restart is requested from the panel and the system is about to restart.',
         'sec.blocked_aggregate': 'Alerts once when blocks reach 10 within 5 minutes; escalates to warning at 50 and critical at 200. The body lists block, challenge, and auto-ban counts plus top rules/IPs/paths. Fewer than 10 blocks stay silent.',
-        'sec.challenge_summary': 'Alerts once when human challenges reach 50 within 5 minutes, with top reasons and IPs. Off by default; enable it in the rule when needed.',
+        'sec.challenge_summary': 'Alerts once when challenges issued or failed reach 10 within 5 minutes, escalating to warning/critical at 50/200. The body includes issued/failed counts plus top reasons and IPs. Off by default; enable it when needed.',
         'sec.cc_triggered': 'Alerts when CC protection triggers a human challenge; the same IP alerts at most once per 10 minutes, and auto-banned IPs are suppressed.',
         'sec.autoban_triggered': 'Alerts when an automatic ban is enforced, with IP, reason, and duration.',
         'sec.autoban_summary': 'Combines alerts when 5 IPs are auto-banned within 5 minutes; later bans in the window do not alert one by one.',

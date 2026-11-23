@@ -53,7 +53,7 @@ var catalogDescriptions = map[string]string{
 	"sys.startup_abnormal":          "面板启动失败或异常退出时提醒，带失败原因。",
 	"sys.restart_requested":         "通过面板请求重启、系统即将重启时提醒。",
 	"sec.blocked_aggregate":         "5 分钟内拦截达到 10 次时提醒一次；达到 50/200 次分别升级为警告/严重。正文列出拦截、挑战、自动封禁次数和 TOP 规则/IP/路径；低于 10 次不提醒。",
-	"sec.challenge_summary":         "5 分钟内人机挑战达到 50 次时提醒一次，正文给出 TOP 原因和 IP；默认关闭，需要时在规则里开启。",
+	"sec.challenge_summary":         "5 分钟内挑战发放或失败达到 10 次时提醒一次，达到 50/200 次升级为警告/严重；正文给出发放数、失败数、TOP 原因和 IP。默认关闭，需要时在规则里开启。",
 	"sec.cc_triggered":              "CC 防护触发人机挑战时提醒；同一 IP 10 分钟内只提醒一次，已被自动封禁的 IP 不再提醒。",
 	"sec.autoban_triggered":         "自动封禁实际执行时提醒，带 IP、原因和时长。",
 	"sec.autoban_summary":           "5 分钟内自动封禁达到 5 个 IP 时合并提醒一次，之后不再逐个 IP 提醒。",

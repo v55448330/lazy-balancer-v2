@@ -334,7 +334,7 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		}
 		// challenge/fail 落库 action=challenged → 计入已开启的拦截聚合窗口。
 		if row.Kind == "challenge" || row.Kind == "fail" {
-			notify.RecordChallengeEvent(attr.ruleName, row.ClientIP)
+			notify.RecordChallengeEvent(attr.ruleName, row.ClientIP, row.Kind == "fail")
 		}
 		if label := services.AutobanCCTriggerReasonLabel(row.Reason); label != "" {
 			notify.PublishCCTriggered(row.ClientIP, label)

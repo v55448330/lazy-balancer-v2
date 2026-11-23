@@ -2939,7 +2939,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					case "challenged":
 						ruleTriggered, clientIP := rec.RuleTriggered, rec.ClientIP
 						notifyAfterCommit = append(notifyAfterCommit, func() {
-							notifyRecordChallengeEvent(ruleTriggered, clientIP)
+							notifyRecordChallengeEvent(ruleTriggered, clientIP, ruleTriggered == "human_failed")
 						})
 						if strings.HasPrefix(ruleTriggered, "cc_") {
 							reason := AutobanCCTriggerReasonLabel(strings.TrimPrefix(ruleTriggered, "cc_"))

@@ -128,7 +128,7 @@ var catalog = []catalogEntry{
 	{EvtRestoreDone, LevelInfo, false, "还原完成", "%s 完成了配置还原"},
 	{EvtRestoreFailed, LevelCritical, true, "还原失败", "配置还原失败：%s"},
 	{EvtBlockedAggregate, LevelInfo, true, "拦截聚合", "%s内拦截 %s 次 / 挑战 %s 次 / 自动封禁 %s 次（TOP 规则：%s；TOP IP：%s；TOP 路径：%s）"},
-	{EvtChallengeSummary, LevelWarn, false, "挑战统计", "%s内挑战 %s 次（TOP 原因：%s；TOP IP：%s）"},
+	{EvtChallengeSummary, LevelWarn, false, "挑战统计", "%s内挑战发放 %s 次 / 失败 %s 次（TOP 原因：%s；TOP IP：%s）"},
 	{EvtCCTriggered, LevelWarn, true, "CC 防护触发", "%s 命中 CC 异常阈值（%s）"},
 	{EvtAutobanTriggered, LevelWarn, true, "自动封禁触发", "%s 被自动封禁（%s）"},
 	{EvtAutobanSummary, LevelWarn, true, "封禁风暴", "%s内自动封禁 %s 个 IP（最近：%s）"},

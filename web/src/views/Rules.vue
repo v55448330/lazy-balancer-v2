@@ -947,7 +947,7 @@
 
               <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
                 <el-switch v-model="wizardForm.tcp_proxy_protocol" />
-                <span class="form-tip-inline">{{ t('common.app.rules.wizard.proxyV2Hint') }}</span>
+                <div class="form-tip-line">{{ t('common.app.rules.wizard.proxyV2Hint') }}</div>
               </el-form-item>
             </template>
 

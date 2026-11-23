@@ -54,3 +54,40 @@ func TestRenderDailyHTML_unifiedContentColumn(t *testing.T) {
 		t.Fatal("HTML 服务状态未前置")
 	}
 }
+
+// 分节不重复：拦截/观察属安全风险，威胁库随安全风险；全局概览只留流量。
+func TestDailySections_metricsPartitionedWithoutDuplicates(t *testing.T) {
+	seen := map[string]string{}
+	for _, sec := range dailySections {
+		for _, it := range sec.items {
+			if prev, ok := seen[it]; ok {
+				t.Fatalf("日报项目 %q 同时出现在 %q 与 %q", it, prev, sec.title)
+			}
+			seen[it] = sec.title
+		}
+	}
+	for item, want := range map[string]string{
+		"blocked": "安全风险", "logged": "安全风险", "threat_db": "安全风险",
+		"requests": "全局概览", "app_version": "服务状态",
+	} {
+		if got := seen[item]; got != want {
+			t.Fatalf("日报项目 %q 分区=%q, want %q", item, got, want)
+		}
+	}
+}
+
+// 邮件 HTML：服务状态卡用节点表（含主节点行），全局概览/安全风险用指标卡；
+// 不再是一张全区块两列表格。
+func TestRenderDailyHTML_sectionLayoutsAndMasterNode(t *testing.T) {
+	data := DailyData{Date: "2026-11-22", ClusterNote: "正常（主节点）",
+		NodesSummary: "主节点(127.0.0.1:8000)：请求 777 · 拦截 7 · 独立IP 5\nslave-a：请求 44 · 拦截 0 · 独立IP 3",
+		Requests:     1200, Allowed: 800, Blocked: 34, Logged: 12, CCTriggered: 2, Autobans: 1,
+		Uptime: "1 小时", AppVersion: "v2.4.5", ThreatDB: "CRS 4.30"}
+	html := RenderDaily(data, []string{"cluster_status", "nodes_summary", "uptime", "app_version",
+		"requests", "allowed", "blocked", "logged", "cc_triggered", "autoban", "threat_db"}, "html")
+	for _, want := range []string{"主节点(127.0.0.1:8000)", "slave-a", "<th align=\"left\"", "role=\"presentation\"", "拦截次数", "观察次数", "威胁库版本"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("HTML 版式缺 %q:\n%s", want, html)
+		}
+	}
+}

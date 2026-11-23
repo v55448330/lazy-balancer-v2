@@ -330,7 +330,11 @@ func TestCollectNodesSummary_aggregatesPerNode(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO cluster_node_daily_stats (date,node,stats_json) VALUES ('2026-11-21',?,?),('2026-11-21',?,?)`, labelA, string(st1), labelB, string(st2)); err != nil {
 		t.Fatal(err)
 	}
-	got := collectNodesSummary(t.Context(), "2026-11-21")
+	master := DailyData{Requests: 777, Blocked: 7, DistinctIPs: 5, TopRule: "XSS", CCTriggered: 2, Autobans: 1}
+	got := collectNodesSummary(t.Context(), "2026-11-21", master)
+	if !strings.HasPrefix(got, formatNodeStatsLine(MasterNodeLabel(), ClusterNodeStats{Requests: 777, Blocked: 7, DistinctIPs: 5, TopRule: "XSS", CCTriggered: 2, Autobans: 1})+"\n") {
+		t.Fatalf("摘要首行应为带数据的主节点: %q", got)
+	}
 	if !strings.Contains(got, "slave-a：请求 1200 · 拦截 30 · 独立IP 9") {
 		t.Fatalf("摘要缺失 slave-a 行: %q", got)
 	}
@@ -344,12 +348,12 @@ func TestCollectNodesSummary_aggregatesPerNode(t *testing.T) {
 	if !strings.Contains(got, "slave-c：未上报") {
 		t.Fatalf("未上报节点被静默: %q", got)
 	}
-	if strings.Count(got, "\n") != 2 {
-		t.Fatalf("摘要应为每节点一行（3 行 2 换行）: %q", got)
+	if strings.Count(got, "\n") != 3 {
+		t.Fatalf("摘要应为主节点+3 从节点（4 行 3 换行）: %q", got)
 	}
-	// 声明了集群但该日全部未上报：每个已批准从节点都出「未上报」行。
-	wantEmptyDay := "slave-a：未上报\nslave-b：未上报\nslave-c：未上报"
-	if got := collectNodesSummary(t.Context(), "2026-01-01"); got != wantEmptyDay {
+	// 声明了集群但该日全部未上报：主节点仍显示本地统计，从节点逐行「未上报」。
+	wantEmptyDay := formatNodeStatsLine(MasterNodeLabel(), ClusterNodeStats{Requests: 777, Blocked: 7, DistinctIPs: 5, TopRule: "XSS", CCTriggered: 2, Autobans: 1}) + "\n" + "slave-a：未上报\nslave-b：未上报\nslave-c：未上报"
+	if got := collectNodesSummary(t.Context(), "2026-01-01", master); got != wantEmptyDay {
 		t.Fatalf("无数据日期摘要=%q，want %q（未上报可见）", got, wantEmptyDay)
 	}
 }
