@@ -26,8 +26,8 @@ export const toggleDailyModules = (
   return [...next]
 }
 
-// 与后端 validateChannelStyle 的 len(s) 同口径：模板长度按 UTF-8 字节，
-// 不按 JS UTF-16 字符（中文 1 字符约 3 字节）。
+// 与后端 validateChannelStyle 的 len(s) 同口径：模板长度按 UTF8 字节，
+// 不按 JS 字符数（中文 1 字符约 3 字节）。
 export const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).length
 
 interface ChannelTemplateDraft {
