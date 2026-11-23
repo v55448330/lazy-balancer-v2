@@ -2,6 +2,7 @@ package services
 
 import (
 	"crypto/tls"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,5 +155,17 @@ func TestResolveCertificate_unknownModeFallsBackToSelfSignedWithWarn(t *testing.
 	}
 	if got := logs.String(); !strings.Contains(got, `TLS 模式 "garbage" 不在白名单内`) {
 		t.Fatalf("未知 mode 必须留痕: %q", got)
+	}
+}
+
+type failingEntropyReader struct{}
+
+func (failingEntropyReader) Read([]byte) (int, error) {
+	return 0, errors.New("entropy unavailable")
+}
+
+func TestAdminTLSSerial_returnsEntropyError(t *testing.T) {
+	if _, err := adminTLSSerial(failingEntropyReader{}); err == nil {
+		t.Fatal("crypto/rand error must be returned, not silently discarded")
 	}
 }

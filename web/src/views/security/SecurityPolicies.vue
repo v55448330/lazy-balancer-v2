@@ -1161,7 +1161,7 @@ import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { crsCategoryLabel } from '@/utils/crsCategories.ts'
 import { builtinBlockPageLabel, type BlockPageLike } from '@/utils/builtinBlockPages'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, normalizePolicyType, mergeChainOrder, mergeIpEntryCount, mergeIpEntryValues, normalizePolicyChainOrder, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, aclProducesBlocking, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, normalizePolicyType, mergeChainOrder, mergeIpEntryCount, mergeIpEntryValues, normalizePolicyChainOrder, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy, SecurityStageCustomRule, CrsRuleFileOption } from '@/utils/securityStages'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { updaterName } from '@/utils/updaterName'
@@ -3105,7 +3105,7 @@ const stageCapableOf = (stage: BlockPageStage): boolean => blockPageStageCanInte
     const rule = allCustomRules.value.find((r) => r.id === id)
     return !!rule && customRuleCanBlockInMode(form.value.mode, rule)
   }),
-  hasAclEntries: form.value.ip_acl_enabled && form.value.ip_acl_mode !== '绕过' && aclMergedCount.value > 0,
+  hasAclEntries: aclProducesBlocking(form.value.ip_acl_enabled, form.value.ip_acl_mode, aclMergedCount.value),
   hasBlacklistEntries: ipBlacklistSelf.value.length > 0,
   hasGeoip: form.value.geoip_enabled && geoipCountries.value.length > 0,
 })

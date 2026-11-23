@@ -29,6 +29,23 @@ func TestStatusWriter_unwrapPreservesHijack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResponseController.Hijack through statusWriter: %v (Unwrap chain broken)", err)
 	}
+	if w.status != http.StatusSwitchingProtocols {
+		t.Fatalf("status=%d, want 101（升级响应直写连接，不经过 WriteHeader）", w.status)
+	}
+}
+
+// WriteHeader 已显式给出状态时，Hijack 不得把它改写为 101。
+func TestStatusWriter_hijackKeepsExplicitStatus(t *testing.T) {
+	base := &hijackableWriter{ResponseWriter: httptest.NewRecorder()}
+	w := &statusWriter{ResponseWriter: base}
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		t.Fatalf("Hijack: %v", err)
+	}
+	if w.status != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", w.status)
+	}
 }
 
 // 受信代理判定缺席时伪造 XFF 不得改变观测到的客户端 IP；var 在场时用 var 值。

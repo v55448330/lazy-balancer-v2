@@ -60,6 +60,9 @@
         <span class="info-note-desc">{{ t('common.app.views.trigDetail.entriesLoadFailed') }}</span>
         <el-button size="small" type="primary" plain :loading="loading" @click="retryLists">{{ t('common.app.views.trigDetail.reload') }}</el-button>
       </div>
+      <div v-if="deletedRefIds.length > 0 && !loadError" class="info-note-bar">
+        <span class="info-note-desc">{{ t('common.app.views.trigDetail.deletedListRefs', { ids: deletedRefIds.join(', ') }) }}</span>
+      </div>
       <div class="trg-card dialog-panel">
         <DialogSectionHeader :title="t('common.app.views.trigDetail.policyConfig', { dimension: dimensionTitle })" />
         <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.currentConfig') }}</span><span>{{ relevantSummary }}</span></div>
@@ -73,7 +76,7 @@
           <div v-if="inlineAclHit" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.hitPosition') }}</span><span>{{ t('common.app.views.trigDetail.inlineAclList', { mode: aclModeWord }) }}</span></div>
           <div v-if="trustHitNote" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.trustExemption') }}</span><span>{{ trustHitNote }}</span></div>
           <div v-if="memberSystemTip" class="info-note-bar"><span class="info-note-desc">{{ memberSystemTip }}</span></div>
-          <div v-if="allHitLists.length === 0 && !inlineAclHit && kind === 'acl' && !isAllowOutside && !loadError && !entriesError" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.noHitListFound') }}</span></div>
+          <div v-if="allHitLists.length === 0 && !inlineAclHit && kind === 'acl' && !isAllowOutside && !loadError && !entriesError && deletedRefIds.length === 0" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.noHitListFound') }}</span></div>
         </template>
 
         <!-- 爬虫校验：验证结果与豁免引擎（v2.3.8 独立族，不再误标地域） -->
@@ -422,6 +425,14 @@ const loadError = ref(false)
 // 「未定位到命中的地址列表」的业务结论（与真实未命中无法区分）——与 IP 处置
 // 弹框的 listsError 同口径：横幅 + 重试，「未定位」结论在失败态不可达。
 const entriesError = ref(false)
+// 引用的名单已被删除（配置状态，非瞬时加载失败）：GET 404 单独归类，不再
+// 复用可重试的 entriesError 横幅（重载永远失败，且会抑制「未定位」结论）。
+const deletedRefIds = ref<number[]>([])
+const isNotFoundError = (err: unknown): boolean => {
+  if (!(err instanceof Error)) return false
+  const e = err as { status?: number; response?: { status?: number } }
+  return e.status === 404 || e.response?.status === 404
+}
 // policy_id<=0 是后端归因的合法「无策略归属」态（规则未绑定策略时
 // securityevents.go 返回 (0, "")），不是「策略已删除」——文案分离。
 const noPolicyAttribution = computed(() => (props.row?.policy_id ?? 0) <= 0)
@@ -557,6 +568,7 @@ const loadAll = async (): Promise<void> => {
   policyMissing.value = false
   loadError.value = false
   entriesError.value = false
+  deletedRefIds.value = []
   policy.value = null
   enabledPolicies.value = []
   lists.value = []
@@ -614,11 +626,23 @@ const loadAll = async (): Promise<void> => {
     // 失败信号只能按「引用名单是否全部落地」判定，否则条目缺失会退化成
     // 「未命中名单」的业务结论（不能伪装成业务结论）。
     await ensureSharedEntries(refIds, async (id) => {
-      const res = await request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`, { silent: true })
-      return (res.data?.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
+      try {
+        const res = await request.get<APIResponse<{ id: number; entries?: Array<{ value: string }> }>>(`/security/ip-lists/${id}`, { silent: true })
+        return (res.data?.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
+      } catch (err) {
+        // 404=名单已删除（禁用策略后删除属正常配置形态）：单列状态；
+        // 网络/5xx 继续上抛，由 missingSharedEntryIds 走可重试横幅。
+        if (isNotFoundError(err)) {
+          if (seq === loadSeq && !deletedRefIds.value.includes(id)) deletedRefIds.value.push(id)
+        }
+        // 404 不落空缓存：否则下次打开弹框会命中「已缓存」而永久丢失
+        // 「引用的名单已删除」提示；由 ensureSharedEntries 保持未缓存、下次重取。
+        throw err
+      }
     })
     if (seq !== loadSeq) return
-    entriesError.value = missingSharedEntryIds(refIds).length > 0
+    deletedRefIds.value = [...new Set(deletedRefIds.value)].sort((a, b) => a - b)
+    entriesError.value = missingSharedEntryIds(refIds).some((id) => !deletedRefIds.value.includes(id))
     entriesCache.value = { ...sharedEntriesCache }
   } finally {
     if (seq === loadSeq) loading.value = false

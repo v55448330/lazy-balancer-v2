@@ -23,15 +23,23 @@ const challengeKind = (ruleTriggered: string | undefined | null): 'issued' | 'pa
   return null
 }
 
+// 词条缺失时 vue-i18n 返回键路径（truthy），`t(...) || action` 的回退永远
+// 不可达，界面会显示 common.app.views.eventAction.* 而非动作原文。按「译文
+// 等于键」判定缺失，保持 fail-visible 原样回显契约。
+const actionLabel = (key: string, action: string): string => {
+  const translated = t(key)
+  return translated === key ? action : translated
+}
+
 /** 短标签（列表/筛选等紧凑位）：拦截 / 检测 / 挑战结果。
  *  ruleTriggered 形参零消费：挑战三态标签同词（区分只由 eventActionTone 承载），
  *  保留形参使调用方与 tone 同一传参形态——删参会让三处调用点分叉。 */
 export const eventActionShort = (action: string | undefined | null, _ruleTriggered?: string | null): string => {
   if (!action) return '—'
-  if (action === 'blocked') return t('common.app.views.eventAction.blockedShort') || action
-  if (action === 'logged') return t('common.app.views.eventAction.loggedShort') || action
-  if (action === 'trust') return t('common.app.views.eventAction.trustShort') || action
-  if (action === 'challenged') return t('common.app.views.eventAction.challengedShort') || action
+  if (action === 'blocked') return actionLabel('common.app.views.eventAction.blockedShort', action)
+  if (action === 'logged') return actionLabel('common.app.views.eventAction.loggedShort', action)
+  if (action === 'trust') return actionLabel('common.app.views.eventAction.trustShort', action)
+  if (action === 'challenged') return actionLabel('common.app.views.eventAction.challengedShort', action)
   return action
 }
 
@@ -39,10 +47,10 @@ export const eventActionShort = (action: string | undefined | null, _ruleTrigger
  *  ruleTriggered 形参零消费，口径同 eventActionShort（见其注释）。 */
 export const eventActionFull = (action: string | undefined | null, _ruleTriggered?: string | null): string => {
   if (!action) return '—'
-  if (action === 'blocked') return t('common.app.views.eventAction.blockedFull') || action
-  if (action === 'logged') return t('common.app.views.eventAction.loggedFull') || action
-  if (action === 'trust') return t('common.app.views.eventAction.trustFull') || action
-  if (action === 'challenged') return t('common.app.views.eventAction.challengedFull') || action
+  if (action === 'blocked') return actionLabel('common.app.views.eventAction.blockedFull', action)
+  if (action === 'logged') return actionLabel('common.app.views.eventAction.loggedFull', action)
+  if (action === 'trust') return actionLabel('common.app.views.eventAction.trustFull', action)
+  if (action === 'challenged') return actionLabel('common.app.views.eventAction.challengedFull', action)
   return action
 }
 

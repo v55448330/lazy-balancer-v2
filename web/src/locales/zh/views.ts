@@ -1263,6 +1263,7 @@ export default {
     'dimWaf': 'WAF',
     'disabled': '禁用',
     'enabled': '启用',
+    'deletedListRefs': '引用的地址列表已删除（ID: {ids}）：命中名单与信任豁免归因不可用',
     'entriesLoadFailed': '地址列表条目加载失败：命中名单与信任豁免归因不完整',
     'eventTime': '事件时间 · {time}',
     'exemptEngines': '豁免引擎',

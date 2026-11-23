@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -129,6 +130,12 @@ func (c AdminTLSConfig) ResolveCertificate(dataDir string) (tls.Certificate, err
 	}
 }
 
+// adminTLSSerial 读取 128-bit 随机序列号。crypto/rand 失败必须上抛：丢弃
+// 错误会让 x509 以 nil/零值序列号失败，错误归因落在证书创建而非熵源。
+func adminTLSSerial(reader io.Reader) (*big.Int, error) {
+	return rand.Int(reader, new(big.Int).Lsh(big.NewInt(1), 128))
+}
+
 // selfSignedCert loads or generates a self-signed admin certificate so it is
 // stable across restarts; cluster peers skip verification for it anyway.
 func selfSignedCert(dataDir string) (tls.Certificate, error) {
@@ -160,7 +167,10 @@ func selfSignedCert(dataDir string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("生成自签名私钥失败: %w", err)
 	}
-	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := adminTLSSerial(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("生成自签名证书序列号失败: %w", err)
+	}
 	tmpl := x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "Lazy Balancer V2", Organization: []string{"XiaoBao"}},

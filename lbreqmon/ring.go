@@ -233,6 +233,11 @@ func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// 协议升级的 101 由 ReverseProxy 在 Hijack 后直写连接（不经过
+	// WriteHeader）；不补记则 WS/upgrade 行恒为 0，连接监控显示为绿色 2xx「0」。
+	if w.status == 0 {
+		w.status = http.StatusSwitchingProtocols
+	}
 	hc := &hijackedConn{Conn: conn, w: w}
 	if brw != nil {
 		brw.Writer.Reset(hc)

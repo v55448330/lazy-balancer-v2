@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  aclProducesBlocking,
   attachStageDetails,
   blockPageStageCanIntercept,
   addressAllowDenyConflictText,
@@ -368,6 +369,16 @@ test('阶段可拦截能力门：stage3 关模式/检测无 block 规则、stage
   assert.equal(blockPageStageCanIntercept({ stage: 1, hasAclEntries: true }), true)
   assert.equal(blockPageStageCanIntercept({ stage: 1, hasBlacklistEntries: true }), true)
   assert.equal(blockPageStageCanIntercept({ stage: 1, hasGeoip: true }), true)
+})
+
+test('allow 空生效集是 fail-closed 恒拒，拦截页能力门不得判不可拦截', () => {
+  assert.equal(aclProducesBlocking(true, 'allow', 0), true)
+  assert.equal(aclProducesBlocking(true, 'allow', 1), true)
+  assert.equal(aclProducesBlocking(false, 'allow', 0), false)
+  assert.equal(aclProducesBlocking(true, 'deny', 0), false)
+  assert.equal(aclProducesBlocking(true, 'deny', 1), true)
+  assert.equal(aclProducesBlocking(true, '绕过', 1), false)
+  assert.equal(aclProducesBlocking(true, '', 1), true)
 })
 
 test('检测模式拦截页能力：body 规则只记录，URI 规则仍可拦截，其他模式不受相位限制', () => {

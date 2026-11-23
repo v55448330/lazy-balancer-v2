@@ -37,7 +37,9 @@ const (
 // 封顶——既尊重服务端窗口，又防 DoS 式超长封存（Retry-After: 86400）把
 // 签发链停摆在单次 Present 上。var 供测试收窄（与 dnspod
 // domainIDNegativeTTL 同型约定）。
-var retryAfterCap = 120 * time.Second
+// 60s < DNS SDK 的 90s 单请求包络（dnspod/tencent/cloudflare/aliyun），为
+// 重试请求本身留出余量；超过客户端超时的服务端窗口只能按超时失败。
+var retryAfterCap = 60 * time.Second
 
 // Retryable reports whether an HTTP status code is a transient failure that
 // is worth another attempt (429 and 5xx).
@@ -88,6 +90,25 @@ type Transport struct {
 	MaxBackoff     time.Duration // upper bound for any single wait; 0 means 30s
 }
 
+// retryWait 计算下一次等待：本地退避按 max 封顶；Retry-After 先按 cap 封顶，
+// 再只抬高不压低本地退避。cap < max 的测试缝/未来配置不得让服务端头把等待
+// 压到本地退避以下（Retry-After 只应放大等待）。
+func retryWait(backoff, max, after, cap time.Duration) time.Duration {
+	wait := backoff
+	if wait > max {
+		wait = max
+	}
+	if after > 0 {
+		if after > cap {
+			after = cap
+		}
+		if after > wait {
+			wait = after
+		}
+	}
+	return wait
+}
+
 func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	attempts, initial, max := t.defaults()
 	var body []byte
@@ -124,13 +145,7 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		// 本地退避先按 MaxBackoff 封顶；服务器显式 Retry-After 只抬高
 		// 等待（不压低本地退避），采纳后按 retryAfterCap 独立封顶——
 		// 不再被 MaxBackoff 截短成撞墙重试（见 retryAfterCap 注释）。
-		wait := backoff
-		if wait > max {
-			wait = max
-		}
-		if after := After(response.Header.Get("Retry-After")); after > wait {
-			wait = min(after, retryAfterCap)
-		}
+		wait := retryWait(backoff, max, After(response.Header.Get("Retry-After")), retryAfterCap)
 		// 复用连接前必须先排水：直接 Close 会把仍有未读字节的响应体对应的
 		// 连接标记为不可复用（net/http 语义），连续重试每次都新建 TLS 连接。
 		// 有界排水（丢弃，最多 maxRetryDrainBytes）——异常大响应体不得让

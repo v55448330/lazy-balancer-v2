@@ -833,3 +833,23 @@ func TestCrawlerAssemblyEntries_nilDBReturnsExplicitError(t *testing.T) {
 		t.Fatal("RebuildCrawlerIPListSnapshot with nil DB must return an explicit error, got nil")
 	}
 }
+
+// 行存在但 entries=” 与显式 '[]' 同义：必须登记为空集合，不得当行缺失补种。
+func TestLoadCrawlerIPLists_emptyStringIsExplicitEmpty(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`DELETE FROM security_ip_lists WHERE category='搜索引擎爬虫'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at)
+		VALUES (?, '', '搜索引擎爬虫', '', 1, datetime('now'), datetime('now'))`, CrawlerIPListName("so360spider")); err != nil {
+		t.Fatal(err)
+	}
+	all, err := loadCrawlerIPListsFromDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, ok := all["so360spider"]
+	if !ok || len(entries) != 0 {
+		t.Fatalf("entries='' 应为显式空集合: ok=%v entries=%v", ok, entries)
+	}
+}

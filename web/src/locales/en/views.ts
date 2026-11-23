@@ -1263,6 +1263,7 @@ export default {
     'dimWaf': 'WAF',
     'disabled': 'Disabled',
     'enabled': 'Enabled',
+    'deletedListRefs': 'Referenced address list has been deleted (ID: {ids}): hit-list and trust-exemption attribution unavailable',
     'entriesLoadFailed': 'Address list entries failed to load: hit-list and trust-exemption attribution incomplete',
     'eventTime': 'Event time · {time}',
     'exemptEngines': 'Exempt engines',

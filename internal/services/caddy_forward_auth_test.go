@@ -522,3 +522,20 @@ func TestBuildHTTPHandleChain_ntlmTransportPlainHTTPUpstreams(t *testing.T) {
 		t.Fatalf("plain http upstreams missing http_ntlm transport: %#v", proxy["transport"])
 	}
 }
+
+func TestValidateForwardAuthGatewayAddressForWrite_pathQueryRejected(t *testing.T) {
+	for _, valid := range []string{"http://gw.internal:7000", "https://gw.internal", "http://gw.internal:7000/"} {
+		if err := ValidateForwardAuthGatewayAddressForWrite(valid); err != nil {
+			t.Fatalf("valid address %q rejected: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{
+		"http://gw.internal:7000/auth",
+		"http://gw.internal:7000?x=1",
+		"http://gw.internal:7000/#frag",
+	} {
+		if err := ValidateForwardAuthGatewayAddressForWrite(invalid); err == nil {
+			t.Fatalf("address %q with path/query/fragment must be rejected（渲染层会静默丢弃）", invalid)
+		}
+	}
+}

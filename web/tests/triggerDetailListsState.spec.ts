@@ -27,14 +27,25 @@ test('名单条目失败不得静默：按 refIds 缺失显性置 entriesError',
   assert.match(loadAll, /entriesError\.value = false/, '每轮装载先复位失败态')
   assert.match(
     loadAll,
-    /entriesError\.value = missingSharedEntryIds\(refIds\)\.length > 0/,
-    'ensureSharedEntries 单名单失败不抛出——必须按引用名单是否全部落地判定',
+    /entriesError\.value = missingSharedEntryIds\(refIds\)\.some\(\(id\) => !deletedRefIds\.value\.includes\(id\)\)/,
+    'ensureSharedEntries 单名单失败不抛出——必须按引用名单是否全部落地判定；已删除名单不计入可重试失败',
   )
   // 缺失判定必须在条目补齐之后（先判定再加载会把在途请求误报为失败）
   const ensured = loadAll.indexOf('await ensureSharedEntries(refIds')
   const flagged = loadAll.indexOf('entriesError.value = missingSharedEntryIds(refIds)')
   assert.ok(ensured > 0, 'loadAll 必须先补齐条目')
   assert.ok(flagged > ensured, '失败判定必须排在条目补齐之后')
+})
+
+test('引用的名单已删除与瞬时加载失败分离（404 不提供无效重载）', () => {
+  assert.match(text, /const deletedRefIds = ref<number\[\]>\(\[\]\)/)
+  assert.match(text, /const isNotFoundError = \(err: unknown\): boolean =>/)
+  assert.match(text, /deletedRefIds\.value\.push\(id\)/)
+  assert.match(text, /deletedRefIds\.value = \[\.\.\.new Set\(deletedRefIds\.value\)\]\.sort/)
+  assert.match(text, /t\('common\.app\.views\.trigDetail\.deletedListRefs', \{ ids: deletedRefIds\.join\(', '\) \}\)/)
+  const deletedBanner = text.split('\n').find((line) => line.includes('deletedListRefs'))
+  assert.ok(deletedBanner, '已删除名单横幅调用点仍在模板中')
+  assert.doesNotMatch(deletedBanner!, /retryLists|reload/, '已删除名单是配置状态，不得提供永不成功的重载入口')
 })
 
 test('失败态有横幅与重试入口（策略/条目同轮重取）', () => {
@@ -52,4 +63,5 @@ test('失败态不得退化成「未定位到命中的地址列表」的业务�
   assert.ok(tipLine, '未定位提示调用点仍在模板中')
   assert.match(tipLine!, /!entriesError/, '条目加载失败时「未定位」不成立')
   assert.match(tipLine!, /!loadError/, '策略/名单加载失败时「未定位」不成立')
+  assert.match(tipLine!, /deletedRefIds\.length === 0/, '引用名单已删除时不得再断言「未定位」')
 })

@@ -42,6 +42,13 @@ test('未知动作 fail-visible：原样回显，不回落到「检测」', () =
   assert.equal(eventActionTone(undefined), 'warning', '未知动作按未拦截色调渲染')
 })
 
+test('缺键回退可达：译文等于键路径时回显动作原文', () => {
+  const source = code('src/utils/eventAction.ts')
+  assert.match(source, /const translated = t\(key\)/, '缺键判定必须先取译文')
+  assert.match(source, /translated === key \? action : translated/, 'vue-i18n 缺键返回键路径，按相等判定回退')
+  assert.doesNotMatch(source, /\|\|\s*action/, 'truthy 键路径使 || action 成为死回退')
+})
+
 test('四个视图共用单源映射，本地副本已删除', () => {
   const screen = code('src/views/security/ThreatScreen.vue')
   assert.match(screen, /from '@\/utils\/eventAction'/)

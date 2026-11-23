@@ -94,7 +94,8 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 	for rows.Next() {
 		r, _, err := scanNotificationChannel(rows.Scan)
 		if err != nil {
-			continue
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知通道失败", err)})
+			return
 		}
 		if r.Type == "qq" || r.Type == "wx_clawbot" {
 			r.LinkConnected, r.LinkState = notify.ChannelLinkStatus(r.Type, r.Target)
@@ -112,6 +113,10 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 			r.StyleConfig = maskChannelStyleHeaders(r.StyleConfig)
 		}
 		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知通道失败", err)})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"channels": out}})
 }

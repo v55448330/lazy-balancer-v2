@@ -578,12 +578,14 @@ func persistCRSSnapshotFromInLock(liveDir, snapshotDir, version string) error {
 	// 时再 cleanupTmp() 会把唯一完整的新树也删掉——两份快照同时消失，
 	// 容器重建即回退镜像捆绑版本（快照缺席不自愈，只有退化快照会自愈）。
 	oldDir := snapshotDir + ".old"
-	if err := os.RemoveAll(oldDir); err != nil {
-		cleanupTmp()
-		return fmt.Errorf("清理旧快照残骸: %w", err)
-	}
 	prevExisted := false
-	if _, err := os.Stat(snapshotDir); err == nil {
+	switch _, statErr := os.Stat(snapshotDir); {
+	case statErr == nil:
+		// 当前快照在场：.old 是上一轮成功替换后的残骸，可清理。
+		if err := os.RemoveAll(oldDir); err != nil {
+			cleanupTmp()
+			return fmt.Errorf("清理旧快照残骸: %w", err)
+		}
 		if err := osRename(snapshotDir, oldDir); err != nil {
 			// 旧快照原封未动：清理暂存即可（保留 tmp 会与「旧快照仍有效」
 			// 的现场混淆，且下一次调用入口本就会清 tmp）。
@@ -591,6 +593,21 @@ func persistCRSSnapshotFromInLock(liveDir, snapshotDir, version string) error {
 			return fmt.Errorf("暂存旧快照: %w", err)
 		}
 		prevExisted = true
+	case errors.Is(statErr, os.ErrNotExist):
+		// 当前快照缺失：.old 若在场，就是上一轮复位失败留下的唯一旧树，
+		// 不得当残骸删除（与 replaceDirFromInWindow 的守卫同口径）。
+		if _, oldErr := os.Stat(oldDir); oldErr == nil {
+			prevExisted = true
+		} else if !errors.Is(oldErr, os.ErrNotExist) {
+			cleanupTmp()
+			return fmt.Errorf("检查旧快照残骸: %w", oldErr)
+		} else if err := os.RemoveAll(oldDir); err != nil {
+			cleanupTmp()
+			return fmt.Errorf("清理旧快照残骸: %w", err)
+		}
+	default:
+		cleanupTmp()
+		return fmt.Errorf("检查当前快照: %w", statErr)
 	}
 	if err := osRename(tmpDir, snapshotDir); err != nil {
 		// 新树到位失败：旧快照复位（失败时保留 .old 与完整 tmp 供人工/

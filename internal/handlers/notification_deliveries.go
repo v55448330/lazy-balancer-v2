@@ -140,7 +140,8 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		var d notificationDeliveryDTO
 		var attempts, isTest int
 		if err := rows.Scan(&d.ID, &d.UserID, &d.Username, &d.EventType, &d.Level, &d.Title, &d.Body, &d.Status, &attempts, &d.Error, &d.CreatedAt, &d.SentAt, &isTest); err != nil {
-			continue
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+			return
 		}
 		d.Attempts = attempts
 		d.IsTest = isTest != 0
@@ -155,6 +156,10 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		d.Channels = []deliveryChannelDTO{}
 		out = append(out, d)
 		ids = append(ids, d.ID)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+		return
 	}
 	// 每通道结果批量 JOIN（一次查询，按 delivery_id 归组）。通道名优先现表名，
 	// 通道已删回退结果行快照名，再回退「通道 #id」。
@@ -174,28 +179,38 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 			  AND nc.id=(SELECT MAX(id) FROM notification_delivery_channels
 			             WHERE delivery_id=nc.delivery_id AND channel_id=nc.channel_id)
 			ORDER BY nc.id`, chArgs...)
-		if err == nil {
-			byDelivery := map[int64]int{}
-			for i, id := range ids {
-				byDelivery[id] = i
-			}
-			for chRows.Next() {
-				var deliveryID int64
-				var ch deliveryChannelDTO
-				if chRows.Scan(&deliveryID, &ch.ChannelID, &ch.ChannelName, &ch.ChannelType, &ch.Status, &ch.Error, &ch.DurationMs) == nil {
-					if ch.ChannelName == "" {
-						ch.ChannelName = "通道 #" + strconv.FormatInt(ch.ChannelID, 10)
-					}
-					if idx, ok := byDelivery[deliveryID]; ok {
-						if out[idx].UserID != uid {
-							ch.Error = maskCrossOwnerDeliveryError(ch.Error)
-						}
-						out[idx].Channels = append(out[idx].Channels, ch)
-					}
-				}
-			}
-			chRows.Close()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+			return
 		}
+		byDelivery := map[int64]int{}
+		for i, id := range ids {
+			byDelivery[id] = i
+		}
+		for chRows.Next() {
+			var deliveryID int64
+			var ch deliveryChannelDTO
+			if err := chRows.Scan(&deliveryID, &ch.ChannelID, &ch.ChannelName, &ch.ChannelType, &ch.Status, &ch.Error, &ch.DurationMs); err != nil {
+				chRows.Close()
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+				return
+			}
+			if ch.ChannelName == "" {
+				ch.ChannelName = "通道 #" + strconv.FormatInt(ch.ChannelID, 10)
+			}
+			if idx, ok := byDelivery[deliveryID]; ok {
+				if out[idx].UserID != uid {
+					ch.Error = maskCrossOwnerDeliveryError(ch.Error)
+				}
+				out[idx].Channels = append(out[idx].Channels, ch)
+			}
+		}
+		if err := chRows.Err(); err != nil {
+			chRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+			return
+		}
+		chRows.Close()
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"deliveries": out, "total": total}})
 }

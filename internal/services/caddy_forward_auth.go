@@ -46,6 +46,27 @@ func ValidateForwardAuthGatewayAddress(upstream string) (string, bool, error) {
 	return net.JoinHostPort(host, port), parsed.Scheme == "https", nil
 }
 
+// ValidateForwardAuthGatewayAddressForWrite 在保存/导入/启用门额外拒绝地址中
+// 的 path/query/fragment：渲染层只消费 host:port，路径由 ForwardAuthURI 单独
+// 配置；静默丢弃会让用户以为网关走 /auth 而实际走 /。渲染层保留宽容，避免
+// 旧数据在配置生成期整份失败。
+func ValidateForwardAuthGatewayAddressForWrite(upstream string) error {
+	if _, _, err := ValidateForwardAuthGatewayAddress(upstream); err != nil {
+		return err
+	}
+	parsed, err := url.Parse(strings.TrimSpace(upstream))
+	if err != nil {
+		return fmt.Errorf("认证网关地址 %q 无法解析: %v", upstream, err)
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return fmt.Errorf("认证网关地址 %q 不能包含路径（请在同规则的认证路径字段配置）", upstream)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("认证网关地址 %q 不能包含查询参数或片段", upstream)
+	}
+	return nil
+}
+
 // CanonicalForwardAuthCopyHeaders 身份头清单的规范名单源：逐项 TrimSpace 后
 // http.CanonicalHeaderKey（Go 标准库——各连字符段首字母大写），剔除空项后
 // join。分隔空格形态（「remote-user, remote-email」）是用户常见输入：前导

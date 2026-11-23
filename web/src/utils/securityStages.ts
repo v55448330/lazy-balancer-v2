@@ -396,6 +396,15 @@ export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: 
 // 保存路径已放开为 warning-not-block（用户裁定）：空白名单不再被写门硬阻断，
 // 前端保存流以 ElMessageBox.confirm 显性告知「关联规则将拒绝所有请求」后照常
 // 保存；本函数仍不为该形态虚增空组，但不得再把所有空名单统称为「零渲染安全等价」。
+// 拦截页能力门：ACL 是否会产生拒绝。allow 模式即使生效集合为空，引擎也
+// 否定空集（恒拒），因此不能按「条目数 > 0」判不可拦截；deny/绕过仍按条目门。
+export const aclProducesBlocking = (
+  enabled: boolean | undefined,
+  mode: string | undefined,
+  effectiveCount: number,
+): boolean =>
+  enabled === true && (mode === 'allow' || (mode !== '绕过' && effectiveCount > 0))
+
 export const hasIPACLControl = (p: {
   has_ip_control?: boolean
   ip_acl_enabled?: boolean
@@ -1790,7 +1799,7 @@ interface BlockPageStageCapability {
   mode?: string
   /** 阶段 3：至少一条启用且动作为 block 的自定义规则 */
   hasBlockingCustomRule?: boolean
-  /** 阶段 1：ACL 已启用且有效条目非空（绕过模式不拦截） */
+  /** 阶段 1：ACL 已启用且会产生拒绝（allow 空集恒拒；deny 需有效条目；绕过不拦截） */
   hasAclEntries?: boolean
   /** 阶段 1：独立遗留黑名单非空 */
   hasBlacklistEntries?: boolean

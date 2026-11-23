@@ -66,6 +66,9 @@ func loadCrawlerIPListsFromDB() (map[string][]string, error) {
 			return nil, err
 		}
 		if raw == "" {
+			// 行存在但列为空串：与显式 '[]' 同义（空集合），不得当行缺失补种
+			// 内置首版——否则带外清空会被下一次启动静默复活。
+			all[src.Name] = []string{}
 			continue
 		}
 		var values []string

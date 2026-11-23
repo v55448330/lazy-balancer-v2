@@ -470,7 +470,7 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 				return fmt.Errorf("认证网关与直返/301 跳转路径规则互斥（路径 %q 配置了 %s 模式）：网关校验仅对转发上游的请求有意义，请改用普通转发路径或关闭认证网关", pathRule.Path, pathRule.ResponseMode)
 			}
 		}
-		if _, _, err := services.ValidateForwardAuthGatewayAddress(input.ForwardAuthUpstream); err != nil {
+		if err := services.ValidateForwardAuthGatewayAddressForWrite(input.ForwardAuthUpstream); err != nil {
 			return fmt.Errorf("认证网关地址无效: %w", err)
 		}
 		if input.ForwardAuthURI == "" || !strings.HasPrefix(input.ForwardAuthURI, "/") || strings.ContainsAny(input.ForwardAuthURI, "\r\n") {

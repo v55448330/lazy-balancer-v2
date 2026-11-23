@@ -5,8 +5,8 @@ package retry
 // 历史形态：Retry-After 与本地退避共用 MaxBackoff（默认 30s）封顶——服务端
 // 要求的更长限流窗口被截短成「到点即重试」，重试撞墙再吃 429，三次尝试在
 // 90s 窗口内烧完。新形态：本地退避仍按 MaxBackoff 封顶；服务器显式
-// Retry-After 只抬高等待，采纳后按独立封顶 retryAfterCap（120s）——既尊重
-// 服务端窗口，又防 DoS 式超长封存（Retry-After: 86400）停摆签发链。
+// Retry-After 只抬高等待，采纳后按独立封顶 retryAfterCap（60s，小于 DNS SDK
+// 90s 单请求包络）——既尊重服务端窗口，又防 DoS 式超长封存停摆签发链。
 
 import (
 	"net/http"
@@ -109,5 +109,21 @@ func TestTransport_retry_after_below_backoff_is_ignored(t *testing.T) {
 	defer resp.Body.Close()
 	if elapsed < 50*time.Millisecond {
 		t.Fatalf("elapsed=%v, want ≥50ms（本地退避不被 Retry-After=0 压低）", elapsed)
+	}
+}
+
+// cap 小于本地退避时，Retry-After 仍不得把等待压到本地退避以下。
+func TestRetryWait_capBelowMaxBackoffDoesNotLowerWait(t *testing.T) {
+	got := retryWait(40*time.Millisecond, 50*time.Millisecond, time.Hour, 5*time.Millisecond)
+	if got != 40*time.Millisecond {
+		t.Fatalf("wait=%v, want 40ms（Retry-After cap 只能抬高，不能压低本地退避）", got)
+	}
+}
+
+// cap 生效时仍能抬高本地退避。
+func TestRetryWait_capRaisesLocalBackoff(t *testing.T) {
+	got := retryWait(1*time.Millisecond, 50*time.Millisecond, time.Hour, 20*time.Millisecond)
+	if got != 20*time.Millisecond {
+		t.Fatalf("wait=%v, want 20ms（Retry-After 被 cap 截短后抬高退避）", got)
 	}
 }

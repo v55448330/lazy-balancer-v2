@@ -843,3 +843,23 @@ func TestCRSRulesTreeIntact_rejectsEmptyProbe(t *testing.T) {
 		t.Fatal("非空探针 + .conf 必须判完整")
 	}
 }
+
+// dst 缺失而 .old 在场 = 上次复位失败留下的唯一旧快照；新树 rename 失败时
+// 不得把它当残骸删除（与 replaceDirFromInWindow 的恢复守卫同口径）。
+func TestPersistCRSSnapshot_missingSnapshotKeepsOnlyOldOnRenameFailure(t *testing.T) {
+	live := t.TempDir()
+	writeTestFile(t, filepath.Join(live, crsVersionFile), "v4.28.0\n")
+	writeTestFile(t, filepath.Join(live, "rules", crsRulesProbeFile), "SecRule init")
+
+	snapshot := filepath.Join(t.TempDir(), "snapshot")
+	oldDir := snapshot + ".old"
+	writeTestFile(t, filepath.Join(oldDir, "only-old.txt"), "old snapshot")
+	forceRenameFailure(t)
+
+	if err := persistCRSSnapshotFromInLock(live, snapshot, "v4.28.0"); err == nil {
+		t.Fatal("forced rename failure must return an error")
+	}
+	if _, err := os.Stat(filepath.Join(oldDir, "only-old.txt")); err != nil {
+		t.Fatalf("唯一旧快照被删除（dst 缺失 + .old 在场必须保留）: %v", err)
+	}
+}
