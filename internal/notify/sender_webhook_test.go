@@ -189,7 +189,7 @@ func TestWebhookSenderTestMessage(t *testing.T) {
 	if err := testChannel(context.Background(), "webhook", `{"url":"`+srv.URL+`"}`); err != nil {
 		t.Fatalf("testChannel 返回错误: %v", err)
 	}
-	if title != "通知中心测试消息" {
+	if title != "通知通道验证成功" {
 		t.Errorf("测试消息标题 = %q", title)
 	}
 }

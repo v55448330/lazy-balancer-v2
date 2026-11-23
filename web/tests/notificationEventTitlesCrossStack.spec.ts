@@ -107,6 +107,17 @@ test('事件说明对表：catalog ID ↔ zh/en eventDescriptions 双向零缺�
   assert.deepEqual(extrasEn, [], 'en eventDescriptions 出现目录外键')
 })
 
+test('事件 hover 保持一句话短描述（不塞阈值/默认开关操作说明）', () => {
+  const ids = Object.keys(zhDesc)
+  assert.ok(ids.length >= 60, `事件说明数量异常偏少（${ids.length}）`)
+  const tooLong = ids
+    .filter(id => [...zhDesc[id]].length > 60)
+    .map(id => `${id}: ${zhDesc[id]}`)
+  assert.deepEqual(tooLong, [], '事件 hover 超过 60 字，应改为一句简短用途说明')
+  const longEn = ids.filter(id => enDesc[id].length > 140).map(id => `${id}: ${enDesc[id]}`)
+  assert.deepEqual(longEn, [], '英文事件 hover 超过 140 字符')
+})
+
 test('事件说明对表：zh 与 catalog 同文，en 已翻译且非空', () => {
   const descriptions = parseCatalogDescriptions()
   const drift: string[] = []

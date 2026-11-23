@@ -118,7 +118,7 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 }
 
 func (s webhookSender) Test(ctx context.Context, targetJSON string) error {
-	return s.Send(ctx, targetJSON, testNotificationMessage())
+	return s.Send(ctx, targetJSON, testNotificationMessageFor("Webhook"))
 }
 
 const webhookTimeout = 10 * time.Second

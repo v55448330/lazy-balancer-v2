@@ -1,11 +1,12 @@
 package notify
 
-// 事件说明单源（订阅浮层 hover 用）：一句话说明「什么条件会触发」，避免用户
-// 只凭标题猜测。新增事件必须在此登记（测试强制全覆盖），前端经 CatalogItem
-// description 展示；未登记时回退标题（不会出现空 tooltip）。
+// 事件说明单源（订阅浮层 hover 用）：一句话说明「这个事件是什么/何时会出现」，
+// 不写阈值、默认开关等规则操作细节（那些属于规则配置说明）。新增事件必须在
+// 此登记（测试强制全覆盖），前端经 CatalogItem description 展示；未登记时回退
+// 标题（不会出现空 tooltip）。
 var catalogDescriptions = map[string]string{
 	"auth.login_success":            "登录面板成功时提醒，带来源 IP。",
-	"auth.login_failed":             "同一账号或 IP 在 10 分钟内连续登录失败 5 次时提醒；账号被锁定或禁用时立即提醒，偶尔输错一次不提醒。",
+	"auth.login_failed":             "账号连续登录失败，或被锁定/禁用时提醒。",
 	"auth.password_changed":         "用户修改自己的登录密码时提醒。",
 	"auth.mfa_changed":              "用户开启、关闭或重新绑定 MFA 时提醒。",
 	"auth.mfa_verify_failed":        "同一账号或 IP 在 10 分钟内连续输错 MFA 验证码 5 次时提醒。",
@@ -52,21 +53,21 @@ var catalogDescriptions = map[string]string{
 	"sys.startup_completed":         "面板启动完成并开始监听时提醒，每次启动只提醒一次。",
 	"sys.startup_abnormal":          "面板启动失败或异常退出时提醒，带失败原因。",
 	"sys.restart_requested":         "通过面板请求重启、系统即将重启时提醒。",
-	"sec.blocked_aggregate":         "5 分钟内拦截达到 10 次时提醒一次；达到 50/200 次分别升级为警告/严重。正文列出拦截、挑战、自动封禁次数和 TOP 规则/IP/路径；低于 10 次不提醒。",
-	"sec.challenge_summary":         "5 分钟内挑战发放或失败达到 10 次时提醒一次，达到 50/200 次升级为警告/严重；正文给出发放数、失败数、TOP 原因和 IP。默认关闭，需要时在规则里开启。",
-	"sec.cc_triggered":              "CC 防护触发人机挑战时提醒；同一 IP 10 分钟内只提醒一次，已被自动封禁的 IP 不再提醒。",
-	"sec.autoban_triggered":         "自动封禁实际执行时提醒，带 IP、原因和时长。",
-	"sec.autoban_summary":           "5 分钟内自动封禁达到 5 个 IP 时合并提醒一次，之后不再逐个 IP 提醒。",
-	"sec.autoban_expired":           "自动封禁到期解封时提醒；默认关闭。",
-	"sec.policy_changed":            "安全策略新建、修改、删除、绑定或解绑时提醒。",
-	"sec.ip_list_changed":           "IP 名单或名单条目新建、修改、删除时提醒。",
-	"sec.custom_rule_changed":       "自定义安全规则新建、修改或删除时提醒。",
-	"sec.block_page_changed":        "拦截页新建、修改或删除时提醒。",
-	"sec.autoban_config_changed":    "自动封禁配置变更、累犯记录移除或重置时提醒。",
+	"sec.blocked_aggregate":         "短时间内拦截和挑战次数明显升高时汇总提醒。",
+	"sec.challenge_summary":         "短时间内人机挑战发放或失败次数明显升高时汇总提醒。",
+	"sec.cc_triggered":              "某个 IP 触发 CC 防护并被要求人机验证时提醒。",
+	"sec.autoban_triggered":         "某个 IP 被自动封禁时提醒。",
+	"sec.autoban_summary":           "短时间内多个 IP 被自动封禁时合并提醒。",
+	"sec.autoban_expired":           "IP 的自动封禁到期解除时提醒。",
+	"sec.policy_changed":            "安全策略被创建、修改、删除、绑定或解绑时提醒。",
+	"sec.ip_list_changed":           "IP 名单或名单条目发生变化时提醒。",
+	"sec.custom_rule_changed":       "自定义安全规则被创建、修改或删除时提醒。",
+	"sec.block_page_changed":        "拦截页被创建、修改或删除时提醒。",
+	"sec.autoban_config_changed":    "自动封禁配置或累犯记录发生变化时提醒。",
 	"sec.mcp_disconnected":          "管理员强制断开 MCP 会话时提醒。",
-	"sec.lib_updated":               "规则库更新结束时提醒，带成功/失败和版本或错误摘要。",
-	"sec.lib_settings_changed":      "修改安全库自动更新开关、定时设置或数据源开关时提醒。",
-	"sec.ingest_degraded":           "安全事件入库出现异常时提醒，可能丢失安全事件，需尽快检查审计日志。",
+	"sec.lib_updated":               "安全规则库更新结束时提醒。",
+	"sec.lib_settings_changed":      "安全库自动更新或数据源设置发生变化时提醒。",
+	"sec.ingest_degraded":           "安全事件入库异常、可能丢失事件时提醒。",
 	"sec.ingest_recovered":          "安全事件入库从异常恢复时提醒。",
 	"notify.channel_down":           "QQ、微信等通知通道断开时提醒；断开期间事件投递会失败，恢复后可在投递记录手动重发。",
 	"notify.channel_recovered":      "通知通道恢复、投递正常时提醒。",

@@ -85,10 +85,29 @@ func TestIsBindTestMessage(t *testing.T) {
 }
 
 func TestBindConfirmReplyBrand(t *testing.T) {
-	reply := BindConfirmReply()
+	reply := BindConfirmReply("QQ 机器人")
 	// 无 branding 文件（测试库 DataDir 空）回退默认品牌名
-	if !strings.Contains(reply, "Lazy Balancer") || !strings.Contains(reply, "绑定成功") {
-		t.Errorf("确认文案应含品牌名+绑定成功, got %q", reply)
+	for _, want := range []string{"Lazy Balancer", "绑定成功", "通道：QQ 机器人", "通道连接正常", "消息可达", "配置有效"} {
+		if !strings.Contains(reply, want) {
+			t.Errorf("确认文案缺 %q: %q", want, reply)
+		}
+	}
+	generic := BindConfirmReply()
+	if !strings.Contains(generic, "通道：通知机器人") {
+		t.Errorf("无通道参数回退文案异常: %q", generic)
+	}
+}
+
+// 通道测试与绑定确认共用同一视觉结构（QQ/微信/邮件三端文案层级一致）。
+func TestChannelValidationMessagesShareShape(t *testing.T) {
+	for _, channel := range []string{"QQ 机器人", "微信机器人", "邮件"} {
+		msg := testNotificationMessageFor(channel)
+		if msg.Title != "通知通道验证成功" {
+			t.Errorf("%s 测试消息标题=%q", channel, msg.Title)
+		}
+		if !strings.Contains(msg.Body, "通道："+channel) || !strings.Contains(msg.Body, "通道连接正常") {
+			t.Errorf("%s 测试消息结构异常: %q", channel, msg.Body)
+		}
 	}
 }
 

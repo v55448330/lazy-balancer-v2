@@ -105,7 +105,7 @@ func recordAutobanBurst(ip string, now time.Time) (*Event, bool) {
 	autobanBurstSent = true
 	span := blockedSpanLabel(now.Sub(autobanBurstStart))
 	return &Event{
-		Type: EvtAutobanSummary, Level: LevelWarn, Title: "封禁风暴",
+		Type: EvtAutobanSummary, Level: LevelWarn, Title: "自动封禁聚合",
 		Body: fmt.Sprintf("%s内自动封禁 %d 个 IP（最近：%s）",
 			span, autobanBurstCount, strings.Join(autobanBurstIPs, "、")),
 		Fields: map[string]string{

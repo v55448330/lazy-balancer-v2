@@ -147,7 +147,7 @@ func wrapEmailHTML(msg Message, subject, body string, ts time.Time) string {
 }
 
 func (s emailSender) Test(ctx context.Context, targetJSON string) error {
-	return s.Send(ctx, targetJSON, testNotificationMessage())
+	return s.Send(ctx, targetJSON, testNotificationMessageFor("邮件"))
 }
 
 // smtpSettings 读全局 SMTP 发信凭据（notify_settings KV 表；host 空=未配置，

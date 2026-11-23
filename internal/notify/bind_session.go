@@ -219,8 +219,16 @@ func IsBindTestMessage(text string) bool {
 }
 
 // BindConfirmReply 品牌绑定成功文案（app_name 取自 branding.json，缺省 Lazy Balancer）。
-func BindConfirmReply() string {
-	return "【" + brandAppName() + "】绑定成功！已绑定通知机器人，将为您推送相关通知。"
+// 与通道测试消息共用 channelValidationBody 信息层级，QQ/微信两端视觉一致。
+func BindConfirmReply(channel ...string) string {
+	label := "通知机器人"
+	if len(channel) > 0 && strings.TrimSpace(channel[0]) != "" {
+		label = channel[0]
+	}
+	brand := brandAppName()
+	return "【" + brand + "】通知通道绑定成功\n" +
+		channelValidationBody(label, "已绑定通知机器人，将为您推送相关通知。") +
+		"\n—— " + brand
 }
 
 // brandAppName 读 branding.json app_name（notify 不依赖 handlers/services，避免

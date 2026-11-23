@@ -290,7 +290,7 @@ func handleQQC2CMessage(ctx context.Context, cred qqBotCred, raw json.RawMessage
 	// 免额度）。旧「绑定 <验证码>」自动建通道已移除（统一弹框扫码+保存）。
 	if IsBindTestMessage(msg.Content) {
 		if ConfirmBindSessionByInbound("qq", msg.Author.UserOpenID, appid, msg.Author.UserOpenID, "") {
-			if err := qqSendText(ctx, msg.Author.UserOpenID, BindConfirmReply(), msg.ID, appid, secret); err != nil {
+			if err := qqSendText(ctx, msg.Author.UserOpenID, BindConfirmReply("QQ 机器人"), msg.ID, appid, secret); err != nil {
 				taskLogWarn(ctx, "bind", "QQ 绑定确认回复发送失败（bot=%s）: %v", appid, err)
 			}
 		}

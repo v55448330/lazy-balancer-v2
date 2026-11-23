@@ -570,7 +570,7 @@ func (wxSender) Test(ctx context.Context, targetJSON string) error {
 		}
 		return errors.New("微信机器人连接离线（连接任务未运行或登录态未配置）")
 	}
-	return SendWxText(ctx, targetJSON, formatBotText(testNotificationMessage()))
+	return SendWxText(ctx, targetJSON, formatBotText(testNotificationMessageFor("微信机器人")))
 }
 
 // SendWxText 发微信文本（投递通道适配器调用）。
@@ -979,7 +979,7 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 	// 通道，建通道交弹框保存）。旧「绑定 <验证码>」自动建通道已移除。
 	if IsBindTestMessage(text.String()) {
 		if ConfirmBindSessionByInbound("wx_clawbot", m.FromUserID, cred.AccountID, m.FromUserID, m.ContextToken) {
-			if err := sendWxMessage(ctx, cred, m.FromUserID, BindConfirmReply(), m.ContextToken); err != nil {
+			if err := sendWxMessage(ctx, cred, m.FromUserID, BindConfirmReply("微信机器人"), m.ContextToken); err != nil {
 				taskLogWarn(ctx, "bind", "微信绑定确认回复发送失败（bot=%s）: %v", wxCredKey(cred), err)
 			}
 		}

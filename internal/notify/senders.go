@@ -65,15 +65,26 @@ func RegisterSenderForTest(t *testing.T, typ string, s Sender) {
 	})
 }
 
+// channelValidationBody 通道验证/绑定成功共用的视觉结构：标题由调用方给，
+// 正文在 QQ 文本、微信纯文本、邮件 HTML 三端都保持同一信息层级。
+func channelValidationBody(channel, note string) string {
+	return "✅ 通道连接正常\n────────────\n通道：" + channel + "\n状态：消息可达，配置有效\n说明：" + note
+}
+
 // testNotificationMessage 通道「测试」按钮共用的测试消息。
 func testNotificationMessage() Message {
+	return testNotificationMessageFor("通知通道")
+}
+
+// testNotificationMessageFor 通道测试消息（带通道名，三端统一文案）。
+func testNotificationMessageFor(channel string) Message {
 	return Message{
 		Level:     string(LevelInfo),
 		Time:      time.Now(),
 		Node:      MasterNodeLabel(),
-		EventType: EvtNotifyChannelRecovered, // 占位真实事件键：{{event_title}} 等占位符有值可渲染
-		Title:     "通知中心测试消息",
-		Body:      "这是一条来自通知中心的测试消息；收到即表示该通道配置有效。",
+		EventType: "",
+		Title:     "通知通道验证成功",
+		Body:      channelValidationBody(channel, "收到这条消息，表示该通道已可用于接收通知。"),
 	}
 }
 

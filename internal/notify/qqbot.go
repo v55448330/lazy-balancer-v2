@@ -179,7 +179,7 @@ func (qqSender) Test(ctx context.Context, targetJSON string) error {
 		}
 		return errors.New("QQ 机器人连接离线（连接任务未运行或凭据未配置）")
 	}
-	return SendQQC2C(ctx, targetJSON, formatBotText(testNotificationMessage()))
+	return SendQQC2C(ctx, targetJSON, formatBotText(testNotificationMessageFor("QQ 机器人")))
 }
 
 // SendQQC2C 发 QQ 单聊文本（投递 Daemon 通道适配器调用）。

@@ -263,7 +263,7 @@ func blockedEventAtLevel(w *blockedWindowState, level Level) Event {
 	span := blockedSpanLabel(time.Since(w.start))
 	return Event{
 		Type: EvtBlockedAggregate, Level: level,
-		Title: "拦截聚合",
+		Title: "拦截事件聚合",
 		Body: fmt.Sprintf("%s内拦截 %d 次 / 挑战 %d 次 / 自动封禁 %d 次（TOP 规则：%s；TOP IP：%s；TOP 路径：%s）",
 			span, w.count, w.challenges, w.autobans, topStr, topIP, topPath),
 		Fields: map[string]string{
@@ -413,7 +413,7 @@ func takeChallengeWindowEvent() *Event {
 	span := blockedSpanLabel(time.Since(w.start))
 	return &Event{
 		Type: EvtChallengeSummary, Level: level,
-		Title: "挑战统计",
+		Title: "挑战事件聚合",
 		Body: fmt.Sprintf("%s内挑战发放 %d 次 / 失败 %d 次（TOP 原因：%s；TOP IP：%s）",
 			span, w.count, w.failed, topCounts(w.topReason, 3, "×"), topCounts(w.topIP, 3, "×")),
 		Fields: map[string]string{

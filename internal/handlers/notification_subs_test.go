@@ -102,7 +102,7 @@ func TestNotificationCatalog_exportPins(t *testing.T) {
 		// event_type: title, level, default_subscribed, group
 		"auth.login_success":    {"登录成功", "info", false, "认证"},
 		"cert.failed":           {"证书签发失败", "critical", true, "证书"},
-		"sec.blocked_aggregate": {"拦截聚合", "info", true, "安全"},
+		"sec.blocked_aggregate": {"拦截事件聚合", "info", true, "安全"},
 		"cluster.node_joined":   {"集群节点加入", "info", false, "集群"},
 		"notify.channel_down":   {"通知通道离线", "warn", true, "通知"},
 		"task.succeeded":        {"任务执行成功", "info", false, "任务"},

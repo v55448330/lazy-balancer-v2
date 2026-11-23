@@ -58,6 +58,25 @@ func TestBlockedAggregateCatalogBodyIncludesCounters(t *testing.T) {
 	}
 }
 
+// 两个聚合事件都从 info 起步、按 50/200 升级：目录基础级别必须一致，
+// 否则事件选择卡片会把同类阈值事件分到不同级别段。
+func TestAggregateEventsShareBaseLevel(t *testing.T) {
+	blocked, ok := catalogByID(EvtBlockedAggregate)
+	if !ok {
+		t.Fatal("拦截事件聚合不在目录")
+	}
+	challenge, ok := catalogByID(EvtChallengeSummary)
+	if !ok {
+		t.Fatal("挑战事件聚合不在目录")
+	}
+	if blocked.Level != challenge.Level {
+		t.Fatalf("聚合事件基础级别不一致: blocked=%s challenge=%s", blocked.Level, challenge.Level)
+	}
+	if blocked.Level != LevelInfo {
+		t.Fatalf("聚合事件基础级别=%s, want info（阈值 10 起步）", blocked.Level)
+	}
+}
+
 // ---- 安全库终态事件：成功/失败各一条，字段序=1 库 2 触发 3 版本/错误 ----
 
 func TestLibUpdateResultEvents(t *testing.T) {
