@@ -42,7 +42,7 @@ func TestReconcileImportedThreatFiles_prunesDeletedSourcesWithoutPayload(t *test
 	if !changed {
 		t.Fatalf("删除残留文件必须报告 changed=true（否则调用方不登记文件已落地）")
 	}
-	for _, warning := range warnings {
+	for _, warning := range zhWarnings(warnings) {
 		if warning != "" {
 			t.Logf("warning: %s", warning)
 		}

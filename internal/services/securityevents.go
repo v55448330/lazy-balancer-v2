@@ -730,9 +730,11 @@ type securityEventsMappingsCacheEntry struct {
 	crsExclusion map[int]securityEventsPolicyCRSExclusions
 	// 威胁库名单索引（策略 → 其引用的威胁情报库名单条目前缀集）随映射代际
 	// 构建；threatIndexBuilt 区分「尚未构建」与「构建结果为空」——空结果不得
-	// 每个 pass 重建。
+	// 每个 pass 重建。threatStamps 是索引依据的名单文件状态：更新任务每日改写
+	// 名单文件但不推进 cluster_version，索引靠比对它在下一个 pass 刷新。
 	threatListIndex  map[int][]netip.Prefix
 	threatIndexBuilt bool
+	threatStamps     []securityEventsThreatStamp
 }
 
 var securityEventsMappingsCache = struct {
@@ -912,11 +914,12 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	}
 	trustMatcher := securityEventsBuildTrustMatcher(bindings, policyByID)
 	crsExclusion := securityEventsBuildCRSExclusionMatcher(policyByID)
+	threatIndex, threatStamps := securityEventsBuildThreatListIndex(policyByID)
 	securityEventsMappingsCache.entry = securityEventsMappingsCacheEntry{
 		database: database, version: version, loaded: true,
 		rules: rules, bindings: bindings, policyByID: policyByID,
 		trustMatcher: trustMatcher, crsExclusion: crsExclusion,
-		threatListIndex: securityEventsBuildThreatListIndex(policyByID), threatIndexBuilt: true,
+		threatListIndex: threatIndex, threatIndexBuilt: true, threatStamps: threatStamps,
 	}
 	return rules, bindings, policyByID, nil
 }
@@ -933,16 +936,88 @@ func securityEventsCachedMatchers(bindings map[string][]int, policyByID map[int]
 	return securityEventsBuildTrustMatcher(bindings, policyByID), securityEventsBuildCRSExclusionMatcher(policyByID)
 }
 
-// securityEventsCachedThreatListIndex 返回当前映射代际的威胁库名单索引（语义同
-// securityEventsCachedMatchers：已装载则取缓存，未命中按传入快照现场构建）。
+// securityEventsThreatStamp 是威胁库名单文件（文本或 .fast 代）的存在性、大小与
+// 修改时间。
+type securityEventsThreatStamp struct {
+	path    string
+	exists  bool
+	size    int64
+	modNano int64
+}
+
+// securityEventsStatThreatLists 按给定顺序记录各名单文件的当前状态（文件不存在
+// 时 exists=false，其余字段为零）。
+func securityEventsStatThreatLists(paths []string) []securityEventsThreatStamp {
+	out := make([]securityEventsThreatStamp, 0, len(paths))
+	for _, path := range paths {
+		stamp := securityEventsThreatStamp{path: path}
+		if info, err := os.Stat(path); err == nil {
+			stamp.exists, stamp.size, stamp.modNano = true, info.Size(), info.ModTime().UnixNano()
+		}
+		out = append(out, stamp)
+	}
+	return out
+}
+
+// securityEventsThreatStampsEqual 逐文件比对，含「不存在 → 存在」与反向。
+func securityEventsThreatStampsEqual(a, b []securityEventsThreatStamp) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// securityEventsThreatStampPaths 取上次记录的文件路径（顺序与记录时一致）。
+func securityEventsThreatStampPaths(stamps []securityEventsThreatStamp) []string {
+	paths := make([]string, len(stamps))
+	for i, stamp := range stamps {
+		paths[i] = stamp.path
+	}
+	return paths
+}
+
+// securityEventsCachedThreatListIndex 返回威胁库名单索引。映射代际未变时直接取
+// 缓存，但每个 pass 比对一次名单文件状态（stat 次数 = 两倍威胁源数）：文件被
+// 更新任务改写过，就在缓存锁内重建索引（双检：并发 pass 只重建一次），同代际的
+// 其余映射不受影响。未装载（测试手工清缓存后）按传入快照现场构建。
 func securityEventsCachedThreatListIndex(policyByID map[int]*models.SecurityPolicy) map[int][]netip.Prefix {
 	securityEventsMappingsCache.Lock()
 	entry := securityEventsMappingsCache.entry
 	securityEventsMappingsCache.Unlock()
-	if entry.loaded && entry.threatIndexBuilt {
+	if !entry.loaded || !entry.threatIndexBuilt {
+		index, _ := securityEventsBuildThreatListIndex(policyByID)
+		return index
+	}
+	if securityEventsThreatStampsEqual(entry.threatStamps, securityEventsStatThreatLists(securityEventsThreatStampPaths(entry.threatStamps))) {
 		return entry.threatListIndex
 	}
-	return securityEventsBuildThreatListIndex(policyByID)
+	securityEventsMappingsCache.Lock()
+	defer securityEventsMappingsCache.Unlock()
+	current := &securityEventsMappingsCache.entry
+	if securityEventsThreatIndexRebuiltElsewhere(entry, *current) {
+		// 取快照之后代际已变，或同代际已有别的 pass 完成重建：沿用当前条目。
+		return current.threatListIndex
+	}
+	index, stamps := securityEventsBuildThreatListIndex(policyByID)
+	current.threatListIndex, current.threatStamps = index, stamps
+	return index
+}
+
+// securityEventsThreatIndexRebuiltElsewhere 判断锁外快照之后是否已无需重建：
+// 当前缓存已不是快照所属的映射代际（别的 pass 装载了新一代，索引随新条目一起
+// 构建过；缓存被复位同理），或同代际内已有别的 pass 完成重建（文件状态戳已
+// 更新）。调用方手里的 policyByID 属于快照那一代——代际变了还拿它重建，会把
+// 上一代策略集合的索引写进新一代缓存。
+func securityEventsThreatIndexRebuiltElsewhere(entry, current securityEventsMappingsCacheEntry) bool {
+	if !current.loaded || current.database != entry.database || current.version != entry.version {
+		return true
+	}
+	return !securityEventsThreatStampsEqual(current.threatStamps, entry.threatStamps)
 }
 
 // securityEventsThreatIntelRuleID 是「命中威胁情报库名单」的触发规则 id（历史固定
@@ -968,10 +1043,21 @@ func securityEventsThreatIntelRuleTriggered(ruleTriggered string, policy *models
 	return securityEventsThreatIntelRuleID
 }
 
-// securityEventsBuildThreatListIndex 随映射代际构建威胁库名单索引：装载策略引用
-// 的名单（与渲染/归因同一读取路径——威胁库条目来自 .iplist 文件），再交给纯函数
-// 聚合。装载失败只留痕：该代际内命中威胁库的事件保持 IP 访问控制归类，不影响拦截。
-func securityEventsBuildThreatListIndex(policyByID map[int]*models.SecurityPolicy) map[int][]netip.Prefix {
+// securityEventsBuildThreatListIndex 构建威胁库名单索引，以及索引依据的名单文件
+// 状态：装载策略引用的名单（与渲染/归因同一读取路径——威胁库条目来自 .iplist
+// 文件），再交给纯函数聚合。装载失败只留痕：命中威胁库的事件保持 IP 访问控制
+// 归类，不影响拦截。
+func securityEventsBuildThreatListIndex(policyByID map[int]*models.SecurityPolicy) (map[int][]netip.Prefix, []securityEventsThreatStamp) {
+	return securityEventsBuildThreatListIndexWith(policyByID, func(refIDs []int64) (map[int64][]string, error) {
+		entries, _, err := loadIPListEntriesVia(nil, refIDs)
+		return entries, err
+	}, securityEventsStatThreatLists)
+}
+
+// securityEventsBuildThreatListIndexWith 是 securityEventsBuildThreatListIndex 的
+// 可注入形态：装载名单与记录文件状态两步的先后由测试钉住（见
+// TestSecurityEventsThreatIndex_stampRecordedBeforeLoad），生产路径固定传真实读取。
+func securityEventsBuildThreatListIndexWith(policyByID map[int]*models.SecurityPolicy, load func(refIDs []int64) (map[int64][]string, error), stat func(paths []string) []securityEventsThreatStamp) (map[int][]netip.Prefix, []securityEventsThreatStamp) {
 	seen := make(map[int64]struct{})
 	var refIDs []int64
 	for _, p := range policyByID {
@@ -987,22 +1073,35 @@ func securityEventsBuildThreatListIndex(policyByID map[int]*models.SecurityPolic
 		}
 	}
 	if len(refIDs) == 0 {
-		return nil
+		return nil, nil
 	}
-	threatIDs := threatIPListIDsVia(nil, refIDs)
-	if len(threatIDs) == 0 {
-		return nil
+	sources := threatIPListSourcesVia(nil, refIDs)
+	if len(sources) == 0 {
+		return nil, nil
 	}
-	threatRefIDs := make([]int64, 0, len(threatIDs))
-	for id := range threatIDs {
+	threatIDs := make(map[int64]bool, len(sources))
+	threatRefIDs := make([]int64, 0, len(sources))
+	sourceSeen := make(map[string]struct{}, len(sources))
+	sourceNames := make([]string, 0, len(sources))
+	for id, source := range sources {
+		threatIDs[id] = true
 		threatRefIDs = append(threatRefIDs, id)
+		if _, dup := sourceSeen[source]; !dup {
+			sourceSeen[source] = struct{}{}
+			sourceNames = append(sourceNames, source)
+		}
 	}
-	loaded, _, err := loadIPListEntriesVia(nil, threatRefIDs)
+	// 文件状态在装载**之前**记录：更新任务恰在装载期间改写名单文件时，索引装到的
+	// 内容与记录的状态可能不属于同一版——记的是装载前的旧状态，下一个 pass 的比对
+	// 必然发现不一致而再重建一次（多建一次无害）。若记装载后的状态，比对会认为
+	// 文件未变，索引停在旧内容上直到文件再次变化。
+	stamps := stat(threatIplistStampPaths(sourceNames))
+	loaded, err := load(threatRefIDs)
 	if err != nil {
 		// 未装载到的名单不进索引：命中它的事件按原触发类型记录。
 		Logf("warn", "security events attribution: load threat intel lists failed: %v", err)
 	}
-	return securityEventsBuildThreatListIndexFrom(policyByID, threatIDs, loaded)
+	return securityEventsBuildThreatListIndexFrom(policyByID, threatIDs, loaded), stamps
 }
 
 // securityEventsBuildThreatListIndexFrom 由已装载的名单条目构建「策略 → 其引用的

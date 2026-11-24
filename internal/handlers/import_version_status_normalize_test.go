@@ -44,7 +44,7 @@ func TestImportNormalizesVersionUpdateStatuses(t *testing.T) {
 			t.Fatalf("%s.update_status=%v, want idle", table, got)
 		}
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "4 条版本/源记录") || !strings.Contains(warnings[0], "已归一为 idle") {
+	if len(warnings) != 1 || !strings.Contains(zhWarning(warnings[0]), "4 条版本/源记录") || !strings.Contains(zhWarning(warnings[0]), "已归一为 idle") {
 		t.Fatalf("warnings=%v, want 单条「4 条…已归一为 idle」", warnings)
 	}
 
@@ -145,10 +145,10 @@ func TestImportNormalizesCarriedActiveUpdateStatuses(t *testing.T) {
 			t.Fatalf("%s.update_status=%v, want failed（活动态只属执行进程）", table, got)
 		}
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "4 条版本/源记录") || !strings.Contains(warnings[0], "「更新中」活动态") {
+	if len(warnings) != 1 || !strings.Contains(zhWarning(warnings[0]), "4 条版本/源记录") || !strings.Contains(zhWarning(warnings[0]), "「更新中」活动态") {
 		t.Fatalf("warnings=%v, want 单条「4 条…「更新中」活动态」", warnings)
 	}
-	if strings.Contains(warnings[0], "不在词表内") {
+	if strings.Contains(zhWarning(warnings[0]), "不在词表内") {
 		t.Fatalf("warnings=%v 不得把合法活动词报成词表外值", warnings)
 	}
 	// Then 带 message 列的行写入归属文案（不得保留活动态原文案）；键缺席的行

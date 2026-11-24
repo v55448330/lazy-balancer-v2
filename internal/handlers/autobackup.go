@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -1031,12 +1030,12 @@ func (h *Handlers) autoBackupDir() (string, error) {
 // autoBackupRowByID 查行；不存在 404、DB 故障响亮 500（此前 Scan 错误一律
 // 404「备份不存在」，DB 故障窗口误导排障方向；与 GetCurrentUser/
 // requireAutoBackupMaster 已立先例同口径）。verb 是调用方的动作词
-// （还原/下载/删除）：行面失败与文件面同属「进入高危操作核心之前」的拒绝面，
-// 三个出口（400 非法 ID、404 行不存在/DB 故障 500、400 文件名非法）此前只有
-// 裸 c.JSON，操作审计页零记录——管理员在列表页点「还原/下载/删除」时行可能
-// 已被保留期裁剪或并发删除，被拒尝试同样要能回答「谁在何时试过哪个备份」。
-func (h *Handlers) autoBackupRowByID(c *gin.Context, verb string) (autoBackupRowView, bool) {
-	rawID := c.Param("id")
+// （预览/还原/下载/删除）：行面失败与文件面同属「进入高危操作核心之前」的
+// 拒绝面，三个出口（400 非法 ID、404 行不存在/DB 故障 500、400 文件名非法）
+// 此前只有裸 c.JSON，操作审计页零记录——管理员在列表页点「还原/下载/删除」
+// 时行可能已被保留期裁剪或并发删除，被拒尝试同样要能回答「谁在何时试过哪个
+// 备份」。rawID 取自路径参数（还原/下载/删除）或 ?backup_id=（导入预览）。
+func (h *Handlers) autoBackupRowByID(c *gin.Context, verb, rawID string) (autoBackupRowView, bool) {
 	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil || id <= 0 {
 		failAutoBackupAccess(c, verb, fmt.Sprintf("备份 ID %q", rawID), "无效的备份 ID",
@@ -1072,7 +1071,7 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	if !h.requireAutoBackupMaster(c) {
 		return
 	}
-	view, ok := h.autoBackupRowByID(c, "删除")
+	view, ok := h.autoBackupRowByID(c, "删除", c.Param("id"))
 	if !ok {
 		return
 	}
@@ -1207,8 +1206,8 @@ func readAutoBackupFilePayload(path string) ([]byte, error) {
 }
 
 // autoBackupReadFailure 是「备份目录 → 文件」读入失败的归因类别：公开文案的
-// 细节政策留给调用方——还原端点保留权限/errno 细节（admin 排障契约），预览
-// 端点固定文案（只读探测不披露内部路径）。
+// 细节政策留给调用方——还原保留权限/errno 细节（admin 排障契约），导入预览
+// 固定文案（只读探测不披露内部路径）。
 type autoBackupReadFailure struct {
 	kind  int
 	cause error
@@ -1242,162 +1241,52 @@ func (h *Handlers) readAutoBackupRowFile(view autoBackupRowView) ([]byte, *autoB
 	return data, nil
 }
 
-// decodeAutoBackupPayload 把备份字节归一到导入核心同序的形态（BOM → lbbak →
-// 内部 config.json 字节）。还原与预览共用，避免预览与真实还原对同一份文件
-// 给出不同结论（预览放行、还原 400 是最坏形态）。
-func decodeAutoBackupPayload(data []byte) (configJSON []byte, payload *lbbakPayload, err error) {
-	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
-	if !isLbbakBytes(data) {
-		return data, nil, nil
+// readAutoBackupRowData 是「还原」与「导入预览（?backup_id=）」共用的
+// 「查行 → 目录守卫 → 读文件」入口：读取与失败归因只有这一条代码路径，任一
+// 环节失败即落失败审计并写响应，返回 ok=false。discloseReadError 决定文件
+// 读取失败（权限/IO）时的公开文案：还原面点名 errno（admin 排障契约，登记在
+// adminBusiness5xxDetailFunctions「备份文件读取失败需点名」）；只读预览传
+// false，5xx 固定文案（不披露内部路径）。
+func (h *Handlers) readAutoBackupRowData(c *gin.Context, verb, rawID string, discloseReadError bool) ([]byte, string, bool) {
+	view, ok := h.autoBackupRowByID(c, verb, rawID)
+	if !ok {
+		return nil, "", false
 	}
-	payload, perr := parseLbbak(data)
-	if perr != nil {
-		return nil, nil, perr
+	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
+	data, failure := h.readAutoBackupRowFile(view)
+	if failure == nil {
+		return data, view.Filename, true
 	}
-	return payload.ConfigJSON, payload, nil
+	switch failure.kind {
+	case autoBackupReadDirInvalid:
+		failRestoreFileAccess(c, verb, subject, "备份目录无效", http.StatusInternalServerError, failure.cause)
+	case autoBackupReadMissing:
+		failRestoreFileAccess(c, verb, subject, "备份文件已不存在", http.StatusNotFound, failure.cause)
+	case autoBackupReadTooLarge:
+		failRestoreFileAccess(c, verb, subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge, failure.cause)
+	default:
+		if discloseReadError {
+			failRestoreFileAccess(c, verb, subject, "读取备份文件失败: "+failure.cause.Error(), http.StatusInternalServerError, failure.cause)
+		} else {
+			failRestoreFileAccess(c, verb, subject, "读取备份文件失败", http.StatusInternalServerError, failure.cause)
+		}
+	}
+	return nil, "", false
 }
 
 // RestoreAutoBackup POST /api/v1/auto-backup/:id/restore：按行读文件并走
 // 导入 core 还原（action=「还原」，审计由 core 记录）。还原的是备份实际
-// 包含的内容——未选分类在导出时即未写入。
+// 包含的内容——未选分类在导出时即未写入；?sections= 可在其中再收窄为所选
+// 分类（与文件导入同一参数，由导入核心解析）。
 func (h *Handlers) RestoreAutoBackup(c *gin.Context) {
 	if !h.requireAutoBackupMaster(c) {
 		return
 	}
-	view, ok := h.autoBackupRowByID(c, "还原")
+	data, filename, ok := h.readAutoBackupRowData(c, "还原", c.Param("id"), true)
 	if !ok {
 		return
 	}
-	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
-	data, failure := h.readAutoBackupRowFile(view)
-	if failure != nil {
-		switch failure.kind {
-		case autoBackupReadDirInvalid:
-			failRestoreFileAccess(c, "还原", subject, "备份目录无效", http.StatusInternalServerError, failure.cause)
-		case autoBackupReadMissing:
-			failRestoreFileAccess(c, "还原", subject, "备份文件已不存在", http.StatusNotFound, failure.cause)
-		case autoBackupReadTooLarge:
-			failRestoreFileAccess(c, "还原", subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge, failure.cause)
-		default:
-			// 还原面保留权限/errno 细节（admin 排障契约，登记在
-			// adminBusiness5xxDetailFunctions「备份文件读取失败需点名」）。
-			failRestoreFileAccess(c, "还原", subject, "读取备份文件失败: "+failure.cause.Error(), http.StatusInternalServerError, failure.cause)
-		}
-		return
-	}
-	h.importConfigBackupCore(c, data, view.Filename, "还原")
-}
-
-// PreviewAutoBackup GET /api/v1/auto-backup/:id/preview：还原前的只读预览。
-// 还原确认弹框此前只能拿到「备份名 + 范围」，跨版本告警要等提交之后才在响应
-// warnings 里出现（同族文件导入在预览阶段就给）。本端点读文件后复用导入/预览
-// 同一条校验链（链内只读 DB、只规整内存副本），以合同形态返回版本告警、两侧
-// 版本号、预计算的冲突置禁用清单与其它软告警。
-//
-// 严格只读：不启导入会话、不写 auto_backups/审计。校验失败与
-// 还原一样按 400 归因（文案与导入核心共用同一批校验错误），文件面失败与还原
-// 同族（404/413/500，审计动作「预览失败」）。5xx 不回内部错误文本（与本文件
-// 其余固定文案口径一致）。
-func (h *Handlers) PreviewAutoBackup(c *gin.Context) {
-	if !h.requireAutoBackupMaster(c) {
-		return
-	}
-	view, ok := h.autoBackupRowByID(c, "预览")
-	if !ok {
-		return
-	}
-	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
-	data, failure := h.readAutoBackupRowFile(view)
-	if failure != nil {
-		// 预览是只读探测：5xx 固定文案（不披露路径/errno，底层错误只进日志与
-		// 审计），与文件导入预览的只读口径一致。
-		switch failure.kind {
-		case autoBackupReadDirInvalid:
-			failRestoreFileAccess(c, "预览", subject, "备份目录无效", http.StatusInternalServerError, failure.cause)
-		case autoBackupReadMissing:
-			failRestoreFileAccess(c, "预览", subject, "备份文件已不存在", http.StatusNotFound, failure.cause)
-		case autoBackupReadTooLarge:
-			failRestoreFileAccess(c, "预览", subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge, failure.cause)
-		default:
-			failRestoreFileAccess(c, "预览", subject, "读取备份文件失败", http.StatusInternalServerError, failure.cause)
-		}
-		return
-	}
-	configJSON, payload, err := decodeAutoBackupPayload(data)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_b6aa582b", apimsg.ErrMsg(c, err)), MessageKey: "k_b6aa582b"})
-		return
-	}
-	var backup configBackup
-	if err := json.Unmarshal(configJSON, &backup); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b3d2459c"), MessageKey: "k_b3d2459c"})
-		return
-	}
-	// 与导入核心/文件导入预览同一门序（只读外，无写入），不为预览单开第二套
-	// 校验；RequestedSections 留空=还原语义（按备份体内 sections）。
-	chain, chainErr := validateImportBackupChain(c.Request.Context(), importValidationDeps{
-		DB:                     db.DB,
-		ValidateRuleListenPort: h.validateRuleListenPortForSave,
-	}, &backup, importValidationOptions{LbbakPayload: payload})
-	if chainErr != nil {
-		if writeImportChainReadFailure(c, chainErr) {
-			return
-		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_b6aa582b", apimsg.ErrMsg(c, chainErr)), MessageKey: "k_b6aa582b"})
-		return
-	}
-	warnings := []string{}
-	warnings = append(warnings, chain.SkipWarnings...)
-	// 内容未经摘要校验的史前备份：还原照常，但确认弹框必须看到。
-	if chain.NoIntegrityChecksum {
-		warnings = append(warnings, warningNoIntegrityChecksum)
-	}
-	if chain.CRSTreeReplaced {
-		warnings = append(warnings, warningCRSTreeReplaced)
-	}
-	if chain.WAFMetadataSkipped {
-		warnings = append(warnings, apimsg.T(c, "k_15ae2f31"))
-	}
-	if chain.WAFCRSMetadataSkipped {
-		warnings = append(warnings, apimsg.T(c, "k_a8f33c4d"))
-	}
-	if chain.WAFXdbMetadataSkipped {
-		warnings = append(warnings, apimsg.T(c, "k_81ef1989"))
-	}
-	if chain.ACMEDanglingImported > 0 {
-		warnings = append(warnings, fmt.Sprintf("还原后 %d 条启用规则的 DNS 提供商配置悬挂（引用未随备份导入，且现有配置中不存在或已禁用）——下一次签发/续签将失败，请及时补齐", chain.ACMEDanglingImported))
-	}
-	// 操作者账户将被替换（选了系统数据时）：与文件导入预览同文案，让管理员在
-	// 确认还原前就知道要用备份内的管理员登录。
-	if username := c.GetString("username"); username != "" && chain.SectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], username) {
-		warnings = append(warnings, "备份不包含当前操作账户——若还原时包含“系统数据”，还原后请使用备份内的管理员账户登录")
-	}
-	warnings = append(warnings, chain.CertJobProviderWarnings...)
-	warnings = append(warnings, chain.CertJobDanglingWarnings...)
-	warnings = append(warnings, chain.AutobanClampNotes...)
-	warnings = append(warnings, chain.ConfigClampNotes...)
-	conflicts := chain.DisabledConflicts
-	if conflicts == nil {
-		conflicts = []disabledRuleConflict{}
-	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "ok", Data: autoBackupPreviewData{
-		VersionWarning:    backupProductVersionWarning(backup.Meta, h.cfg.Version),
-		BackupVersion:     backup.Meta.AppVersion,
-		CurrentVersion:    h.cfg.Version,
-		DisabledConflicts: conflicts,
-		Warnings:          warnings,
-	}})
-}
-
-// autoBackupPreviewData 是预览端点的 data 载荷：disabled_conflicts 与
-// POST /config/import 的 data.disabled_conflicts 同形（同一 disabledRuleConflict
-// 类型序列化），前端可用同一渲染组件。
-type autoBackupPreviewData struct {
-	VersionWarning    string                 `json:"version_warning"`
-	BackupVersion     string                 `json:"backup_version"`
-	CurrentVersion    string                 `json:"current_version"`
-	DisabledConflicts []disabledRuleConflict `json:"disabled_conflicts"`
-	Warnings          []string               `json:"warnings"`
+	h.importConfigBackupCore(c, data, filename, "还原")
 }
 
 // DownloadAutoBackup GET /api/v1/auto-backup/:id/download：下载备份文件
@@ -1406,7 +1295,7 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 	if !h.requireAutoBackupMaster(c) {
 		return
 	}
-	view, ok := h.autoBackupRowByID(c, "下载")
+	view, ok := h.autoBackupRowByID(c, "下载", c.Param("id"))
 	if !ok {
 		return
 	}

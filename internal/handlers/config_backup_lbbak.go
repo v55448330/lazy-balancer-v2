@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -324,7 +325,7 @@ func parseLbbak(raw []byte) (*lbbakPayload, error) {
 // 导出只为非空源写 .iplist 条目，而导入源表是全量替换——备份中「空/缺席」的源
 // 不会覆盖本地旧文件，运行时 WAF 仍按旧名单拦截（DB 与执行面分叉）。此处按
 // 导入后的源集合删除多余/空源文件；调用方必须已持 WafFileLock。
-func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *lbbakPayload, failedSources []string) ([]string, bool) {
+func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *lbbakPayload, failedSources []string) (importWarnings, bool) {
 	rows, carried := tables["security_threat_sources"]
 	if !carried {
 		return nil, false // 表缺席=保留本地现状
@@ -334,20 +335,20 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 		failed[source] = true
 	}
 	kept := make(map[string]bool, len(rows))
-	var warnings []string
+	var warnings importWarnings
 	changed := false
-	removePair := func(source, reason string) {
+	removePair := func(source, reasonKey string) {
 		for _, path := range []string{
 			filepath.Join(services.WafDir(), "threat-"+source+".iplist"),
 			filepath.Join(services.WafDir(), "threat-"+source+".iplist.fast"),
 		} {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				warnings = append(warnings, "删除威胁库 "+source+" 本地文件失败: "+err.Error())
+				warnings = append(warnings, importWarn("k_1eb7387c", source, err))
 			} else if err == nil {
 				changed = true
 			}
 		}
-		warnings = append(warnings, "威胁库 "+source+" "+reason)
+		warnings = append(warnings, importWarn(reasonKey, source))
 	}
 	for _, row := range rows {
 		name := backupString(row["name"])
@@ -373,15 +374,15 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 		// update_enabled=0 不会自动重取，必须给出可执行提示，不能笼统说「在备份
 		// 中为空」。
 		if backupString(row["update_status"]) == "success" || backupString(row["version"]) != "" {
-			removePair(name, "在备份中为空（上次下载成功但无条目），已删除本地旧名单文件（记录按备份）")
+			removePair(name, "k_256f8be1")
 			continue
 		}
-		removePair(name, "备份未携带该源文件（导出节点尚未成功下载），已删除本地旧名单文件——如该源需继续生效，请启用更新后手动触发一次威胁库更新")
+		removePair(name, "k_04f9fe39")
 	}
 	// 源表全量替换后不再存在的源：本地残留文件同样删除。
 	entries, err := os.ReadDir(services.WafDir())
 	if err != nil {
-		warnings = append(warnings, "扫描威胁库目录失败: "+err.Error())
+		warnings = append(warnings, importWarn("k_ff1557d5", err))
 		return warnings, changed
 	}
 	for _, entry := range entries {
@@ -398,7 +399,7 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 			continue
 		}
 		if err := os.Remove(filepath.Join(services.WafDir(), name)); err != nil && !os.IsNotExist(err) {
-			warnings = append(warnings, "删除威胁库 "+source+" 本地文件失败: "+err.Error())
+			warnings = append(warnings, importWarn("k_1eb7387c", source, err))
 		} else if err == nil {
 			changed = true
 		}
@@ -410,7 +411,7 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 // warning 且仍 commit，版本记录与文件分裂；现按文件/威胁源逐个记账，调用方
 // 据此在事务内丢弃未落盘文件的版本记录并把逐源失败并入 responseWarnings。
 type lbbakWafApplyResult struct {
-	Warnings            []string
+	Warnings            importWarnings
 	FilesLanded         bool
 	SecurityDataApplied bool
 	FailedCRS           bool
@@ -418,9 +419,11 @@ type lbbakWafApplyResult struct {
 	FailedThreatSources []string
 }
 
-func (result *lbbakWafApplyResult) warn(c *gin.Context, action, message string) {
-	result.Warnings = append(result.Warnings, message)
-	recordAudit(c, action+"警告", "配置备份", message)
+// warn 记一条落盘告警：响应按请求语言渲染，操作审计明细恒取中文母本。
+func (result *lbbakWafApplyResult) warn(c *gin.Context, action, key string, args ...any) {
+	warning := importWarn(key, args...)
+	result.Warnings = append(result.Warnings, warning)
+	recordAudit(c, action+"警告", "配置备份", warning.render(i18n.ZH))
 }
 
 // validateLbbakXdbPayload 把待落盘 xdb 写到临时文件后用运行时同一条装载路径
@@ -468,7 +471,7 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 		if err := validateLbbakXdbPayload(payload.Xdb); err != nil {
 			services.Logf("error", "lbbak 导入: IP2Region 数据文件无法装载，已拒绝落盘: %v", err)
 			result.FailedXdb = true
-			result.warn(c, action, "IP2Region 数据文件无法装载（"+err.Error()+"）——已拒绝该文件并保留本地文件；IP2Region 版本记录已丢弃（记录与文件须同批）")
+			result.warn(c, action, "k_47e2e72c", err)
 		} else {
 			bundle.IP2RegionSha = payload.XdbSha256
 			bundle.Xdb = payload.Xdb
@@ -503,34 +506,34 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 			// 不落盘任何威胁名单。
 			for source := range payload.ThreatIplists {
 				result.FailedThreatSources = append(result.FailedThreatSources, source)
-				result.warn(c, action, "威胁库 "+source+" 未落盘：同步包校验被拒（拒绝整包）——该源保留本地文件与记录")
+				result.warn(c, action, "k_ea4ef9eb", source)
 			}
 			result.FilesLanded = crsChanged || xdbChanged
 			return result
 		}
 		if result.FailedCRS {
-			result.warn(c, action, "CRS 规则库文件落盘失败: "+bundleErr.Error()+"——CRS 版本记录已丢弃（记录与文件须同批）")
+			result.warn(c, action, "k_b2e292cf", bundleErr)
 		}
 		if result.FailedXdb {
-			result.warn(c, action, "IP2Region 数据文件未成功应用: "+bundleErr.Error()+"——IP2Region 版本记录已丢弃（记录与文件须同批）")
+			result.warn(c, action, "k_d5b34aac", bundleErr)
 		}
 		if component == "xdb" && crsChanged {
-			result.warn(c, action, "CRS 规则库文件已落盘并保留版本记录；仅 IP2Region 应用失败")
+			result.warn(c, action, "k_c8bcaf95")
 		}
 	}
 	for source, data := range payload.ThreatIplists {
 		iplistPath := filepath.Join(services.WafDir(), "threat-"+source+".iplist")
-		fail := func(stage string, err error) {
+		fail := func(stage importWarning, err error) {
 			result.FailedThreatSources = append(result.FailedThreatSources, source)
-			services.Logf("error", "lbbak 导入威胁库 %s: %s: %v", source, stage, err)
-			result.warn(c, action, "威胁库 "+source+" "+stage+": "+err.Error()+"——该源保留本地文件与记录")
+			services.Logf("error", "lbbak 导入威胁库 %s: %s: %v", source, stage.render(i18n.ZH), err)
+			result.warn(c, action, "k_91f9bc9e", source, stage, err)
 		}
 		if err := os.MkdirAll(filepath.Dir(iplistPath), 0755); err != nil {
-			fail("mkdir 失败", err)
+			fail(importWarn("k_455b8d5b"), err)
 			continue
 		}
 		if err := services.WriteThreatIplistCompiled(iplistPath, data); err != nil {
-			fail("落盘/编译失败", err)
+			fail(importWarn("k_5f40e901"), err)
 			continue
 		}
 		threatLanded = true
@@ -548,7 +551,7 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 			if err := services.Reload(); err != nil {
 				services.Logf("error", "lbbak 导入后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 				// 热换失败必须对用户可见（磁盘与内存分裂，重启才收敛）。
-				result.warn(c, action, "IP2Region 内存缓存热换失败（重启后生效）: "+err.Error())
+				result.warn(c, action, "k_76f8b3d3", err)
 			}
 			services.RebuildRegionTreeCacheForSync()
 		}
@@ -579,7 +582,7 @@ type lbbakWafFileSnapshot struct {
 	xdbVersionExists      bool
 	xdbVersionSnapshotted bool
 	// warnings 是快照阶段的显性说明（不可快照的现场等），随回退结论透出。
-	warnings []string
+	warnings importWarnings
 	// 威胁名单 threat-<source>.iplist 与其 .fast：导入会写入成功源，并删除
 	// 空/缺席/已删源的本地旧文件（落盘失败源保留本地）。回滚必须同时覆盖
 	// 「旧文件被改」与「本次新增文件要删」两侧。
@@ -636,7 +639,7 @@ func snapshotLbbakWafTargets(payload *lbbakPayload, threatFiles bool) (*lbbakWaf
 		}
 		snapshot.xdbExisted, snapshot.xdbSnapshotted = existed, snapshotted
 		if existed && !snapshotted {
-			snapshot.warnings = append(snapshot.warnings, "导入前 IP2Region 数据文件路径不是普通文件，未纳入回退（该路径的写入本身会失败）")
+			snapshot.warnings = append(snapshot.warnings, importWarn("k_8e68a642"))
 		}
 		versionExisted, versionSnapshotted, err := copyWafFileIfExists(liveXdb+".version", filepath.Join(root, "ip2region.xdb.version"))
 		if err != nil {
@@ -644,7 +647,7 @@ func snapshotLbbakWafTargets(payload *lbbakPayload, threatFiles bool) (*lbbakWaf
 		}
 		snapshot.xdbVersionExists, snapshot.xdbVersionSnapshotted = versionExisted, versionSnapshotted
 		if versionExisted && !versionSnapshotted {
-			snapshot.warnings = append(snapshot.warnings, "导入前 IP2Region 版本标记路径不是普通文件，未纳入回退")
+			snapshot.warnings = append(snapshot.warnings, importWarn("k_4d13e681"))
 		}
 	}
 	if snapshot.threatNames != nil {
@@ -654,7 +657,7 @@ func snapshotLbbakWafTargets(payload *lbbakPayload, threatFiles bool) (*lbbakWaf
 			return fail(fmt.Errorf("扫描威胁名单目录: %w", err))
 		}
 		if notDir {
-			snapshot.warnings = append(snapshot.warnings, "威胁名单目录路径不是目录，威胁名单未纳入回退（该路径下的写入本身会失败）")
+			snapshot.warnings = append(snapshot.warnings, importWarn("k_fe7c270c"))
 		}
 		if len(names) > 0 {
 			if err := os.MkdirAll(filepath.Join(root, "threat"), 0o700); err != nil {
@@ -675,7 +678,7 @@ func snapshotLbbakWafTargets(payload *lbbakPayload, threatFiles bool) (*lbbakWaf
 // 落盘同处 caddyOpMu 临界区（导入 abort 路径满足）。逐项尝试不因首错放弃
 // （恢复面越完整越好）；err 非 nil=文件回退失败（文件与数据库可能分叉），
 // warnings 承载「文件已回退但运行时内存面须重启收敛」等说明。
-func (snapshot *lbbakWafFileSnapshot) restore() (warnings []string, err error) {
+func (snapshot *lbbakWafFileSnapshot) restore() (warnings importWarnings, err error) {
 	if snapshot == nil || snapshot.root == "" {
 		return nil, nil
 	}
@@ -708,7 +711,7 @@ func (snapshot *lbbakWafFileSnapshot) restore() (warnings []string, err error) {
 		case !snapshot.xdbExisted:
 			// 导入前无数据库：磁盘已回到「不存在」，但运行时无法卸载已装载
 			// 的库——只能显性告知重启收敛，不能当作静默成功。
-			warnings = append(warnings, "IP2Region 数据文件已回退为导入前的不存在状态——运行时内存缓存无法卸载导入的数据库，重启后与磁盘收敛")
+			warnings = append(warnings, importWarn("k_b88e56a6"))
 		default:
 			if err := services.Reload(); err != nil {
 				errs = append(errs, fmt.Errorf("回退后热换 IP2Region 内存缓存失败（重启后生效）: %w", err))
@@ -764,21 +767,21 @@ func (snapshot *lbbakWafFileSnapshot) discard() {
 //   - 数据库提交结果不确定（Commit 报错）→ 文件保持导入后状态（不回退）：既
 //     不断言一致也不断言分裂，给人工核对与收敛指引。
 //
-// 空串=无需提示（文件未落盘）。
-func lbbakWafRollbackWarning(filesLanded, restoreAttempted bool, restoreErr error, commitIndeterminate bool) string {
+// 零值=无需提示（文件未落盘）。
+func lbbakWafRollbackWarning(filesLanded, restoreAttempted bool, restoreErr error, commitIndeterminate bool) importWarning {
 	if !filesLanded {
-		return ""
+		return importWarning{}
 	}
 	if commitIndeterminate {
-		return "规则库文件已按备份落盘且保持导入后状态（未回退）——数据库提交结果不确定：若提交实际成功则文件与数据库一致，若实际未提交则文件与版本记录分叉，请核对规则库页版本后重新导入或触发规则库更新收敛"
+		return importWarn("k_23bf2e66")
 	}
 	switch {
 	case restoreAttempted && restoreErr != nil:
-		return "规则库文件已按备份落盘，数据库已回滚，但规则库文件回退失败: " + restoreErr.Error() + "——文件与版本记录可能分裂，请重新导入或触发规则库更新以收敛"
+		return importWarn("k_47a1262e", restoreErr)
 	case restoreAttempted:
-		return "规则库文件已按备份落盘，数据库已回滚——规则库文件已回退到导入前状态（文件与版本记录一致）"
+		return importWarn("k_594803a8")
 	}
-	return "规则库文件已按备份落盘，但数据库已回滚——文件与版本记录可能分裂，请重新导入或触发规则库更新以收敛"
+	return importWarn("k_bbed968a")
 }
 
 // listLbbakThreatFiles 列出 WAF 目录内的威胁名单文件（threat-*.iplist 与其

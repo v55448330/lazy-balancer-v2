@@ -15,6 +15,7 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -226,7 +227,7 @@ type configImportSession struct {
 	wafRestoreErr       error
 	// wafRestoreWarnings 是回退成功但运行时面需重启收敛等说明，随失败响应
 	// 一并透出。
-	wafRestoreWarnings []string
+	wafRestoreWarnings importWarnings
 	// pendingCleanup 是提交成功后待执行的产物清理计划：锁内（事务视图）
 	// 只收集判定集并完成 cert_jobs 必要删除，实际删文件/日志/指标的删除动作
 	// 拆到 close 释放 caddyOpMu 之后执行；会话锁/窗口持续至清理收尾。
@@ -235,7 +236,7 @@ type configImportSession struct {
 	// failureWarnings 是会话收尾阶段产生的、必须随失败响应透出的说明
 	// （提交不确定态下的产物清理去向）。与 wafRestoreWarnings 分开：
 	// 后者只讲规则库文件的回退结论。
-	failureWarnings []string
+	failureWarnings importWarnings
 	// postLockActions 是提交成功后、必须在 caddyOpMu 释放之后同步执行的运行期
 	// 收敛动作。用于「收敛本身要自取 CaddyOpLock」的路径（例：自动封禁禁用
 	// 收尾 AutobanDisableFlush——非重入锁，在导入临界区内直呼即死锁）。执行点
@@ -643,13 +644,13 @@ func (session *configImportSession) abort(importErr error) error {
 			// 不确定态给出）。
 			snapshot.discard()
 			detail := "数据库提交结果不确定：规则库文件保持导入后状态（未回退）——若提交实际未落地则文件与版本记录分叉，请核对规则库页版本后重新导入或触发规则库更新收敛"
-			session.wafRestoreWarnings = append([]string{}, snapshot.warnings...)
+			session.wafRestoreWarnings = append(importWarnings{}, snapshot.warnings...)
 			services.Logf("error", "配置%s警告: %s", session.actionLabel(), detail)
 			services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", detail, "")
 		} else {
 			session.wafRestoreAttempted = true
 			session.wafRestoreWarnings, session.wafRestoreErr = snapshot.restore()
-			session.wafRestoreWarnings = append(append([]string{}, snapshot.warnings...), session.wafRestoreWarnings...)
+			session.wafRestoreWarnings = append(append(importWarnings{}, snapshot.warnings...), session.wafRestoreWarnings...)
 			snapshot.discard()
 			if session.wafRestoreErr != nil {
 				detail := "规则库文件回退失败（文件与数据库可能分叉）: " + session.wafRestoreErr.Error()
@@ -659,7 +660,7 @@ func (session *configImportSession) abort(importErr error) error {
 				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", detail, "")
 			}
 			for _, warning := range session.wafRestoreWarnings {
-				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", warning, "")
+				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", warning.render(i18n.ZH), "")
 			}
 		}
 	}
@@ -691,10 +692,10 @@ func (session *configImportSession) abort(importErr error) error {
 				// 产物清理去向往响应与审计披露：计划已保留到 close 之后执行，
 				// 但不确定态下读者无法从「导入失败」推断磁盘是否已收敛，
 				// 必须显性说明（同族 WAF 文件面已有 lbbakWafRollbackWarning）。
-				if notice := session.indeterminateCleanupNotice(); notice != "" {
+				if notice := session.indeterminateCleanupNotice(); !notice.isZero() {
 					session.failureWarnings = append(session.failureWarnings, notice)
-					services.Logf("warn", "配置%s警告: %s", session.actionLabel(), notice)
-					services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", notice, "")
+					services.Logf("warn", "配置%s警告: %s", session.actionLabel(), notice.render(i18n.ZH))
+					services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", notice.render(i18n.ZH), "")
 				}
 			}
 			if recovery.runtime != nil {
@@ -805,22 +806,22 @@ func absentRuleIDs(ctx context.Context, q rowsQueryer, ids []string) ([]string, 
 // 随失败响应 warnings 透出并落审计。计划已保留到 close 之后执行，但能否执行
 // 取决于提交是否真的落地——此处按已提交视图给出可核对的事实，不预判结果：
 // 视图仍含这些规则=提交未落地、无需清理；已不含=收尾时删除。
-func (session *configImportSession) indeterminateCleanupNotice() string {
+func (session *configImportSession) indeterminateCleanupNotice() importWarning {
 	plan := session.pendingCleanup
 	if plan.empty() {
-		return ""
+		return importWarning{}
 	}
 	if len(plan.disappeared) == 0 {
-		return "数据库提交结果不确定：无材料规则的残留证书文件清理将按已提交视图复核后执行（实际回滚时自动跳过）"
+		return importWarn("k_437730e3")
 	}
 	gone, err := absentRuleIDs(session.cleanupContext(), db.DB, plan.disappeared)
 	if err != nil {
-		return fmt.Sprintf("数据库提交结果不确定：本次导入移除规则的证书文件/指标/日志清理未能核对已提交视图（%v）——请人工核对 certs/ 与各日志目录", err)
+		return importWarn("k_a4725e7f", err)
 	}
 	if len(gone) == 0 {
-		return "数据库提交结果不确定：已提交视图仍包含本次导入替换的规则（提交实际未落地），无需清理产物"
+		return importWarn("k_d6d521a6")
 	}
-	return fmt.Sprintf("数据库提交结果不确定：已按已提交视图确认本次导入移除的 %d 条规则，其证书文件/指标/日志将在导入收尾后清理（实际回滚时自动跳过）", len(gone))
+	return importWarn("k_a71e068e", len(gone))
 }
 
 func (session *configImportSession) commit(affectedRuleIDs []string, certificates []importCertificate) error {

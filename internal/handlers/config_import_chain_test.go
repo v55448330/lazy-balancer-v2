@@ -171,7 +171,7 @@ func TestImportValidationChain_emptyDomainRulesAndBlockPagesSoftSkipped(t *testi
 	if backupInt(keptRule["block_page_stage1_id"]) != 3 || backupInt(keptRule["block_page_stage1_status"]) != 403 {
 		t.Fatalf("规则阶段页引用应原样保留: %v", keptRule)
 	}
-	warnings := strings.Join(result.SkipWarnings, "\n")
+	warnings := strings.Join(zhWarnings(result.SkipWarnings), "\n")
 	for _, want := range []string{"域名为空", "内容为空"} {
 		if !strings.Contains(warnings, want) {
 			t.Fatalf("软跳过警告应包含 %q，实际: %v", want, result.SkipWarnings)
@@ -207,7 +207,7 @@ func TestImportValidationChain_pureJSONThreatSourcesValidatedThenPreservedLocall
 	if err != nil {
 		t.Fatalf("内置威胁源应放行: %v", err)
 	}
-	if !strings.Contains(strings.Join(result.SkipWarnings, "\n"), "已保留本地威胁源配置") {
+	if !strings.Contains(strings.Join(zhWarnings(result.SkipWarnings), "\n"), "已保留本地威胁源配置") {
 		t.Fatalf("应给出保留本地威胁源警告: %v", result.SkipWarnings)
 	}
 }

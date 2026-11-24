@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 )
 
 const (
@@ -58,9 +59,10 @@ const (
 // 行帽按行不按字节：单行最坏 ≈ 请求头 64KiB + 请求体 64KiB + URI 8KiB +
 // rule_msg 2KiB（采集上限 securityEvents*Cap，另有文本截断标记）——摘要
 // 披露理论体积上限，避免「100 万行」被误读为固定小体积。
-func SecurityEventsRetentionSnapshot() (string, int) {
+// lang 是摘要的渲染语言（面板按请求语言取词）；行数上限不随语言变化。
+func SecurityEventsRetentionSnapshot(lang string) (string, int) {
 	policy, _ := securityEventsRetentionPolicyFromDB()
-	return fmt.Sprintf("每日清理 · 保留 %d 天 / 上限 %d 行（按行计，单行最大约 %s，理论体积上限约 %s）",
+	return fmt.Sprintf(i18n.T(lang, "k_7229ce33"),
 		policy.Days, policy.Max, securityEventsRowMaxLabel(), securityEventsRowCapByteBudget(policy.Max)), policy.Max
 }
 

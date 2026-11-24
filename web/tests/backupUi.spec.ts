@@ -3,13 +3,15 @@ import assert from 'node:assert/strict'
 
 import {
   BACKUP_SECTIONS,
+  BACKUP_SECTION_TABLES,
   LEGACY_SECTION_ALIASES,
+  backupSectionsInSummary,
   importConfirmMessage,
   normalizeBackupSectionKeys,
 } from '../src/utils/backupSections.ts'
 import { code, elementSlice, goConstExpr, openTags, repoCode, section } from './_helpers.ts'
 
-// 设置页备份面回归守卫：导入入口/超大文件拒绝、lbbak Blob 直传、还原文案按分类、
+// 设置页备份面回归守卫：导入入口/超大文件拒绝、lbbak Blob 直传、还原复用导入弹框、
 // 下次备份调度口径、立即备份的卸载收尾，以及备份四分类前后端单源一致性。
 const page = code('src/views/settings/BasicSettings.vue')
 
@@ -25,6 +27,10 @@ test('新文件入口先清旧内容，超大拒绝不可回用旧备份', () =>
     'importFileIsLbbak.value = false',
     'importSections.value = []',
     'importValidation.value = null',
+    // 上一份文件的预览会话同样要作废：超大分支此后直接返回，会话留着时点分类
+    // 会用旧会话重新校验，缓存命中就把上一份文件的预览显示在新文件名下。
+    'importPreviewSession?.dispose()',
+    'importPreviewSession = null',
   ]) {
     assert.ok(beforeReject.includes(reset), `missing pre-reject reset: ${reset}`)
   }
@@ -47,14 +53,10 @@ test('lbbak 以 Blob 直传，不复制成第二个 ArrayBuffer', () => {
   assert.match(page, /ref<string \| Blob>\(''\)/)
 })
 
-test('还原文案按备份分类，失败行不显示下载', () => {
+test('还原入口打开导入弹框（服务器备份），失败行不显示下载', () => {
   const restore = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
-  assert.match(restore, /autoBackupScopeText\(row\)/)
-  assert.match(restore, /t\('app\.settings\.basic\.autoBackup\.restoreConfirm'/)
-  assert.ok(code('src/locales/zh/settings.ts').includes('"restoreConfirm": "将使用备份「{name}」覆盖该备份包含的分类'), 'zh 母本须保留「覆盖该备份包含的分类」原文')
-  // 结构负钉：还原文案必须按备份分类投影（上面已钉 restoreConfirm 键+zh 母本），
-  // 不得消费全量覆盖口径键 coverAll/importConfirmFull（裸中文负钉 i18n 后空转）。
-  assert.doesNotMatch(restore, /coverAll|importConfirmFull/)
+  assert.match(restore, /triggerImport\(row\)/, '还原=打开导入弹框，数据源是该行服务器备份')
+  assert.doesNotMatch(restore, /ElMessageBox|autoBackupScopeText|restoreConfirm/, '不再有单独的还原确认框')
   // 属性序与字面空隙不是契约（格式工具栏/换行重排即批量假红）：按「标签 + 属性集」
   // 判定，按钮身份由 @click 处理器认领。
   const downloads = openTags(page, 'el-button').filter((tag) => tag.includes('@click="downloadAutoBackup('))
@@ -120,17 +122,19 @@ test('立即备份轮询在组件卸载后终止且不再弹结果', () => {
 
 // 取消到 0 个分类时，chip 必须保留以便重新勾选；摘要/冲突与确认按钮同门隐藏，
 // 空选择提示替代校验错误，避免继续展示上一次分类集合的预览。
+// 例外——服务器备份（还原）模式：可导入分类要等预览成功才知道，预览失败（请求出错
+// 或备份本身校验不过）时分类为空，必须显示错误原因，「未选择导入分类」不得盖住它。
 test('0 分类选择保留 chip、隐藏陈旧预览并禁用确认', () => {
   assert.match(page, /const importPreviewSelected = computed<boolean>\(\(\) => importSections\.value\.length > 0\)/)
   assert.match(page, /<template v-if="importValidation && !importValidating">/)
   assert.match(page, /@click="toggleImportSection\(sec\.key\)"/)
-  assert.match(page, /v-if="!importValidation\.valid && importPreviewSelected"/)
+  assert.match(page, /v-if="!importValidation\.valid && \(importPreviewSelected \|\| importBackupId !== null\)"/, '服务器备份模式下预览无效时必须显示错误原因')
   assert.match(page, /v-else-if="!importValidation\.valid && importPreviewSelected"/)
   assert.match(page, /<template v-if="importValidation\.valid && importPreviewSelected">/)
-  assert.match(page, /v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">\{\{ t\('app\.settings\.basic\.import\.noneSelected'\) \}\}/)
+  assert.match(page, /v-else-if="!importPreviewSelected && \(importValidation\.valid \|\| importBackupId === null\)" class="info-note-bar import-alert"><span class="info-note-desc">\{\{ t\('app\.settings\.basic\.import\.noneSelected'\) \}\}/, '「未选择导入分类」不得盖住服务器备份的预览失败原因')
   assert.ok(code('src/locales/zh/settings.ts').includes('"noneSelected": "未选择导入分类'), 'zh 母本须保留「未选择导入分类」原文')
   const toggle = section(page, 'const toggleImportSection', 'const toggleExportSection')
-  assert.match(toggle, /if \(validation\.type === 'v1' && key !== 'rules'\) return/, 'V1 取消唯一分类后仍必须允许重新勾选规则')
+  assert.match(toggle, /if \(!importSelectableSections\.value\.includes\(key\)\) return/, '不可选分类（V1 的非规则分类、服务器备份未包含的分类）不可点；V1 取消唯一分类后仍必须允许重新勾选规则')
   const button = section(page, ':disabled="!importValidation?.valid', ':loading="importing"')
   assert.match(button, /!importPreviewSelected/)
   // 与同卡其余写入口同门：只读 ∪ 非主节点（从节点导入必然 403）
@@ -191,12 +195,85 @@ test('分类选择统一走 query，纯 JSON 请求体不被改写', () => {
 // 自动备份还原与导入同口径：冲突自动禁用的规则必须出现在结果弹框里，
 // 否则「还原成功」后流量静默切走。
 test('自动备份还原结果展示冲突自动禁用明细', () => {
-  const body = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
+  const body = section(page, 'const submitRestore', 'const confirmImport')
   assert.ok(body.includes('disabled_conflicts'), '还原必须读取 data.disabled_conflicts')
   assert.ok(body.includes('formatImportConflict'), '冲突明细必须复用 formatImportConflict')
   assert.match(body, /t\('app\.settings\.basic\.conflictsDisabled', \{ count: disabledConflicts\.length \}\)/)
   assert.ok(code('src/locales/zh/settings.ts').includes('"conflictsDisabled": "冲突置为禁用：{count} 条"'), 'zh 母本须保留「冲突置为禁用」原文')
   assert.match(body, /formatImportConflict\(conflict, true\)/, '还原路径的冲突文案须用已禁用时态')
+})
+
+// 还原结果弹框靠「告警文本包含标记子串」决定按钮是「重新登录」还是「刷新页面」。
+// 会话吊销告警后端已双语、按动作（导入/还原）各登记一条：标记必须同时命中每条的
+// 中、英文案，否则英文界面把「重新登录」降级成「刷新页面」。
+test('会话吊销标记同时命中导入/还原告警的中英文案', () => {
+  const catalog = repoCode('internal/i18n/catalog_manual.go')
+  const marks = (['zh', 'en'] as const).map((locale) => {
+    const mark = /"sessionRevokeMark": "([^"]+)"/.exec(code(`src/locales/${locale}/settings.ts`))?.[1]
+    assert.ok(mark, `${locale} 须有 restoreResult.sessionRevokeMark`)
+    return mark
+  })
+  for (const key of ['k_dffc3f29', 'k_23e13305']) {
+    const line = catalog.split('\n').find((l) => l.includes(`"${key}"`)) ?? ''
+    const texts = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1])
+    assert.equal(texts.length, 3, `${key} 须为「键, 中文, 英文」三项`)
+    assert.ok(texts[1].includes(marks[0]), `zh 的会话吊销标记须是 ${key} 中文文案的子串`)
+    assert.ok(texts[2].includes(marks[1]), `en 的会话吊销标记须是 ${key} 英文文案的子串`)
+  }
+})
+
+// 备份历史的「还原」复用导入弹框：数据源是服务器上的这份备份——文件区显示文件名
+// 与「服务器备份」标注、不出选文件按钮；预览与确认只带 backup_id/所选分类。
+test('服务器备份复用导入弹框：预览带 backup_id 空请求体，确认先过导入的最终确认再走还原端点', () => {
+  const dialog = section(page, 'v-model="importDialogVisible"', '</el-dialog>')
+  assert.match(dialog, /<el-button v-if="importBackupId === null" :icon="Upload" @click="chooseImportFile">/, '服务器备份不显示「选择备份文件」按钮')
+  assert.match(dialog, /<el-tag v-if="importBackupId !== null"[^>]*>\{\{ t\('app\.settings\.basic\.import\.serverBackup'\) \}\}<\/el-tag>/, '文件名旁标注「服务器备份」')
+  assert.match(dialog, /'is-disabled': !importSelectableSections\.includes\(sec\.key\)/, '备份未包含的分类禁用（与 V1 非规则分类同形态）')
+  assert.ok(code('src/locales/zh/settings.ts').includes('"serverBackup": "服务器备份"'), 'zh 母本须有「服务器备份」')
+  assert.ok(code('src/locales/en/settings.ts').includes('"serverBackup": "Server backup"'), 'en 成对在场')
+
+  const preview = section(page, 'const postImportValidation', 'const revalidateImport')
+  assert.match(preview, /&backup_id=\$\{backupId\}/, '服务器备份预览带 backup_id')
+  assert.match(preview, /backupId === null \? importFileContent\.value : undefined/, '服务器备份预览请求体为空')
+
+  const confirm = section(page, 'const confirmImport', 'const DEFAULT_GITHUB_PROXY_URL')
+  assert.match(confirm, /importConfirmMessage\(validation\.type, importSections\.value\)/, '先过导入现有的最终二次确认')
+  assert.match(confirm, /await submitRestore\(importBackupId\.value\)/, '确认后走还原提交')
+  const submit = section(page, 'const submitRestore', 'const confirmImport')
+  assert.match(submit, /`\/auto-backup\/\$\{backupId\}\/restore\?sections=\$\{encodeURIComponent\(importSections\.value\.join\(','\)\)\}`, undefined, \{ timeout: 0 \}\)/, '还原按所选分类提交：空请求体、分钟级请求 timeout: 0')
+  // 入口必须是调用形态：方法引用写法会把点击事件当成 serverBackup，点「导入配置」
+  // 就发一次空体校验并报错。
+  assert.match(page, /@click="triggerImport\(\)"/, '导入入口以调用形态绑定（不得写成方法引用）')
+  // 预览请求失败（备份文件已不存在 / 超过上限…）：服务器备份模式下失败原因必须留在
+  // 弹框内——全局提示几秒即逝，而此时分类全禁用、没有重试入口。
+  const failure = section(page, 'const importValidateFailureText', 'const startImportValidation')
+  assert.match(failure, /importBackupId\.value !== null && error instanceof Error && error\.message/, '服务器备份模式取失败原因')
+  assert.match(failure, /return error\.message/, '服务器备份模式在弹框内显示失败原因')
+  assert.match(failure, /return t\('app\.settings\.basic\.import\.validateRequestFail'\)/, '本地文件模式沿用通用文案')
+  assert.equal((page.match(/error: importValidateFailureText\(error\)/g) ?? []).length, 2, '首轮预览与分类重校验两处都经同一取词')
+  // 关闭弹框必须清掉服务器备份的数据源状态：否则「还原 → 关闭 → 本地文件导入」
+  // 会带着旧的 backup_id 去校验，确认时走 submitRestore(旧 ID)。
+  const closed = section(page, 'const onImportDialogClosed', 'const chooseImportFile')
+  assert.match(closed, /importBackupId\.value = null/, '关闭即清数据源')
+  assert.match(closed, /importBackupSections\.value = \[\]/, '关闭即清可导入分类')
+})
+
+// 服务器备份只开放它实际包含的分类：预览 summary 以表名为键，分类所含的表任一在场
+// （导出恒带所选分类的全部表，空表计 0）即该分类在场；分类→表为后端
+// configBackupSections.Tables 的镜像，跨栈对表。
+test('服务器备份实际包含的分类由预览 summary 判定，分类→表与后端同源', () => {
+  const go = repoCode('internal/handlers/config_backup.go')
+  const goBlock = section(go, 'var configBackupSections = []struct', '\n}\n')
+  const goTables = [...goBlock.matchAll(/\{Key: "(\w+)", Label: "[^"]+", Tables: \[\]string\{([^}]*)\}/g)]
+    .map((m) => [m[1], [...m[2].matchAll(/"([a-z0-9_]+)"/g)].map((x) => x[1])])
+  assert.deepEqual(BACKUP_SECTIONS.map((s) => [s.key, [...BACKUP_SECTION_TABLES[s.key]]]), goTables, '分类→表漂移会让备份包含的分类被误判为未包含')
+
+  const everyTable = Object.fromEntries(Object.values(BACKUP_SECTION_TABLES).flat().map((table) => [table, 0]))
+  assert.deepEqual(backupSectionsInSummary(everyTable), ['users', 'rules', 'security', 'cluster'])
+  assert.deepEqual(backupSectionsInSummary({ lb_rules: 2, upstreams: 0, path_rules: 0, cert_jobs: 0 }), ['rules'], '空表计 0 也算在场；未含分类不算')
+  assert.deepEqual(backupSectionsInSummary({ users: 1, nodes: 1 }), ['users', 'cluster'])
+  // summary 缺席（校验未通过/请求失败）：不限制分类，交由后端按备份范围取交集
+  assert.deepEqual(backupSectionsInSummary(undefined), ['users', 'rules', 'security', 'cluster'])
 })
 
 // V1 备份按后端契约只导入规则部分；此前最终确认框沿用「覆盖当前全部配置」

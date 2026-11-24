@@ -3,8 +3,8 @@
 // 覆盖三件可观察行为：
 //  1. 导入/还原这类分钟级同步写请求在断连后必须显式告知「可能仍在后台执行」并
 //     给出操作日志入口——全局拦截器只弹一句「网络连接失败」，会被读成「没执行」。
-//  2. 还原确认框必须先请求预览（版本告警/将被禁用的规则/其它告警），预览失败
-//     不得阻断还原；分组与过滤逻辑抽成纯函数在此钉住。
+//  2. 备份历史的「还原」复用导入弹框（预览告警/冲突清单、分类选择、最终确认），
+//     不再有单独的还原确认框与旧预览端点。
 //  3. 未保存改动必须能被跨组件读取（离开当前设置页的确认与 beforeunload 共用
 //     同一登记）：切到任何其它页面（含设置内其它分页）都要确认，确认离开即
 //     丢弃全部改动；首屏/保存后回填只覆盖「服务端确认值」快照，重挂载不得把
@@ -17,7 +17,6 @@ import assert from 'node:assert/strict'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
 import { isConnectionInterruption } from '../src/utils/connectionInterruption.ts'
-import { restorePreviewGroups } from '../src/utils/restorePreview.ts'
 import {
   discardSettingsDraft,
   hasDirtySettingsForm,
@@ -60,33 +59,18 @@ test('断连只认「请求已出站但没拿到响应」，4xx/5xx 与取消/�
   assert.equal(isConnectionInterruption('network'), false)
 })
 
-// —— 还原预览分组 ——
+// —— 还原复用导入弹框 ——
 
-test('还原预览分组：版本告警去空白、告警逐条保序并滤空、冲突明细原序', () => {
-  const groups = restorePreviewGroups({
-    version_warning: '  备份版本 v2.1.0，当前 v2.4.3  ',
-    backup_version: 'v2.1.0',
-    current_version: 'v2.4.3',
-    disabled_conflicts: [
-      { name: 'A', reason: 'same port', conflicts_with: [] },
-      { caddy_id: 'b', reason: 'same domain', conflicts_with: [{ name: 'A', reason: 'same domain' }] },
-    ],
-    warnings: ['规则库元数据已跳过', '', 42, '证书任务悬挂 2 条'],
-  })
-  assert.equal(groups.versionWarning, '备份版本 v2.1.0，当前 v2.4.3')
-  assert.deepEqual(groups.conflicts.map((conflict) => conflict.name ?? conflict.caddy_id), ['A', 'b'])
-  assert.deepEqual(groups.warnings, ['规则库元数据已跳过', '证书任务悬挂 2 条'])
-})
-
-test('还原预览缺字段/畸形载荷不抛错、不臆造条目（旧后端与半途字段）', () => {
-  for (const payload of [null, undefined, {}, { version_warning: 1, warnings: 'oops', disabled_conflicts: {} }]) {
-    const groups = restorePreviewGroups(payload)
-    assert.equal(groups.versionWarning, '')
-    assert.deepEqual(groups.conflicts, [])
-    assert.deepEqual(groups.warnings, [])
+test('还原不再有单独确认框与旧预览端点：预览复用导入校验端点', () => {
+  const page = code('src/views/settings/BasicSettings.vue')
+  assert.doesNotMatch(page, /auto-backup\/\$\{id\}\/preview/, '旧还原预览端点不得残留')
+  assert.doesNotMatch(page, /fetchRestorePreview|restorePreviewGroups/, '不得保留单独的还原预览组装逻辑')
+  const restore = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
+  assert.doesNotMatch(restore, /ElMessageBox/, '还原入口只打开导入弹框，不弹确认框')
+  assert.match(restore, /triggerImport\(row\)/, '预览（告警/冲突清单）经导入弹框展示')
+  for (const locale of ['zh', 'en'] as const) {
+    assert.doesNotMatch(code(`src/locales/${locale}/settings.ts`), /"restorePreview"|"restoreConfirm"|"restoreTitle"|"restoreConfirmBtn"/, `${locale} 只为还原确认框存在的词条须删除`)
   }
-  const trailing = restorePreviewGroups({ warnings: ['  ', '\tok\t'] })
-  assert.deepEqual(trailing.warnings, ['ok'], '逐条去首尾空白后保留内部内容')
 })
 
 // —— 未保存改动登记 ——
@@ -143,40 +127,12 @@ test('基线变更能驱动脏态重算（保存回填只改基线、不动表�
   assert.equal(dirty.value, false)
 })
 
-// —— 还原确认框：先预览、失败不阻断 ——
-
-test('还原先请求预览再确认，失败只加一行提示仍可继续', () => {
-  const page = code('src/views/settings/BasicSettings.vue')
-  assert.match(page, /\/auto-backup\/\$\{id\}\/preview/, '还原必须请求预览端点（silent，失败不作还原失败提示）')
-  const fetchPreview = section(page, 'const fetchRestorePreview', 'const restoreAutoBackup')
-  assert.match(fetchPreview, /silent: true/)
-  assert.match(fetchPreview, /restorePreviewGroups\(null\)/, '预览失败按空分组继续，不得抛错阻断')
-  assert.match(fetchPreview, /failure: reason/, '失败原因必须回传给确认框')
-  const restore = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
-  const previewAt = restore.indexOf('fetchRestorePreview(row.id)')
-  const confirmAt = restore.indexOf('ElMessageBox.confirm')
-  assert.ok(previewAt > 0, '确认前必须请求预览')
-  assert.ok(confirmAt > previewAt, '预览必须在确认框之前')
-  assert.match(restore, /preview\.failure/, '预览失败原因必须显性进入确认框')
-  assert.match(restore, /confirm-scope-lead/, '后果披露用全局单源类（DESIGN_SPEC §20）')
-  assert.match(restore, /confirm-scope-list/)
-  assert.match(restore, /restorePreview\.(conflictsLead|warningsLead|fail)/, '分组文案走词条')
-})
-
-test('还原确认按钮语义是「仍然还原」（已看到后果后的继续）', () => {
-  const zh = code('src/locales/zh/settings.ts')
-  const en = code('src/locales/en/settings.ts')
-  assert.match(zh, /"restoreConfirmBtn": "仍然还原"/)
-  assert.match(en, /"restoreConfirmBtn": "/)
-  assert.match(zh, /"restoreTitle": "还原配置"/)
-})
-
 // —— 断连提示与操作日志入口 ——
 
 test('导入/还原的断连提示给出操作日志入口（不是只弹一句网络失败）', () => {
   const page = code('src/views/settings/BasicSettings.vue')
   const importBody = section(page, 'const confirmImport', 'const DEFAULT_GITHUB_PROXY_URL')
-  const restoreBody = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
+  const restoreBody = section(page, 'const submitRestore', 'const confirmImport')
   for (const [name, body, messageKey] of [
     ['导入', importBody, 'import.interrupted'],
     ['还原', restoreBody, 'restore.interrupted'],

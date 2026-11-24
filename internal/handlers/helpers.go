@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
 
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -177,10 +178,10 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 // (与 systemMetricsReadFile 同款测试隔离约定)。
 var tlsCertSystemRoots = x509.SystemCertPool
 
-// 证书警告文案的单源（分类依赖前缀，故集中定义）。
+// 证书警告分类前缀的单源：certWarningsForResponse 按前缀识别「可轮换」状态
+// （过期/未生效不随保存响应弹框）。完整文案是 importWarning 词条事实，见
+// tlsCertificateNotes。
 const (
-	certWarningIncompleteChain   = "证书链可能不完整，部分客户端将握手失败"
-	certWarningDomainMismatch    = "证书域名与规则域名不匹配"
 	certWarningExpiredPrefix     = "证书已过期"
 	certWarningNotYetValidPrefix = "证书尚未生效"
 )
@@ -200,7 +201,8 @@ func certWarningsForResponse(warnings []string) []string {
 	return out
 }
 
-// tlsCertificateWarnings对手动 TLS 证书做「不阻断」质量检查
+// tlsCertificateNotes 对手动 TLS 证书做「不阻断」质量检查，返回告警事实（按
+// 语言渲染见 importWarning）：
 //  1. 链完整性——系统根 + PEM 内中间证书 x509.Verify,unknown authority 类
 //     失败说明链可能不完整(浏览器/严格客户端将握手失败);
 //  2. 域名覆盖——domain 非空且证书 DNSNames/CN 不覆盖(含通配符语义,
@@ -209,7 +211,7 @@ func certWarningsForResponse(warnings []string) []string {
 // 纯警告不阻断:配对/解析合法性由 validateTLSCertificate 硬校验负责,此处
 // 解析失败防御性返回 nil;无警告返回 nil。keyPEM 仅用于配对解析(契约与
 // rules.go 消费侧对称)。
-func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
+func tlsCertificateNotes(certPEM, keyPEM, domain string) importWarnings {
 	pair, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil || len(pair.Certificate) == 0 {
 		return nil
@@ -218,7 +220,7 @@ func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
 	if err != nil {
 		return nil
 	}
-	var warnings []string
+	var warnings importWarnings
 	intermediates := x509.NewCertPool()
 	for _, der := range pair.Certificate[1:] {
 		if intermediate, perr := x509.ParseCertificate(der); perr == nil {
@@ -234,7 +236,7 @@ func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
 		}); verr != nil {
 			var unknownAuthority x509.UnknownAuthorityError
 			if errors.As(verr, &unknownAuthority) {
-				warnings = append(warnings, certWarningIncompleteChain)
+				warnings = append(warnings, importWarn("k_64f5881f"))
 			}
 		}
 	}
@@ -244,9 +246,9 @@ func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
 	// 规则保存路径却丢弃未用。
 	now := time.Now()
 	if now.After(leaf.NotAfter) {
-		warnings = append(warnings, certWarningExpiredPrefix+" (过期时间: "+leaf.NotAfter.In(services.CurrentLocation()).Format("2006-01-02")+")")
+		warnings = append(warnings, importWarn("k_233440d6", leaf.NotAfter.In(services.CurrentLocation()).Format("2006-01-02")))
 	} else if now.Before(leaf.NotBefore) {
-		warnings = append(warnings, certWarningNotYetValidPrefix+" (生效时间: "+leaf.NotBefore.In(services.CurrentLocation()).Format("2006-01-02")+")")
+		warnings = append(warnings, importWarn("k_4167ea7d", leaf.NotBefore.In(services.CurrentLocation()).Format("2006-01-02")))
 	}
 	for _, name := range strings.Split(domain, ",") {
 		name = strings.TrimSpace(name)
@@ -254,11 +256,17 @@ func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
 			continue
 		}
 		if !tlsCertCoversDomain(leaf, name) {
-			warnings = append(warnings, certWarningDomainMismatch)
+			warnings = append(warnings, importWarn("k_f24a01f7"))
 			break
 		}
 	}
 	return warnings
+}
+
+// tlsCertificateWarnings 是 tlsCertificateNotes 的中文渲染：规则保存链路与
+// 审计明细按中文母本消费，且 certWarningsForResponse 依赖中文前缀分类。
+func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
+	return tlsCertificateNotes(certPEM, keyPEM, domain).render(i18n.ZH)
 }
 
 // tlsCertCoversDomain 判定证书是否覆盖域名:优先标准 SAN 校验(Go 内建通配

@@ -1,4 +1,4 @@
-// 仪表盘披露口径守卫（规则卡截断提示纯函数 + 图表/指标/重启入口的口径说明接线）。
+// 仪表盘披露口径守卫（规则卡截断提示纯函数 + 指标卡副标题/重启入口的口径说明接线）。
 //
 // 运行：cd web && node --test tests/dashboardDisclosure.spec.ts
 
@@ -25,6 +25,17 @@ test('规则卡截断提示：恰好 10 条全部展示不提示，第 11 条起
   assert.deepEqual(ruleCardOverflowHint(23, 10), { total: 23, shown: 10, hidden: 13 })
 })
 
+// 2026-11-25 用户裁定：概览流量图/连接图下方的两条「整机口径」说明属过度设计，已移除
+// （指标卡口径副标题与规则卡截断提示保留）。此钉防止说明或其词条回潮。
+test('概览图下方不再有「整机口径」说明，词条同步移除', () => {
+  assert.ok(!dashboard.includes('chart-scope-note'), '流量图/连接图下方不得再出现口径说明')
+  for (const [locale, catalog] of [['zh', zhDashboard], ['en', enDashboard]] as const) {
+    for (const key of ['trafficScopeNote', 'connectionsScopeNote']) {
+      assert.ok(!(key in catalog), `${locale} 不得残留已移除的词条 ${key}`)
+    }
+  }
+})
+
 test('规则卡截断提示：总数不足 10 条但有未进榜规则时同样提示', () => {
   assert.deepEqual(ruleCardOverflowHint(8, 3), { total: 8, shown: 3, hidden: 5 })
 })
@@ -49,22 +60,6 @@ test('规则卡底部只披露截断口径，不提供跳转规则列表的入�
   for (const locale of ['zh', 'en'] as const) {
     assert.equal(code(`src/locales/${locale}/common.ts`).includes('viewAllRules'), false, `${locale} 词条键 viewAllRules 不得残留`)
   }
-})
-
-test('概览流量图与连接图各自声明整机口径', () => {
-  const trafficCard = dashboard.slice(dashboard.indexOf("t('common.app.dashboard.trafficMonitor')"), dashboard.indexOf("t('common.app.dashboard.connections')"))
-  const connectionsCard = dashboard.slice(dashboard.indexOf("t('common.app.dashboard.connections')"), dashboard.indexOf("t('common.app.dashboard.lbRules')"))
-  assert.match(trafficCard, /class="chart-scope-note form-tip-line">\{\{ t\('common\.app\.dashboard\.trafficScopeNote'\) \}\}/)
-  assert.match(connectionsCard, /class="chart-scope-note form-tip-line">\{\{ t\('common\.app\.dashboard\.connectionsScopeNote'\) \}\}/)
-})
-
-test('图表口径说明不臆造为负载规则合计（后端取整机网卡与整机连接）', () => {
-  assert.match(zhDashboard.trafficScopeNote, /整机/)
-  assert.match(zhDashboard.connectionsScopeNote, /整机/)
-  assert.doesNotMatch(zhDashboard.trafficScopeNote, /负载规则合计/)
-  assert.doesNotMatch(zhDashboard.connectionsScopeNote, /负载规则合计/)
-  assert.match(enDashboard.trafficScopeNote, /[Hh]ost-wide/)
-  assert.match(enDashboard.connectionsScopeNote, /[Hh]ost-wide/)
 })
 
 test('重启入口统一为进程口径并说明中断范围', () => {
@@ -97,7 +92,7 @@ test('概览七张指标卡各带口径副标题', () => {
 
 test('新增披露文案 zh/en 成对非空且口径用词一致', () => {
   const keys = [
-    'rulesOverflowHint', 'trafficScopeNote', 'connectionsScopeNote',
+    'rulesOverflowHint',
     'restartScopeNote', 'stopScopeNote', 'startScopeNote',
     'totalRequestsScope', 'inFlightScope', 'domainCountScope', 'reqRateScope', 'latencyScope',
   ] as const

@@ -189,7 +189,7 @@
               <div><el-button size="small" :icon="Download" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">{{ t('app.settings.basic.system.export') }}</el-button></div>
             </el-tooltip>
             <el-tooltip :disabled="!backupDisabled" :content="t('app.settings.basic.system.backupDisabledTip')">
-              <div><el-button size="small" :icon="Upload" :disabled="backupDisabled" @click="triggerImport">{{ t('app.settings.basic.system.import') }}</el-button></div>
+              <div><el-button size="small" :icon="Upload" :disabled="backupDisabled" @click="triggerImport()">{{ t('app.settings.basic.system.import') }}</el-button></div>
             </el-tooltip>
             <el-tooltip :disabled="!backupDisabled" :content="t('app.settings.basic.system.backupDisabledTip')">
               <div><el-button size="small" :icon="Timer" :disabled="backupDisabled" @click="openAutoBackupDialog">{{ t('app.settings.basic.autoBackup.title') }}</el-button></div>
@@ -331,8 +331,11 @@
         <DialogHeader :icon="Upload" :title="t('app.settings.basic.import.title')" :subtitle="t('app.settings.basic.import.subtitle')" />
       </template>
       <div class="import-picker">
-        <el-button :icon="Upload" @click="chooseImportFile">{{ t('app.settings.basic.import.chooseFile') }}</el-button>
-        <span v-if="importFileName" class="import-filename">{{ importFileName }}</span>
+        <el-button v-if="importBackupId === null" :icon="Upload" @click="chooseImportFile">{{ t('app.settings.basic.import.chooseFile') }}</el-button>
+        <template v-if="importFileName">
+          <span class="import-filename">{{ importFileName }}</span>
+          <el-tag v-if="importBackupId !== null" size="small" type="info">{{ t('app.settings.basic.import.serverBackup') }}</el-tag>
+        </template>
         <span v-else class="import-hint">{{ t('app.settings.basic.import.formatsHint') }}</span>
       </div>
       <input ref="importInput" type="file" accept="application/json,.json,.bak,.lbbak,application/gzip" class="import-input" @change="handleImportFile" />
@@ -340,10 +343,12 @@
       <div v-if="importValidating" v-loading="true" class="import-validating">{{ t('app.settings.basic.import.validating') }}</div>
 
       <template v-if="importValidation && !importValidating">
-        <div v-if="!importValidation.valid && importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error || t('app.settings.basic.import.validateFail') }}</span></div>
+        <div v-if="!importValidation.valid && (importPreviewSelected || importBackupId !== null)" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error || t('app.settings.basic.import.validateFail') }}</span></div>
         <!-- 预览无效时分类 chip 保持可见可用——取消勾选坏行分类后
              revalidateImport 自动重校验恢复 valid 即解锁确认；0 分类时保留
-             校验对象与 chip，仅隐藏预览并禁用确认，用户可直接重新勾选。 -->
+             校验对象与 chip，仅隐藏预览并禁用确认，用户可直接重新勾选。
+             服务器备份（还原）例外：可导入分类要等预览成功才知道，预览失败时
+             分类为空，错误原因必须照常显示。 -->
         <div class="import-result">
           <div class="import-sections">
             <div class="import-sections-label">{{ t('app.settings.basic.import.sectionsLabel') }}</div>
@@ -351,7 +356,7 @@
               <button
                 v-for="sec in BACKUP_SECTIONS" :key="sec.key"
                 type="button" class="section-chip"
-                :class="{ 'is-active': importSections.includes(sec.key), 'is-disabled': importValidation.type === 'v1' && sec.key !== 'rules' }"
+                :class="{ 'is-active': importSections.includes(sec.key), 'is-disabled': !importSelectableSections.includes(sec.key) }"
                 @click="toggleImportSection(sec.key)"
               >{{ sec.label }}</button>
             </div>
@@ -391,7 +396,7 @@
             <div v-if="importValidation.type !== 'v1'" class="info-note-bar import-alert"><span class="info-note-desc">{{ importSections.length === BACKUP_SECTIONS.length ? t('app.settings.basic.import.coverAll') : t('app.settings.basic.import.coverSelected', { list: listJoin(importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)) }) }}</span></div>
             <div v-else class="info-note-bar" style="margin-top: 4px"><span class="info-note-desc">{{ t('app.settings.basic.import.v1Scope') }}</span></div>
           </template>
-          <div v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ t('app.settings.basic.import.noneSelected') }}</span></div>
+          <div v-else-if="!importPreviewSelected && (importValidation.valid || importBackupId === null)" class="info-note-bar import-alert"><span class="info-note-desc">{{ t('app.settings.basic.import.noneSelected') }}</span></div>
         </div>
       </template>
 
@@ -574,7 +579,6 @@ import { request, mfaAwareSuccess, suspendSessionExpiredHandling } from '@/utils
 import { formatBytes } from '@/utils/formatBytes'
 import { isConfigUnchanged } from '@/utils/saveResult'
 import { isConnectionInterruption } from '@/utils/connectionInterruption'
-import { restorePreviewGroups, type AutoBackupPreviewPayload, type RestorePreviewGroups } from '@/utils/restorePreview'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { useSettingsDraft, useSettingsFormTracker, type AdminTlsCertInfo } from '@/composables/useSettingsDraft'
@@ -588,7 +592,7 @@ import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displa
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, nearestSiteLocation } from '@/utils/siteLocation'
 import { useSiteChoiceLabel } from '@/composables/useSiteChoiceLabel'
 import RestoreResultDialog from '@/components/settings/RestoreResultDialog.vue'
-import { BACKUP_SECTIONS, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
+import { BACKUP_SECTIONS, backupSectionsInSummary, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews, type ImportPreviewSession } from '@/utils/importPreview'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
 import { importFailureLines, importFailureReport } from '@/utils/importFailure'
@@ -707,7 +711,8 @@ const toggleImportSection = (key: string): void => {
   // 预览无效时分类开关保持可用——剔除坏行分类后重校验
   // 即恢复可导入，「未选分类坏行不误拒」契约方才 UI 可达
   if (!validation) return
-  if (validation.type === 'v1' && key !== 'rules') return
+  // 不可选分类（V1 的非规则分类、服务器备份未包含的分类）与 chip 的禁用态同门
+  if (!importSelectableSections.value.includes(key)) return
   importSections.value = importSections.value.includes(key)
     ? importSections.value.filter((k) => k !== key)
     : [...importSections.value, key]
@@ -816,8 +821,8 @@ const autoBackupCatchUpDue = ref(false)
 // 备份列表截断位（backups_truncated）：true 时列表上方提示「还有更旧的未返回」，
 // 否则用户会把窗口裁剪误读为「这就是全部历史」。
 const autoBackupTruncated = ref(false)
-// 行级在途门（占位先于确认框，同 TaskMonitor/ClusterSettings 范式）：双击或
-// 连点不同行不得叠出两个确认框、并发提交两次整库覆盖/删除。
+// 行级在途门（占位先于打开弹框/确认框，同 TaskMonitor/ClusterSettings 范式）：
+// 双击或连点不同行不得叠出两个弹框、并发提交两次整库覆盖/删除。
 const restoringBackupId = ref<number | null>(null)
 const deletingBackupId = ref<number | null>(null)
 const autoBackupActionBusy = computed(() => restoringBackupId.value !== null || deletingBackupId.value !== null)
@@ -1019,93 +1024,14 @@ const downloadAutoBackup = async (row: AutoBackupRow): Promise<void> => {
   }
 }
 
-// 还原预览（只读探测）：跨版本告警与「将被置为禁用的规则」必须在确认前可见——
-// 原实现只有备份名+分类，版本告警与冲突自动禁用要等提交后的结果弹框才出现。
-// 失败不阻断还原（silent：预览失败不是还原失败，全局 toast 会误导）。
-const fetchRestorePreview = async (id: number): Promise<{ groups: RestorePreviewGroups; failure: string }> => {
-  try {
-    const res = await request.get<{ data?: AutoBackupPreviewPayload }>(`/auto-backup/${id}/preview`, { silent: true })
-    return { groups: restorePreviewGroups(res.data), failure: '' }
-  } catch (error) {
-    const reason = error instanceof Error && error.message ? error.message : t('app.settings.basic.messages.unknownError')
-    return { groups: restorePreviewGroups(null), failure: reason }
-  }
-}
-
-const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
+// 备份历史的「还原」：打开导入弹框，数据源是服务器上的这份备份——预览（告警/
+// 冲突清单）、分类选择与最终确认全部复用导入弹框。
+const restoreAutoBackup = (row: AutoBackupRow): void => {
   // 写动作函数级守卫（还原会覆盖配置，仅主节点管理员可执行）+ 行动作在途门
+  // （双击不得叠两个弹框、并发提交两次整库覆盖）；在途态随导入弹框关闭释放。
   if (backupDisabled.value || autoBackupActionBusy.value) return
   restoringBackupId.value = row.id
-  try {
-    const scope = autoBackupScopeText(row)
-    const preview = await fetchRestorePreview(row.id)
-    // 后果清单走 DESIGN_SPEC §20 全局单源类；清单可能很长（逐条冲突规则 + 告警），
-    // 容器限高滚动，避免弹框被撑出视口后「仍然还原」按钮不可达。
-    const previewBody = [
-      h('div', t('app.settings.basic.autoBackup.restoreConfirm', { name: row.filename, scope })),
-      ...(preview.groups.versionWarning ? [h('p', { class: 'confirm-scope-lead' }, preview.groups.versionWarning)] : []),
-      ...(preview.groups.conflicts.length > 0
-        ? [
-            h('p', { class: 'confirm-scope-lead' }, t('app.settings.basic.autoBackup.restorePreview.conflictsLead')),
-            h('ul', { class: 'confirm-scope-list' }, preview.groups.conflicts.map((conflict) => h('li', formatImportConflict(conflict)))),
-          ]
-        : []),
-      ...(preview.groups.warnings.length > 0
-        ? [
-            h('p', { class: 'confirm-scope-lead' }, t('app.settings.basic.autoBackup.restorePreview.warningsLead')),
-            h('ul', { class: 'confirm-scope-list' }, preview.groups.warnings.map((warning) => h('li', warning))),
-          ]
-        : []),
-      ...(preview.failure ? [h('p', { class: 'confirm-scope-lead' }, t('app.settings.basic.autoBackup.restorePreview.fail', { reason: preview.failure }))] : []),
-    ]
-    try {
-      await ElMessageBox.confirm(
-        h('div', { style: 'max-height: 50vh; overflow-y: auto;' }, previewBody),
-        t('app.settings.basic.autoBackup.restoreTitle'),
-        { type: 'warning', confirmButtonText: t('app.settings.basic.autoBackup.restoreConfirmBtn'), cancelButtonText: t('app.settings.basic.actions.cancel') },
-      )
-    } catch {
-      return
-    }
-    try {
-      // 还原走导入 core(config_backup.go importConfigBackupCore),响应同样携带
-      // data.warnings 与 data.disabled_conflicts——与导入弹框同口径展示：冲突
-      // 自动禁用的规则若无提示，业务流量会在「还原成功」后静默切走。
-      const res = await request.post<{ message?: string; data?: { warnings?: string[]; disabled_conflicts?: DisabledRuleConflict[] } }>(`/auto-backup/${row.id}/restore`, undefined, { timeout: 0 })
-      autoBackupVisible.value = false
-      const warnings = res.data?.warnings ?? []
-      const disabledConflicts = res.data?.disabled_conflicts ?? []
-      // 完成统计走结构化弹框(2026-11 用户需求):统计徽章网格+全局提示+规则警告
-      // 滚动区,替代轻量 alert(内容多时不可读)。会话吊销按钮文案=重新登录。
-      // 会话吊销已发生(系统数据还原):挂起 401 处置,统计弹框不被过期框遮挡、
-      // 不在用户读到结果前被踢回登录;弹框按钮 reload 后挂起态随整页重载消亡
-      suspendSessionExpiredHandling()
-      restoreResult.value = {
-        visible: true,
-        kind: 'restore',
-        message: res.message || t('app.settings.basic.restore.success'),
-        warnings,
-        conflictsSummary: disabledConflicts.length > 0 ? t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length }) : '',
-        conflicts: disabledConflicts.map((conflict) => formatImportConflict(conflict, true)),
-        buttonText: (warnings.some((w) => w.includes(t('app.settings.basic.restoreResult.sessionRevokeMark'))))
-          ? t('app.settings.basic.restoreResult.reloginBtn')
-          : t('app.settings.basic.actions.reloadPage'),
-      }
-    } catch (error: unknown) {
-      // 分钟级同步请求断连：后端可能仍在提交，必须显式告知并给审计入口——
-      // 全局「网络连接失败」会被读成「没执行」。
-      if (isConnectionInterruption(error)) {
-        await showTransferInterruption(t('app.settings.basic.restore.interrupted'))
-        return
-      }
-      // 全局拦截器已弹 message toast；失败响应携带的文件面判决（回退失败=文件与
-      // 版本记录可能分裂 / 提交结果不确定=需人工核对）必须展示——回滚只覆盖库侧，
-      // 回退失败或提交不确定时执行面可能已与库分叉，不得按「已回滚即无需动作」处理。
-      await showImportFailure(error, t('app.settings.basic.restore.failTitle'), t('app.settings.basic.restore.failShort'))
-    }
-  } finally {
-    restoringBackupId.value = null
-  }
+  triggerImport(row)
 }
 
 const deleteAutoBackup = async (row: AutoBackupRow): Promise<void> => {
@@ -1171,6 +1097,9 @@ interface ImportResponse {
 
 const importDialogVisible = ref(false)
 const importFileName = ref('')
+// 数据源：null=本地文件；非空=备份历史里的服务器备份行 ID（「还原」入口）——
+// 文件在服务器上，预览与确认只带 backup_id，不上传、不换文件。
+const importBackupId = ref<number | null>(null)
 const importSections = ref<string[]>([])
 const importFileIsLbbak = ref(false)
 const IMPORT_MAX_BYTES = 128 * 1024 * 1024
@@ -1185,6 +1114,13 @@ let importValidationSeq = 0
 // 预览会话：按「内容指纹 + 所选分类」复用上一次校验结果，分类连续切换时取消
 // 上一轮在途请求——勾选分类不再重传整份备份（上限 128MB）。
 let importPreviewSession: ImportPreviewSession<ImportValidation> | null = null
+// 服务器备份实际包含的分类：取自首轮（全部分类）预览的 summary——之后按所选
+// 分类重校验时 summary 会随之收窄，不能再用它判断包含范围。
+const importBackupSections = ref<readonly string[]>([])
+// 当前可选的分类：V1 备份只开放负载规则；服务器备份只开放它实际包含的分类。
+const importSelectableSections = computed<readonly string[]>(() => BACKUP_SECTIONS
+  .map((sec) => sec.key)
+  .filter((key) => !(importValidation.value?.type === 'v1' && key !== 'rules') && (importBackupId.value === null || importBackupSections.value.includes(key))))
 
 // 摘要标签单源 utils/importSummaryLabels（后端表集完整覆盖由跨栈测试钉住）——
 // 原页内表只覆盖 12 个键，其余按原键回退，用户会在预览里看到后端表名。
@@ -1235,7 +1171,9 @@ const showTransferInterruption = async (message: string): Promise<void> => {
   if (await confirmLeavingSettingsPage('audit-log', authStore.currentPage)) authStore.setCurrentPage('audit-log')
 }
 
-const triggerImport = (): void => {
+// 打开导入弹框。serverBackup 省略=本地文件数据源；给出=备份历史里的服务器备份
+// （「还原」入口）：文件在服务器上，预览与确认只带 backup_id，不上传、不换文件。
+const triggerImport = (serverBackup: Pick<AutoBackupRow, 'id' | 'filename'> | null = null): void => {
   if (backupDisabled.value) return
   importValidationSeq++
   importValidating.value = false
@@ -1244,12 +1182,16 @@ const triggerImport = (): void => {
   // 预览结果依赖打开弹框时的库状态（冲突/悬挂告警/策略引用都会随配置变化），
   // 故每次打开都清空跨会话缓存——否则同一份备份在配置改变后仍返回旧预览。
   invalidateImportPreviews()
-  importFileName.value = ''
+  importBackupId.value = serverBackup?.id ?? null
+  importFileName.value = serverBackup?.filename ?? ''
   importFileContent.value = ''
   importFileIsLbbak.value = false
   importSections.value = []
   importValidation.value = null
   importDialogVisible.value = true
+  // 服务器备份没有本地字节可采样：会话键取行 ID + 文件名（文件名带时间戳，
+  // 行 ID 被复用时键随之分离）。
+  if (serverBackup) void startImportValidation(`server-backup:${serverBackup.id}:${serverBackup.filename}`)
 }
 
 const onImportDialogClosed = (): void => {
@@ -1264,6 +1206,10 @@ const onImportDialogClosed = (): void => {
   importFileIsLbbak.value = false
   importValidation.value = null
   importSections.value = []
+  importBackupId.value = null
+  importBackupSections.value = []
+  // 服务器备份的行级在途态随弹框关闭释放（还原成功/取消/关闭均经此）
+  restoringBackupId.value = null
 }
 
 const chooseImportFile = (): void => {
@@ -1276,6 +1222,11 @@ const handleImportFile = async (event: Event): Promise<void> => {
   input.value = ''
   if (!file) return
   const validationSeq = ++importValidationSeq
+  // 上一份文件的预览会话随新文件作废：超大文件分支此后直接返回，会话若留着，
+  // 点分类会用旧会话重新校验（缓存命中时把上一份文件的预览显示在新文件名下）；
+  // dispose 同时中止仍在途的旧上传。
+  importPreviewSession?.dispose()
+  importPreviewSession = null
   importFileName.value = file.name
   // 新文件一选定即作废旧内容；任何后续拒绝分支都不能让旧字节配新文件名。
   importFileContent.value = ''
@@ -1312,28 +1263,50 @@ const handleImportFile = async (event: Event): Promise<void> => {
     // 不把整份 Blob 复制成第二个 ArrayBuffer）
     const fingerprint = await importPreviewFingerprint(importFileContent.value)
     if (validationSeq !== importValidationSeq) return
-    importPreviewSession?.dispose()
-    importPreviewSession = createImportPreviewSession<ImportValidation>({
-      fingerprint,
-      send: (sections, signal) => postImportValidation(sections, signal),
-    })
-    // 预览请求携带分类选择（初始=全选，与下方 V2 默认选择一致；
-    // 备份不消费该参数）——预览与导入同参，预览结果按所选分类过滤
-    const preview = await importPreviewSession.validate(BACKUP_SECTIONS.map((sec) => sec.key))
-    const data = preview.value
-    if (validationSeq !== importValidationSeq) return
-    importValidation.value = data ?? null
-    // 仅负载规则(锁定);V2 默认全选。无 WAF 规则库文件的备份不整类剔除
-    // 「安全防护」(该分类同时含策略表)——后端兜底:跳过规则库版本记录表,
-    // 并在响应 warnings 中说明(下方结果弹框展示)
-    if (data?.type === 'v1') {
-      importSections.value = ['rules']
-    } else {
-      importSections.value = BACKUP_SECTIONS.map((sec) => sec.key)
-    }
+    await startImportValidation(fingerprint)
   } catch {
     if (validationSeq === importValidationSeq) {
       importValidation.value = { valid: false, error: t('app.settings.basic.import.validateRequestFail'), disabled_conflicts: [] }
+    }
+  } finally {
+    if (validationSeq === importValidationSeq) {
+      importValidating.value = false
+    }
+  }
+}
+
+// 预览请求失败的弹框文案：服务器备份模式的失败原因来自服务器（备份文件已不存在 /
+// 超过上限…），必须留在弹框内——全局提示几秒即逝，而此时分类全禁用、没有重试入口
+// （被替换掉的旧还原确认框同样显示原因）。拦截器已把各类失败统一成带本地化文案的
+// ApiRequestError。本地文件模式沿用通用文案（历史行为，未改）。
+const importValidateFailureText = (error: unknown): string => {
+  if (importBackupId.value !== null && error instanceof Error && error.message) return error.message
+  return t('app.settings.basic.import.validateRequestFail')
+}
+
+// 为当前数据源建立预览会话并发起首轮校验（请求全部分类，后端按备份范围取交集）
+// ——文件导入与服务器备份共用。响应回来时序号已推进（关闭/换源）则丢弃。
+// 首轮默认选择=当前全部可选分类：V1 仅负载规则（锁定），服务器备份仅它实际
+// 包含的分类，其余全选。无 WAF 规则库文件的备份不整类剔除「安全防护」(该分类
+// 同时含策略表)——后端兜底:跳过规则库版本记录表,并在响应 warnings 中说明。
+const startImportValidation = async (fingerprint: string): Promise<void> => {
+  const validationSeq = importValidationSeq
+  importValidating.value = true
+  importPreviewSession?.dispose()
+  importPreviewSession = createImportPreviewSession<ImportValidation>({
+    fingerprint,
+    send: (sections, signal) => postImportValidation(sections, signal),
+  })
+  try {
+    const preview = await importPreviewSession.validate(BACKUP_SECTIONS.map((sec) => sec.key))
+    const data = preview.value
+    if (validationSeq !== importValidationSeq) return
+    if (importBackupId.value !== null) importBackupSections.value = backupSectionsInSummary(data?.summary)
+    importValidation.value = data ?? null
+    importSections.value = [...importSelectableSections.value]
+  } catch (error) {
+    if (validationSeq === importValidationSeq) {
+      importValidation.value = { valid: false, error: importValidateFailureText(error), disabled_conflicts: [] }
     }
   } finally {
     if (validationSeq === importValidationSeq) {
@@ -1349,8 +1322,10 @@ const handleImportFile = async (event: Event): Promise<void> => {
 // 请求可被 signal 取消：分类连续切换时旧轮次的上传不再占用带宽。
 const postImportValidation = async (sections: readonly string[], signal: AbortSignal): Promise<ImportValidation> => {
   const isLbbak = importFileIsLbbak.value
-  const endpoint = `/config/import/validate?sections=${encodeURIComponent(sections.join(','))}`
-  const body: string | Blob = importFileContent.value
+  // 服务器备份的文件在服务器上：请求体为空，只带 backup_id。
+  const backupId = importBackupId.value
+  const endpoint = `/config/import/validate?sections=${encodeURIComponent(sections.join(','))}` + (backupId === null ? '' : `&backup_id=${backupId}`)
+  const body: string | Blob | undefined = backupId === null ? importFileContent.value : undefined
   const res = await request.post<{ data: ImportValidation }>(endpoint, body, {
     headers: { 'Content-Type': isLbbak ? 'application/octet-stream' : 'application/json' },
     timeout: 0,
@@ -1380,17 +1355,59 @@ const revalidateImport = async (): Promise<void> => {
     return
   }
   if (importValidation.value?.type === 'v1') return
-  if (!importFileContent.value || !importPreviewSession) return
+  if (!importPreviewSession) return
   const session = importPreviewSession
   const validationSeq = ++importValidationSeq
   try {
     const data = (await session.validate(sections)).value
     if (validationSeq !== importValidationSeq) return
     importValidation.value = data ?? null
-  } catch {
+  } catch (error) {
     if (validationSeq === importValidationSeq) {
-      importValidation.value = { valid: false, error: t('app.settings.basic.import.validateRequestFail'), disabled_conflicts: [] }
+      importValidation.value = { valid: false, error: importValidateFailureText(error), disabled_conflicts: [] }
     }
+  }
+}
+
+// 服务器备份的提交：按所选分类还原。请求发出之后的处置（结果弹框/断连/失败）
+// 沿用还原分支。
+const submitRestore = async (backupId: number): Promise<void> => {
+  try {
+    // 还原走导入 core(config_backup.go importConfigBackupCore),响应同样携带
+    // data.warnings 与 data.disabled_conflicts——与导入弹框同口径展示：冲突
+    // 自动禁用的规则若无提示，业务流量会在「还原成功」后静默切走。
+    const res = await request.post<{ message?: string; data?: { warnings?: string[]; disabled_conflicts?: DisabledRuleConflict[] } }>(`/auto-backup/${backupId}/restore?sections=${encodeURIComponent(importSections.value.join(','))}`, undefined, { timeout: 0 })
+    importDialogVisible.value = false
+    autoBackupVisible.value = false
+    const warnings = res.data?.warnings ?? []
+    const disabledConflicts = res.data?.disabled_conflicts ?? []
+    // 完成统计走结构化弹框(2026-11 用户需求):统计徽章网格+全局提示+规则警告
+    // 滚动区,替代轻量 alert(内容多时不可读)。会话吊销按钮文案=重新登录。
+    // 会话吊销已发生(系统数据还原):挂起 401 处置,统计弹框不被过期框遮挡、
+    // 不在用户读到结果前被踢回登录;弹框按钮 reload 后挂起态随整页重载消亡
+    suspendSessionExpiredHandling()
+    restoreResult.value = {
+      visible: true,
+      kind: 'restore',
+      message: res.message || t('app.settings.basic.restore.success'),
+      warnings,
+      conflictsSummary: disabledConflicts.length > 0 ? t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length }) : '',
+      conflicts: disabledConflicts.map((conflict) => formatImportConflict(conflict, true)),
+      buttonText: (warnings.some((w) => w.includes(t('app.settings.basic.restoreResult.sessionRevokeMark'))))
+        ? t('app.settings.basic.restoreResult.reloginBtn')
+        : t('app.settings.basic.actions.reloadPage'),
+    }
+  } catch (error: unknown) {
+    // 分钟级同步请求断连：后端可能仍在提交，必须显性告知并给审计入口——
+    // 全局「网络连接失败」会被读成「没执行」。
+    if (isConnectionInterruption(error)) {
+      await showTransferInterruption(t('app.settings.basic.restore.interrupted'))
+      return
+    }
+    // 全局拦截器已弹 message toast；失败响应携带的文件面判决（回退失败=文件与
+    // 版本记录可能分裂 / 提交结果不确定=需人工核对）必须展示——回滚只覆盖库侧，
+    // 回退失败或提交不确定时执行面可能已与库分叉，不得按「已回滚即无需动作」处理。
+    await showImportFailure(error, t('app.settings.basic.restore.failTitle'), t('app.settings.basic.restore.failShort'))
   }
 }
 
@@ -1418,6 +1435,10 @@ const confirmImport = async (): Promise<void> => {
   }
   importing.value = true
   try {
+    if (importBackupId.value !== null) {
+      await submitRestore(importBackupId.value)
+      return
+    }
     let endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'
     // 分类选择一律经 query（v1 路径忽略该参数）：v3 纯 JSON 的体内 sections
     // 参与校验和，改写会被判成「已篡改」，请求体恒为原始字节。

@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -18,6 +20,91 @@ import (
 type importValidationDeps struct {
 	DB                     *sql.DB
 	ValidateRuleListenPort func(protocol string, port int) error
+}
+
+// importWarning 导入/还原链一条告警的事实形态：词条键 + 参数，渲染推迟到消费点。
+//
+// 同一条告警有两处消费且语言要求相反——操作审计明细恒为中文，预览/导入/还原
+// 响应按请求语言——而产出告警的函数带副作用（钳值、删行、删文件），不能按语言
+// 各跑一遍。故产出点只记事实，消费点各取所需的语言渲染；中文渲染与词条化之前
+// 的字面量逐字一致。
+type importWarning struct {
+	key  string
+	args []any
+}
+
+// importWarn 登记一条告警事实（词条登记于 internal/i18n/catalog_manual.go）。
+func importWarn(key string, args ...any) importWarning {
+	return importWarning{key: key, args: args}
+}
+
+// isZero 表示没有告警（与空串文案等价）。
+func (warning importWarning) isZero() bool { return warning.key == "" }
+
+// render 按语言渲染；参数可以嵌套另一条告警，按同一语言递归渲染。不走
+// apimsg.Tf：其传参点守卫要求键为字符串字面量，而这里的键由事实携带；模板
+// 只使用 fmt 动词，fmt.Sprintf 与 Tf 同序填充。
+func (warning importWarning) render(lang string) string {
+	if warning.isZero() {
+		return ""
+	}
+	args := warning.args
+	copied := false
+	for index, arg := range warning.args {
+		nested, ok := arg.(importWarning)
+		if !ok {
+			continue
+		}
+		if !copied {
+			args = make([]any, len(warning.args))
+			copy(args, warning.args)
+			copied = true
+		}
+		args[index] = nested.render(lang)
+	}
+	return fmt.Sprintf(i18n.T(lang, warning.key), args...)
+}
+
+// importWarnings 告警集合。
+type importWarnings []importWarning
+
+// render 按语言逐条渲染；空集合返回 nil（响应 JSON 形态与此前一致）。
+func (list importWarnings) render(lang string) []string {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(list))
+	for _, warning := range list {
+		out = append(out, warning.render(lang))
+	}
+	return out
+}
+
+// importListSeparator 列举项连接符：中文母本用顿号，英文用逗号。
+func importListSeparator(lang string) string {
+	if lang == i18n.EN {
+		return ", "
+	}
+	return "、"
+}
+
+// unregisteredThreatWarning 是 manifest 未登记的威胁库条目告警（预览与导入
+// 同文案）：landed 为 true 表示条目随「安全防护」分类落盘。
+func unregisteredThreatWarning(lang string, entries []string, landed bool) string {
+	key := "k_b46f2ff0"
+	if landed {
+		key = "k_d5ab8a60"
+	}
+	return fmt.Sprintf(i18n.T(lang, key), strings.Join(entries, importListSeparator(lang)))
+}
+
+// importActionKey 按「导入/还原」动作取词条：动作词在句中的形态随语言不同
+// （中文「导入后」/英文 "After import"），整句各登记一条，不做词级拼接。
+func importActionKey(action, importKey, restoreKey string) string {
+	if action == "还原" {
+		return restoreKey
+	}
+	return importKey
 }
 
 // importValidationOptions 两条调用路径（导入提交/导入预览）的差异项。
@@ -40,18 +127,18 @@ type importValidationResult struct {
 	NoIntegrityChecksum     bool
 	SectionTables           map[string]bool
 	IncludeGlobal           bool
-	SkipWarnings            []string
+	SkipWarnings            importWarnings
 	DisabledConflicts       []disabledRuleConflict
 	CRSTreeReplaced         bool
 	ACMEDanglingImported    int
-	CertJobProviderWarnings []string
-	AutobanClampNotes       []string
+	CertJobProviderWarnings importWarnings
+	AutobanClampNotes       importWarnings
 	// ConfigClampNotes 全局配置数值归一事实（越界/非法形态被钳制的键）——
 	// 链内唯一归一点，预览与导入共用，双路径可见。
-	ConfigClampNotes []string
+	ConfigClampNotes importWarnings
 	// CertJobDanglingWarnings 证书任务 CA 提供商悬挂/禁用的两档告警——链内
 	// 单源产出，预览直接透传（导入在锁内以事务视图重算同一判据，文案共用）。
-	CertJobDanglingWarnings []string
+	CertJobDanglingWarnings importWarnings
 	WAFMetadataSkipped      bool
 	WAFCRSMetadataSkipped   bool
 	WAFXdbMetadataSkipped   bool
@@ -328,7 +415,7 @@ func (ch *importValidationChain) validateCertJobProviderDangling() error {
 	disabled, missing, err := certJobProviderDanglingCounts(ch.ctx, ch.deps.DB, ch.backup.Tables, ch.result.SectionTables)
 	if err != nil {
 		services.Logf("warn", "配置预览/导入：证书任务 CA 提供商悬挂统计失败: %v", err)
-		ch.result.CertJobDanglingWarnings = append(ch.result.CertJobDanglingWarnings, "证书任务 CA 提供商悬挂统计未完成（读取失败）："+err.Error())
+		ch.result.CertJobDanglingWarnings = append(ch.result.CertJobDanglingWarnings, importWarn("k_5c8dbec2", err))
 		return nil
 	}
 	ch.result.CertJobDanglingWarnings = certJobProviderDanglingWarnings(disabled, missing)
@@ -365,9 +452,9 @@ func (ch *importValidationChain) normalizeGlobalConfigNumbers() error {
 		normalized := normalizeBackupRequestBodyMB(value, 1, db.DefaultRequestBodyMaxSizeMB)
 		ch.backup.Config["request_body_max_size_mb"] = normalized
 		if !integerShape {
-			notes = append(notes, fmt.Sprintf("request_body_max_size_mb 非法形态（%v），已归一为 %d", value, normalized))
+			notes = append(notes, importWarn("k_8da541b9", value, normalized))
 		} else if n <= 0 {
-			notes = append(notes, fmt.Sprintf("request_body_max_size_mb 越界（%d），已钳位为 %d", n, normalized))
+			notes = append(notes, importWarn("k_3acfb6ae", n, normalized))
 		}
 	}
 	ch.result.ConfigClampNotes = notes

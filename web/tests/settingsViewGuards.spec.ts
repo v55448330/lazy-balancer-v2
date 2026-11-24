@@ -20,17 +20,19 @@ test('A 删除备份后的刷新不得覆盖未保存的自动备份表单', () 
   assert.doesNotMatch(del, /await fetchAutoBackup\(\)/)
 })
 
-test('B 备份行还原/删除有在途门（占位先于确认、按钮联动 loading/disabled）', () => {
+test('B 备份行还原/删除有在途门（占位先于打开弹框/确认、按钮联动 loading/disabled）', () => {
   assert.match(page, /const restoringBackupId = ref<number \| null>\(null\)/)
   assert.match(page, /const deletingBackupId = ref<number \| null>\(null\)/)
   assert.match(page, /const autoBackupActionBusy = computed\(\(\) => restoringBackupId\.value !== null \|\| deletingBackupId\.value !== null\)/)
 
-  const restore = section(page, 'const restoreAutoBackup = async', 'const deleteAutoBackup = async')
+  // 还原=打开导入弹框（服务器备份）：占位先于打开弹框（双击不得叠两个弹框、
+  // 并发提交两次整库覆盖），在途态随导入弹框关闭释放。
+  const restore = section(page, 'const restoreAutoBackup = ', 'const deleteAutoBackup = async')
   const guard = restore.indexOf('if (backupDisabled.value || autoBackupActionBusy.value) return')
   const occupy = restore.indexOf('restoringBackupId.value = row.id')
-  const confirm = restore.indexOf('ElMessageBox.confirm')
-  assert.ok(guard > 0 && occupy > guard && confirm > occupy, '占位必须先于确认框（双击不得叠两个确认框）')
-  assert.match(restore, /finally \{\s*restoringBackupId\.value = null/, '在途态必须在 finally 释放')
+  const open = restore.indexOf('triggerImport(row)')
+  assert.ok(guard > 0 && occupy > guard && open > occupy, '占位必须先于打开弹框')
+  assert.match(section(page, 'const onImportDialogClosed', 'const chooseImportFile'), /restoringBackupId\.value = null/, '在途态必须在导入弹框关闭时释放')
 
   const del = member(page, 'const deleteAutoBackup = async')
   assert.match(del, /if \(backupDisabled\.value \|\| autoBackupActionBusy\.value\) return/)

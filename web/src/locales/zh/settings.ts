@@ -812,6 +812,7 @@ export default {
           "title": "导入配置备份",
           "subtitle": "选择备份文件与要导入的分类",
           "chooseFile": "选择备份文件",
+          "serverBackup": "服务器备份",
           "formatsHint": "支持 V2 完整备份与 V1（nginx 版）备份",
           "validating": "正在校验备份文件...",
           "validateFail": "备份文件校验失败",
@@ -909,14 +910,6 @@ export default {
           "scopeBroken": "范围损坏（见日志）",
           "triggerManual": "手动",
           "triggerScheduled": "定时",
-          "restoreConfirm": "将使用备份「{name}」覆盖该备份包含的分类：{scope}；未包含的分类保持现状。此操作不可撤销。确认还原？",
-          "restoreTitle": "还原配置",
-          "restoreConfirmBtn": "仍然还原",
-          "restorePreview": {
-            "conflictsLead": "以下规则与现有配置冲突，还原后会被置为禁用：",
-            "warningsLead": "还原前请留意：",
-            "fail": "预览获取失败：{reason}；仍可继续还原，结果以操作日志为准"
-          },
           "deleteConfirm": "确认删除备份「{name}」？删除后不可恢复。",
           "deleteTitle": "删除备份",
           "deleted": "备份已删除"

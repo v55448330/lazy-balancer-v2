@@ -33,7 +33,7 @@ func TestAuditLogAndAutoBackupReadsConsumeRequestContext(t *testing.T) {
 			markers: []string{"QueryContext(", "QueryRowContext("},
 		},
 		{
-			file: "autobackup.go", fn: "func (h *Handlers) autoBackupRowByID(c *gin.Context, verb string) (autoBackupRowView, bool) {",
+			file: "autobackup.go", fn: "func (h *Handlers) autoBackupRowByID(c *gin.Context, verb, rawID string) (autoBackupRowView, bool) {",
 			markers: []string{"QueryRowContext("},
 		},
 		{

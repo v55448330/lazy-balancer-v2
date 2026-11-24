@@ -284,7 +284,6 @@
             <div v-if="trafficUnavailable" class="chart-stale-hint">{{ t('common.app.dashboard.staleHint') }}</div>
             <v-chart :option="trafficChartOption" autoresize />
           </div>
-          <div class="chart-scope-note form-tip-line">{{ t('common.app.dashboard.trafficScopeNote') }}</div>
         </el-card>
       </el-col>
       <el-col :span="12">
@@ -310,7 +309,6 @@
             <div v-if="connectionsUnavailable" class="chart-stale-hint">{{ t('common.app.dashboard.staleHint') }}</div>
             <v-chart :option="connChartOption" autoresize />
           </div>
-          <div class="chart-scope-note form-tip-line">{{ t('common.app.dashboard.connectionsScopeNote') }}</div>
         </el-card>
       </el-col>
     </el-row>

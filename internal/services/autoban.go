@@ -43,6 +43,7 @@ import (
 	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
@@ -713,54 +714,62 @@ func reconcileAutobanRuntimeLocked(old, new AutobanConfig) func() {
 }
 
 // AutobanConfigReplaceEffectNote 返回「替换十列后运行期收敛动作」的用户可读
-// 说明（导入/还原响应的 warnings 与成功审计单源）；无收敛动作（十列相同，
-// 或仅时长/观察模式变化）时返回空串。
+// 说明（导入/还原响应的 warnings 与成功审计单源）；lang 是渲染语言——响应按
+// 请求语言，操作审计明细恒取中文母本。无收敛动作（十列相同，或仅时长/观察
+// 模式变化）时返回空串。
 //
 // 文案只披露真实变化的因子：清桶是合并判定（窗口 ∪ 口径 ∪ 证据分层参数），
 // 把合并判定写成「统计窗口/口径由 X 改为 X」会在仅改证据分层字段时谎报
 // 窗口/口径变更（判定与文案必须由同一组分项驱动）。
-func AutobanConfigReplaceEffectNote(old, new AutobanConfig) string {
+func AutobanConfigReplaceEffectNote(old, new AutobanConfig, lang string) string {
 	effect := autobanConfigReplaceEffectsOf(old, new)
+	say := func(key string, args ...any) string {
+		return fmt.Sprintf(i18n.T(lang, key), args...)
+	}
+	// 分句与列举项的连接符随语言：中文母本为全角分号/顿号。
+	sep, listSep := "；", "、"
+	if lang == i18n.EN {
+		sep, listSep = "; ", ", "
+	}
 	parts := []string{}
 	if effect.resetCounters {
 		changed := make([]string, 0, 3)
 		if effect.windowChanged {
-			changed = append(changed, fmt.Sprintf("统计窗口由 %d 分钟改为 %d 分钟",
-				old.WindowMinutes, new.WindowMinutes))
+			changed = append(changed, say("k_f51fda25", old.WindowMinutes, new.WindowMinutes))
 		}
 		if effect.scopeChanged {
-			changed = append(changed, fmt.Sprintf("统计口径由 %s 改为 %s", old.Scope, new.Scope))
+			changed = append(changed, say("k_a5957fda", old.Scope, new.Scope))
 		}
 		if effect.countingParamsChanged {
 			params := make([]string, 0, 3)
 			if old.CountingMode != new.CountingMode {
-				params = append(params, fmt.Sprintf("计数方式由 %s 改为 %s", old.CountingMode, new.CountingMode))
+				params = append(params, say("k_bc07f397", old.CountingMode, new.CountingMode))
 			}
 			if old.SuspicionMultiplier != new.SuspicionMultiplier {
-				params = append(params, fmt.Sprintf("嫌疑累计倍率由 %d 改为 %d",
+				params = append(params, say("k_e652808f",
 					old.SuspicionMultiplier, new.SuspicionMultiplier))
 			}
 			if old.ConfirmFloorRatio != new.ConfirmFloorRatio {
-				params = append(params, fmt.Sprintf("确证打底比例由 %s 改为 %s",
+				params = append(params, say("k_5036bfda",
 					old.ConfirmFloorRatio, new.ConfirmFloorRatio))
 			}
-			changed = append(changed, "证据分层计数参数变更（"+strings.Join(params, "、")+"）")
+			changed = append(changed, say("k_7fccba3a", strings.Join(params, listSep)))
 		}
-		parts = append(parts, strings.Join(changed, "；")+"，已清空自动封禁统计计数（旧计数不适用于新口径）")
+		parts = append(parts, strings.Join(changed, sep)+say("k_ca3c3bab"))
 	} else if effect.recomputeReached {
-		parts = append(parts, fmt.Sprintf("封禁阈值由 %d 改为 %d，已按新阈值重算统计达标标记", old.Threshold, new.Threshold))
+		parts = append(parts, say("k_e5903e21", old.Threshold, new.Threshold))
 	}
 	if effect.disableFlushTransition {
-		parts = append(parts, "自动封禁已停用，已执行禁用收尾（到期条目解封、统计计数清空）")
+		parts = append(parts, say("k_922a8854"))
 	} else if effect.disableFlush {
-		parts = append(parts, "自动封禁处于停用态，已清理到期条目并清空统计计数")
+		parts = append(parts, say("k_dd8099ce"))
 	} else if effect.loopToggled {
-		parts = append(parts, "自动封禁已启用，调度已按新配置开启")
+		parts = append(parts, say("k_27b4fed8"))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return "自动封禁配置变更：" + strings.Join(parts, "；")
+	return say("k_1f352d1a") + strings.Join(parts, sep)
 }
 
 // AutobanEnabled 业务开关（EnabledFn 数据源，fail-closed：读库失败=已停止）。

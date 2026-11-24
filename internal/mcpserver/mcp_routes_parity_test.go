@@ -114,7 +114,6 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/auto-backup/run":         "手动触发一次完整备份(低频管理面板操作;备份含凭证材料)",
 	"DELETE /api/v1/auto-backup/:id":       "备份删除(低频管理面板操作;面板有二次确认)",
 	"POST /api/v1/auto-backup/:id/restore": "备份还原——覆盖全量配置(低频管理面板操作;面板有二次确认)",
-	"GET /api/v1/auto-backup/:id/preview":  "还原前只读预览(跨版本告警/将被置禁用的规则/其余告警)：面板还原确认框专用，与 POST /config/import 的 disabled_conflicts 走同一条只读校验链",
 	"GET /api/v1/auto-backup/:id/download": "备份文件下载(lbbak 二进制流含私钥与凭证明文,MCP 通道不支持二进制下载)",
 	// —— 面板表单流程专属 ——
 	"POST /api/v1/certificate-configs/test": "面板「先测后存」表单流程：测试尚未保存的 DNS 配置（凭证随请求体内联提交）；Agent 流程中配置已落库，用 test_certificate_config（/certificate-configs/:id/test）",

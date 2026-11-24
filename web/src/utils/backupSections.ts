@@ -16,6 +16,29 @@ export const BACKUP_SECTIONS = [
 /** legacy 分类键别名：升级前的 global_config/waf_files 读出即归一。 */
 export const LEGACY_SECTION_ALIASES: Record<string, string> = { global_config: 'users', waf_files: 'security' }
 
+/** 各分类所含的表（后端 configBackupSections 的 Tables 镜像，跨栈钉测对表）。 */
+export const BACKUP_SECTION_TABLES: Readonly<Record<string, readonly string[]>> = {
+  users: ['users', 'api_keys', 'ca_providers', 'certificate_configs'],
+  rules: ['lb_rules', 'upstreams', 'path_rules', 'cert_jobs'],
+  security: [
+    'security_policies', 'security_policy_bindings', 'security_custom_rules', 'security_block_pages',
+    'security_ip_lists', 'security_crs_version', 'security_ip2region_version', 'security_threat_sources',
+    'security_crawler_sources',
+  ],
+  cluster: ['nodes'],
+}
+
+/**
+ * 备份实际包含的分类：预览 summary 以表名为键，分类所含的表任一在场即该分类在场
+ * （导出恒带所选分类的全部表，空表计 0）；summary 缺席（校验未通过）时按全部分类。
+ */
+export const backupSectionsInSummary = (summary: Readonly<Record<string, number>> | undefined): string[] => {
+  if (!summary) return BACKUP_SECTIONS.map((section) => section.key)
+  return BACKUP_SECTIONS
+    .filter((section) => hasOwn(BACKUP_SECTION_TABLES, section.key) && BACKUP_SECTION_TABLES[section.key].some((table) => hasOwn(summary, table)))
+    .map((section) => section.key)
+}
+
 /**
  * 导入最终确认文案（覆盖面差异单源）。
  *

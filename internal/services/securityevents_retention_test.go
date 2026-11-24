@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 )
 
 func setupSecurityEventsRetentionTestDB(t *testing.T) {
@@ -708,7 +709,7 @@ func TestSecurityEventsRetention_summaryIncludesRowCap(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30, security_events_row_cap=5000 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	summary, rowCap := SecurityEventsRetentionSnapshot()
+	summary, rowCap := SecurityEventsRetentionSnapshot(i18n.ZH)
 	if rowCap != 5000 {
 		t.Fatalf("rowCap=%d, want 5000", rowCap)
 	}
@@ -722,7 +723,7 @@ func TestSecurityEventsRetention_summaryIncludesRowCap(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=0, security_events_row_cap=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	summary, _ = SecurityEventsRetentionSnapshot()
+	summary, _ = SecurityEventsRetentionSnapshot(i18n.ZH)
 	if !strings.Contains(summary, "90 天") || !strings.Contains(summary, "1000000 行") || !strings.Contains(summary, "131 GiB") {
 		t.Fatalf("默认 summary=%q, want 含 90 天、1000000 行与 131 GiB 字节预算", summary)
 	}

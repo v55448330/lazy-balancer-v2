@@ -54,7 +54,7 @@ func TestValidateV2BackupAutobanConfig_legacyCountHumanNumericForms(t *testing.T
 	if got := config["autoban_scope"]; got != "blocked,logged" {
 		t.Fatalf("开关缺席 autoban_scope=%v, want blocked,logged", got)
 	}
-	if len(notes) == 0 || !strings.Contains(notes[0], "all") {
+	if len(notes) == 0 || !strings.Contains(zhWarning(notes[0]), "all") {
 		t.Fatalf("迁移必须留痕, notes=%v", notes)
 	}
 }

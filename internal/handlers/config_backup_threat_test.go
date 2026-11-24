@@ -129,7 +129,7 @@ func TestThreatReconcileDistinguishesAbsenceReasons(t *testing.T) {
 		},
 	}
 	warnings, _ := reconcileImportedThreatFiles(tables, &lbbakPayload{}, nil)
-	joined := strings.Join(warnings, " | ")
+	joined := strings.Join(zhWarnings(warnings), " | ")
 	if !strings.Contains(joined, "ustc") || !strings.Contains(joined, "上次下载成功但无条目") {
 		t.Fatalf("warnings=%s, want 成功空名单语义（备份中该源为空）", joined)
 	}

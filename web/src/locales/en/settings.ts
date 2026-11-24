@@ -671,7 +671,7 @@ export default {
           "noticesTitle": "Important notices",
           "ruleWarningsTitle": "Rule warnings ({count})",
           "reloginBtn": "Re-login and refresh",
-          "sessionRevokeMark": "session revoked"
+          "sessionRevokeMark": "sessions were revoked"
         },
           "siteCoord": "Lat {lat} · Lng {lng}",
         "title": "Basic settings",
@@ -812,6 +812,7 @@ export default {
           "title": "Import config backup",
           "subtitle": "Choose a backup file and the sections to import",
           "chooseFile": "Choose backup file",
+          "serverBackup": "Server backup",
           "formatsHint": "Supports V2 full backups and V1 (nginx-era) backups",
           "validating": "Validating backup file...",
           "validateFail": "Backup file validation failed",
@@ -909,14 +910,6 @@ export default {
           "scopeBroken": "Scope corrupted (see logs)",
           "triggerManual": "Manual",
           "triggerScheduled": "Scheduled",
-          "restoreConfirm": "Backup \"{name}\" will overwrite the sections it contains: {scope}; unincluded sections stay as-is. This cannot be undone. Restore?",
-          "restoreTitle": "Restore configuration",
-          "restoreConfirmBtn": "Restore anyway",
-          "restorePreview": {
-            "conflictsLead": "These rules conflict with the current configuration and will be disabled after restore:",
-            "warningsLead": "Before restoring, note:",
-            "fail": "Failed to load preview: {reason}; you can still restore — check the audit log for the outcome"
-          },
           "deleteConfirm": "Delete backup \"{name}\"? This cannot be undone.",
           "deleteTitle": "Delete backup",
           "deleted": "Backup deleted"

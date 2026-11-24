@@ -381,9 +381,9 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_23096e05"), MessageKey: "k_23096e05"})
 		return
 	}
-	expiry := "永不过期"
+	var expires sql.NullTime
 	if req.ExpiresAt != nil {
-		expiry = req.ExpiresAt.Format("2006-01-02")
+		expires = sql.NullTime{Time: *req.ExpiresAt, Valid: true}
 	}
 	// 字段级留痕——只读/可写、MCP 开关、白名单条数此前
 	// 不可见，「可写 + MCP 开启 + 白名单」的高权授予与只读 Key 审计文案相同。
@@ -391,7 +391,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	recordAudit(c, "创建", "API密钥", services.FormatAuditDetail(
 		fmt.Sprintf("密钥 %d", id),
 		req.Name,
-		fmt.Sprintf("过期：%s", expiry),
+		"过期："+apiKeyExpiryLabel(expires),
 		"API 权限："+map[bool]string{true: "只读", false: "可写"}[apiRO],
 		"MCP 权限："+map[bool]string{true: "只读", false: "可写"}[mcpRO],
 		"API："+boolOnOff(apiEnabled),

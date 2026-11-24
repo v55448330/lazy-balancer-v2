@@ -266,7 +266,7 @@ test('invalidateImportPreviews 清空跨会话缓存，且弹框打开时调用�
   assert.equal(sent.length, 2)
 
   const page = code('src/views/settings/BasicSettings.vue')
-  const trigger = section(page, 'const triggerImport = (): void =>', 'const onImportDialogClosed')
+  const trigger = section(page, 'const triggerImport = (', 'const onImportDialogClosed')
   assert.match(trigger, /invalidateImportPreviews\(\)/, '打开导入弹框必须清空预览缓存')
 })
 

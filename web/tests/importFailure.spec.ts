@@ -67,7 +67,7 @@ test('接线：拦截器透传响应体，导入/还原失败路径复用同一�
   assert.match(helper, /importFailureLines\(report\)/)
   assert.match(helper, /ElMessageBox\.alert/)
 
-  const restore = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
+  const restore = section(page, 'const submitRestore', 'const confirmImport')
   assert.match(restore, /showImportFailure\(error, t\('app\.settings\.basic\.restore\.failTitle'\), t\('app\.settings\.basic\.restore\.failShort'\)\)/, '还原失败必须展示 warnings')
   // 结构负钉：失败分支（catch）不得消费成功口径键/「配置未受影响」类断言——
   // 文件面可能已分裂（裸中文负钉 i18n 后空转；成功路径的 restore.success 属合法）。

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -68,7 +69,7 @@ func TestAutobanConfigReplaceEffectNote_mapsEffectsToUserText(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			note := AutobanConfigReplaceEffectNote(tt.old, tt.new)
+			note := AutobanConfigReplaceEffectNote(tt.old, tt.new, i18n.ZH)
 			if tt.empty {
 				if note != "" {
 					t.Fatalf("note=%q, want 空串（无运行期收敛动作不得编造披露）", note)

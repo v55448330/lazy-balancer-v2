@@ -405,7 +405,7 @@ func TestCollectImportCertificatesSkipsTCP(t *testing.T) {
 	if len(certs) != 1 || certs[0].ruleID != "lb_http" {
 		t.Fatalf("仅 HTTP 规则应物化证书，got %+v", certs)
 	}
-	for _, warning := range warnings {
+	for _, warning := range zhWarnings(warnings) {
 		if strings.Contains(warning, "lb_tcp") {
 			t.Fatalf("TCP 行不得进入证书警告: %s", warning)
 		}

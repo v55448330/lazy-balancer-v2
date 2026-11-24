@@ -325,7 +325,7 @@ func TestValidateConvertedV1Rules_saveSideValueDomain(t *testing.T) {
 			if len(valid) != 0 {
 				t.Fatalf("invalid v1 rule passed validation: %+v", valid[0])
 			}
-			if len(skips) != 1 || !strings.Contains(skips[0], tt.wantSkip) {
+			if len(skips) != 1 || !strings.Contains(zhWarning(skips[0]), tt.wantSkip) {
 				t.Fatalf("skips=%v, want 1 条含 %q 的跳过原因", skips, tt.wantSkip)
 			}
 		})

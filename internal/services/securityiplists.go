@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -302,12 +303,12 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 	return entries, failed, nil
 }
 
-// threatIPListIDsVia 返回 ids 中属于威胁情报库系统名单的 id 集合。判据与
-// loadIPListEntriesVia 的路由分支同源：system=1 且名单名映射到威胁源——
+// threatIPListSourcesVia 返回 ids 中属于威胁情报库系统名单的「id → 威胁源名」。
+// 判据与 loadIPListEntriesVia 的路由分支同源：system=1 且名单名映射到威胁源——
 // 自动封禁、爬虫等其它 system=1 名单不算。store 语义同 loadIPListEntriesVia
 // （nil 回退 db.DB）。
-func threatIPListIDsVia(store caddyConfigStore, ids []int64) map[int64]bool {
-	out := make(map[int64]bool, len(ids))
+func threatIPListSourcesVia(store caddyConfigStore, ids []int64) map[int64]string {
+	out := make(map[int64]string, len(ids))
 	effective := store
 	if effective == nil {
 		effective = db.DB
@@ -323,12 +324,30 @@ func threatIPListIDsVia(store caddyConfigStore, ids []int64) map[int64]bool {
 			if err := rows.Scan(&id, &system, &name); err != nil {
 				continue
 			}
-			if system == 1 && threatSourceByListName(name) != "" {
-				out[id] = true
+			if source := threatSourceByListName(name); system == 1 && source != "" {
+				out[id] = source
 			}
 		}
 	})
 	return out
+}
+
+// threatIplistPath 是威胁源名单文件（文本代）的路径单源。
+func threatIplistPath(source string) string {
+	return filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist", source))
+}
+
+// threatIplistStampPaths 返回威胁库各源的「文本 + .fast」文件路径（按源名排序，
+// 顺序稳定可逐项比对），供摄取侧探测名单文件是否已被更新任务改写。
+func threatIplistStampPaths(sources []string) []string {
+	names := append([]string(nil), sources...)
+	sort.Strings(names)
+	paths := make([]string, 0, len(names)*2)
+	for _, source := range names {
+		text := threatIplistPath(source)
+		paths = append(paths, text, wafiplist.FastPath(text))
+	}
+	return paths
 }
 
 // parseIPListEntriesStrict 解析自定义名单的 entries 列（渲染与摘要共用的
@@ -587,7 +606,7 @@ func readThreatIplistEntries(listName string) ([]string, error) {
 	if source == "" {
 		return nil, fmt.Errorf("列表 %q 不映射到任何威胁源", listName)
 	}
-	iplistPath := filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist", source))
+	iplistPath := threatIplistPath(source)
 	vals, err := readThreatIplistPath(iplistPath)
 	if err != nil {
 		// 严格模式由调用方跳过策略：两个文件都不可用时才报错。
@@ -777,7 +796,7 @@ func loadIPListRefPresenceVia(store caddyConfigStore, ids []int64) (map[int64]bo
 			if system == 1 && threatSourceByListName(name) != "" {
 				// 只判存在性（不构造整份 []string）：摘要/列表按秒级轮询，
 				// 全量展开最坏 3 × 20 万条前缀集纯属浪费。
-				has, ferr := threatIplistHasEntries(filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist", threatSourceByListName(name))))
+				has, ferr := threatIplistHasEntries(threatIplistPath(threatSourceByListName(name)))
 				if ferr != nil {
 					Logf("error", "摘要: 威胁库 %q 文件读取失败: %v（严格模式：引用该列表的策略按装载失败处理）", name, ferr)
 					failed[id] = true

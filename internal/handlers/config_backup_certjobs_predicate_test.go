@@ -195,7 +195,7 @@ func TestValidateV2BackupCertJobs_normalizesDanglingCAProvider(t *testing.T) {
 		if got := job["ca_provider_id"]; got != 0 {
 			t.Fatalf("ca_provider_id=%v, want 0（归一跟随默认）", got)
 		}
-		if len(warnings) != 1 || !strings.Contains(warnings[0], "CA 提供商") {
+		if len(warnings) != 1 || !strings.Contains(zhWarning(warnings[0]), "CA 提供商") {
 			t.Fatalf("warnings=%v, want 1 条提供商归一警告", warnings)
 		}
 	})

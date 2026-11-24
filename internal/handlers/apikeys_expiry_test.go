@@ -209,6 +209,59 @@ func TestUpdateAPIKeyStatus_expiryChangeAuditRecordsOldAndNew(t *testing.T) {
 	}
 }
 
+// 创建审计的「过期」与更新审计同一格式（面板时区精确到秒）：此前只记 UTC 日期，
+// 东八区 00:30 过期的密钥会记成前一天，选到时分的有效期也只剩日期。
+func TestCreateAPIKey_expiryAuditUsesPanelTimeToTheSecond(t *testing.T) {
+	panelTZ, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := services.CurrentLocation()
+	if _, err := services.ConfigureLocation("Asia/Shanghai"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = services.ConfigureLocation(previous.String()) })
+	// 面板提交的是 UTC 的 ISO 串：面板时区 2027-01-31 00:30:45 = UTC 01-30 16:30:45
+	expires := time.Date(2027, 1, 31, 0, 30, 45, 0, panelTZ).UTC()
+	for _, tc := range []struct {
+		label string
+		body  string
+		want  string
+	}{
+		{"带过期时间", `{"name":"dated","expires_at":"` + expires.Format(time.RFC3339) + `"}`, "过期：2027-01-31 00:30:45"},
+		{"留空", `{"name":"undated"}`, "过期：永不过期"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			// Given
+			setupAPIKeyTestDB(t)
+			if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+				t.Fatalf("initialize audit db: %v", err)
+			}
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/users/me/api-keys", strings.NewReader(tc.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			ctx.Set("user_id", 1)
+			ctx.Set("role", "admin")
+
+			// When
+			(&Handlers{}).CreateCurrentUserAPIKey(ctx)
+
+			// Then
+			if recorder.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s, want 201", recorder.Code, recorder.Body.String())
+			}
+			var detail string
+			if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='创建' AND resource='API密钥' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+				t.Fatalf("read audit detail: %v", err)
+			}
+			if !strings.Contains(detail, tc.want) {
+				t.Fatalf("audit detail=%q, want 含 %q", detail, tc.want)
+			}
+		})
+	}
+}
+
 // 编辑弹框每次保存都会带上当前过期时间：与库内相同不算变更，不得留下空转审计。
 func TestUpdateAPIKeyStatus_sameExpiryIsNotAuditedAsChange(t *testing.T) {
 	// Given

@@ -438,8 +438,6 @@ export default {
       "domainCountScope": "Hosts with metric data",
       "reqRateScope": "Avg. of last collection interval",
       "latencyScope": "Cumulative since last config reload",
-      "trafficScopeNote": "Host-wide: receive/send rate of this machine's egress interface (the default-route interface, or all physical interfaces when there is no default route). Includes traffic that does not go through load balancing rules; the curve is sampled live while this page is open.",
-      "connectionsScopeNote": "Host-wide: live count of all TCP connections on this machine, including connections that do not go through load balancing rules; the curve is sampled live while this page is open.",
       "rulesOverflowHint": "Showing the top {shown} of {total} rules (rules with no traffic are not ranked)",
       "totalRequests": "Total requests",
       "inFlightRequests": "In-flight requests",

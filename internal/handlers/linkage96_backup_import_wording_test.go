@@ -38,7 +38,7 @@ func TestImportPartialSuccess_messageKeepsPhaseOnce(t *testing.T) {
 	if !strings.Contains(message, "database is locked") {
 		t.Fatalf("message 丢失真实原因: %s", message)
 	}
-	warning := importPartialSuccessWarning(queueErr)
+	warning := importPartialSuccessWarning(zhCtx(), queueErr)
 	if got := strings.Count(warning, "证书任务恢复失败"); got != 1 {
 		t.Fatalf("warning 中阶段描述出现 %d 次, want 1: %s", got, warning)
 	}
@@ -106,15 +106,15 @@ func TestImportPartialSuccess_wordingHasSingleSource(t *testing.T) {
 					continue
 				}
 				if allowed[d.Name.Name] {
-					// 正向控制：单源函数体内必须真的含阶段描述，否则命中数
-					// 为零时负向断言（offenders 空）无意义。
+					// 正向控制：单源函数体内必须真的含阶段描述（字面量本身，或所引
+					// 词条的中文母本），否则命中数为零时负向断言（offenders 空）无意义。
 					ast.Inspect(d.Body, func(n ast.Node) bool {
 						lit, ok := n.(*ast.BasicLit)
 						if !ok || lit.Kind != token.STRING {
 							return true
 						}
 						value, _ := strconv.Unquote(lit.Value)
-						if strings.Contains(value, fragment) {
+						if strings.Contains(value, fragment) || strings.Contains(catalogZH(value), fragment) {
 							singleSourceHits++
 						}
 						return true
@@ -138,8 +138,8 @@ func TestImportPartialSuccess_wordingHasSingleSource(t *testing.T) {
 	}
 }
 
-// 证书任务 CA 提供商悬挂文案单源：两档字面量只允许出现在
-// certJobProviderDanglingWarnings 内（响应/审计/预览都必须调它）。
+// 证书任务 CA 提供商悬挂文案单源：两档文案（字面量本身，或所引词条的中文
+// 母本）只允许出现在 certJobProviderDanglingWarnings 内（响应/审计/预览都必须调它）。
 func TestCertJobProviderDangling_wordingHasSingleSource(t *testing.T) {
 	const (
 		disabledFragment = "个证书任务的 CA 提供商已禁用"
@@ -157,7 +157,11 @@ func TestCertJobProviderDangling_wordingHasSingleSource(t *testing.T) {
 	var offenders []string
 	scannedFiles := 0
 	isFragment := func(value string) bool {
-		return strings.Contains(value, disabledFragment) || strings.Contains(value, missingFragment)
+		text := value
+		if zh := catalogZH(value); zh != "" {
+			text = zh
+		}
+		return strings.Contains(text, disabledFragment) || strings.Contains(text, missingFragment)
 	}
 	inspectLiterals := func(label string, node ast.Node) {
 		ast.Inspect(node, func(n ast.Node) bool {
@@ -191,8 +195,8 @@ func TestCertJobProviderDangling_wordingHasSingleSource(t *testing.T) {
 					continue
 				}
 				if d.Name.Name == "certJobProviderDanglingWarnings" {
-					// 正向控制：单源函数体内必须真的含两档文案，否则扫描面
-					// 命中数为零时负向断言（offenders 空）无意义。
+					// 正向控制：单源函数体内必须真的含两档文案（字面量或其词条键），
+					// 否则扫描面命中数为零时负向断言（offenders 空）无意义。
 					ast.Inspect(d.Body, func(n ast.Node) bool {
 						lit, ok := n.(*ast.BasicLit)
 						if !ok || lit.Kind != token.STRING {

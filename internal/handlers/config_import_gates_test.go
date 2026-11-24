@@ -20,7 +20,7 @@ func TestImportChain_normalizesKeepaliveWithClampNote(t *testing.T) {
 		if err := chain.normalizeGlobalConfigNumbers(); err != nil {
 			t.Fatalf("normalizeGlobalConfigNumbers(%v): %v", value, err)
 		}
-		return config["upstream_keepalive_timeout"], chain.result.ConfigClampNotes
+		return config["upstream_keepalive_timeout"], zhWarnings(chain.result.ConfigClampNotes)
 	}
 
 	for _, tt := range []struct {

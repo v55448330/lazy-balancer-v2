@@ -16,6 +16,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/taskengine"
@@ -661,7 +662,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		// 安全事件行文案/行帽由 services 单源生成（显式
 		// security_events_retention_days/row_cap 生效，不再复用审计月数文案）；
 		// 其写入侧与审计日志同文件，大小限值随 audit_log_size_mb。
-		note, rowCap := services.SecurityEventsRetentionSnapshot()
+		note, rowCap := services.SecurityEventsRetentionSnapshot(i18n.FromCtx(c))
 		info.RetentionNote = note
 		limitRows := int64(rowCap)
 		info.LimitRows = &limitRows

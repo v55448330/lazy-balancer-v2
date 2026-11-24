@@ -194,23 +194,23 @@ func TestLbbakImport_successDiscardsWafSnapshot(t *testing.T) {
 // 提交结果不确定（文件保持导入后状态）。分叉可见性不得回退到固定文案，也不得
 // 在不确定态断言「一致」。
 func TestLbbakWafRollbackWarning_distinguishesRestoredFromSplit(t *testing.T) {
-	if got := lbbakWafRollbackWarning(false, false, nil, false); got != "" {
+	if got := zhWarning(lbbakWafRollbackWarning(false, false, nil, false)); got != "" {
 		t.Fatalf("no landed file must produce no warning, got %q", got)
 	}
-	restored := lbbakWafRollbackWarning(true, true, nil, false)
+	restored := zhWarning(lbbakWafRollbackWarning(true, true, nil, false))
 	if !strings.Contains(restored, "已回退到导入前状态") || strings.Contains(restored, "可能分裂") {
 		t.Fatalf("restored warning=%q, want rollback confirmed without split claim", restored)
 	}
-	split := lbbakWafRollbackWarning(true, true, errors.New("boom"), false)
+	split := zhWarning(lbbakWafRollbackWarning(true, true, errors.New("boom"), false))
 	if !strings.Contains(split, "回退失败") || !strings.Contains(split, "可能分裂") {
 		t.Fatalf("failed rollback warning=%q, must expose the split", split)
 	}
-	legacy := lbbakWafRollbackWarning(true, false, nil, false)
+	legacy := zhWarning(lbbakWafRollbackWarning(true, false, nil, false))
 	if !strings.Contains(legacy, "可能分裂") {
 		t.Fatalf("unattempted rollback warning=%q, must expose the split", legacy)
 	}
 	// 提交结果不确定：不断言一致、不断言已回退，给人工核对指引。
-	indeterminate := lbbakWafRollbackWarning(true, false, nil, true)
+	indeterminate := zhWarning(lbbakWafRollbackWarning(true, false, nil, true))
 	for _, want := range []string{"提交结果不确定", "未回退", "核对"} {
 		if !strings.Contains(indeterminate, want) {
 			t.Fatalf("indeterminate warning=%q, must contain %q", indeterminate, want)
@@ -222,7 +222,7 @@ func TestLbbakWafRollbackWarning_distinguishesRestoredFromSplit(t *testing.T) {
 		}
 	}
 	// 提交不确定但文件未落盘：无文件面结论可言（库侧不确定由正文阶段描述承担）。
-	if got := lbbakWafRollbackWarning(false, false, nil, true); got != "" {
+	if got := zhWarning(lbbakWafRollbackWarning(false, false, nil, true)); got != "" {
 		t.Fatalf("indeterminate commit without landed files must produce no file warning, got %q", got)
 	}
 }
@@ -260,7 +260,7 @@ func TestLbbakImport_indeterminateCommitKeepsWafFiles(t *testing.T) {
 		if _, err := os.Stat(snapshotRoot); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("快照目录必须被丢弃, stat err=%v", err)
 		}
-		if got := lbbakWafRollbackWarning(true, session.wafRestoreAttempted, session.wafRestoreErr, session.commitIndeterminate); !strings.Contains(got, "提交结果不确定") {
+		if got := zhWarning(lbbakWafRollbackWarning(true, session.wafRestoreAttempted, session.wafRestoreErr, session.commitIndeterminate)); !strings.Contains(got, "提交结果不确定") {
 			t.Fatalf("失败响应文件面提示=%q, want 不确定态", got)
 		}
 	})
@@ -288,7 +288,7 @@ func TestLbbakImport_indeterminateCommitKeepsWafFiles(t *testing.T) {
 		if !session.wafRestoreAttempted || session.wafRestoreErr != nil {
 			t.Fatalf("确定回滚必须执行文件回退（attempted=%v err=%v）", session.wafRestoreAttempted, session.wafRestoreErr)
 		}
-		if got := lbbakWafRollbackWarning(true, session.wafRestoreAttempted, session.wafRestoreErr, session.commitIndeterminate); !strings.Contains(got, "已回退到导入前状态") {
+		if got := zhWarning(lbbakWafRollbackWarning(true, session.wafRestoreAttempted, session.wafRestoreErr, session.commitIndeterminate)); !strings.Contains(got, "已回退到导入前状态") {
 			t.Fatalf("确定回滚+回退成功的文件面提示=%q, want 一致态", got)
 		}
 	})

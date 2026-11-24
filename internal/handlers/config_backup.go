@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
@@ -1054,23 +1055,23 @@ func countStalledNonTerminalCertJobs() (count int, unknown bool) {
 }
 
 // stalledWarning 是「证书任务因签发任务已停止而未重排」的披露文案单源
-// （响应 warnings 与操作审计同文；空串=无需披露）。recoveryErr 分支按
+// （响应 warnings 与操作审计同文；零值=无需披露）。recoveryErr 分支按
 // wasActive 分流：仅导入前在跑的队列才会被 Resume——用户停止态谎报
 // 「已恢复运行」会把运维引向错误终态（队列实际仍停）。
-func (recovery *importQueueRecovery) stalledWarning() string {
+func (recovery *importQueueRecovery) stalledWarning() importWarning {
 	if recovery.recoveryErr != nil {
 		if recovery.wasActive {
-			return "证书签发队列已恢复运行，但导入后的任务恢复未完成：" + recovery.recoveryErr.Error() + "——请检查证书任务列表，必要时手动重试"
+			return importWarn("k_39df510b", recovery.recoveryErr)
 		}
-		return "证书签发任务保持停止，且导入后的任务恢复未完成：" + recovery.recoveryErr.Error() + "——请检查证书任务列表，恢复该任务后才会继续推进"
+		return importWarn("k_7f690b4a", recovery.recoveryErr)
 	}
 	if recovery.stalledUnknown {
-		return "证书签发任务已停止：导入的非终态证书任务本窗口未重排（数量统计失败，请检查任务列表）——恢复该任务后才会继续推进"
+		return importWarn("k_854c7ae0")
 	}
 	if recovery.stalledNonTerminal <= 0 {
-		return ""
+		return importWarning{}
 	}
-	return fmt.Sprintf("%d 个非终态证书任务因证书签发任务已停止而未重排——恢复该任务后才会继续推进", recovery.stalledNonTerminal)
+	return importWarn("k_96e1e1a8", recovery.stalledNonTerminal)
 }
 
 func finishImportFailure(tx *sql.Tx, recovery *importQueueRecovery, importErr error) error {
@@ -1140,14 +1141,14 @@ type configBackupMeta struct {
 
 // backupProductVersionWarning 提示产品版本兼容面；结构 Meta.Version 仍负责
 // 硬兼容门，本警告不替代校验也不阻断管理员明确发起的跨版本还原。
-func backupProductVersionWarning(meta configBackupMeta, currentVersion string) string {
+func backupProductVersionWarning(meta configBackupMeta, currentVersion string) importWarning {
 	if currentVersion == "" || meta.AppVersion == currentVersion {
-		return ""
+		return importWarning{}
 	}
 	if meta.AppVersion == "" {
-		return "备份未记录导出产品版本，当前运行版本为 " + currentVersion + "——跨版本还原前请确认兼容性"
+		return importWarn("k_f5db32dd", currentVersion)
 	}
-	return "备份导出产品版本为 " + meta.AppVersion + "，当前运行版本为 " + currentVersion + "——跨版本还原可能存在兼容性差异，请确认后继续"
+	return importWarn("k_264dfeb4", meta.AppVersion, currentVersion)
 }
 
 type tableQuerier interface {
@@ -3117,13 +3118,13 @@ func certJobProviderDanglingCounts(ctx context.Context, q certJobRowQueryer, tab
 
 // certJobProviderDanglingWarnings 两档悬挂告警的文案单源（预览 warnings 与
 // 导入审计共用）——此前预览/导入各写一份近似文案，措辞与口径随时可能分叉。
-func certJobProviderDanglingWarnings(disabled, missing int) []string {
-	warnings := make([]string, 0, 2)
+func certJobProviderDanglingWarnings(disabled, missing int) importWarnings {
+	warnings := make(importWarnings, 0, 2)
 	if disabled > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d 个证书任务的 CA 提供商已禁用——续签将失败（任务转 failed 终态），请补齐 CA 提供商或在证书页手工重试", disabled))
+		warnings = append(warnings, importWarn("k_56860680", disabled))
 	}
 	if missing > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d 个证书任务引用的 CA 提供商已不存在——续签时将回落首个启用提供商（自愈），如需保持原提供商请补齐", missing))
+		warnings = append(warnings, importWarn("k_464e8105", missing))
 	}
 	return warnings
 }
@@ -3145,13 +3146,13 @@ func certJobProviderDanglingWarnings(disabled, missing int) []string {
 // 初检（*sql.DB 视图）与导入锁内复核（*sql.Tx 视图）共用本实现——「备份未
 // 携带 cert_jobs」分支读的是 live 行，锁外初检与加锁之间并发删除任务行会让
 // 初检结论失效，锁内必须按事务视图重跑（见 revalidateImportLiveDependencies）。
-func validateV2BackupCertJobs(tables map[string][]map[string]any) ([]string, error) {
+func validateV2BackupCertJobs(tables map[string][]map[string]any) (importWarnings, error) {
 	return validateV2BackupCertJobsWithQuerier(context.Background(), tables, db.DB)
 }
 
 // validateV2BackupCertJobsWithQuerier 允许调用方指定 live 读取面。
-func validateV2BackupCertJobsWithQuerier(ctx context.Context, tables map[string][]map[string]any, q certJobRowQueryer) ([]string, error) {
-	var warnings []string
+func validateV2BackupCertJobsWithQuerier(ctx context.Context, tables map[string][]map[string]any, q certJobRowQueryer) (importWarnings, error) {
+	var warnings importWarnings
 	// cert_jobs.ca_provider_id 参与导入期可解析性校验（与 lb_rules 的
 	// ACME 引用同一索引语义：备份表优先、缺表回退 live）：悬挂/已禁用的
 	// 提供商会让非终态任务首次入队即落 failed 终态（loadCAProvider 对
@@ -3177,7 +3178,7 @@ func validateV2BackupCertJobsWithQuerier(ctx context.Context, tables map[string]
 		}
 	}
 	if danglingProviderJobs > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d 条证书任务引用的 CA 提供商不存在或已禁用，已归一为跟随默认提供商（原引用会导致任务首次入队即失败）", danglingProviderJobs))
+		warnings = append(warnings, importWarn("k_54e8dd71", danglingProviderJobs))
 	}
 	jobRows, carried := tables["cert_jobs"]
 	if !carried {
@@ -3993,11 +3994,11 @@ func validateV2BackupAdminTLS(config map[string]any) error {
 // 在 checksum 校验之后执行，不影响完整性判定。
 // 三通道归一语义分歧（保存拒/导入钳/回填复位默认）的
 // 显式声明锚在 services.ValidateAutobanConfig 注释——本函数即「导入钳」通道。
-func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
+func validateV2BackupAutobanConfig(config map[string]any) (importWarnings, error) {
 	if config == nil {
 		return nil, nil
 	}
-	var notes []string
+	var notes importWarnings
 	if raw, exists := config["autoban_threshold"]; exists && raw != nil {
 		if n, ok := backupInteger(raw); ok {
 			if n < 1 || n > 10000 {
@@ -4009,11 +4010,11 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 					clamped = 10000
 				}
 				config["autoban_threshold"] = clamped
-				notes = append(notes, fmt.Sprintf("autoban_threshold 越界（%d），已钳位为 %d", n, clamped))
+				notes = append(notes, importWarn("k_5452edb3", n, clamped))
 			}
 		} else {
 			config["autoban_threshold"] = db.DefaultAutobanThreshold
-			notes = append(notes, fmt.Sprintf("autoban_threshold 非整数形态，已归一为 %d", db.DefaultAutobanThreshold))
+			notes = append(notes, importWarn("k_f5cd955a", db.DefaultAutobanThreshold))
 		}
 	}
 	if raw, exists := config["autoban_window_minutes"]; exists && raw != nil {
@@ -4027,11 +4028,11 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 					clamped = 60
 				}
 				config["autoban_window_minutes"] = clamped
-				notes = append(notes, fmt.Sprintf("autoban_window_minutes 越界（%d），已钳位为 %d", n, clamped))
+				notes = append(notes, importWarn("k_933e7850", n, clamped))
 			}
 		} else {
 			config["autoban_window_minutes"] = db.DefaultAutobanWindowMinutes
-			notes = append(notes, fmt.Sprintf("autoban_window_minutes 非整数形态，已归一为 %d", db.DefaultAutobanWindowMinutes))
+			notes = append(notes, importWarn("k_f37da833", db.DefaultAutobanWindowMinutes))
 		}
 	}
 	// 旧备份兼容（2026-11-13 口径多选改造）：单值 scope（blocked/logged/all）
@@ -4041,7 +4042,7 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 			if strings.TrimSpace(value) == "" {
 				// 空串=未设置，归一为新默认全选（不走旧值映射）。
 				config["autoban_scope"] = db.DefaultAutobanScope
-				notes = append(notes, "autoban_scope 空值，已归一为默认全选")
+				notes = append(notes, importWarn("k_ff362aae"))
 			} else {
 				countHuman := false
 				if ch, ok := config["autoban_count_human_failed"]; ok {
@@ -4052,7 +4053,7 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 				migrated := services.MigrateLegacyAutobanScope(value, countHuman)
 				if migrated != value {
 					config["autoban_scope"] = migrated
-					notes = append(notes, fmt.Sprintf("autoban_scope 旧单值口径（%s）已迁移为多选集合（%s）", value, migrated))
+					notes = append(notes, importWarn("k_979ef9c1", value, migrated))
 				}
 			}
 		}
@@ -4075,11 +4076,11 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 					clamped = services.AutobanSuspicionMultiplierMax
 				}
 				config["autoban_suspicion_multiplier"] = clamped
-				notes = append(notes, fmt.Sprintf("autoban_suspicion_multiplier 越界（%d），已钳位为 %d", n, clamped))
+				notes = append(notes, importWarn("k_f59c70bf", n, clamped))
 			}
 		} else {
 			config["autoban_suspicion_multiplier"] = db.DefaultAutobanSuspicionMultiplier
-			notes = append(notes, fmt.Sprintf("autoban_suspicion_multiplier 非整数形态，已归一为 %d", db.DefaultAutobanSuspicionMultiplier))
+			notes = append(notes, importWarn("k_6277ad5e", db.DefaultAutobanSuspicionMultiplier))
 		}
 	}
 	for _, field := range []struct {
@@ -4106,7 +4107,7 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 		}
 		if strings.TrimSpace(value) == "" {
 			config[field.key] = field.def
-			notes = append(notes, fmt.Sprintf("%s 空值，已归一为 %s", field.key, field.def))
+			notes = append(notes, importWarn("k_75473069", field.key, field.def))
 			continue
 		}
 		if field.invalid(value) {
@@ -5235,13 +5236,13 @@ func backupInteger(value any) (int, bool) {
 // 关联表须含 security_policy_bindings 且其规则列名为 rule_caddy_id（其余为
 // rule_id）——漏掉该表会让跳过在 validateBackupRuleReferences 之前把规则移出
 // lb_rules，其绑定命中「引用了不存在的规则」整包 400，与软跳过语义冲突。
-func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
+func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) importWarnings {
 	rows, exists := tables["lb_rules"]
 	if !exists {
 		return nil
 	}
 	skippedIDs := map[string]bool{}
-	warnings := []string{}
+	var warnings importWarnings
 	kept := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		protocol, _ := row["protocol"].(string)
@@ -5257,7 +5258,7 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 			name = caddyID
 		}
 		skippedIDs[caddyID] = true
-		warnings = append(warnings, fmt.Sprintf("规则 %s 的域名为空，已跳过导入", name))
+		warnings = append(warnings, importWarn("k_64ab7fb0", name))
 	}
 	if len(skippedIDs) == 0 {
 		return nil
@@ -5293,7 +5294,7 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 		tables[ref.table] = filtered
 	}
 	if droppedBindings > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d 条安全策略绑定随空域名规则一并跳过", droppedBindings))
+		warnings = append(warnings, importWarn("k_f4867f3d", droppedBindings))
 	}
 	return warnings
 }
@@ -5305,12 +5306,12 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 // 原生 403。被跳过页面的悬挂 block_page_id 引用沿用口径
 // （运行时 JOIN 语义，悬挂不产出规则）；全表跳空时默认页由导入事务内
 // 重播种 + SeedDefaultBlockPage 渲染兜底。
-func skipEmptyBlockPages(tables map[string][]map[string]any) []string {
+func skipEmptyBlockPages(tables map[string][]map[string]any) importWarnings {
 	rows, exists := tables["security_block_pages"]
 	if !exists {
 		return nil
 	}
-	warnings := []string{}
+	var warnings importWarnings
 	kept := make([]map[string]any, 0, len(rows))
 	skipped := map[int]struct{}{}
 	for _, row := range rows {
@@ -5326,7 +5327,7 @@ func skipEmptyBlockPages(tables map[string][]map[string]any) []string {
 		if id := backupInt(row["id"]); id > 0 {
 			skipped[id] = struct{}{}
 		}
-		warnings = append(warnings, fmt.Sprintf("拦截页面 %s 的内容为空，已跳过导入", name))
+		warnings = append(warnings, importWarn("k_9777b466", name))
 	}
 	if len(warnings) == 0 {
 		return nil
@@ -5452,11 +5453,11 @@ var backupConfigClampRules = []backupConfigClampRule{
 
 // clampBackupConfigInts 按 backupConfigClampRules 就地钳制全局配置区，返回
 // 审计留痕（越界/非法形态各一条，文案与历史逐键文本同口径）。
-func clampBackupConfigInts(config map[string]any) []string {
+func clampBackupConfigInts(config map[string]any) importWarnings {
 	if config == nil {
 		return nil
 	}
-	var notes []string
+	var notes importWarnings
 	for _, rule := range backupConfigClampRules {
 		value, exists := config[rule.Key]
 		if !exists || value == nil {
@@ -5465,12 +5466,12 @@ func clampBackupConfigInts(config map[string]any) []string {
 		n, ok := backupInteger(value)
 		if !ok {
 			config[rule.Key] = rule.Def
-			notes = append(notes, fmt.Sprintf("%s 非法形态，已重置为 %d", rule.Key, rule.Def))
+			notes = append(notes, importWarn("k_be9391c5", rule.Key, rule.Def))
 			continue
 		}
 		if rule.ResetOnLow && n < rule.Lo {
 			config[rule.Key] = rule.Def
-			notes = append(notes, fmt.Sprintf("%s 非法（须为正整数），已归默认 %d", rule.Key, rule.Def))
+			notes = append(notes, importWarn("k_0906bec1", rule.Key, rule.Def))
 			continue
 		}
 		if rule.Hi == 0 {
@@ -5483,7 +5484,7 @@ func clampBackupConfigInts(config map[string]any) []string {
 		}
 		if rule.ResetOnHigh && n > rule.Hi {
 			config[rule.Key] = rule.Def
-			notes = append(notes, fmt.Sprintf("%s 越界，已重置为 %d", rule.Key, rule.Def))
+			notes = append(notes, importWarn("k_fa5433f6", rule.Key, rule.Def))
 			continue
 		}
 		clamped := n
@@ -5494,7 +5495,7 @@ func clampBackupConfigInts(config map[string]any) []string {
 			clamped = rule.Hi
 		}
 		config[rule.Key] = clamped
-		notes = append(notes, fmt.Sprintf("%s 越界（%d），已钳位为 %d", rule.Key, n, clamped))
+		notes = append(notes, importWarn("k_ab5ac3ed", rule.Key, n, clamped))
 	}
 	return notes
 }
@@ -6062,14 +6063,12 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	h.importConfigBackupCore(c, raw, "", "导入")
 }
 
-const warningPureJSONThreatSourcesPreserved = "纯 JSON 备份不携带威胁名单文件，已保留本地威胁源配置与名单"
-
 // prepareV2BackupSkips 是预览/导入共用的行准备序列。纯 JSON 无法携带威胁
 // 名单文件，其源表必须在任何行级门之前剔除（本地表与文件均保留）；空域名
 // 规则及空内容拦截页同样先软跳过，避免将被丢弃行的坏布尔/时间戳升级为整包
 // 400。checksum 与 sections 过滤已由调用方在此之前完成。
-func prepareV2BackupSkips(backup *configBackup, payload *lbbakPayload, sectionTables map[string]bool) ([]string, error) {
-	warnings := []string{}
+func prepareV2BackupSkips(backup *configBackup, payload *lbbakPayload, sectionTables map[string]bool) (importWarnings, error) {
+	var warnings importWarnings
 	if rows, carried := backup.Tables["nodes"]; carried {
 		sanitizeNodeRowsForRestore(rows)
 	}
@@ -6081,7 +6080,7 @@ func prepareV2BackupSkips(backup *configBackup, payload *lbbakPayload, sectionTa
 				return nil, err
 			}
 			delete(backup.Tables, "security_threat_sources")
-			warnings = append(warnings, warningPureJSONThreatSourcesPreserved)
+			warnings = append(warnings, importWarn("k_959f5965"))
 		}
 	}
 	warnings = append(warnings, skipEmptyDomainHTTPRules(backup.Tables)...)
@@ -6106,7 +6105,7 @@ const importedActiveUpdateStatusMessage = "随备份导入的进行中状态，�
 //
 // 行键缺席不动（restoreTable 按 schema DEFAULT 落库）。返回汇总警告（有改动
 // 时），供响应/审计展示。
-func normalizeImportedVersionUpdateStatuses(tables map[string][]map[string]any) []string {
+func normalizeImportedVersionUpdateStatuses(tables map[string][]map[string]any) importWarnings {
 	carried := 0
 	normalized := 0
 	for _, table := range []string{"security_crs_version", "security_ip2region_version", "security_threat_sources", "security_crawler_sources"} {
@@ -6131,12 +6130,12 @@ func normalizeImportedVersionUpdateStatuses(tables map[string][]map[string]any) 
 			normalized++
 		}
 	}
-	var warnings []string
+	var warnings importWarnings
 	if carried > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d 条版本/源记录携带「更新中」活动态，导入节点不执行该任务，已归一为 failed", carried))
+		warnings = append(warnings, importWarn("k_517d0571", carried))
 	}
 	if normalized > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d 条版本/源记录的 update_status 不在词表内，已归一为 idle", normalized))
+		warnings = append(warnings, importWarn("k_d45c1567", normalized))
 	}
 	return warnings
 }
@@ -6364,6 +6363,10 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	sectionTables := chain.SectionTables
 	skipWarnings := chain.SkipWarnings
 	disabledConflicts := chain.DisabledConflicts
+	// 响应文案按请求语言渲染：链产出的是语言中立的告警事实（importWarning），
+	// 操作审计明细恒取中文母本。
+	lang := i18n.FromCtx(c)
+	localizedConflicts := localizeDisabledRuleConflicts(disabledConflicts, lang)
 	crsTreeReplaced := chain.CRSTreeReplaced
 	acmeDanglingImported := chain.ACMEDanglingImported
 	certJobProviderWarnings := chain.CertJobProviderWarnings
@@ -6554,7 +6557,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	// 文案单源（与预览 warnings 同一实现），动作前缀只标明本次操作。
 	for _, warning := range certJobProviderDanglingWarnings(certJobProviderDisabled, certJobProviderMissing) {
-		recordAudit(c, action+"警告", "配置备份", warning)
+		recordAudit(c, action+"警告", "配置备份", warning.render(i18n.ZH))
 	}
 	// 初检读取 live 的三项合并校验在锁内重跑（任何写之前）。
 	if err := revalidateImportLiveDependencies(ctx, tx, &backup, sectionTables); err != nil {
@@ -6971,20 +6974,20 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 热换内存缓存(完整更新流程,2026-09-18 用户裁定)。
 	wafApply := lbbakWafApplyResult{}
 	respondAfterWafFailure := func(status int, message string) {
-		failureWarnings := append([]string{}, skipWarnings...)
-		failureWarnings = append(failureWarnings, wafApply.Warnings...)
+		failureWarnings := append([]string{}, skipWarnings.render(lang)...)
+		failureWarnings = append(failureWarnings, wafApply.Warnings.render(lang)...)
 		// 文件面提示按 abort 的实际回退结论生成：已回退=明示一致；
 		// 回退失败=显性告知可能分裂（不得沿用固定文案谎报）；提交结果不确定=
 		// 文件保持导入后状态并给人工核对指引（不得断言一致/分裂）。
-		if warning := lbbakWafRollbackWarning(wafApply.FilesLanded, session.wafRestoreAttempted, session.wafRestoreErr, session.commitIndeterminate); warning != "" {
-			failureWarnings = append(failureWarnings, warning)
+		if warning := lbbakWafRollbackWarning(wafApply.FilesLanded, session.wafRestoreAttempted, session.wafRestoreErr, session.commitIndeterminate); !warning.isZero() {
+			failureWarnings = append(failureWarnings, warning.render(lang))
 		}
-		failureWarnings = append(failureWarnings, session.wafRestoreWarnings...)
+		failureWarnings = append(failureWarnings, session.wafRestoreWarnings.render(lang)...)
 		// 会话收尾阶段的一般性披露（提交不确定态下的产物清理去向）：
 		// 与 WAF 回退结论并列透出，避免「导入失败」被读成「磁盘也已收敛」。
-		failureWarnings = append(failureWarnings, session.failureWarnings...)
+		failureWarnings = append(failureWarnings, session.failureWarnings.render(lang)...)
 		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{
-			"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": failureWarnings,
+			"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": failureWarnings,
 		}})
 	}
 	// 落盘前快照将被修改的 WAF 路径（CRS 整树/xdb+版本标记/全部威胁名单
@@ -7066,7 +7069,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		}
 		for _, warning := range warnings {
 			wafApply.Warnings = append(wafApply.Warnings, warning)
-			recordAudit(c, action+"警告", "配置备份", warning)
+			recordAudit(c, action+"警告", "配置备份", warning.render(i18n.ZH))
 		}
 	}
 	// 摘要必须在 WAF 版本表按落盘结果丢弃之后重算，否则响应仍宣称已导入
@@ -7125,12 +7128,12 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	// branding_json 只是文件镜像。提交成功后把备份值物化到
 	// branding.json，再刷新镜像与默认页面；否则下一次镜像会把 DB 回写成旧文件。
-	brandingWarning := ""
+	brandingWarning := importWarning{}
 	if backup.Config != nil {
 		if raw, carried := backup.Config["branding_json"]; carried {
 			if _, err := services.MaterializeBranding(h.cfg.DataDir, backupString(raw)); err != nil {
-				brandingWarning = "品牌配置文件还原失败: " + err.Error()
-				recordAudit(c, action+"警告", "配置备份", brandingWarning)
+				brandingWarning = importWarn("k_922ae27b", err)
+				recordAudit(c, action+"警告", "配置备份", brandingWarning.render(i18n.ZH))
 				// 文件仍是唯一事实源：立即把 DB 镜像回本地文件，避免留下分叉。
 				if _, mirrorErr := services.RefreshBrandingMirror(h.cfg.DataDir); mirrorErr != nil {
 					recordAudit(c, action+"警告", "配置备份", "品牌镜像回读失败: "+mirrorErr.Error())
@@ -7138,8 +7141,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			} else {
 				reseedBlockPageNeeded = true
 				if _, err := services.RefreshBrandingMirror(h.cfg.DataDir); err != nil {
-					brandingWarning = "品牌镜像刷新失败: " + err.Error()
-					recordAudit(c, action+"警告", "配置备份", brandingWarning)
+					brandingWarning = importWarn("k_f42c573c", err)
+					recordAudit(c, action+"警告", "配置备份", brandingWarning.render(i18n.ZH))
 				}
 			}
 		}
@@ -7181,11 +7184,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 锁）——排入 session.postLockActions，在 close() 释放锁之后、调度恢复之前
 	// 执行；响应/审计只披露「将要执行的收敛」，不谎报已落定。
 	autobanRuntimeNote := ""
+	autobanRuntimeNoteLocalized := ""
 	if autobanBeforeKnown {
 		if newAutoban, readErr := services.GetAutobanConfig(); readErr != nil {
 			services.Logf("warn", "配置%s：读取导入后自动封禁配置失败，运行期收敛已跳过: %v", action, readErr)
-		} else if note := services.AutobanConfigReplaceEffectNote(autobanBefore, newAutoban); note != "" {
+		} else if note := services.AutobanConfigReplaceEffectNote(autobanBefore, newAutoban, i18n.ZH); note != "" {
 			autobanRuntimeNote = note
+			autobanRuntimeNoteLocalized = services.AutobanConfigReplaceEffectNote(autobanBefore, newAutoban, lang)
 			before, after := autobanBefore, newAutoban
 			session.postLockActions = append(session.postLockActions, func() {
 				services.ReconcileAutobanRuntimeAfterConfigReplace(before, after)
@@ -7265,12 +7270,12 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 回退 {Enabled:false, selfsigned}，与运行态上传证书指纹不等时会在导入成功
 	// 但库读抖动的情况下误报「需重启」并落一条假审计。读失败仅 warn 并跳过
 	// 本轮判定（不误报、不改状态）。
-	adminTLSRestartWarning := ""
+	adminTLSRestartWarning := importWarning{}
 	if adminTLS, tlsErr := services.LoadAdminTLSConfigE(); tlsErr != nil {
 		services.Logf("warn", "导入后读取管理面板 HTTPS 配置失败，跳过重启判定: %v", tlsErr)
 	} else if services.RuntimeAdminTLSChanged(adminTLS) {
-		adminTLSRestartWarning = "管理面板 HTTPS 配置已" + action + "，需重启后生效（当前进程继续使用启动时的证书）"
-		recordAudit(c, action+"警告", "配置备份", adminTLSRestartWarning)
+		adminTLSRestartWarning = importWarn(importActionKey(action, "k_54eed4be", "k_725cf35e"))
+		recordAudit(c, action+"警告", "配置备份", adminTLSRestartWarning.render(i18n.ZH))
 	}
 	// off→on 且水位线为空/陈旧（>1 分钟）→ 置 now，避免导入后立即
 	// 补跑停用期首轮。直接写列而非 SetAutoBackupEnabled（后者会二次 StartLoop）。
@@ -7296,8 +7301,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		auditSource = "服务器备份 " + filename + "（覆盖" + action + "）"
 	}
 	auditParts := []string{"来源：" + auditSource, counts}
-	auditParts = append(auditParts, configClampNotes...)
-	auditParts = append(auditParts, autobanClampNotes...)
+	auditParts = append(auditParts, configClampNotes.render(i18n.ZH)...)
+	auditParts = append(auditParts, autobanClampNotes.render(i18n.ZH)...)
 	if autobanRuntimeNote != "" {
 		// 自动封禁运行期收敛（清桶/禁用收尾/调度联动）是导入的可感知副作用，
 		// 必须与响应 warnings 同源留痕（此前只在 PUT 保存路径有审计）。
@@ -7305,16 +7310,16 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	if len(skipWarnings) > 0 {
 		// 列表现含空域名规则与空内容拦截页两类跳过，标签泛化。
-		auditParts = append(auditParts, "跳过警告："+strings.Join(skipWarnings, "；"))
+		auditParts = append(auditParts, "跳过警告："+strings.Join(skipWarnings.render(i18n.ZH), "；"))
 	}
 	if len(importCertWarnings) > 0 {
 		// 证书链/域名警告随成功审计留痕(不阻断)。
-		auditParts = append(auditParts, "证书警告："+strings.Join(importCertWarnings, "；"))
+		auditParts = append(auditParts, "证书警告："+strings.Join(importCertWarnings.render(i18n.ZH), "；"))
 	}
 	if len(certJobProviderWarnings) > 0 {
 		// 证书任务 CA 提供商归一（ca_provider_id 就地写回 0）会改变无人值守
 		// 签发路径，必须与响应 warnings 双通道留痕（同 custom_only 归一）。
-		auditParts = append(auditParts, "证书任务提供商归一："+strings.Join(certJobProviderWarnings, "；"))
+		auditParts = append(auditParts, "证书任务提供商归一："+strings.Join(certJobProviderWarnings.render(i18n.ZH), "；"))
 	}
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
@@ -7334,8 +7339,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if operatorReplaced {
 		auditParts = append(auditParts, "操作者账户已被备份替换,请使用备份内管理员登录")
 	}
-	if warning := backupProductVersionWarning(backup.Meta, h.cfg.Version); warning != "" {
-		auditParts = append(auditParts, "版本兼容警告："+warning)
+	if warning := backupProductVersionWarning(backup.Meta, h.cfg.Version); !warning.isZero() {
+		auditParts = append(auditParts, "版本兼容警告："+warning.render(i18n.ZH))
 	}
 	if queueRecoveryErr == nil {
 		auditParts = append(auditParts, services.AuditResultPart("success"))
@@ -7350,46 +7355,46 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if !reseedApplyFailed {
 		h.recordCaddyApplyResult(nil)
 	}
-	responseWarnings := skipWarnings
-	if warning := backupProductVersionWarning(backup.Meta, h.cfg.Version); warning != "" {
-		responseWarnings = append(append([]string{}, responseWarnings...), warning)
+	responseWarnings := skipWarnings.render(lang)
+	if warning := backupProductVersionWarning(backup.Meta, h.cfg.Version); !warning.isZero() {
+		responseWarnings = append(append([]string{}, responseWarnings...), warning.render(lang))
 	}
-	if brandingWarning != "" {
-		responseWarnings = append(append([]string{}, responseWarnings...), brandingWarning)
+	if !brandingWarning.isZero() {
+		responseWarnings = append(append([]string{}, responseWarnings...), brandingWarning.render(lang))
 	}
 	if ignoredNodeTokens > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("%d 个节点的备份令牌与本地不一致，已保留本地令牌与审批状态（备份仅恢复拓扑属性，从节点无需重新审批）", ignoredNodeTokens))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_d201bf89", ignoredNodeTokens))
 	}
 	if attributionMismatches > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("%d 条记录的归属用户未随备份包含或已被替换，作者显示可能为空或错配（导入未改写归属字段）", attributionMismatches))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_653168b7", attributionMismatches))
 	}
 	if prunedBindings > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("已按导入后的规则与策略视图清理 %d 条悬挂安全策略绑定", prunedBindings))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_e59272f4", prunedBindings))
 	}
 	if autobanRuntimeNote != "" {
-		responseWarnings = append(append([]string{}, responseWarnings...), autobanRuntimeNote)
+		responseWarnings = append(append([]string{}, responseWarnings...), autobanRuntimeNoteLocalized)
 	}
 	if customOnlyNormalized > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("%d 个 WAF 模式为 off 且挂启用自定义规则的策略已按旧语义归一为 custom_only（自定义规则开始生效）", customOnlyNormalized))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_8f24dccc", customOnlyNormalized))
 	}
 	// 两档悬挂告警与预览/审计同源（文案单源），不得再各写一份字面量。
 	if dangling := certJobProviderDanglingWarnings(certJobProviderDisabled, certJobProviderMissing); len(dangling) > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), dangling...)
+		responseWarnings = append(append([]string{}, responseWarnings...), dangling.render(lang)...)
 	}
 	if certJobProviderCountErr != nil {
-		responseWarnings = append(append([]string{}, responseWarnings...), "证书任务 CA 提供商悬挂统计未完成（读取失败，导入本身不受影响）："+certJobProviderCountErr.Error())
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_a941d605", certJobProviderCountErr))
 	}
 	if acmeDanglingCountErr != nil {
-		responseWarnings = append(append([]string{}, responseWarnings...), "ACME 引用悬挂统计未完成（读取失败，导入本身不受影响）："+acmeDanglingCountErr.Error())
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_c321af37", acmeDanglingCountErr))
 	}
 	if droppedTCPBindings > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("已解除 %d 条 TCP 规则的安全策略绑定（TCP 不参与策略渲染）", droppedTCPBindings))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_3bcda218", droppedTCPBindings))
 	}
 	if wafMetadataSkipped {
 		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_15ae2f31"))
 	}
 	if crsTreeReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), warningCRSTreeReplaced)
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_fff391ed"))
 	}
 	if wafCRSMetadataSkipped {
 		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_a8f33c4d"))
@@ -7400,15 +7405,12 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// manifest 未登记的威胁库条目——不拒绝（老备份
 	// 兼容），但响应与审计必须可见「内容未经完整性校验」。
 	if len(lbbakUnregisteredThreat) > 0 {
-		unregisteredDetail := fmt.Sprintf("lbbak 含 manifest 未登记的威胁库条目（%s）——内容未经完整性校验，已按原样落盘；建议核实来源后重新导出备份", strings.Join(lbbakUnregisteredThreat, "、"))
-		if lbbakFiles == nil || !sectionTables["security_crs_version"] {
-			unregisteredDetail = fmt.Sprintf("lbbak 含 manifest 未登记的威胁库条目（%s）——内容未经完整性校验；本次分类未选择安全防护数据，条目未导入、未落盘", strings.Join(lbbakUnregisteredThreat, "、"))
-		}
-		recordAudit(c, action+"警告", "配置备份", unregisteredDetail)
-		responseWarnings = append(append([]string{}, responseWarnings...), unregisteredDetail)
+		unregisteredLanded := lbbakFiles != nil && sectionTables["security_crs_version"]
+		recordAudit(c, action+"警告", "配置备份", unregisteredThreatWarning(i18n.ZH, lbbakUnregisteredThreat, unregisteredLanded))
+		responseWarnings = append(append([]string{}, responseWarnings...), unregisteredThreatWarning(lang, lbbakUnregisteredThreat, unregisteredLanded))
 	}
 	if len(wafApply.Warnings) > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), wafApply.Warnings...)
+		responseWarnings = append(append([]string{}, responseWarnings...), wafApply.Warnings.render(lang)...)
 	}
 	if operatorReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_610d9398"))
@@ -7418,37 +7420,37 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 与同函数 custom_only 归一一致——响应 warnings 之外必须落操作审计，
 		// 否则事后只能看到「OIDC 忽然关闭」而无从追溯来源。
 		detail := "备份未携带 OIDC 配置——现有 OIDC 配置已随备份收敛清空（用户数据按备份替换，避免「OIDC 启用但零用户」不一致状态）"
-		responseWarnings = append(append([]string{}, responseWarnings...), detail)
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_ae6c81db"))
 		recordAudit(c, action+"警告", "配置备份", detail)
 	}
 	if revokedSessions && !operatorReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_a61110d0", action))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, importActionKey(action, "k_dffc3f29", "k_23e13305")))
 	}
 	if acmeDanglingRules > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf(action+"后 %d 条启用规则的 DNS 提供商配置悬挂（引用不在导入数据中）——下一次签发/续签将失败，请及时补齐", acmeDanglingRules))
+		responseWarnings = append(append([]string{}, responseWarnings...), importWarn(importActionKey(action, "k_8a06e6ae", "k_0f2464ba"), acmeDanglingRules).render(lang))
 	}
 	// 反向悬挂警告(与上方审计同文案族;与 acmeDanglingRules 互斥,
 	// 方向不同:此处为导入规则引用 live 缺失)。
 	if acmeDanglingImported > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf(action+"后 %d 条启用规则的 DNS 提供商配置悬挂（引用未随备份导入，且现有配置中不存在或已禁用）——下一次签发/续签将失败，请及时补齐", acmeDanglingImported))
+		responseWarnings = append(append([]string{}, responseWarnings...), importWarn(importActionKey(action, "k_5a6b172f", "k_6518c08b"), acmeDanglingImported).render(lang))
 	}
 	// 证书任务级 CA 提供商悬挂/禁用引用的归一警告（validateV2BackupCertJobs 产出）。
 	if len(certJobProviderWarnings) > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), certJobProviderWarnings...)
+		responseWarnings = append(append([]string{}, responseWarnings...), certJobProviderWarnings.render(lang)...)
 	}
 	// 证书链/域名警告并入响应(行内容类警告,不阻断)。
 	if len(importCertWarnings) > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), importCertWarnings...)
+		responseWarnings = append(append([]string{}, responseWarnings...), importCertWarnings.render(lang)...)
 	}
 	// 证书签发任务被用户停止时，导入的非终态任务本窗口不会重排（fail-safe，
 	// 不越过用户停止意图）——必须披露，否则任务列表显示进行中而实际无 worker。
 	// 文案单源在 importQueueRecovery.stalledWarning；操作审计同文留痕。
-	if stalledDetail := session.recovery.stalledWarning(); stalledDetail != "" {
-		responseWarnings = append(append([]string{}, responseWarnings...), stalledDetail)
-		recordAudit(c, action+"警告", "配置备份", stalledDetail)
+	if stalledDetail := session.recovery.stalledWarning(); !stalledDetail.isZero() {
+		responseWarnings = append(append([]string{}, responseWarnings...), stalledDetail.render(lang))
+		recordAudit(c, action+"警告", "配置备份", stalledDetail.render(i18n.ZH))
 	}
-	if adminTLSRestartWarning != "" {
-		responseWarnings = append(append([]string{}, responseWarnings...), adminTLSRestartWarning)
+	if !adminTLSRestartWarning.isZero() {
+		responseWarnings = append(append([]string{}, responseWarnings...), adminTLSRestartWarning.render(lang))
 	}
 	// 导入提交后按库实态统一对齐六个业务驱动任务；off→on 无需重启。
 	// 四族规则库（CRS/IP2Region/威胁库/爬虫库）的「启用且空槽」
@@ -7483,9 +7485,8 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	_, ipListsReplaced := backup.Tables["security_ip_lists"]
 	if crawlerSourcesReplaced || ipListsReplaced {
 		if err := services.RestoreCrawlerIPListSnapshot(); err != nil {
-			warning := "爬虫运行快照重建失败（重启或下次更新后重试）: " + err.Error()
-			recordAudit(c, action+"警告", "配置备份", warning)
-			responseWarnings = append(append([]string{}, responseWarnings...), warning)
+			recordAudit(c, action+"警告", "配置备份", "爬虫运行快照重建失败（重启或下次更新后重试）: "+err.Error())
+			responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_893f9b1b", err))
 		}
 	}
 	// api_keys 已随导入整体替换——清空白名单 CIDR
@@ -7496,13 +7497,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 失败属「部分成功」——500 会让前端按「已回滚」处理而不刷新，管理员
 		// 可能重复导入。改为 200 + partial=true，warning 说明失败面。文案单源：
 		// 阶段描述只出现一次（见 importPartialSuccessMessage）。
-		responseWarnings = append(responseWarnings, importPartialSuccessWarning(queueRecoveryErr))
+		responseWarnings = append(responseWarnings, importPartialSuccessWarning(c, queueRecoveryErr))
 		notifyImportOutcome(c, action, true, "")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: importPartialSuccessMessage(action, queueRecoveryErr), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings, "partial": true}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: importPartialSuccessMessage(action, queueRecoveryErr), Data: gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings, "partial": true}})
 		return
 	}
 	notifyImportOutcome(c, action, true, "")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_2499ff15", action, strings.ReplaceAll(counts, "；", "、")), MessageKey: "k_2499ff15", Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_2499ff15", action, strings.ReplaceAll(counts, "；", "、")), MessageKey: "k_2499ff15", Data: gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings}})
 }
 
 // importPartialSuccessMessage 是「部分成功」（数据库已提交、证书任务恢复失败）
@@ -7515,16 +7516,16 @@ func importPartialSuccessMessage(action string, queueRecoveryErr error) string {
 }
 
 // importPartialSuccessWarning 是部分成功响应 warnings 的单条说明（同源口径）。
-func importPartialSuccessWarning(queueRecoveryErr error) string {
-	return "数据库已提交，但证书任务恢复失败: " + importFailureCause(queueRecoveryErr)
+func importPartialSuccessWarning(c i18n.Ctx, queueRecoveryErr error) string {
+	return apimsg.Tf(c, "k_672e1587", importFailureCause(queueRecoveryErr))
 }
 
 // collectImportCertificates 待物化的手动证书材料与质量警告（/
 // 单源）：TCP 行的 TLS 字段已被 normalizeRuleRowsForTransport 在库侧
 // 清零（不终结入站 TLS）——不得用内存备份行把私钥物化到 /app/certs。
-func collectImportCertificates(rows []map[string]any) ([]importCertificate, []string) {
+func collectImportCertificates(rows []map[string]any) ([]importCertificate, importWarnings) {
 	certs := make([]importCertificate, 0)
-	warnings := make([]string, 0)
+	warnings := make(importWarnings, 0)
 	for _, row := range rows {
 		caddyID, _ := row["caddy_id"].(string)
 		if caddyID == "" {
@@ -7554,8 +7555,8 @@ func collectImportCertificates(rows []map[string]any) ([]importCertificate, []st
 			continue
 		}
 		certs = append(certs, importCertificate{ruleID: caddyID, certPEM: certPEM, keyPEM: keyPEM})
-		for _, warning := range tlsCertificateWarnings(certPEM, keyPEM, backupString(row["domain"])) {
-			warnings = append(warnings, fmt.Sprintf("规则 %s（%s）：%s", backupString(row["name"]), caddyID, warning))
+		for _, warning := range tlsCertificateNotes(certPEM, keyPEM, backupString(row["domain"])) {
+			warnings = append(warnings, importWarn("k_550e4adc", backupString(row["name"]), caddyID, warning))
 		}
 	}
 	return certs, warnings

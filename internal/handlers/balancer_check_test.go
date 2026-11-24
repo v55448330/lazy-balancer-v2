@@ -17,13 +17,13 @@ func TestConvertV1Rules_emptyBalancerTypeProducesNoWarning(t *testing.T) {
 	}
 	proxies := []v1Proxy{newProxy("ql", ""), newProxy("home", ""), newProxy("odd", "round_robin_custom")}
 	_, warnings := convertV1Rules(proxies, nil)
-	for _, w := range warnings {
+	for _, w := range zhWarnings(warnings) {
 		if w == `规则 ql 的负载策略 "" 无法映射，已使用 weighted_round_robin` || w == `规则 home 的负载策略 "" 无法映射，已使用 weighted_round_robin` {
 			t.Fatalf("empty balancer_type still warned: %s", w)
 		}
 	}
 	foundOdd := false
-	for _, w := range warnings {
+	for _, w := range zhWarnings(warnings) {
 		if w == `规则 odd 的负载策略 "round_robin_custom" 无法映射，已使用 weighted_round_robin` {
 			foundOdd = true
 		}

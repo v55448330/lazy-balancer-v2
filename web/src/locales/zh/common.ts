@@ -438,8 +438,6 @@ export default {
       "domainCountScope": "有指标数据的域名数",
       "reqRateScope": "上一采集周期平均值",
       "latencyScope": "自上次配置重载累计分布",
-      "trafficScopeNote": "整机口径：本机出口网卡的收发速率（取默认路由网卡，无默认路由时为物理网卡合计），包含未经负载均衡规则转发的流量；曲线为本页打开期间的实时采样。",
-      "connectionsScopeNote": "整机口径：本机全部 TCP 连接的实时数量，包含未经负载均衡规则转发的连接；曲线为本页打开期间的实时采样。",
       "rulesOverflowHint": "仅显示前 {shown} 条，共 {total} 条（零流量规则不进入排行）",
       "totalRequests": "总请求数",
       "inFlightRequests": "进行中请求",
