@@ -271,7 +271,6 @@ export default {
         ruleConflictReloadHint: 'The rule has been modified by another user. The list has been refreshed; close the wizard and reopen it before editing.',
         ruleCopyConfirm: 'Are you sure you want to copy rule "{name}"?',
         ruleDeleteConfirm: 'Are you sure you want to delete rule "{name}"?',
-        ruleModifiedByOther: 'The rule has been modified by another user.',
         ruleUpdatedNotice: 'Rule updated, please take note.',
         securityBindingsCopyFailFirst: 'Security policy bindings failed to load; reload first, then copy.',
         securityBindingsCopyWait: 'Security policy bindings are loading; please wait before copying.',

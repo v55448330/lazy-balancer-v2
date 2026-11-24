@@ -72,7 +72,8 @@ func (h *Handlers) GetHumanLiveChallenges(c *gin.Context) {
 }
 
 // enrichHumanLiveAttribution 按 rule_id 批量补全规则/CC 属主策略名
-// （stage2 优先、mixed 存量兜底，与 lookupHumanEventAttribution 单源同口径）。
+// （stage2 优先、mixed 存量兜底，与 lookupHumanEventAttribution 单源同口径；
+// 查询失败按零值归属补全并留痕，视图不 5xx）。
 func enrichHumanLiveAttribution(rows []humanLiveChallengeSession) {
 	if len(rows) == 0 {
 		return
@@ -85,7 +86,7 @@ func enrichHumanLiveAttribution(rows []humanLiveChallengeSession) {
 		}
 		attr, ok := cache[ruleID]
 		if !ok {
-			attr = lookupHumanEventAttribution(ruleID)
+			attr = humanEventAttributionFor(ruleID)
 			cache[ruleID] = attr
 		}
 		rows[i].RuleName = attr.ruleName

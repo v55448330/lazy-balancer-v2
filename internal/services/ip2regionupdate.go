@@ -91,9 +91,11 @@ type IP2RegionUpdateManager struct {
 	// 回滚只还原 v4；v6 bak 仅供崩溃窗口恢复，成功路径清理）。
 	v6BakCreated bool
 
-	// v6InstallAttempted/v6InstallSucceeded/v6InstallError 记录本次运行 v6
-	// 源的安装段结果（运行 goroutine 私有，仅成功路径持 mu 读）：
-	// attempted=false=本轮未尝试（关闭/已最新）；失败不反噬 v4 的 success。
+	// v6InstallAttempted/v6InstallSucceeded/v6InstallError 记录本次安装尝试
+	// v6 源的安装段结果（运行 goroutine 私有，仅成功路径持 mu 读）：
+	// attempted=false=本次尝试未尝试 v6（关闭/已最新）；失败不反噬 v4 的
+	// success。按「每次 downloadAndInstall 尝试」复位而非整轮运行——本函数
+	// 在任务内重试里被重复调用，上一轮尝试的失败态不得残留到下一轮。
 	v6InstallAttempted bool
 	v6InstallSucceeded bool
 	v6InstallError     string
@@ -784,6 +786,13 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 // 结果定性）。重载失败回滚只还原 v4 基线；v6 安装成功即同 tag 有效内容，
 // 保留在盘（Caddy 侧待下次成功重载生效）。
 func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag string, needV4, needV6 bool) error {
+	// 每次尝试复位 v6 安装结果：上一轮尝试遗留的 attempted=true 会让下方安
+	// 装段的「备份失败即拒装」门把本轮已下载并通过校验的 v6 库一并拒装
+	// （工件丢在 staging，源状态停在上一轮失败文案）。复位后各轮独立落定：
+	// 本轮失败重新写 failed，成功由 run() 成功路径写 success。
+	m.v6InstallAttempted = false
+	m.v6InstallSucceeded = false
+	m.v6InstallError = ""
 	m.setStage(IP2RegionStatusDownloading, fmt.Sprintf("下载 %s", tag))
 	stagingDir := filepath.Join(filepath.Dir(ip2regionLivePath), ".staging")
 	if err := os.RemoveAll(stagingDir); err != nil {

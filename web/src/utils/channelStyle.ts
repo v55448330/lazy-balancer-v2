@@ -5,7 +5,11 @@
 // 别的功能写进去的键抹掉——日报渲染模式会静默回退，用户配置看似「自己变了」。
 //
 // 同一模块承载日报模板保存的计划函数：多 tab 全量保存时逐通道算差异，只提交
-// 真正变化的通道；与任一语言预置相同的草稿不落库（预置升级继续生效）。
+// 真正变化的通道。日报模板写 daily_* 键（与事件正文模板键分离）：自定义模板
+// 模式所见即所得（预置也落库）；内置模板模式下与预置相同的草稿不落库。
+//
+// 存量行（日报卡曾把模板写进事件键）的归一只在后端做：列表接口直接输出新
+// 布局、保存入口按同一判据落库。本模块不做存量识别，按键名各管各的。
 
 interface ChannelStyleForm {
   payload_template: string
@@ -88,15 +92,17 @@ export const buildChannelStyleConfig = (
 }
 
 // 渲染模式（与后端 DailyModuleModeEffective 同口径：显式值优先，缺省按存量
-// 正文模板键推断——有模板=模板模式）。
+// 日报模板键推断——有日报模板=模板模式）。
 export type DailyRenderMode = 'modules' | 'template'
 
-export const channelBodyTplKey = (typ: string): string =>
-  typ === 'webhook' ? 'payload_template' : typ === 'email' ? 'body_template' : 'content_template'
+// 日报正文模板键（日报卡「编辑模板」的读写面）。事件正文模板
+// （payload_template/body_template/content_template）只作用于事件消息，日报
+// 模板只作用于日报——两套作用域不得共用一个键（此前日报卡写事件键：事件
+// 通知被日报模板改写，日报模板又因「等于预置即删键」不生效）。
+export const dailyBodyTplKey = (typ: string): string =>
+  typ === 'webhook' ? 'daily_payload_template' : typ === 'email' ? 'daily_body_template' : 'daily_content_template'
 
-// 三类正文模板键（后端 ChannelStyle 的 payload/body/content）——日报模式推断
-// 不按通道类型挑键：任一键非空即模板模式。
-const BODY_TEMPLATE_KEYS: readonly string[] = ['payload_template', 'body_template', 'content_template']
+const DAILY_TEMPLATE_KEYS: readonly string[] = ['daily_payload_template', 'daily_body_template', 'daily_content_template']
 
 export const effectiveDailyMode = (raw: string | undefined, _typ: string): DailyRenderMode => {
   const style = parseStyleConfig(raw)
@@ -104,11 +110,11 @@ export const effectiveDailyMode = (raw: string | undefined, _typ: string): Daily
   if (explicit === 'modules' || explicit === 'template') return explicit
   // 与后端 DailyModuleModeEffective 同口径：不 trim——空白模板也算已配置
   // （后端判据 Key == ""；前端曾按类型单键 + trim，跨类型/空白形态判定分叉）。
-  const hasBodyTpl = BODY_TEMPLATE_KEYS.some((k) => {
+  const hasDailyTpl = DAILY_TEMPLATE_KEYS.some((k) => {
     const tpl = style[k]
     return typeof tpl === 'string' && tpl !== ''
   })
-  return hasBodyTpl ? 'template' : 'modules'
+  return hasDailyTpl ? 'template' : 'modules'
 }
 
 const canonical = (v: unknown): unknown => {
@@ -139,15 +145,18 @@ interface DailyStylePlan {
   changed: boolean
 }
 
-// 单通道日报模板保存计划：正文草稿（trim）与任一语言预置相同/为空 → 移除
-// 模板键（沿用默认链，预置升级继续生效）；渲染模式与存量生效值不同才写
-// daily_mode；返回是否与存量有差异（无差异不写库）。
+// 单通道日报模板保存计划：正文写入日报键（daily_*）。清空草稿 → 移除日报键；
+// 内置模板模式下与任一语言预置相同的草稿不落库（已存模板保留但不生效，预置
+// 副本无意义）；自定义模板模式所见即所得——预置也原样落库（后端默认链并不
+// 等于 webhook/邮件/英文预置，删键会让实际投递与编辑器预览不一致）。渲染模式
+// 与存量生效值不同才写 daily_mode；返回是否与存量有差异（无差异不写库）。
+// 事件正文模板键不属于日报卡：原样保留，不读不删。
 export const planDailyChannelStyle = ({ raw, type, draft, presets, mode }: DailyStylePlanInput): DailyStylePlan => {
   const original = parseStyleConfig(raw)
-  const style: Record<string, unknown> = { ...original }
-  const key = channelBodyTplKey(type)
+  const style: Record<string, unknown> = { ...parseStyleConfig(raw) }
+  const key = dailyBodyTplKey(type)
   const body = draft.trim()
-  if (body === '' || presets.some(p => body === p.trim())) delete style[key]
+  if (body === '' || (mode !== 'template' && presets.some(p => body === p.trim()))) delete style[key]
   else style[key] = body
   if (mode !== effectiveDailyMode(raw, type)) style.daily_mode = mode
   return { style, changed: !stylesEqual(style, original) }

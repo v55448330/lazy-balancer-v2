@@ -36,11 +36,16 @@ interface ChannelTemplateDraft {
   defaultZh: string
   defaultEn: string
   bodyTemplate: string
+  /** 该通道的中文预置是否与后端默认链逐字等价（仅 QQ/微信成立，跨栈夹具
+   * 钉住）。等价时「等于预置」才删键；webhook/邮件无后端默认模板、英文预置
+   * 无后端英文缺省——保存后必须落库，否则实际投递与编辑器预览不一致。 */
+  presetIsDefaultChain?: boolean
 }
 
 // 事件模板保存：保留未展示通道（如停用通道）的既有 per-channel 模板；
-// 仅对本次展示的通道重建键。草稿等于默认或事件级 body 时删除该键，
-// 让默认链/事件级模板继续生效，而不是把 body 钉成 per-channel 副本。
+// 仅对本次展示的通道重建键。空草稿、等于事件级 body（事件级模板继续生效，
+// 不钉 per-channel 副本）、等于**与默认链等价的**中文预置时删除该键；
+// 其余（自定义、webhook/邮件预置、英文预置）原样落库。
 export const mergeChannelTemplateDrafts = (
   existing: Record<string, string> | undefined,
   drafts: readonly ChannelTemplateDraft[],
@@ -49,7 +54,8 @@ export const mergeChannelTemplateDrafts = (
   for (const d of drafts) {
     const id = String(d.channelId)
     const text = d.text
-    if (!text || text === d.defaultZh || text === d.defaultEn || (d.bodyTemplate !== '' && text === d.bodyTemplate)) {
+    const isDefaultChainPreset = d.presetIsDefaultChain === true && text === d.defaultZh
+    if (!text || isDefaultChainPreset || (d.bodyTemplate !== '' && text === d.bodyTemplate)) {
       delete out[id]
     } else {
       out[id] = text
@@ -57,3 +63,15 @@ export const mergeChannelTemplateDrafts = (
   }
   return out
 }
+
+// 规则级邮件模板的发送格式由内容决定（与后端派发同判据）：含 HTML 标签按
+// text/html 发送（占位符值转义），否则按纯文本原文发送。后端没有规则级格式
+// 字段，两侧判据一致预览才是实发形态。标签名须紧跟 "<"——比较运算里的
+// "a < b" 不算标签。
+const HTML_TAG = /<\/?[a-zA-Z!][^<>]*>/
+export const ruleTemplateIsHtml = (tpl: string): boolean => HTML_TAG.test(tpl)
+
+// 通道模板字节上限（与后端保存门同口径）：机器人 ≤2000、邮件 ≤4000、webhook
+// 不限（保存时校验占位符替换后可解析）。日报卡与规则弹框共用。
+export const channelTemplateByteLimit = (type: string): number =>
+  type === 'qq' || type === 'wx_clawbot' ? 2000 : type === 'email' ? 4000 : 0

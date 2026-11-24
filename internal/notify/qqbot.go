@@ -157,14 +157,16 @@ func (qqSender) Send(ctx context.Context, targetJSON string, msg Message) error 
 		}
 		return errors.New("QQ 机器人服务未运行（连接任务已停止或凭据未配置）")
 	}
-	var styled struct {
-		MsgType         string `json:"msg_type"`
-		ContentTemplate string `json:"content_template"`
+	// 模板键经样式解析（含存量日报模板归一）：日报用 daily_content_template，
+	// 事件用 content_template。
+	style := ParseChannelStyle(targetJSON)
+	contentTemplate := style.ContentTemplate
+	if msg.EventType == EvtDailyReport {
+		contentTemplate = style.DailyContentTemplate
 	}
-	_ = json.Unmarshal([]byte(targetJSON), &styled) // 样式键缺失/坏 JSON=文本默认
-	text := renderBotMessage(styled.ContentTemplate, msg, time.Now(), "qq")
+	text := renderBotMessage(contentTemplate, msg, time.Now(), "qq")
 	// QQ 官方支持 markdown（msg_type=2）；缺省即 markdown 富文本，显式 text 才纯文本。
-	if styled.MsgType == "text" {
+	if style.MsgType == "text" {
 		return SendQQC2C(ctx, targetJSON, text)
 	}
 	return SendQQC2CMarkdown(ctx, targetJSON, text)

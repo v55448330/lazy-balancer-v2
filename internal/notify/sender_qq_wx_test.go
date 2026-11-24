@@ -158,14 +158,14 @@ func TestConfirmBindSessionByInboundSemantics(t *testing.T) {
 	t.Cleanup(clearBindSessions)
 	// Given 弹框扫码注册会话（QQ 携带待绑定凭据）
 	StartBindSessionWithCred(7, "qq", "o456", "APP_A", "SEC_A")
-	if phase, _ := PollBindSession("qq", "o456", "APP_A"); phase != "awaiting_message" {
+	if phase, _ := PollBindSession(7, "qq", "o456", "APP_A"); phase != "awaiting_message" {
 		t.Fatalf("注册后应 awaiting_message, got %q", phase)
 	}
 	// When 入站确认
 	if !ConfirmBindSessionByInbound("qq", "o456", "APP_A", "o456", "") {
 		t.Fatal("活跃会话应被确认")
 	}
-	phase, receiver := PollBindSession("qq", "o456", "APP_A")
+	phase, receiver := PollBindSession(7, "qq", "o456", "APP_A")
 	if phase != "confirmed" || receiver != "o456" {
 		t.Errorf("确认后 phase=%q receiver=%q, want confirmed/o456", phase, receiver)
 	}

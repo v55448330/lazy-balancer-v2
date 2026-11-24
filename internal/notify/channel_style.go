@@ -14,29 +14,224 @@ package notify
 import (
 	"encoding/json"
 	"html"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 // ChannelStyle 通道样式（解析后的结构形态）。
+//
+// 正文模板分两套作用域（2026-11-24 对齐裁定）：
+//   - 事件正文模板：payload_template / body_template / content_template——
+//     事件消息（含规则级模板回退）与 API 写入的既有语义；界面已无编辑入口。
+//   - 日报正文模板：daily_payload_template / daily_body_template /
+//     daily_content_template——「每日摘要卡 → 编辑模板」唯一写入口，只作用于
+//     日报。存量行（日报卡曾把模板写进事件键）由同一判据归一：派发路径
+//     normalizeLegacyDaily、读面 CanonicalChannelStyleJSON、写面 CanonicalTemplateScope。
 type ChannelStyle struct {
 	PayloadTemplate string `json:"payload_template"`
 	SubjectTemplate string `json:"subject_template"`
 	ContentTemplate string `json:"content_template"`
 	BodyTemplate    string `json:"body_template"`
-	MsgType         string `json:"msg_type"`
-	DailyFormat     string `json:"daily_format"`
+	// 日报专用正文模板（与事件正文模板分离，见上）。
+	DailyPayloadTemplate string `json:"daily_payload_template"`
+	DailyBodyTemplate    string `json:"daily_body_template"`
+	DailyContentTemplate string `json:"daily_content_template"`
+	MsgType              string `json:"msg_type"`
+	DailyFormat          string `json:"daily_format"`
+	BodyFormat           string `json:"body_format"`
 	// DailyMode 日报渲染模式显式开关（2026-11-22 用户裁定）："modules"=模块
-	// 拼装（忽略已存正文模板，走 items 分节渲染）；"template"=自定义模板独占；
+	// 拼装（忽略已存日报模板，走 items 分节渲染）；"template"=自定义模板独占；
 	// 缺省=存量回填推断（见 DailyModuleModeEffective）。
 	DailyMode string `json:"daily_mode"`
 }
 
-// DailyModuleModeEffective 日报是否走模块拼装（抑制该通道正文模板）。
-// 显式值优先；缺省按存量推断——有任一正文模板键（机器人 content_template/
-// 邮件 body_template/webhook payload_template）即模板模式，与加开关前的
-// 隐式行为一致（存量用户无感迁移）。未知值同样按存量推断（向前兼容）。
+// dailyValueKeys 日报载荷 values 键集（存量归一判据：模板引用这些变量即视为
+// 日报卡产物）。与 dailyValues 的单源一致——新增日报变量须同步两处。
+var dailyValueKeys = map[string]bool{
+	"requests": true, "allowed": true, "logged": true, "distinct_ips": true,
+	"bandwidth": true, "peak_qps": true, "blocked": true, "attack_top": true,
+	"top_ips": true, "top_paths": true, "cc_triggered": true, "autoban": true,
+	"cert_status": true, "cert_expiring": true, "cluster_status": true,
+	"nodes_summary": true, "uptime": true, "threat_db": true, "app_version": true,
+	"api_calls": true, "mcp_calls": true, "task_status": true, "backup_status": true,
+	"login_status": true,
+}
+
+// templateReferencesDailyVariable 模板是否引用任一日报变量（{{name}}）。
+func templateReferencesDailyVariable(tpl string) bool {
+	for {
+		start := strings.Index(tpl, "{{")
+		if start < 0 {
+			return false
+		}
+		tpl = tpl[start+2:]
+		end := strings.Index(tpl, "}}")
+		if end < 0 {
+			return false
+		}
+		if dailyValueKeys[strings.TrimSpace(tpl[:end])] {
+			return true
+		}
+		tpl = tpl[end+2:]
+	}
+}
+
+// ruleTemplateHTMLTag 规则级邮件模板的发送格式判据：模板含 HTML 标签即按
+// text/html 发送（占位符值转义），否则按纯文本原文发送。后端没有规则级格式
+// 字段，格式只能由内容决定；与前端规则弹框的格式行同口径
+// （notificationDrafts.ruleTemplateIsHtml），两侧一致预览才是实发形态。
+var ruleTemplateHTMLTag = regexp.MustCompile(`<\/?[a-zA-Z!][^<>]*>`)
+
+func ruleTemplateIsHTML(tpl string) bool { return ruleTemplateHTMLTag.MatchString(tpl) }
+
+// templateScopePairs 事件正文模板键 → 对应的日报正文模板键。
+var templateScopePairs = [3][2]string{
+	{"payload_template", "daily_payload_template"},
+	{"body_template", "daily_body_template"},
+	{"content_template", "daily_content_template"},
+}
+
+// legacyDailyTemplate 读时归一判据：事件键上的这份模板是否来自日报卡——行带
+// 显式 daily_mode（只有日报卡保存会写），或模板引用日报变量（事件消息没有
+// 日报变量）。
+func legacyDailyTemplate(dailyMode, tpl string) bool {
+	return dailyMode != "" || templateReferencesDailyVariable(tpl)
+}
+
+// legacyDailyTemplateAt 行 m 上这一对键是否属于「未按新布局写过的存量行」：
+// 事件键非空、对应 daily_* 键未出现、且 legacyDailyTemplate 成立。daily_* 键
+// 只要出现（含空串）就是作用域声明——事件键是事件模板，不再归一。
+func legacyDailyTemplateAt(m map[string]any, eventKey, dailyKey string) (string, bool) {
+	tpl, _ := m[eventKey].(string)
+	if tpl == "" {
+		return "", false
+	}
+	if _, explicit := m[dailyKey]; explicit {
+		return "", false
+	}
+	mode, _ := m["daily_mode"].(string)
+	if !legacyDailyTemplate(mode, tpl) {
+		return "", false
+	}
+	return tpl, true
+}
+
+// normalizeLegacyDaily 存量读时归一（派发路径，内存态不写库）：日报卡曾把
+// 模板写进事件键，这类行迁入 daily_*；其余保留为事件模板（API 写入语义）。
+// raw 只用来取 daily_* 键是否出现，仅事件键非空的行才解析（常见行零开销）。
+func (s *ChannelStyle) normalizeLegacyDaily(raw string) {
+	var keys map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &keys) != nil {
+		return
+	}
+	fields := [3][2]*string{
+		{&s.PayloadTemplate, &s.DailyPayloadTemplate},
+		{&s.BodyTemplate, &s.DailyBodyTemplate},
+		{&s.ContentTemplate, &s.DailyContentTemplate},
+	}
+	for i, p := range templateScopePairs {
+		src, dst := fields[i][0], fields[i][1]
+		if *src == "" {
+			continue
+		}
+		if _, explicit := keys[p[1]]; explicit {
+			continue
+		}
+		if legacyDailyTemplate(s.DailyMode, *src) {
+			*dst, *src = *src, ""
+		}
+	}
+}
+
+// CanonicalChannelStyleJSON 读面输出的模板作用域归一（不写库）：列表接口对
+// 存量行直接给出新布局，客户端原样回写不会再把旧事件键带回来。无迁移返回原文。
+func CanonicalChannelStyleJSON(raw string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(raw), &m) != nil {
+		return raw
+	}
+	moved := false
+	for _, p := range templateScopePairs {
+		if tpl, ok := legacyDailyTemplateAt(m, p[0], p[1]); ok {
+			m[p[1]], moved = tpl, true
+			delete(m, p[0])
+		}
+	}
+	if !moved {
+		return raw
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return string(b)
+}
+
+// CanonicalTemplateScope 写入侧的模板作用域归一（validateChannelStyle 之后）：
+// next=本次要落库的规范化 JSON，stored=写前的行（创建时传空）。读时归一只能
+// 凭行形态识别存量日报模板，新写的行不得再落进「事件键非空 + 无 daily_* 键
+// + 带 daily_mode」这个形态，否则 API 在带 daily_mode 的通道上写的事件模板
+// 会被静默归一成日报模板。逐对（事件键非空时，按序判定）：
+//
+//  1. 与写前的值逐字相同，且写前行属存量（legacyDailyTemplateAt）→ 迁入
+//     daily_*：未改动的存量行被原样回写时，把读时归一的结论落库；
+//  2. 模板引用日报变量 → 只可能是日报模板（旧版前端仍把日报草稿写进事件
+//     键）→ 归入 daily_*；
+//  3. 已带 daily_* 键 → 作用域已显式，不动；
+//  4. 其余且带 daily_mode → 事件模板，补显式空 daily_* 键声明作用域。
+func CanonicalTemplateScope(next, stored string) string {
+	var n map[string]any
+	if json.Unmarshal([]byte(next), &n) != nil || n == nil {
+		return next
+	}
+	var st map[string]any
+	if json.Unmarshal([]byte(stored), &st) != nil {
+		st = nil
+	}
+	mode, _ := n["daily_mode"].(string)
+	changed := false
+	for _, p := range templateScopePairs {
+		tpl, _ := n[p[0]].(string)
+		if tpl == "" {
+			continue
+		}
+		prev, legacy := "", false
+		if st != nil {
+			prev, legacy = legacyDailyTemplateAt(st, p[0], p[1])
+		}
+		_, hasDaily := n[p[1]]
+		switch {
+		case legacy && prev == tpl:
+			delete(n, p[0])
+			if !hasDaily {
+				n[p[1]] = tpl
+			}
+			changed = true
+		case templateReferencesDailyVariable(tpl):
+			delete(n, p[0])
+			n[p[1]] = tpl
+			changed = true
+		case hasDaily:
+		case mode != "":
+			n[p[1]] = ""
+			changed = true
+		}
+	}
+	if !changed {
+		return next
+	}
+	b, err := json.Marshal(n)
+	if err != nil {
+		return next
+	}
+	return string(b)
+}
+
+// DailyModuleModeEffective 日报是否走模块拼装（抑制该通道日报正文模板）。
+// 显式值优先；缺省按存量推断——有任一**日报**正文模板键即模板模式。事件正文
+// 模板不参与日报模式推断（两套作用域分离）。
 func (s ChannelStyle) DailyModuleModeEffective() bool {
 	if s.DailyMode == "modules" {
 		return true
@@ -44,17 +239,20 @@ func (s ChannelStyle) DailyModuleModeEffective() bool {
 	if s.DailyMode == "template" {
 		return false
 	}
-	return s.ContentTemplate == "" && s.BodyTemplate == "" && s.PayloadTemplate == ""
+	return s.DailyContentTemplate == "" && s.DailyBodyTemplate == "" && s.DailyPayloadTemplate == ""
 }
 
 // ParseChannelStyle 容错解析（坏 JSON/空串=零值默认；派发路径不可因样式
-// 配置损坏而中断投递）。
+// 配置损坏而中断投递）。含存量日报模板归一（见 normalizeLegacyDaily）。
 func ParseChannelStyle(raw string) ChannelStyle {
 	var s ChannelStyle
 	if strings.TrimSpace(raw) == "" {
 		return s
 	}
 	_ = json.Unmarshal([]byte(raw), &s)
+	if s.PayloadTemplate != "" || s.BodyTemplate != "" || s.ContentTemplate != "" {
+		s.normalizeLegacyDaily(raw)
+	}
 	return s
 }
 
@@ -69,7 +267,11 @@ func MergeStyleIntoTarget(targetJSON, styleJSON string) string {
 	if err := json.Unmarshal([]byte(styleJSON), &style); err != nil || style == nil {
 		return targetJSON
 	}
-	for _, k := range []string{"payload_template", "subject_template", "body_template", "body_format", "content_template", "msg_type", "daily_format", "method", "headers"} {
+	for _, k := range []string{"payload_template", "subject_template", "body_template", "body_format", "content_template",
+		"daily_payload_template", "daily_body_template", "daily_content_template",
+		// daily_mode 必须随样式进 target：sender 对合并后的 target 重新解析样式，
+		// 缺它则「不含日报变量的存量日报模板」在投递路径上认不出来。
+		"daily_mode", "msg_type", "daily_format", "method", "headers"} {
 		if v, ok := style[k]; ok {
 			if _, exists := target[k]; !exists {
 				target[k] = v
@@ -172,9 +374,13 @@ func renderSubjectTemplate(tpl string, msg Message, ts time.Time) string {
 	return strings.NewReplacer(pairs...).Replace(tpl)
 }
 
-// renderStyleTemplateJSON webhook payload_template 专用：占位符值经 JSON
-// 编码（加引号+转义）后嵌入，与保存校验「占位符替换为 "probe" 仍合法 JSON」
-// 同口径——模板写 `"title": {{title}}`，运行时产出合法 JSON 字符串值。
+// renderStyleTemplateJSON webhook 载荷模板专用：占位符值经 JSON 编码（加引号
+// +转义）后嵌入，与保存校验「占位符替换为 "probe" 仍合法 JSON」同口径——
+// 模板写 `"title": {{title}}`，运行时产出合法 JSON 字符串值。
+//
+// 两种占位符约定都接受：裸占位符（保存侧 probe 口径）与裹引号占位符
+// `"{{title}}"`（规则弹框旧预置的写法）——后者替换时连引号一起替换为编码值，
+// 不会产出 `""x""` 非法 JSON。规则级通道模板与 API 载荷模板共用本函数。
 func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 	if !strings.Contains(tpl, "{{") {
 		return tpl
@@ -183,8 +389,11 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 		b, _ := json.Marshal(s)
 		return string(b)
 	}
+	addPair := func(pairs []string, key, val string) []string {
+		return append(pairs, `"`+key+`"`, enc(val), key, enc(val))
+	}
 	base := baseTemplatePairs(msg, ts)
-	pairs := make([]string, 0, len(base)+4)
+	pairs := make([]string, 0, (len(base)/2)*4+8)
 	for i := 0; i+1 < len(base); i += 2 {
 		val := base[i+1]
 		// JSON 变体保留机器枚举与 RFC3339 时刻（文本渲染器用中文级别/分钟粒度，
@@ -195,13 +404,13 @@ func renderStyleTemplateJSON(tpl string, msg Message, ts time.Time) string {
 		case "{{time}}":
 			val = ts.Format(time.RFC3339)
 		}
-		pairs = append(pairs, base[i], enc(val))
+		pairs = addPair(pairs, base[i], val)
 	}
 	// 日报变量同文本变体：值经 JSON 编码嵌入（保存校验同口径）。
 	if msg.EventType == EvtDailyReport {
 		daily := dailyTemplatePairs(msg)
 		for i := 0; i+1 < len(daily); i += 2 {
-			pairs = append(pairs, daily[i], enc(daily[i+1]))
+			pairs = addPair(pairs, daily[i], daily[i+1])
 		}
 	}
 	return strings.NewReplacer(pairs...).Replace(tpl)

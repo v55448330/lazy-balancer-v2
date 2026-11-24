@@ -636,12 +636,14 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		// 120=117 基线+绑定会话注册/取消 2 路由+默认策略逐项创建（apply-defaults）
-		// 1 路由 Explicit（handler 留痕）；
-		// 8=Generic 不变；21=skip（+2：集群事件/统计上报机器接口）。新增见 auditpolicy.go 登记处注释。
-		wantExplicit = 120
+		// 119=117 基线+绑定会话注册/取消 2 路由+默认策略逐项创建（apply-defaults）
+		// 1 路由 Explicit（handler 留痕）−1：已停用的零写入兼容端点
+		// batch-block-pages 改登记 Skip（不再要求 handler 含审计调用）；
+		// 8=Generic 不变；22=skip（+2：集群事件/统计上报机器接口；+1：上述
+		// batch-block-pages）。新增见 auditpolicy.go 登记处注释。
+		wantExplicit = 119
 		wantGeneric  = 8
-		wantSkip     = 21
+		wantSkip     = 22
 	)
 	explicitCount, genericCount, skipCount := 0, 0, 0
 	for _, policy := range auditRoutePolicies {

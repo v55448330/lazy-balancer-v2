@@ -204,7 +204,7 @@ func TestWxInboundMultiBotSessions(t *testing.T) {
 	m.setMsgs("T2", `[{"from_user_id":"wxU","context_token":"ctx-B2","item_list":[{"type":1,"text_item":{"text":"绑定测试"}}]}]`)
 	m.poke("T2")
 	// Then 会话确认且 receiver=扫码者；入站不建通道（建通道交弹框保存）
-	if receiver := waitBindConfirmed(t, "wx_clawbot", "wxU", "B2"); receiver != "wxU" {
+	if receiver := waitBindConfirmed(t, 7, "wx_clawbot", "wxU", "B2"); receiver != "wxU" {
 		t.Errorf("绑定会话 receiver=%q, want wxU", receiver)
 	}
 	var n int

@@ -297,6 +297,9 @@ func resetBlockedStateForTest(t *testing.T) {
 	autobanBurstCount = 0
 	autobanBurstIPs = nil
 	autobanBurstSent = false
+	expiredBurstStart = time.Time{}
+	expiredBurstCount = 0
+	expiredBurstWarned = false
 	suppressMu.Unlock()
 }
 

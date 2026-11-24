@@ -282,6 +282,14 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_583965f9"), MessageKey: "k_583965f9"})
 			return
 		}
+		// 不可取消的任务（描述符 Cancelable=false）：拒绝原因是「任务不支持
+		// 取消」而非「任务未在运行」——后者与监控页同时显示的「运行中」自相
+		// 矛盾，会让运维反复点取消并怀疑状态失真。零副作用：不记取消审计、
+		// 不发事件。
+		if !m.Cancelable {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_44b8c98f"), MessageKey: "k_44b8c98f"})
+			return
+		}
 		if !te.Cancel(id) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_9dd23c40"), MessageKey: "k_9dd23c40"})
 			return

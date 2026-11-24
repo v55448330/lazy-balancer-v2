@@ -23,6 +23,14 @@
               <span v-if="isAdmin" class="scope-hint">{{ t('app.notification.rules.allPlatformHint') }}</span>
             </div>
           </template>
+          <el-alert v-if="overviewLoadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
+            <template #title>
+              <div class="polling-error-title">
+                <span>{{ t('app.notification.rules.overviewLoadFailed') }}</span>
+                <el-button link type="danger" @click="() => loadOverview()">{{ t('common.app.views.audit.retryNow') }}</el-button>
+              </div>
+            </template>
+          </el-alert>
           <el-row :gutter="16">
             <el-col :xs="12" :sm="6">
               <div class="stat-item">
@@ -240,6 +248,14 @@
               </div>
             </div>
           </template>
+          <el-alert v-if="rulesLoadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
+            <template #title>
+              <div class="polling-error-title">
+                <span>{{ t('app.notification.rules.rulesLoadFailed') }}</span>
+                <el-button link type="danger" @click="() => fetchRules(false)">{{ t('common.app.views.audit.retryNow') }}</el-button>
+              </div>
+            </template>
+          </el-alert>
           <el-table :data="eventRules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb', color: '#374151', fontWeight: 600 }">
             <el-table-column :label="t('app.notification.rules.trigger')" width="90">
               <template #default="{ row }">
@@ -326,9 +342,10 @@
     </el-tabs>
 
     <!-- 模板弹框（事件规则与日报每通道共享）：rule 模式=每通道规则模板（接收通道已前移到
-         事件规则表格的多选浮层草稿）；daily 模式=通道正文模板（style_config：机器人 content_template/webhook payload_template/email body_template）。
+         事件规则表格的多选浮层草稿）；daily 模式=日报正文模板（style_config：机器人 daily_content_template/webhook daily_payload_template/email daily_body_template）。
          两模式同一版式：通道切换 radio + 格式行 + 编辑器 + 变量芯片 + 提示 + 折叠预览 + 取消/保存，
-         仅数据源不同。机器人格式协议固定（仅高亮/预览样式）；webhook/email 格式可选。 -->
+         仅数据源不同。机器人格式协议固定（仅高亮/预览样式）；rule 模式 webhook/邮件格式由内容决定；
+         daily 模式 webhook/email 格式可选。 -->
     <el-dialog v-model="tplDialogVisible" append-to-body class="dialog-body-inset rule-edit-dialog" width="min(860px, 94vw)" top="5vh">
       <template #header>
         <DialogHeader :icon="Bell" :title="t('app.notification.rules.editTemplateTitle')" :subtitle="tplMode === 'rule' ? (tplEditingRule?.title || '') : (tplActiveChannel?.name || '')" tone="primary" />
@@ -359,9 +376,9 @@
             </div>
           <div class="tpl-format-row">
             <span class="tpl-format-label">{{ t('app.notification.rules.tplFormatLabel') }}</span>
-            <el-tag v-if="isBotChannel(tplActiveChannel?.type || '')" size="small" effect="plain">{{ dailyFormatLabel(tplFixedFormat) }}</el-tag>
+            <el-tag v-if="tplMode === 'rule' || isBotChannel(tplActiveChannel?.type || '')" size="small" effect="plain">{{ dailyFormatLabel(tplActiveFormat) }}</el-tag>
             <el-select v-else :model-value="tplFormatSelectValue" size="small" style="width: 170px" @change="onTplFormatChange">
-              <el-option v-for="f in tplFormatSelectOptions" :key="f.value" :value="f.value" :label="f.label" />
+              <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
             </el-select>
           </div>
           <!-- 日报渲染模式显式开关（2026-11-22 裁定）：模块拼装/自定义模板二选一可见可切 -->
@@ -442,11 +459,15 @@ import DeliveryLog from './DeliveryLog.vue'
 import { mdToHtml, dailyMultiValueMd } from '@/utils/mdPreview'
 import { defaultEventTpl } from '@/utils/eventDefaultTemplates'
 import {
-  channelBodyTplKey, effectiveDailyMode, parseStyleConfig, planDailyChannelStyle,
+  dailyBodyTplKey, effectiveDailyMode, parseStyleConfig, planDailyChannelStyle,
   type DailyRenderMode,
 } from '@/utils/channelStyle'
+import { overviewDeliveryStats } from '@/utils/notificationOverview'
+import { createLatestReadSession } from '@/utils/viewAsyncState'
 import { dailySampleValues } from '@/utils/dailySamples'
-import { mergeChannelTemplateDrafts, toggleDailyModules, utf8ByteLength } from '@/utils/notificationDrafts'
+import {
+  channelTemplateByteLimit, mergeChannelTemplateDrafts, ruleTemplateIsHtml, toggleDailyModules, utf8ByteLength,
+} from '@/utils/notificationDrafts'
 import { formatDate } from '@/utils/date'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
@@ -649,38 +670,51 @@ const byEventOption = computed<EChartsOption>(() => {
   // 横向条形（事件标题长，类目轴换 y）：grid 左侧留白给标题
   return squareChartCorners({ ...opt, grid: { left: 8, right: 24, top: 15, bottom: 32, containLabel: true }, xAxis: { type: 'value', minInterval: 1, axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#9ca3af' }, splitLine: { lineStyle: { color: '#f3f4f6' } } }, yAxis: { type: 'category', data: rows.map(d => d.title), axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#6b7280', width: 90, overflow: 'truncate' } } })
 })
-const fetchDeliveryStats = async (): Promise<void> => {
+const fetchDeliveryStats = async (): Promise<boolean> => {
   try {
     const res = await request.get<{ data?: DeliveryStats }>('/notification/delivery-stats', { silent: true })
     if (res.data) deliveryStats.value = { by_channel: res.data.by_channel ?? [], by_type: res.data.by_type ?? [], by_event: res.data.by_event ?? [] }
-  } catch { /* keep empty */ }
+    return true
+  } catch { return false }
 }
 
-const fetchTrend = async (): Promise<void> => {
+const fetchTrend = async (): Promise<boolean> => {
   try {
-    // 概览=全平台口径（管理员）；普通用户端点自动收窄本人
+    // 概览「投递量/成功率」卡统一「近 7 天」口径：管理员=全平台、普通用户=本人
+    // （端点按角色收窄）。此前管理员读全平台全时统计、普通用户读近 7 天本人。
     const res = await request.get<{ data?: { trend: { date: string; total: number; sent: number; rate: number }[] } }>('/notification/delivery-trend', { silent: true })
     trendData.value = res.data?.trend ?? []
-    if (!isAdmin.value) {
-      const total = trendData.value.reduce((s, d) => s + d.total, 0)
-      const sent = trendData.value.reduce((s, d) => s + d.sent, 0)
-      overviewStats.value = { ...overviewStats.value, deliveries: total, successRate: total > 0 ? sent / total : 0 }
-    }
-  } catch { /* keep empty */ }
+    const stats = overviewDeliveryStats(trendData.value)
+    overviewStats.value = { ...overviewStats.value, deliveries: stats.deliveries, successRate: stats.successRate }
+    return true
+  } catch { return false }
 }
 
-const fetchAdminOverview = async (): Promise<void> => {
-  if (!isAdmin.value) return
+const fetchAdminOverview = async (): Promise<boolean> => {
+  if (!isAdmin.value) return true
   try {
-    const res = await request.get<{ data?: { stats: { channels: number; rules: number; deliveries: number; success_rate: number }; channel_by_type?: { type: string; count: number }[]; users: { id: number; username: string }[] } }>('/notification/admin/overview', { silent: true })
+    // 仅取通道/规则数与分布、用户列表；投递量/成功率统一由近 7 天趋势派生。
+    const res = await request.get<{ data?: { stats: { channels: number; rules: number }; channel_by_type?: { type: string; count: number }[]; users: { id: number; username: string }[] } }>('/notification/admin/overview', { silent: true })
     if (res.data?.stats) {
-      overviewStats.value = { channels: res.data.stats.channels, rules: res.data.stats.rules, deliveries: res.data.stats.deliveries, successRate: res.data.stats.success_rate }
+      overviewStats.value = { ...overviewStats.value, channels: res.data.stats.channels, rules: res.data.stats.rules }
     }
     channelDist.value = res.data?.channel_by_type ?? []
     adminUsers.value = res.data?.users ?? []
     // 规则视角默认本人（首次到达时初始化；不覆盖用户已选）
     if (rulesUserId.value === 0 && authStore.user?.id) rulesUserId.value = authStore.user.id
-  } catch { /* */ }
+    return true
+  } catch { return false }
+}
+
+// 概览取数失败态：错误条 + 重试——不得静默落成 0 /「暂无数据」。序号守卫：
+// 慢返回的旧失败不得覆盖已成功的重试。
+const overviewLoadError = ref(false)
+let overviewLoadSeq = 0
+const loadOverview = async (): Promise<void> => {
+  const seq = ++overviewLoadSeq
+  overviewLoadError.value = false
+  const results = await Promise.all([fetchDeliveryStats(), fetchTrend(), fetchAdminOverview()])
+  if (seq === overviewLoadSeq) overviewLoadError.value = results.some(ok => !ok)
 }
 const asRule = (row: unknown): Rule => row as Rule
 const loading = ref(false)
@@ -719,11 +753,9 @@ const tplMode = ref<'rule' | 'daily'>('rule')
 const tplEditingRule = ref<Rule | null>(null)
 const tplChannelTab = ref('') // 通道 ID 字符串
 const tplTexts = ref<Record<string, string>>({}) // 通道 ID → 草稿模板
-const tplFormats = ref<Record<string, string>>({}) // rule 模式：通道 ID → 正文格式（编辑高亮/预览状态）
 const tplPreviewOpen = ref<string[]>([]) // 预览区默认折叠（防弹框超屏），开弹框时复位
 const savingTpl = ref(false)
 const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{event_title}}', '{{node}}', '{{brand}}']
-const tplFormatOptions = ['text', 'markdown', 'html', 'json'].map(v => ({ value: v, label: dailyFormatLabel(v) }))
 
 // 模板 tab 通道集：rule 模式=规则已保存的选定通道∩userChannels（未选/缺省=全部，
 // 仍可编辑模板）；daily 模式=全部通道（含停用——模板可先配好，启用即生效）。
@@ -741,36 +773,33 @@ const tplText = computed({
 })
 // 正文格式：机器人协议固定（QQ=markdown、微信=纯文本，仅决定高亮/预览样式）；
 // daily 模式 webhook/email 随日报生效格式（日报覆盖 > 类型自动映射，持久化）；
-// rule 模式 webhook/email=编辑状态（缺省 json/html，后端无规则级格式字段）。
+// rule 模式 webhook/邮件由模板内容决定——后端没有规则级格式字段，按通道形态
+// 投递：webhook 恒为 JSON 载荷；邮件含 HTML 标签按 text/html、否则按纯文本
+// （ruleTemplateIsHtml，与后端派发同判据）。格式行此时只展示不可选，预览即
+// 实发形态。
 const tplActiveFormat = computed<string>(() => {
   const ch = tplActiveChannel.value
   if (!ch) return 'text'
   if (isBotChannel(ch.type)) return fixedDailyFormat(ch.type)
-  // daily 模式必须先读持久化格式：tplFormats 是 rule 模式草稿，切到日报后
-  // 若沿用会把日报预览/高亮固定在 rule 残留格式；daily 下拉保存后也不会刷新。
-  if (tplMode.value === 'daily') {
-    const f = dailyRule.value ? dailyFormatOf(dailyRule.value, ch.type) : 'auto'
-    return f === 'auto' ? autoDailyFormat(ch.type) : f
+  // rule 模式：格式由内容决定（见上）。
+  if (tplMode.value === 'rule') {
+    if (ch.type === 'webhook') return 'json'
+    if (ch.type === 'email') return ruleTemplateIsHtml(tplText.value) ? 'html' : 'text'
+    return 'text'
   }
-  // rule 模式：格式=弹框格式行当前选择；缺省按类型映射。
-  const sel = tplFormats.value[tplChannelTab.value]
-  if (sel) return sel
-  return ch.type === 'webhook' ? 'json' : 'html'
+  // daily 模式读持久化格式：auto=回退类型映射。
+  const f = dailyRule.value ? dailyFormatOf(dailyRule.value, ch.type) : 'auto'
+  return f === 'auto' ? autoDailyFormat(ch.type) : f
 })
-const setTplFormat = (v: string): void => { tplFormats.value = { ...tplFormats.value, [tplChannelTab.value]: v } }
-// 版式统一：rule/daily 共用同一格式行（机器人协议固定 tag；webhook/email 同款下拉），
-// 仅数据源不同——rule=编辑高亮状态，daily=持久化格式（auto=回退类型映射）。
-const tplFixedFormat = computed(() => fixedDailyFormat(tplActiveChannel.value?.type || ''))
+// 版式统一：rule/daily 共用同一格式行——rule 与机器人=固定 tag（由通道形态/
+// 协议决定），daily 的 webhook/email=持久化格式下拉（auto=回退类型映射）。
 const tplFormatSelectValue = computed<string>(() => {
   const ch = tplActiveChannel.value
   if (!ch) return 'text'
-  if (tplMode.value === 'daily') return dailyFormatOf(dailyRule.value, ch.type)
-  return tplFormats.value[tplChannelTab.value] || (ch.type === 'webhook' ? 'json' : 'html')
+  return dailyFormatOf(dailyRule.value, ch.type)
 })
-const tplFormatSelectOptions = computed(() => tplMode.value === 'daily' ? dailyFormatOptions.value : tplFormatOptions)
 const onTplFormatChange = (v: string): void => {
   if (tplMode.value === 'daily') void saveDailyFormat(dailyRule.value, tplActiveChannel.value?.type || '', v)
-  else setTplFormat(v)
 }
 // 提示行统一结构：占位符说明恒在；类型提示 + 模式提示次序一致。
 // daily 模式按渲染模式切换措辞：内置模板下模板不生效——旧文案「保存后该通道
@@ -802,7 +831,7 @@ const tplEditorLabel = computed(() => {
   return t('app.notification.rules.tplText')
 })
 // 占位符集：rule 模式=事件变量；daily 模式机器人/邮件=日报+事件变量（后端日报
-// 派发对 content_template/renderStyleTemplate 两类同时替换）；webhook 载荷模板仅事件变量。
+// 派发对 daily_content_template/daily_body_template 两类同时替换）；webhook 载荷模板仅事件变量。
 const tplActivePh = computed<string[]>(() => {
   if (tplMode.value === 'daily') return [...dailyPh, ...tplPh]
   return tplPh
@@ -925,15 +954,10 @@ const previewText = computed(() => {
   }
   return text
 })
-// 长度校验提示（后端 validateChannelStyle 同口径）：daily 模式机器人 content_template
-// ≤2000、email body_template ≤4000；rule 模式与 webhook 无长度限制（webhook 保存校验 JSON 可解析）。
-const tplLengthLimit = computed<number>(() => {
-  if (tplMode.value !== 'daily') return 0
-  const typ = tplActiveChannel.value?.type || ''
-  if (isBotChannel(typ)) return 2000
-  if (typ === 'email') return 4000
-  return 0
-})
+// 长度校验提示（与后端保存门同口径，见 channelTemplateByteLimit）：机器人
+// ≤2000、邮件 ≤4000；webhook 无长度限制（保存校验 JSON 可解析）。日报卡与
+// 规则弹框同限。
+const tplLengthLimit = computed<number>(() => channelTemplateByteLimit(tplActiveChannel.value?.type || ''))
 const tplByteLength = computed(() => utf8ByteLength(tplText.value))
 
 // 全量通道 DTO（enabled/last_test_ok/style_config 单源）：rules 端点只回启用通道
@@ -955,32 +979,59 @@ const fetchChannels = async (): Promise<void> => {
   } catch { /* 通道 DTO 不可用时退化为 rules 端点的启用通道集 */ }
 }
 
-const fetchRules = async (reseedDrafts: boolean): Promise<void> => {
-  loading.value = true
-  try {
-    // 默认当前用户；管理员可选其他用户（规则/通道按用户区分，概览才全平台）
-    const rulesUrl = isAdmin.value && rulesUserId.value > 0 ? `/notification/rules?user_id=${rulesUserId.value}` : '/notification/rules'
-    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; catalog?: CatalogEvent[]; daily_items?: { id: string; label: string }[]; daily_modules?: { id: string; label: string; emoji: string; items: string[] }[] } }>(rulesUrl)
-    rules.value = res.data?.rules ?? []
-    // 最低级别预选：空值回退目录默认级别 info（目录各组最低级别，亦为后端
-    // 新建订阅行的起始级别）——下拉不再呈现空「请选择」态；仅显示兜底，不写库。
-    for (const r of rules.value) {
-      if (r.trigger === 'event' && !r.min_level) r.min_level = 'info'
-    }
-    userChannels.value = res.data?.channels ?? []
-    eventCatalog.value = res.data?.catalog ?? []
-    dailyModules.value = res.data?.daily_modules ?? []
-    await fetchChannels()
-    seedDailyTplDrafts()
-    seedDrafts(reseedDrafts)
-    if (!isAdmin.value) {
-      const chs = userChannels.value
-      overviewStats.value = { channels: chs.length, rules: rules.value.filter(r => r.enabled).length, deliveries: overviewStats.value.deliveries, successRate: overviewStats.value.successRate }
-      const counts = new Map<string, number>()
-      for (const ch of chs) counts.set(ch.type, (counts.get(ch.type) ?? 0) + 1)
-      channelDist.value = [...counts.entries()].map(([type, count]) => ({ type, count }))
-    }
-  } catch (e) { console.error(e) } finally { loading.value = false }
+// 规则读取会话：新请求作废在途旧请求——管理员切换用户、或保存后的刷新与
+// 切换叠加时，先发出的旧响应不得覆盖当前视角（否则随后的保存会把 A 用户
+// 的规则草稿写进 B 用户名下）。
+const rulesReadSession = createLatestReadSession()
+// 规则取数失败态：错误条 + 重试（不得静默落成「暂无数据」）
+const rulesLoadError = ref(false)
+// 强制播种的意图跨会话粘滞：带强制标志的会话被作废时（切用户的强制刷新在
+// 途，保存后刷新/回到规则页的非强制刷新后发先至），胜出会话必须继承——否则
+// 落地的 seedDrafts(false) 会按规则 id 保留上一位用户的行内草稿，点保存即写
+// 进新视角用户名下。失败时意图保留，重试（非强制）同样补播种。双保险：记录
+// 草稿属主，视角用户与属主不同一律强制播种。
+let reseedArmed = true
+let draftsOwnerUserId = 0
+const fetchRules = (reseedDrafts: boolean): Promise<void> => {
+  if (reseedDrafts) reseedArmed = true
+  return rulesReadSession.run(
+    async () => {
+      // 默认当前用户；管理员可选其他用户（规则/通道按用户区分，概览才全平台）
+      const rulesUrl = isAdmin.value && rulesUserId.value > 0 ? `/notification/rules?user_id=${rulesUserId.value}` : '/notification/rules'
+      const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; catalog?: CatalogEvent[]; daily_items?: { id: string; label: string }[]; daily_modules?: { id: string; label: string; emoji: string; items: string[] }[] } }>(rulesUrl, { silent: true })
+      await fetchChannels()
+      return res
+    },
+    {
+      onStart: () => { loading.value = true },
+      onSuccess: (res) => {
+        rulesLoadError.value = false
+        rules.value = res.data?.rules ?? []
+        // 最低级别预选：空值回退目录默认级别 info（目录各组最低级别，亦为后端
+        // 新建订阅行的起始级别）——下拉不再呈现空「请选择」态；仅显示兜底，不写库。
+        for (const r of rules.value) {
+          if (r.trigger === 'event' && !r.min_level) r.min_level = 'info'
+        }
+        userChannels.value = res.data?.channels ?? []
+        eventCatalog.value = res.data?.catalog ?? []
+        dailyModules.value = res.data?.daily_modules ?? []
+        seedDailyTplDrafts()
+        const owner = isAdmin.value && rulesUserId.value > 0 ? rulesUserId.value : (authStore.user?.id ?? 0)
+        seedDrafts(reseedArmed || owner !== draftsOwnerUserId)
+        reseedArmed = false
+        draftsOwnerUserId = owner
+        if (!isAdmin.value) {
+          const chs = userChannels.value
+          overviewStats.value = { channels: chs.length, rules: rules.value.filter(r => r.enabled).length, deliveries: overviewStats.value.deliveries, successRate: overviewStats.value.successRate }
+          const counts = new Map<string, number>()
+          for (const ch of chs) counts.set(ch.type, (counts.get(ch.type) ?? 0) + 1)
+          channelDist.value = [...counts.entries()].map(([type, count]) => ({ type, count }))
+        }
+      },
+      onError: (e) => { console.error(e); rulesLoadError.value = true },
+      onFinally: () => { loading.value = false },
+    },
+  )
 }
 
 // 写请求归属：管理员在他人视角时代管该用户（?user_id 与 GET 视角同口径）
@@ -1389,12 +1440,13 @@ const tplDailyMode = computed<DailyRenderMode>({
   set: (v) => { dailyModes.value = { ...dailyModes.value, [tplChannelTab.value]: v } },
 })
 
-// 日报草稿库：既有正文模板 > 通道形态预置（逐通道；未保存过=预置形态）
+// 日报草稿库：既有日报正文模板（daily_*；存量行由列表接口归一输出）> 通道
+// 形态预置（逐通道；未保存过=预置形态）
 const seedDailyTplDrafts = (): void => {
   const drafts: Record<number, string> = {}
   for (const ch of channelOptions.value) {
     const full = dailyFullChannels.value.find(c => c.id === ch.id)
-    const tpl = parseStyleConfig(full?.style_config)[channelBodyTplKey(ch.type)]
+    const tpl = parseStyleConfig(full?.style_config)[dailyBodyTplKey(ch.type)]
     const saved = typeof tpl === 'string' ? tpl : ''
     drafts[ch.id] = saved || defaultChannelTplFor(ch.type, tplLang.value)
   }
@@ -1492,15 +1544,12 @@ const editTemplate = async (rule: Rule): Promise<void> => {
   const fresh = rules.value.find(r => r.id === rule.id) ?? rule
   tplMode.value = 'rule'
   tplEditingRule.value = fresh
-  // 草稿初始化：既有每通道模板 > 事件级模板 > 通道形态预置；格式=类型缺省
+  // 草稿初始化：既有每通道模板 > 事件级模板 > 通道形态预置。
   const drafts: Record<string, string> = {}
-  const formats: Record<string, string> = {}
   for (const ch of userChannels.value) {
     drafts[String(ch.id)] = fresh.channel_templates?.[String(ch.id)] || fresh.body_template || defaultTplFor(ch.type, tplLang.value)
-    formats[String(ch.id)] = ch.type === 'webhook' ? 'json' : ch.type === 'email' ? 'html' : fixedDailyFormat(ch.type)
   }
   tplTexts.value = drafts
-  tplFormats.value = formats
   // tab 集=规则已保存的选定通道（未选=全部）；通道选择已前移到表格内联
   const targets = tplTabChannels.value
   tplChannelTab.value = targets.length ? String(targets[0].id) : ''
@@ -1510,15 +1559,25 @@ const editTemplate = async (rule: Rule): Promise<void> => {
 
 const saveTemplate = async (): Promise<void> => {
   if (!tplEditingRule.value || savingTpl.value) return
+  // 长度预检（与后端保存门同口径）：超长的通道直接点名并切过去，不发请求。
+  for (const ch of tplTabChannels.value) {
+    const limit = channelTemplateByteLimit(ch.type)
+    if (limit && utf8ByteLength(tplTexts.value[String(ch.id)] ?? '') > limit) {
+      tplChannelTab.value = String(ch.id)
+      ElMessage.error(t('app.notification.rules.ruleTemplateTooLong'))
+      return
+    }
+  }
   // 保存写库需确认（取消不执行）
   try { await ElMessageBox.confirm(t('app.notification.rules.saveTplConfirm'), t('app.notification.rules.confirmTitle'), { type: 'warning' }) }
   catch { return }
   savingTpl.value = true
   try {
     // 每通道模板部分更新（不动启用态/级别/时间/通道选择——通道选择已前移到表格内联）。
-    // 仅提交与预置（任一语言）/事件级模板不同的草稿（空差异=沿用默认链）。
+    // 仅提交与事件级模板不同、或与「不等价于默认链」的预置不同的草稿：
+    // 中文机器人预置=后端默认链（删键沿用）；webhook/邮件预置与英文预置
+    // 的后端默认并不等价——必须落库，否则实际投递与编辑器预览不一致。
     // 只重建本次展示的通道；未展示（停用）通道的既有模板原样保留。
-    // 草稿等于默认或事件级 body 时删除该键，避免把 body 钉成 per-channel 副本。
     const tpls = mergeChannelTemplateDrafts(
       tplEditingRule.value.channel_templates,
       tplTabChannels.value.map(ch => ({
@@ -1527,6 +1586,7 @@ const saveTemplate = async (): Promise<void> => {
         defaultZh: defaultTplFor(ch.type, 'zh'),
         defaultEn: defaultTplFor(ch.type, 'en'),
         bodyTemplate: tplEditingRule.value?.body_template ?? '',
+        presetIsDefaultChain: isBotChannel(ch.type),
       })),
     )
     await request.post(ruleWriteUrl(tplEditingRule.value.id), { channel_templates: tpls })
@@ -1589,9 +1649,7 @@ watch([() => tplMode.value, () => tplDailyMode.value, () => tplChannelTab.value,
 
 onMounted(() => {
   void fetchRules(true)
-  void fetchAdminOverview()
-  void fetchTrend()
-  void fetchDeliveryStats()
+  void loadOverview()
 })
 // 回到规则页即时刷新：通道管理里刚停用的通道必须立刻反映为禁选（已选自动移出草稿）
 watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })

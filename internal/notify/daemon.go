@@ -182,13 +182,35 @@ func sendOneChannel(ctx context.Context, ch deliveryTarget, channelTpl, eventTpl
 		}
 		chMsg.Title = msg.Title + "（" + chName + "）"
 	}
+	isChannelTemplate := channelTpl != ""
 	if channelTpl == "" {
 		channelTpl = eventTpl
 	}
 	if channelTpl != "" && msg.EventType != EvtDailyReport {
-		chMsg.Body = renderStyleTemplate(channelTpl, msg, time.Now())
-		// 全量布局已渲染：通道样式模板不得再套（双渲染根因修复）。
-		chMsg.TemplateApplied = true
+		now := time.Now()
+		switch {
+		case isChannelTemplate && ch.Type == "webhook":
+			// 规则级 webhook 模板=用户声明的 JSON 载荷：按 JSON 口径渲染占位符
+			//（值 JSON 编码；兼容裹引号的旧预置），TemplateFormat 让 sender 直接
+			// 把它作为 POST 体。
+			chMsg.Body = renderStyleTemplateJSON(channelTpl, msg, now)
+			chMsg.TemplateApplied, chMsg.TemplateFormat = true, "json"
+		case isChannelTemplate && ch.Type == "email":
+			// 规则级邮件模板的格式由内容决定（后端无规则级格式字段）：含 HTML 标签
+			// → 值 HTML 转义后按 text/html 发送；纯文本模板 → 文本渲染后按
+			// text/plain 原文发送（换行保留，保存门前落库的纯文本模板不变形）。
+			chMsg.Body = renderStyleTemplate(channelTpl, msg, now)
+			chMsg.TemplateApplied = true
+			if ruleTemplateIsHTML(channelTpl) {
+				chMsg.Body = renderStyleTemplateHTML(channelTpl, msg, now)
+				chMsg.TemplateFormat = "html"
+			}
+		default:
+			// 事件级模板（所有通道共用的文本版式）与机器人模板：文本渲染。
+			// 全量布局已渲染：通道样式模板不得再套（双渲染根因修复）。
+			chMsg.Body = renderStyleTemplate(channelTpl, msg, now)
+			chMsg.TemplateApplied = true
+		}
 	}
 	// 传 chMsg 保留事件模板渲染结果（非日报原样透传 chMsg.Body）；
 	// 此前传 msg 会把事件模板渲染覆盖回目录原始正文（事件模板不生效根因）。

@@ -214,9 +214,9 @@ func GetDailyConfig(userID int64) (DailyConfig, error) {
 	return cfg, nil
 }
 
-// SaveDailyConfig 落库单用户配置（formats 键=通道白名单、值=格式白名单，
-// 非法键值丢弃）。
-func SaveDailyConfig(cfg DailyConfig) error {
+// dailyConfigJSON 日报配置归一 + 序列化（保存与事务变体共用单源；
+// formats 键=通道白名单、值=格式白名单，非法键值丢弃）。
+func dailyConfigJSON(cfg DailyConfig) (string, error) {
 	validChannels := map[string]bool{}
 	for _, ch := range DailyFormatChannels {
 		validChannels[ch] = true
@@ -232,11 +232,33 @@ func SaveDailyConfig(cfg DailyConfig) error {
 		"items": cfg.Items, "formats": formats,
 	})
 	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+// SaveDailyConfig 独立写入（自提交）。与订阅行需要原子写时用 SaveDailyConfigTx。
+func SaveDailyConfig(cfg DailyConfig) error {
+	raw, err := dailyConfigJSON(cfg)
+	if err != nil {
 		return err
 	}
 	_, err = db.DB.Exec(`INSERT INTO notification_daily (user_id, config, updated_at) VALUES (?,?,datetime('now'))
 		ON CONFLICT(user_id) DO UPDATE SET config=excluded.config, updated_at=excluded.updated_at`,
-		cfg.UserID, string(raw))
+		cfg.UserID, raw)
+	return err
+}
+
+// SaveDailyConfigTx 事务内写入日报配置：与订阅行（日报目标通道）同事务提交，
+// 任一失败整体回滚——避免「保存失败但时间/项目已改」的半写状态。
+func SaveDailyConfigTx(ctx context.Context, tx *sql.Tx, cfg DailyConfig) error {
+	raw, err := dailyConfigJSON(cfg)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO notification_daily (user_id, config, updated_at) VALUES (?,?,datetime('now'))
+		ON CONFLICT(user_id) DO UPDATE SET config=excluded.config, updated_at=excluded.updated_at`,
+		cfg.UserID, raw)
 	return err
 }
 

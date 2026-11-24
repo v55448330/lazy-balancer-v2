@@ -461,7 +461,7 @@
             </el-table-column>
             <el-table-column :label="t('app.security.events.banSource')" width="110" align="center">
               <template #default="{ row }">
-                <el-tag size="small" effect="plain" :type="row.remark === '自动封禁' ? 'warning' : 'info'">{{ row.remark === '自动封禁' ? t('app.security.events.banSourceAuto') : t('app.security.events.banSourceManual') }}</el-tag>
+                <el-tag size="small" effect="plain" :type="isAutomaticBanEntry(row) ? 'warning' : 'info'">{{ isAutomaticBanEntry(row) ? t('app.security.events.banSourceAuto') : t('app.security.events.banSourceManual') }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.security.events.banRemaining')" width="170" align="center">
@@ -608,7 +608,7 @@ import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
 import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, autobanIdentityDisplay, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
 import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, AUTOBAN_SUSPICION_MULTIPLIER_MAX, AUTOBAN_CONFIRM_FLOOR_RATIOS, matchAutobanPreset, type AutobanPresetId } from '@/utils/autobanPresets'
-import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
+import { autobanEntryExpired, autobanEntryRemaining, isAutomaticBanEntry } from '@/utils/autobanEntry'
 import { useIpListAdd } from '@/composables/useIpListAdd'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { invalidateSharedEntriesCache } from '@/utils/securityStages'
@@ -937,7 +937,7 @@ const toggleAutobanEnabled = async (): Promise<void> => {
 // —— 封禁与累犯合并弹框（双 tab）：tab1 当前封禁全功能（搜索/来源/分页/解封），
 //    tab2 累犯前科（RecidivismTable 共享组件）。数据源=名单 API（list_id 由
 //    status 投影）；名单条目含手动封禁与到期残留（与累犯记账正交）。 ——
-interface AutobanBanEntry { value: string; remark: string; created_at?: string; expires_at?: string }
+interface AutobanBanEntry { value: string; remark: string; created_at?: string; expires_at?: string; automatic?: boolean }
 const banConsoleVisible = ref(false)
 const banConsoleTab = ref<'bans' | 'recid'>('bans')
 const autobanBans = ref<AutobanBanEntry[]>([])

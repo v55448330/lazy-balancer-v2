@@ -35,6 +35,12 @@ type Message struct {
 	// webhook payload_template）不得再套一层（2026-11-22 用户实测双渲染：
 	// 标题/正文各两份+外层 ** 字面量泄漏）。默认链（无事件模板）不置位。
 	TemplateApplied bool
+	// TemplateFormat TemplateApplied 正文的通道形态（规则级通道模板按通道
+	// 渲染时由派发侧写入）："json"=Body 已是 webhook 载荷 JSON 文本（可直接
+	// 作为 POST 体）；"html"=Body 已是转义后的 HTML（邮件按 text/html 发送）；
+	// 空=文本/markdown 布局（webhook 进默认信封、邮件 text/plain 原文直发）。
+	// 事件级模板（所有通道共用一份文本版式）不置位，维持文本语义。
+	TemplateFormat string
 	// DailyModuleMode 日报渲染模式=模块拼装（通道 style_config.daily_mode
 	// 显式选择/存量推断，daemon 派发时置位）：该通道已存正文模板保留但不
 	// 生效，日报走 items 分节渲染（2026-11-22 二选一显式开关）。

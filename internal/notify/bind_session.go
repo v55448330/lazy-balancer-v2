@@ -103,12 +103,14 @@ func PendingBindQQCreds() []qqBotCred {
 	return out
 }
 
-// PollBindSession 弹框轮询会话 phase（无会话=idle）。
-func PollBindSession(typ, scannerID, botKey string) (phase, receiver string) {
+// PollBindSession 弹框轮询会话 phase（无会话/非属主=idle）。会话按属主隔离：
+// (type, scanner_id, bot_key) 只是会话标识，不构成访问凭据——他人持有同一
+// 三元组不得看到 phase/receiver。
+func PollBindSession(userID int64, typ, scannerID, botKey string) (phase, receiver string) {
 	bindSessionMu.Lock()
 	defer bindSessionMu.Unlock()
 	s := bindSessions[bindSessionKey(typ, scannerID, botKey)]
-	if s == nil {
+	if s == nil || s.UserID != userID {
 		return "idle", ""
 	}
 	return s.Phase, s.Receiver
@@ -159,9 +161,15 @@ func PruneBindSessions(maxAge time.Duration) int {
 // AbortBindSession 弹框取消时清理绑定会话+待绑定凭据，防「幽灵」入站连接
 // （未保存通道的 bot 被 supervisor 枚举建连）。wx 清匹配 pin；qq 会话删除后
 // PendingBindQQCreds 不再返回→supervisor 对账回收。唤醒 supervisor 立即收口。
-func AbortBindSession(typ, scannerID, botKey string) {
+// 非属主调用是 no-op（会话标识不构成访问凭据）。
+func AbortBindSession(userID int64, typ, scannerID, botKey string) {
 	bindSessionMu.Lock()
-	delete(bindSessions, bindSessionKey(typ, scannerID, botKey))
+	key := bindSessionKey(typ, scannerID, botKey)
+	if s := bindSessions[key]; s == nil || s.UserID != userID {
+		bindSessionMu.Unlock()
+		return
+	}
+	delete(bindSessions, key)
 	bindSessionMu.Unlock()
 	if typ == "wx_clawbot" {
 		wxCtxMu.Lock()

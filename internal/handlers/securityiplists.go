@@ -729,8 +729,19 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: lists})
 }
 
+// ipListDetailEntry 名单详情读面的条目形态：存储条目四字段之外附带派生
+// 来源位 automatic——按自动封禁判据单源（services.AutobanEntryIsAutomatic）
+// 逐条派生，封禁控制台「来源」列据此渲染，不再拿备注字面量去猜（自动条目
+// 的备注早已升级为具体触发原因）。来源位只读：不进 models.IPListEntry，
+// 写路径解析存储形态时对载荷携带的 automatic 一律忽略、不回写 entries。
+type ipListDetailEntry struct {
+	models.IPListEntry
+	Automatic bool `json:"automatic"`
+}
+
 // GetIPList 单条详情（含 entries）——弹框按需拉取（v2.3.2 弹框性能重构：
-// 列表接口不再内联 entries，大名单查看/编辑不再背全表载荷）。
+// 列表接口不再内联 entries，大名单查看/编辑不再背全表载荷）。entries[]
+// 形态见 ipListDetailEntry（每条带 automatic 来源位）。
 func (h *Handlers) GetIPList(c *gin.Context) {
 	id := c.Param("id")
 	// 非规范数字 ID 门（与全部写路径/策略详情同口径）：SQLite 数值亲和
@@ -755,6 +766,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	// 预置自动封禁名单（system=1 但条目在 DB）走自定义分支——威胁文件
 	// 读取对该名恒失败（未映射威胁源）会让弹框 500。
 	row.PresetAutoban = row.System && row.Name == services.AutobanPresetListName
+	var entries []ipListDetailEntry
 	if row.System && !row.PresetAutoban && services.IsThreatSystemListName(row.Name) {
 		// RDB 文件化: 威胁名单条目从 .iplist 文件读取；爬虫地址库仍由
 		// DB entries 提供（不得误走威胁文件路径返回空集）。
@@ -763,22 +775,27 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", ferr)})
 			return
 		}
-		entries := make([]models.IPListEntry, len(vals))
+		// 文件条目无备注，来源位恒 false（零值）。
+		entries = make([]ipListDetailEntry, len(vals))
 		for i, v := range vals {
-			entries[i] = models.IPListEntry{Value: v}
+			entries[i] = ipListDetailEntry{IPListEntry: models.IPListEntry{Value: v}}
 		}
-		encoded, _ := json.Marshal(entries)
-		row.Entries = json.RawMessage(encoded)
-		row.EntryCount = len(entries)
 	} else {
-		var entries []models.IPListEntry
 		if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_c542aa92", id, err), MessageKey: "k_c542aa92"})
 			return
 		}
-		row.Entries = json.RawMessage(entriesJSON)
-		row.EntryCount = len(entries)
+		for i := range entries {
+			entries[i].Automatic = services.AutobanEntryIsAutomatic(entries[i].IPListEntry)
+		}
 	}
+	encoded, err := json.Marshal(entries)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		return
+	}
+	row.Entries = json.RawMessage(encoded)
+	row.EntryCount = len(entries)
 	// 引用面与列表同源装载（ref_count/ref_count_enabled/ref_policies/
 	// trusted_proxy_*）——详情此前恒零值且 ref_policies 为 null，与前端契约
 	// （非可选数组）及列表端点分叉。失败 fail-closed（同列表：不得把引用面

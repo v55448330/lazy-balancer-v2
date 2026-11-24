@@ -167,7 +167,7 @@ func TestQQBindTestMessageConfirmsSession(t *testing.T) {
 	// When 入站「绑定测试」（首 bot 会话：凭据=全局）
 	handleQQC2CMessage(context.Background(), qqBotCred{AppID: "APP_G", Secret: "SEC_G"}, json.RawMessage(`{"content":"绑定测试","author":{"user_openid":"o9"},"id":"MSG9"}`))
 	// Then 会话 confirmed + receiver 捕获
-	phase, receiver := PollBindSession("qq", "o9", "APP_G")
+	phase, receiver := PollBindSession(7, "qq", "o9", "APP_G")
 	if phase != "confirmed" || receiver != "o9" {
 		t.Fatalf("确认后 phase=%q receiver=%q, want confirmed/o9", phase, receiver)
 	}

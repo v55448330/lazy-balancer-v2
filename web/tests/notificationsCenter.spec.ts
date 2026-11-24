@@ -45,7 +45,8 @@ test('侧栏接线：通知中心菜单项紧跟 API 密钥之后（铃铛图标
 test('通知页五 tab 投影：概览/规则/通道/投递/邮件服务', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
   assert.match(text, /el-tabs/, '必须使用 tabs')
-  assert.match(text, /request\.get<[^>]*>\(rulesUrl\)/, '必须消费规则端点')
+  // 取数失败由页面自己的错误条呈现（silent），调用形态允许携带请求选项。
+  assert.match(text, /request\.get<[^>]*>\(rulesUrl[,)]/, '必须消费规则端点')
   // 概览=仪表盘（stat 卡+ECharts 趋势+通道分布），非简易 div bar
   assert.match(text, /v-chart/, '概览趋势必须用 ECharts（全站图表规范）')
   assert.match(text, /axisChartBase|pieChartBase/, '图表必须经共享基线构建')
@@ -297,8 +298,16 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   assert.doesNotMatch(nc, /savingTplChannelId/, '单 tab 保存态已退役')
   assert.match(nc, /templateInactiveHint/, '内置模板模式提示词必须与开关一致')
   assert.match(nc, /modeModulesPreviewHint/, '内置模板预览必须带只读口径说明（编辑弹框内）')
-  assert.match(nc, /if \(tplMode\.value === 'daily'\) \{\n\s+const f = dailyRule\.value \? dailyFormatOf/, 'daily 格式必须先读持久化格式，不能沿用 rule 草稿')
-  assert.match(nc, /const sel = tplFormats\.value\[tplChannelTab\.value\]\n\s+if \(sel\) return sel/, 'rule 模式格式=弹框格式行当前选择（预览与格式行一致）')
+  // 格式来源：rule 模式由模板内容决定（webhook=JSON 载荷；邮件含 HTML 标签=HTML、
+  // 否则纯文本，与后端派发同判据），格式行只展示不可选；daily 模式 webhook/email
+  // 读持久化格式，auto 回退类型映射。
+  assert.match(nc, /if \(tplMode\.value === 'rule'\) \{\n\s+if \(ch\.type === 'webhook'\) return 'json'\n\s+if \(ch\.type === 'email'\) return ruleTemplateIsHtml\(tplText\.value\) \? 'html' : 'text'/, 'rule 模式格式必须由内容决定（预览=实发形态）')
+  assert.match(nc, /const f = dailyRule\.value \? dailyFormatOf\(dailyRule\.value, ch\.type\) : 'auto'\n\s+return f === 'auto' \? autoDailyFormat\(ch\.type\) : f/, 'daily 格式必须读持久化格式，auto 回退类型映射')
+  assert.match(nc, /<el-tag v-if="tplMode === 'rule' \|\| isBotChannel\(tplActiveChannel\?\.type \|\| ''\)"/, 'rule 模式与机器人的格式行=固定 tag，不得提供与实发不一致的下拉')
+  // 取数会话守卫不得丢掉强制播种：被作废会话的强制标志由胜出会话继承，草稿
+  // 属主变更一律重播种——否则上一位用户的行内草稿会留在新视角并被保存进他人规则。
+  assert.match(nc, /if \(reseedDrafts\) reseedArmed = true/, '强制播种意图必须跨会话粘滞')
+  assert.match(nc, /seedDrafts\(reseedArmed \|\| owner !== draftsOwnerUserId\)/, '胜出会话必须继承强制播种，且草稿属主变更即重播种')
   assert.match(nc, /const moduleLabel = \(mod: \{ id: string; label: string \}\)/, '模块名必须经词条映射（缺键回落后端 label）')
   assert.match(nc, /:readonly="tplMode === 'daily' && tplDailyMode === 'modules'"/, '模块拼装模式编辑器必须只读')
   assert.match(nc, /modeModulesPreviewHint/, '模块拼装预览提示必须在位')

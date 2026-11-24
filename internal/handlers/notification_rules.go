@@ -434,7 +434,15 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			}
 			selectedChannelIDs = ids
 		}
-		if err := notify.SaveDailyConfig(cfg); err != nil {
+		// 日报配置与目标通道订阅行同事务：任一失败整体回滚，不得留下
+		// 「保存失败但时间/项目已改、通道选择仍旧」的半写状态。
+		tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
+			return
+		}
+		defer tx.Rollback()
+		if err := notify.SaveDailyConfigTx(c.Request.Context(), tx, cfg); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
 			return
 		}
@@ -442,15 +450,19 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		// 同时记录更新者/时间（items/send_time 变更亦刷新）。
 		if req.ChannelIDs != nil {
 			b, _ := json.Marshal(selectedChannelIDs)
-			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates, enabled, updated_at, updated_by)
+			if _, err := tx.ExecContext(c.Request.Context(), `INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates, enabled, updated_at, updated_by)
 				VALUES (?,?,?,?,?,?,1,datetime('now'),?)
 				ON CONFLICT(user_id, event_type) DO UPDATE SET channel_ids=excluded.channel_ids, enabled=1, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
 				uid, notify.EvtDailyReport, "info", "", string(b), "", actor); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报目标通道失败", err)})
 				return
 			}
-		} else if _, err := db.DB.Exec(`UPDATE notification_subscriptions SET updated_at=datetime('now'), updated_by=? WHERE user_id=? AND event_type=?`, actor, uid, notify.EvtDailyReport); err != nil {
+		} else if _, err := tx.ExecContext(c.Request.Context(), `UPDATE notification_subscriptions SET updated_at=datetime('now'), updated_by=? WHERE user_id=? AND event_type=?`, actor, uid, notify.EvtDailyReport); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("记录日报更新时间失败", err)})
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
 			return
 		}
 
@@ -473,6 +485,26 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		if req.MinLevel != nil && !validSubLevel(*req.MinLevel) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3ae60346"), MessageKey: "k_3ae60346"})
 			return
+		}
+		// 规则级「事件×通道模板」保存门（与派发渲染同门）：webhook 必须是可
+		// 解析的 JSON 载荷模板、机器人/邮件模板长度受限。放在事务前——400 不
+		// 触碰任何行。
+		if req.ChannelTemplates != nil {
+			clean := make(map[string]string, len(req.ChannelTemplates))
+			for k, v := range req.ChannelTemplates {
+				if v != "" {
+					clean[k] = v
+				}
+			}
+			if err := validateRuleChannelTemplates(db.DB, uid, clean); err != nil {
+				var rv *ruleTemplateValidationError
+				if errors.As(err, &rv) {
+					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, rv.key), MessageKey: rv.key})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("校验规则模板失败", err)})
+				return
+			}
 		}
 		// 组写入包单事务：任一事件行失败不得留下半组订阅（此前逐条 Exec，
 		// 失败中止时前半组已落库，UI 与投递口径分叉）。

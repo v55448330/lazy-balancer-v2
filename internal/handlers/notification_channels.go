@@ -8,6 +8,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,6 +106,8 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 		} else {
 			r.LinkState = "none"
 		}
+		// 模板作用域读面归一：存量行（日报模板仍在事件键上）直接按新布局输出。
+		r.StyleConfig = notify.CanonicalChannelStyleJSON(r.StyleConfig)
 		if r.UserID != uid {
 			r.Target = maskChannelTarget(r.Type, r.Target)
 			r.TargetMasked = true
@@ -352,7 +355,7 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
-		styleConfig = normalized
+		styleConfig = notify.CanonicalTemplateScope(normalized, "")
 	}
 	// 多机器人：target 钉住 bot 凭据（出站按 target 凭据鉴权）。
 	target := pinBotChannelTarget(uid, req.Type, req.Target)
@@ -429,7 +432,7 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
-		normalizedStyle, hasStyle = normalized, true
+		normalizedStyle, hasStyle = notify.CanonicalTemplateScope(normalized, currentStyle), true
 	}
 	if req.Target != "" {
 		if err := validateChannelTarget(typ, req.Target); err != nil {
@@ -598,10 +601,14 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 // validateChannelStyle 通道消息样式校验+归一（返回规范化 JSON）：
 //
 //	键白名单 payload_template/subject_template/body_template/content_template/
-//	msg_type/daily_format/body_format/method/headers
+//	daily_payload_template/daily_body_template/daily_content_template/
+//	daily_mode/msg_type/daily_format/body_format/method/headers
+//	正文模板两套作用域：事件键只用于事件、daily_* 键只用于日报（同门校验）
 //	webhook.payload_template：{{占位符}}替换后必须可解析 JSON
 //	webhook.method ∈ GET/POST；headers 键白名单（认证/内容类型类，禁 Host/Cookie 等）
 //	qq.msg_type ∈ text/markdown；*.daily_format ∈ 格式白名单；email 键值白名单
+//	daily_mode ∈ modules/template；作用域归一（CanonicalTemplateScope）由调用方
+//	在本函数之后执行。
 func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -612,17 +619,16 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 	for k, v := range m {
 		sv, _ := v.(string)
 		switch k {
-		case "payload_template":
+		case "payload_template", "daily_payload_template":
+			// 事件载荷模板与日报载荷模板（日报卡写入口）同门校验。
 			if typ != "webhook" {
 				return "", errors.New("payload_template 仅 webhook 通道支持")
 			}
 			if sv == "" {
 				continue
 			}
-			// 占位符替换后必须可解析（保存即拦截，投递期才不踩坏模板）
-			probe := regexp.MustCompile(`\{\{[^}]*}}`).ReplaceAllString(sv, `"probe"`)
-			if !json.Valid([]byte(probe)) {
-				return "", errors.New("payload_template 不是合法 JSON 模板（占位符替换后仍需可解析）")
+			if err := probeWebhookPayloadTemplate(sv); err != nil {
+				return "", err
 			}
 			out[k] = sv
 		case "subject_template":
@@ -633,7 +639,8 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 				return "", errors.New("subject_template 过长（≤300）")
 			}
 			out[k] = sv
-		case "body_template":
+		case "body_template", "daily_body_template":
+			// 事件正文模板与日报正文模板（日报卡写入口）同门校验。
 			if typ != "email" {
 				return "", errors.New("body_template 仅邮件通道支持")
 			}
@@ -641,7 +648,8 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 				return "", errors.New("body_template 过长（≤4000）")
 			}
 			out[k] = sv
-		case "content_template":
+		case "content_template", "daily_content_template":
+			// 事件正文模板与日报正文模板（日报卡写入口）同门校验。
 			if typ != "qq" && typ != "wx_clawbot" {
 				return "", errors.New("content_template 仅 QQ/微信通道支持")
 			}
@@ -726,6 +734,89 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// probeWebhookPayloadTemplate 占位符替换后必须可解析 JSON（保存即拦截，
+// 投递期才不踩坏模板）。两种占位符约定都接受：裸占位符（保存侧 probe 口径）
+// 与裹引号占位符（规则弹框旧预置的写法）——后者连引号一起替换，避免误判成
+// `""probe""` 非法 JSON。
+func probeWebhookPayloadTemplate(sv string) error {
+	quoted := regexp.MustCompile(`"\{\{[^}]*}}"`).ReplaceAllString(sv, `"probe"`)
+	probe := regexp.MustCompile(`\{\{[^}]*}}`).ReplaceAllString(quoted, `"probe"`)
+	if !json.Valid([]byte(probe)) {
+		return errors.New("payload_template 不是合法 JSON 模板（占位符替换后仍需可解析）")
+	}
+	return nil
+}
+
+// ruleTemplateValidationError 规则模板校验的业务错误（handler 按语义键提示）。
+type ruleTemplateValidationError struct{ key string }
+
+func (e *ruleTemplateValidationError) Error() string { return e.key }
+
+// validateRuleChannelTemplates 规则级「事件×通道模板」保存门（与派发渲染同门）：
+// webhook → JSON 载荷模板（占位符替换后可解析，兼容裹引号写法）；机器人
+// ≤2000 字节；邮件 ≤4000 字节。通道行不存在（已删除）跳过——不因历史模板
+// 阻止规则保存。database 读取失败按基础设施错误返回（调用方映射 500）。
+func validateRuleChannelTemplates(database *sql.DB, userID int64, tpls map[string]string) error {
+	if len(tpls) == 0 {
+		return nil
+	}
+	// 键按数值归一后再查（与派发侧 strconv.ParseInt 同口径）：SQLite 对 INTEGER
+	// 列做数值亲和，"05"/"+5" 这类写法在 IN 里同样命中该通道——拿原始字符串
+	// 键回查类型会落空，等于借写法绕过保存门。无法解析的键派发侧永不命中，
+	// 不拦。
+	byChannel := make(map[int64]string, len(tpls))
+	idArgs := make([]any, 0, len(tpls))
+	for id, tpl := range tpls {
+		chID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || chID <= 0 {
+			continue
+		}
+		byChannel[chID] = tpl
+		idArgs = append(idArgs, chID)
+	}
+	if len(idArgs) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(idArgs)+1)
+	args = append(args, userID)
+	args = append(args, idArgs...)
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(idArgs)), ",")
+	rows, err := database.Query(`SELECT id, type FROM notification_channels WHERE user_id=? AND id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	types := make(map[int64]string, len(idArgs))
+	for rows.Next() {
+		var id int64
+		var typ string
+		if err := rows.Scan(&id, &typ); err != nil {
+			return err
+		}
+		types[id] = typ
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for chID, tpl := range byChannel {
+		switch types[chID] {
+		case "webhook":
+			if err := probeWebhookPayloadTemplate(tpl); err != nil {
+				return &ruleTemplateValidationError{key: "k_00c1f3e8"}
+			}
+		case "email":
+			if len(tpl) > 4000 {
+				return &ruleTemplateValidationError{key: "k_0d9a61a4"}
+			}
+		case "qq", "wx_clawbot":
+			if len(tpl) > 2000 {
+				return &ruleTemplateValidationError{key: "k_0d9a61a4"}
+			}
+		}
+	}
+	return nil
 }
 
 // webhookHeaderAllowed 自定义头白名单：认证/内容协商类 + X- 前缀自定义。

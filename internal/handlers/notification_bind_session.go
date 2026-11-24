@@ -53,7 +53,7 @@ func (h *Handlers) GetBindSession(c *gin.Context) {
 	typ := c.Query("type")
 	scannerID := c.Query("scanner_id")
 	botKey := c.Query("bot_key")
-	phase, receiver := notify.PollBindSession(typ, scannerID, botKey)
+	phase, receiver := notify.PollBindSession(contextUserID(c), typ, scannerID, botKey)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"phase":     phase,
 		"receiver":  receiver,
@@ -75,7 +75,7 @@ func (h *Handlers) DeleteBindSession(c *gin.Context) {
 		}
 		qqTaskMu.Unlock()
 	}
-	notify.AbortBindSession(typ, scannerID, botKey)
+	notify.AbortBindSession(uid, typ, scannerID, botKey)
 	recordAudit(c, "绑定", "通知通道", "取消绑定会话（"+typ+"）")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }

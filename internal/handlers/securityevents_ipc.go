@@ -11,12 +11,16 @@ package handlers
 //   - 204 只在 DB commit 完成之后返回（写侧据此判定该批无需 spool）；
 //   - 依赖未就绪（数据库句柄缺失）或入库失败一律 5xx——写侧按可重试处理并把
 //     整批落 fallback spool，由采集任务补采；
-//   - 请求体过大 413 / 读失败 400 表示「该批不可入库」，写侧不 spool（避免毒批
-//     无限重试）；
+//   - 请求体过大 413 / 畸形 JSON 400 表示「该批不可入库」，写侧不 spool（避免
+//     毒批无限重试）；
+//   - 请求体读取失败（连接中断、读超时等瞬态故障）503——与入库失败同属可
+//     重试，写侧把整批落 fallback spool，由采集任务补采；
 //   - socket 权限 0600、仅本机（Unix domain socket 天然不到网络）。
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,23 +49,38 @@ type SecurityEventsIPCServer struct {
 	path     string
 }
 
+// securityEventsIPCReadBody 读取一批请求体——两个入库端点「读取阶段」状态
+// 语义的单源：超过 limit → 413（该批不可入库，写侧丢弃不 spool）；其它读取
+// 失败（连接中断、读超时等瞬态故障）→ 503（写侧按可重试处理，整批落
+// fallback spool）。读失败不得回 400：写侧把 400 当「该批不可入库」直接
+// 丢弃，等于把一批本可重试的事件永久丢弃。ok=false 时响应已写出。
+func securityEventsIPCReadBody(w http.ResponseWriter, r *http.Request, limit int64, batch string) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, batch+" batch too large", http.StatusRequestEntityTooLarge)
+			return nil, false
+		}
+		http.Error(w, "read "+batch+" batch: "+err.Error(), http.StatusServiceUnavailable)
+		return nil, false
+	}
+	return raw, true
+}
+
 // SecurityEventsEventsIngestHandler 处理一批换行分隔 audit JSON 的入库请求。
-// 独立成方法便于测试直接驱动（不经过真 socket）。
+// 独立成方法便于测试直接驱动（不经过真 socket）。响应语义：204=整批已提交
+// （写侧据此不落 spool）；413=超限（写侧丢弃）；读失败、依赖未就绪或入库
+// 失败一律 5xx（写侧落 spool 重试）。
 func (s *SecurityEventsIPCServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, services.SecurityEventsIPCMaxBodyBytes())
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "security events batch too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "read security events batch: "+err.Error(), http.StatusBadRequest)
+	raw, ok := securityEventsIPCReadBody(w, r, services.SecurityEventsIPCMaxBodyBytes(), "security events")
+	if !ok {
 		return
 	}
 	// 入库过程与请求生命周期解耦：写侧连接超时/断开不得让一批事件在半途中止
@@ -148,9 +167,12 @@ type humanEventAttribution struct {
 	policyName string
 }
 
-func lookupHumanEventAttribution(ruleID string) humanEventAttribution {
+// lookupHumanEventAttribution 按 rule_id 查归属。错误口径：无数据库句柄/
+// 规则 ID 为空/规则不存在（无绑定不是故障）→ 零值且 err=nil；其它查询失败
+// → 零值 + 错误——调用方不得把查询失败静默成「无策略归属」。
+func lookupHumanEventAttribution(ruleID string) (humanEventAttribution, error) {
 	if db.DB == nil || strings.TrimSpace(ruleID) == "" {
-		return humanEventAttribution{}
+		return humanEventAttribution{}, nil
 	}
 	var a humanEventAttribution
 	err := db.DB.QueryRow(`SELECT COALESCE(r.name,''), CASE WHEN p.id IS NOT NULL THEN b.policy_id ELSE 0 END, CASE WHEN p.id IS NOT NULL THEN p.name ELSE '' END
@@ -160,10 +182,41 @@ func lookupHumanEventAttribution(ruleID string) humanEventAttribution {
 		WHERE r.caddy_id=?
 		ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 WHEN p.policy_type='mixed' THEN 1 ELSE 2 END, b.rank, b.policy_id
 		LIMIT 1`, ruleID).Scan(&a.ruleName, &a.policyID, &a.policyName)
-	if err != nil {
-		return humanEventAttribution{}
+	if errors.Is(err, sql.ErrNoRows) {
+		return humanEventAttribution{}, nil
 	}
-	return a
+	if err != nil {
+		return humanEventAttribution{}, fmt.Errorf("查询规则人机事件归属失败: %w", err)
+	}
+	return a, nil
+}
+
+// humanEventAttributionFailureLogWindow 归属查询失败留痕的节流窗口：人机事件
+// 逐事件投递（一批通常一行），DB 持续故障时逐批留痕会按请求速率刷屏。
+const humanEventAttributionFailureLogWindow = time.Minute
+
+// humanEventAttributionFailureLog 归属查询失败的留痕窗口（结构单源
+// services.LogThrottle；单槽——故障源是库句柄而非 rule_id，按 rule_id 分槽
+// 会随网络输入无界增长）。
+var humanEventAttributionFailureLog services.LogThrottle
+
+// logHumanEventAttributionFailure 归属查询失败留痕（窗口内只放行首条，带
+// rule_id 与底层错误）：运维据此区分「查询失败按无归属落库」与「规则真的
+// 没绑定策略」。
+func logHumanEventAttributionFailure(ruleID string, err error) {
+	if humanEventAttributionFailureLog.Allow(humanEventAttributionFailureLogWindow) {
+		services.Logf("warn", "人机事件归属查询失败，事件按无策略归属落库: rule_id=%s err=%v", ruleID, err)
+	}
+}
+
+// humanEventAttributionFor 归属查询的调用侧单点：查询失败按零值归属继续
+// （事件照常落库、运行态视图照常返回）并节流留痕。
+func humanEventAttributionFor(ruleID string) humanEventAttribution {
+	attr, err := lookupHumanEventAttribution(ruleID)
+	if err != nil {
+		logHumanEventAttributionFailure(ruleID, err)
+	}
+	return attr
 }
 
 // handleIngestHuman 人机验证事件摄入（POST /security-events/ingest-human）：
@@ -180,7 +233,10 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	raw, ok := securityEventsIPCReadBody(w, r, 1<<20, "human event")
+	if !ok {
+		return
+	}
 	type humanEventRow struct {
 		Ts       int64  `json:"ts"`
 		RuleID   string `json:"rule_id"`
@@ -192,15 +248,10 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		Reason   string `json:"reason"` // CC 触发原因（session_anomaly/rps_spike/4xx_ratio；非 CC 触发空）
 	}
 	var rows []humanEventRow
-	if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
-		// 超限 body 与 handleIngest 同口径：*http.MaxBytesError → 413（4xx=该批
-		// 不可入库，写侧不 spool），其余解析错误才是 400。json.Decoder 原样回传
-		// body 读取错误（encoding/json refill），errors.As 可命中。
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "human event batch too large", http.StatusRequestEntityTooLarge)
-			return
-		}
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&rows); err != nil {
+		// 畸形 JSON（空体/截断/类型不符）→ 400：4xx=该批不可入库，写侧丢弃不
+		// spool。超限与读取失败已在 securityEventsIPCReadBody 判定（413/503），
+		// 此处只剩解析错误。
 		http.Error(w, "bad human event batch: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -257,7 +308,8 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	attributions := map[string]humanEventAttribution{}
 	for _, row := range accepted {
 		if _, ok := attributions[row.RuleID]; !ok {
-			attributions[row.RuleID] = lookupHumanEventAttribution(row.RuleID)
+			// 查询失败按零值归属落库（留痕见 humanEventAttributionFor）。
+			attributions[row.RuleID] = humanEventAttributionFor(row.RuleID)
 		}
 	}
 	ctx := context.WithoutCancel(r.Context())

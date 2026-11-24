@@ -1,5 +1,6 @@
 // 自动封禁名单条目的到期展示口径单源：名单编辑弹框（SecurityRules）与 IP
 // 处置快捷弹框（IPLocationAction）共用，原为 SecurityRules 内的组件局部函数。
+// 封禁控制台（SecurityEvents）来源列的判据见文末 isAutomaticBanEntry。
 //
 // expires_at 是库内 UTC 墙钟串（"YYYY-MM-DD HH:mm:ss"，空=永久条目）。到期
 // 判定/剩余时长以浏览器侧解析与本机时钟对比——展示层近似（分钟粒度），封禁
@@ -29,3 +30,10 @@ export const autobanEntryRemaining = (expiresAt: string): string => {
   if (hours < 24) return t('common.app.views.autoban.remainingHoursMinutes', { hours, minutes: minutes % 60 })
   return t('common.app.views.autoban.remainingDaysHours', { days: Math.floor(hours / 24), hours: hours % 24 })
 }
+
+/**
+ * 条目是否自动封禁：唯一判据 = 服务端名单详情的 automatic 来源位。
+ * 备注是自由文本（自动封禁可能是「突刺」「累犯·人机验证失败」等），不参与
+ * 判定；来源位缺失（旧响应/非封禁名单）按手动处理。
+ */
+export const isAutomaticBanEntry = (entry: { automatic?: boolean; [field: string]: unknown } | undefined): boolean => entry?.automatic === true

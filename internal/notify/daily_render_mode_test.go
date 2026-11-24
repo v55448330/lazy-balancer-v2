@@ -1,38 +1,49 @@
 package notify
 
-// 日报「渲染模式」显式开关钉测（2026-11-22 用户裁定：模块拼装与自定义模板
-// 二选一须显式可见可切，不靠「有没有存模板」隐式推断）。
-//   - daily_mode="modules"：模块拼装——忽略该通道已存正文模板，走 items
-//     分节渲染（dailyTemplatesSuppressed=true，机器人/邮件/webhook 模板
-//     应用点全部旁路，回到与「从未存过模板」完全相同的默认链）。
-//   - daily_mode="template"：自定义模板独占（既有行为，钉测见
-//     daily_template_mode_test.go）。
-//   - daily_mode 缺省：存量回填推断——有任一正文模板键即模板模式（与加
-//     开关前的隐式行为一致，存量用户无感）。
 import (
 	"strings"
 	"testing"
 	"time"
 )
 
+// 日报「渲染模式」显式开关钉测（2026-11-22 用户裁定：模块拼装与自定义模板
+// 二选一须显式可见可切，不靠「有没有存模板」隐式推断）。
+//   - daily_mode="modules"：模块拼装——忽略该通道已存日报模板，走 items
+//     分节渲染（dailyTemplatesSuppressed=true，机器人/邮件/webhook 模板
+//     应用点全部旁路，回到与「从未存过模板」完全相同的默认链）。
+//   - daily_mode="template"：自定义模板独占（既有行为，钉测见
+//     daily_template_mode_test.go）。
+//   - daily_mode 缺省：存量回填推断——有任一**日报**正文模板键即模板模式。
+//     事件正文模板键不参与日报模式推断（2026-11-24 作用域分离：日报卡写
+//     daily_*，事件模板走 payload/body/content；存量行由 ParseChannelStyle
+//     按「显式 daily_mode 或引用日报变量」归一）。
 func TestDailyModuleModeEffective(t *testing.T) {
 	cases := []struct {
 		name  string
 		style ChannelStyle
-		want  bool // true=模块拼装（抑制通道模板）
+		want  bool // true=模块拼装（抑制通道日报模板）
 	}{
 		{"无任何配置=模块拼装", ChannelStyle{}, true},
-		{"存量机器人模板（缺省回填）=模板模式", ChannelStyle{ContentTemplate: "tpl"}, false},
-		{"存量邮件模板（缺省回填）=模板模式", ChannelStyle{BodyTemplate: "tpl"}, false},
-		{"存量webhook模板（缺省回填）=模板模式", ChannelStyle{PayloadTemplate: "{}"}, false},
+		{"日报机器人模板=模板模式", ChannelStyle{DailyContentTemplate: "tpl"}, false},
+		{"日报邮件模板=模板模式", ChannelStyle{DailyBodyTemplate: "tpl"}, false},
+		{"日报webhook模板=模板模式", ChannelStyle{DailyPayloadTemplate: "{}"}, false},
+		{"事件正文模板不推断日报模式", ChannelStyle{ContentTemplate: "tpl", PayloadTemplate: "{}"}, true},
 		{"显式template=模板模式（即使无模板，编辑器侧另有保底）", ChannelStyle{DailyMode: "template"}, false},
-		{"显式modules=模块拼装（已存模板保留但不生效）", ChannelStyle{DailyMode: "modules", ContentTemplate: "tpl", PayloadTemplate: "{}"}, true},
-		{"未知值按存量推断（向前兼容）", ChannelStyle{DailyMode: "weird", ContentTemplate: "tpl"}, false},
+		{"显式modules=模块拼装（已存模板保留但不生效）", ChannelStyle{DailyMode: "modules", DailyContentTemplate: "tpl", DailyPayloadTemplate: "{}"}, true},
+		{"未知值按存量推断（向前兼容）", ChannelStyle{DailyMode: "weird", DailyContentTemplate: "tpl"}, false},
 	}
 	for _, c := range cases {
 		if got := c.style.DailyModuleModeEffective(); got != c.want {
 			t.Fatalf("%s: DailyModuleModeEffective=%v want %v", c.name, got, c.want)
 		}
+	}
+	// 存量行归一：引用日报变量的旧键视为日报模板 → 模板模式；纯静态版式旧键
+	// 视为事件模板 → 不推断日报模式。
+	if ParseChannelStyle(`{"content_template":"{{requests}}"}`).DailyModuleModeEffective() {
+		t.Fatal("含日报变量的存量模板必须归一日报模板（模板模式）")
+	}
+	if !ParseChannelStyle(`{"content_template":"静态版式"}`).DailyModuleModeEffective() {
+		t.Fatal("无日报变量的旧键是事件模板，不得推断日报模式")
 	}
 }
 

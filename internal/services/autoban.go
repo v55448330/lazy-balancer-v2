@@ -874,6 +874,13 @@ func autobanEntryIsAutomatic(e models.IPListEntry) bool {
 	return false
 }
 
+// AutobanEntryIsAutomatic 自动条目判据的导出入口：名单详情读面的来源位
+// automatic 由此单源派生（面板不拿备注字面量另写一份判据）。判据本体与
+// 适用范围见 autobanEntryIsAutomatic。
+func AutobanEntryIsAutomatic(e models.IPListEntry) bool {
+	return autobanEntryIsAutomatic(e)
+}
+
 // autobanFeedItem 摄取提交点的最小喂入形态。
 type autobanFeedItem struct {
 	IP            string

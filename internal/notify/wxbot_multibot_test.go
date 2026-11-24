@@ -195,7 +195,7 @@ func TestWxBindTestMessageConfirmsSession(t *testing.T) {
 	// When 入站「绑定测试」
 	handleWxInbound(context.Background(), cred, in)
 	// Then 会话 confirmed + receiver/context_token 捕获
-	phase, receiver := PollBindSession("wx_clawbot", "wx9", "B_S")
+	phase, receiver := PollBindSession(7, "wx_clawbot", "wx9", "B_S")
 	if phase != "confirmed" || receiver != "wx9" {
 		t.Fatalf("确认后 phase=%q receiver=%q, want confirmed/wx9", phase, receiver)
 	}

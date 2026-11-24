@@ -16,16 +16,21 @@ test('编辑向导记录打开时的 updated_at 并随保存回传 expected_upda
 })
 
 test('版本冲突（409）刷新列表并提示重新打开，不静默覆盖', () => {
-  assert.match(page, /error instanceof ApiRequestError && error\.status === 409/)
-  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
-  assert.ok(code('src/locales/zh/rules.ts').includes("ruleModifiedByOther: '规则已被他人修改'"), '409 文案必须在 zh 母本词条中')
-  assert.match(page, /error\.message\.includes\(t\('common\.app\.rules\.msgs\.ruleModifiedByOther'\)\)/)
+  // 判据=稳定语义键优先（与界面语言无关），不再按本地化文案子串分类。
+  const conflictMarker = 'isRuleVersionConflict(error.status, error.messageKey, error.message)'
+  assert.match(page, /error instanceof ApiRequestError && isRuleVersionConflict\(error\.status, error\.messageKey, error\.message\)/)
+  // 语义键与后端 catalog 的一致性见下方钉测与 tests/ruleConflict.spec.ts（无键旧
+  // 响应的母本兜底亦在该处钉住）；界面不再需要本地化的冲突文案词条。
+  assert.ok(
+    /RULE_VERSION_CONFLICT_MESSAGE_KEY = 'k_60ab0761'/.test(code('src/utils/ruleConflict.ts')),
+    '版本冲突语义键必须与后端 catalog 一致',
+  )
   // 边界硬失败：marker 缺失时 indexOf 返回 -1，slice(-1) 会退化成文件末字符、
   // 断言自动变宽仍绿（本用例要守的「409 刷新列表」失守也不会红）。
   const catchMarker = "console.error('submit wizard failed'"
   const catchIdx = page.indexOf(catchMarker)
   assert.ok(catchIdx > 0, `catch 起点 marker 缺失: ${catchMarker}`)
-  const conflictIdx = page.indexOf('error instanceof ApiRequestError && error.status === 409')
+  const conflictIdx = page.indexOf(conflictMarker)
   assert.ok(conflictIdx > 0 && conflictIdx < catchIdx, '409 分支必须位于提交失败 catch 之前')
   const conflict = page.slice(conflictIdx, catchIdx)
   assert.match(conflict, /fetchRules\(/)

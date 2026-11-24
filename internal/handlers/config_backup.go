@@ -4586,7 +4586,9 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 //     事务内 live 名单复核（窗口内删除名单会让初检结论失效）；
 //   - 名单表携带、备份未携带 refs（未选系统数据 Config==nil，或 Config 未含
 //     该键）：refs 保持 live、名单=备份行集合 → live refs 必须按备份名单 id
-//     集复核，悬空即拒绝（此前该组合无门禁，导入后受信网段渲染静默缺条目）；
+//     集复核，悬空或指向内置名单即拒绝（此前该组合无门禁，导入后受信网段
+//     渲染静默缺条目）；随后按导入后视图过受信网段总量门（导入后内联网段 ∪
+//     被引用备份名单行展开，与写侧 trustedProxyTotalGate 同口径同文案）；
 //   - 两侧均携带：初检 validateV2BackupTrustedProxyConfig 已按备份行确定性
 //     解析（无 live 依赖），锁内不重复；
 //   - 两侧均缺席：导入不改变该配对，无需复核。
@@ -4674,6 +4676,24 @@ func revalidateImportTrustedProxyRefs(ctx context.Context, tx *sql.Tx, backup *c
 				return fmt.Errorf("受信代理不能引用内置地址列表：#%d", id)
 			}
 		}
+		// 总量门（与写侧 trustedProxyTotalGate 同一条文案）：名单随备份替换后，
+		// 导入后的真实展开规模 = 导入后内联网段 ∪ 备份中被 live refs 引用的名单
+		// 行展开——此前该分支只校验引用存在性，备份把被引用名单扩大即可把渲染
+		// 侧的受信网段数带到远超写侧上限。
+		referenced := make(map[int64]trustedProxyListSource, len(unique))
+		lists := trustedProxyBackupListSource(backup.Tables).lists
+		for _, id := range unique {
+			referenced[id] = lists[id]
+		}
+		// 内联网段：备份携带时导入后以备份值为准（全量替换），否则取事务内
+		// 库内存量值（窗口内保存过的内联变更须在锁内重读）。
+		var inlineRaw string
+		if text, ok := backup.Config["trusted_proxy_ranges"].(string); ok {
+			inlineRaw = text
+		} else if err := tx.QueryRowContext(ctx, `SELECT COALESCE(trusted_proxy_ranges,'[]') FROM global_config WHERE id=1`).Scan(&inlineRaw); err != nil {
+			return importInfraReadFailure(fmt.Errorf("锁内读取受信代理网段失败: %w", err))
+		}
+		return trustedProxyTotalGate(trustedProxyRangeJSONPrefixes(inlineRaw), trustedProxyListSourcePrefixKeys(referenced))
 	}
 	return nil
 }

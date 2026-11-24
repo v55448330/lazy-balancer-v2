@@ -254,7 +254,14 @@ func MFAIssueChallenge(userID int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	// 影响行数读取失败是存储故障，必须原样上抛：折叠成 0 行会误报
+	// 「用户不存在」（与 mfaConsumeRecoveryCode 同口径）；仅真实 0 行才是
+	// 用户不存在。
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if n != 1 {
 		return "", fmt.Errorf("用户不存在")
 	}
 	// 惰性清理过期行（去掉 consumed=1——未消费的过期挑战同样永久不可用，
@@ -446,7 +453,12 @@ func MFAActivate(userID int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	n, _ := result.RowsAffected()
+	// 影响行数读取失败是存储故障，必须原样上抛：折叠成 0 行会误报
+	// ErrMFASecretChanged（业务态 400）；仅真实非 1 行才是并发改写。
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
 	if n != 1 {
 		return nil, ErrMFASecretChanged
 	}

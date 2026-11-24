@@ -507,7 +507,10 @@ func TestLookupHumanEventAttribution_mixedLegacyOwner(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES ('lb-mix-attr',71,0)`); err != nil {
 		t.Fatal(err)
 	}
-	attr := lookupHumanEventAttribution("lb-mix-attr")
+	attr, lerr := lookupHumanEventAttribution("lb-mix-attr")
+	if lerr != nil {
+		t.Fatalf("lookup attribution: %v", lerr)
+	}
 	if attr.policyID != 71 || attr.policyName != "混合存量CC" || attr.ruleName != "混合属主规则" {
 		t.Fatalf("mixed 存量属主必须被归因，got %+v（policy_id=0 即「无策略归属」误标）", attr)
 	}
@@ -518,7 +521,10 @@ func TestLookupHumanEventAttribution_mixedLegacyOwner(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES ('lb-mix-attr',72,1)`); err != nil {
 		t.Fatal(err)
 	}
-	attr = lookupHumanEventAttribution("lb-mix-attr")
+	attr, lerr = lookupHumanEventAttribution("lb-mix-attr")
+	if lerr != nil {
+		t.Fatalf("lookup attribution (stage2): %v", lerr)
+	}
 	if attr.policyID != 72 || attr.policyName != "阶段2CC" {
 		t.Fatalf("stage2 属主必须优先于 mixed，got %+v", attr)
 	}

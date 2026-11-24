@@ -4619,6 +4619,8 @@ func updateUpstreamTx(ctx context.Context, tx *sql.Tx, row, incoming storedUpstr
 // {bound:0, unchanged:<存在的 http 规则数>, skipped:[{rule_id,reason}]}。
 // 兼容面：旧前端/外部自动化批量提交不再 400，但也不再生效（拦截页走
 // 逐策略归因，见 services/caddy.go blockPageSyntheticBase）。
+// 留痕口径：零写入端点的预读失败不记「更新失败」审计，只回 500 + 固定文案，
+// 底层错误进运行日志。
 func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	// 导入窗口 fast-fail：批量改页与导入争同一把写锁，排队后按导入后的
 	// 库状态生效会让客户端看到提交漂移（与余下规则写端点同门）。
@@ -4707,31 +4709,34 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		prefetchArgs[i] = ruleID
 	}
 	protocolByRule := make(map[string]string, len(req.RuleIDs))
+	// 零写入端点：预读失败没有任何「更新」发生，不记「更新失败」审计（运维按
+	// 审计排障会把读故障误判为写失败）；响应 500 + 固定文案，底层错误带端点
+	// 上下文只进运行日志（cause 传 nil——writeInternalError 不重复记日志）。
+	readFailed := func(err error) {
+		services.Logf("error", "批量拦截页端点（已停用，零写入）预读规则失败: %v", err)
+		writeInternalError(c, http.StatusInternalServerError, "读取规则失败", nil)
+	}
 	prefetchRows, err := db.DB.QueryContext(c.Request.Context(),
 		"SELECT caddy_id, COALESCE(protocol,'') FROM lb_rules WHERE caddy_id IN ("+strings.Join(placeholders, ",")+")", prefetchArgs...)
 	if err != nil {
-		recordRuleWriteFailure(c, "更新", "读取规则失败", err)
-		writeInternalError(c, http.StatusInternalServerError, "读取规则失败", err)
+		readFailed(err)
 		return
 	}
 	for prefetchRows.Next() {
 		var caddyID, protocol string
 		if err := prefetchRows.Scan(&caddyID, &protocol); err != nil {
 			prefetchRows.Close()
-			recordRuleWriteFailure(c, "更新", "读取规则失败", err)
-			writeInternalError(c, http.StatusInternalServerError, "读取规则失败", err)
+			readFailed(err)
 			return
 		}
 		protocolByRule[caddyID] = protocol
 	}
 	if err := prefetchRows.Close(); err != nil {
-		recordRuleWriteFailure(c, "更新", "读取规则失败", err)
-		writeInternalError(c, http.StatusInternalServerError, "读取规则失败", err)
+		readFailed(err)
 		return
 	}
 	if err := prefetchRows.Err(); err != nil {
-		recordRuleWriteFailure(c, "更新", "读取规则失败", err)
-		writeInternalError(c, http.StatusInternalServerError, "读取规则失败", err)
+		readFailed(err)
 		return
 	}
 	for _, ruleCaddyID := range req.RuleIDs {

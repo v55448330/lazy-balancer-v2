@@ -52,6 +52,9 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		// 扫码产码端点：绑定完成时 handler 记一次「绑定」审计，产码不复记。
 		"POST /api/v1/notification/qq/bind-code": {},
 		"POST /api/v1/notification/wx/qr/start":  {},
+		// 已停用的零写入兼容端点：只读规则表拼回执，成功不留痕；读失败曾记成
+		// 「更新失败」审计，现只进运行日志——整条路由按「明确不留痕」登记。
+		"POST /api/v1/rules/batch-block-pages": {},
 		// 任务触发：已升 Explicit——17 个可手动触发族中 11 族
 		// 任务体零审计，handler 对非自记族显式补记「触发/任务监控」（自记族
 		// 跳过，保 单记裁定），不再属有意跳过。

@@ -28,14 +28,14 @@ func TestBindSessionFlow(t *testing.T) {
 	t.Cleanup(clearBindSessions)
 	// 注册会话→待发送
 	StartBindSession(7, "wx_clawbot", "scanner1", "botA")
-	if phase, _ := PollBindSession("wx_clawbot", "scanner1", "botA"); phase != "awaiting_message" {
+	if phase, _ := PollBindSession(7, "wx_clawbot", "scanner1", "botA"); phase != "awaiting_message" {
 		t.Fatalf("注册后应 awaiting_message, got %q", phase)
 	}
 	// 入站「绑定测试」确认
 	if !ConfirmBindSessionByInbound("wx_clawbot", "scanner1", "botA", "scanner1", "ctx-1") {
 		t.Fatalf("活跃会话应被确认")
 	}
-	phase, receiver := PollBindSession("wx_clawbot", "scanner1", "botA")
+	phase, receiver := PollBindSession(7, "wx_clawbot", "scanner1", "botA")
 	if phase != "confirmed" || receiver != "scanner1" {
 		t.Errorf("确认后 phase=%q receiver=%q, want confirmed/scanner1", phase, receiver)
 	}
@@ -59,11 +59,11 @@ func TestBindSessionIsolation(t *testing.T) {
 	if ConfirmBindSessionByInbound("qq", "scanner1", "botA", "scanner1", "") {
 		t.Errorf("不同类型不应匹配")
 	}
-	if phase, _ := PollBindSession("wx_clawbot", "scanner1", "botA"); phase != "awaiting_message" {
+	if phase, _ := PollBindSession(7, "wx_clawbot", "scanner1", "botA"); phase != "awaiting_message" {
 		t.Errorf("原会话应仍待发送, got %q", phase)
 	}
 	// 无会话=idle
-	if phase, _ := PollBindSession("qq", "nobody", "botX"); phase != "idle" {
+	if phase, _ := PollBindSession(7, "qq", "nobody", "botX"); phase != "idle" {
 		t.Errorf("无会话应 idle, got %q", phase)
 	}
 }
@@ -167,8 +167,8 @@ func TestAbortBindSessionClearsGhost(t *testing.T) {
 	wxCtxMu.Lock()
 	wxConfirmedPin = &wxBotCred{Token: "T_G", AccountID: "B_GHOST", UserID: "wxU"}
 	wxCtxMu.Unlock()
-	AbortBindSession("wx_clawbot", "wxU", "B_GHOST")
-	if phase, _ := PollBindSession("wx_clawbot", "wxU", "B_GHOST"); phase != "idle" {
+	AbortBindSession(7, "wx_clawbot", "wxU", "B_GHOST")
+	if phase, _ := PollBindSession(7, "wx_clawbot", "wxU", "B_GHOST"); phase != "idle" {
 		t.Errorf("取消后 wx 会话应 idle, got %q", phase)
 	}
 	wxCtxMu.Lock()
@@ -184,7 +184,7 @@ func TestAbortBindSessionClearsGhost(t *testing.T) {
 	}
 	// qq：会话携带 secret→取消后不再枚举
 	StartBindSessionWithCred(7, "qq", "oU", "APP_GHOST", "SEC_G")
-	AbortBindSession("qq", "oU", "APP_GHOST")
+	AbortBindSession(7, "qq", "oU", "APP_GHOST")
 	for _, b := range PendingBindQQCreds() {
 		if b.AppID == "APP_GHOST" {
 			t.Errorf("取消后 qq 不应再枚举幽灵凭据")

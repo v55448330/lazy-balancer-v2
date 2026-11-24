@@ -179,13 +179,19 @@ func trustedProxyInlinePrefixes(req *models.UpdateConfigRequest) (map[string]str
 	if err := db.DB.QueryRow(`SELECT COALESCE(trusted_proxy_ranges,'[]') FROM global_config WHERE id=1`).Scan(&raw); err != nil {
 		return nil, trustedProxyReadFailure(fmt.Errorf("读取当前受信代理网段失败: %w", err))
 	}
+	// 存量畸形（仅见于带外改库）：按 0 计——渲染层对畸形同样 fail-closed
+	// 不注入，总量门不因存量畸形拒绝合法的引用清理载荷。
+	return trustedProxyRangeJSONPrefixes(raw), nil
+}
+
+// trustedProxyRangeJSONPrefixes 把内联网段的 JSON 数组文本解析为规范前缀
+// 集合；非数组/畸形文本按空集计（存量畸形仅见于带外改库）。
+func trustedProxyRangeJSONPrefixes(raw string) map[string]struct{} {
 	var entries []string
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		// 存量畸形（仅见于带外改库）：按 0 计——渲染层对畸形同样 fail-closed
-		// 不注入，总量门不因存量畸形拒绝合法的引用清理载荷。
-		return map[string]struct{}{}, nil
+		return map[string]struct{}{}
 	}
-	return trustedProxyPrefixKeys(entries), nil
+	return trustedProxyPrefixKeys(entries)
 }
 
 // idChunk 是一个 id 分片及其预构造的 IN 子句占位符与参数。chunkIDs 是全部
@@ -283,8 +289,17 @@ func trustedProxyStoredRefPrefixesWithSource(source trustedProxyBackupSource) (m
 	if err != nil {
 		return nil, err
 	}
+	return trustedProxyListSourcePrefixKeys(resolved), nil
+}
+
+// trustedProxyListSourcePrefixKeys 把名单解析源行集合展开为规范前缀集合
+// （总量门的引用面：保存通道存量 refs 展开与导入锁内复核共用）：空 value
+// 跳过、跨名单重叠只计一次；条目 JSON 畸形/单条不可解析（仅见于带外改库或
+// 手造备份）按 0 计——格式/宽度门由保存通道的严格校验
+// （normalizeTrustedProxyRangeRefsWithSource）承担，本函数只计数。
+func trustedProxyListSourcePrefixKeys(rows map[int64]trustedProxyListSource) map[string]struct{} {
 	keys := make(map[string]struct{})
-	for _, row := range resolved {
+	for _, row := range rows {
 		var entries []models.IPListEntry
 		if row.entries == "" || json.Unmarshal([]byte(row.entries), &entries) != nil {
 			continue
@@ -299,7 +314,7 @@ func trustedProxyStoredRefPrefixesWithSource(source trustedProxyBackupSource) (m
 			keys[key] = struct{}{}
 		}
 	}
-	return keys, nil
+	return keys
 }
 
 // normalizeTrustedProxyRangeRefsWithSource 校验并归一引用载荷：空白归一 "[]"；

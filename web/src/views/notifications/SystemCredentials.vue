@@ -80,6 +80,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Message } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import { createSmtpTestGate, smtpPortError } from '@/utils/smtpTestGate'
 import type {
   NotificationSettingsPayload,
   NotificationSettingsResponse,
@@ -90,7 +91,6 @@ const { t } = useI18n()
 const loading = ref(false)
 const loadError = ref(false)
 const saving = ref(false)
-const portError = ref('')
 
 const form = ref({
   smtpHost: '',
@@ -113,6 +113,7 @@ const smtpSnapshot = (f: typeof form.value): string => JSON.stringify({
 // 变动=与已保存配置不同或输入新密码；变动后须重新测试通过才允许保存。
 const smtpDirty = computed(() => smtpSnapshot(form.value) !== smtpSavedSnapshot.value || form.value.smtpPass !== '')
 watch(form, () => { smtpTestOk.value = false }, { deep: true })
+const testGate = createSmtpTestGate() // 最近一次测试发出时的投递配置快照
 let settingsRequestSeq = 0
 
 // SMTP 连通性测试：发送当前表单草稿（host/port/user/pass/from/tls/insecure），
@@ -121,6 +122,7 @@ const testSMTP = async (): Promise<void> => {
   if (smtpTesting.value) return
   smtpTesting.value = true
   try {
+    testGate.begin(form.value)
     const res = await request.post<{ code: number; message?: string }>('/notification/settings/smtp-test',
       {
         test_to: form.value.smtpTestTo.trim(),
@@ -133,8 +135,13 @@ const testSMTP = async (): Promise<void> => {
         insecure: form.value.smtpInsecure,
       }, { silent: true })
     if (res.code === 0 || res.code === 200) {
-      mfaAwareSuccess(t('app.notification.creds.smtpTestOk'))
-      smtpTestOk.value = true
+      // 在途期间投递配置已变动：结果只证明发出测试时的配置，不得放行保存。
+      if (testGate.appliesTo(form.value)) {
+        mfaAwareSuccess(t('app.notification.creds.smtpTestOk'))
+        smtpTestOk.value = true
+      } else {
+        ElMessage.warning(t('app.notification.creds.smtpSaveGateHint'))
+      }
     } else {
       ElMessage.error(res.message || t('app.notification.creds.smtpTestFailed'))
     }
@@ -145,11 +152,8 @@ const testSMTP = async (): Promise<void> => {
   }
 }
 
-const portValid = computed(() => {
-  const port = form.value.smtpPort
-  // 0 = 未配置（占位），1-65535 = 合法
-  return port === 0 || (Number.isInteger(port) && port >= 1 && port <= 65535)
-})
+const portError = computed(() => smtpPortError(form.value.smtpPort, t('app.notification.creds.portInvalid')))
+const portValid = computed(() => portError.value === '')
 
 const canSave = computed(() => portValid.value && (!smtpDirty.value || smtpTestOk.value))
 
@@ -184,10 +188,6 @@ const fetchSettings = async (): Promise<void> => {
 
 const saveSettings = async (): Promise<void> => {
   if (saving.value) return
-  if (!portValid.value) {
-    portError.value = t('app.notification.creds.portInvalid')
-    return
-  }
   saving.value = true
   try {
     // secret 留空即省略键（不覆盖既有凭据）

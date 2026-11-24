@@ -26,10 +26,7 @@ type emailSender struct{}
 
 func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) error {
 	var cfg struct {
-		Email           string `json:"email"`
-		SubjectTemplate string `json:"subject_template"`
-		BodyTemplate    string `json:"body_template"`
-		BodyFormat      string `json:"body_format"`
+		Email string `json:"email"`
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
 		return fmt.Errorf("邮件通道目标解析失败: %w", err)
@@ -45,33 +42,43 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	if ts.IsZero() {
 		ts = time.Now()
 	}
+	// 模板键与正文格式统一经样式解析（含存量日报模板归一）。
+	style := ParseChannelStyle(targetJSON)
 	subject := msg.Title
-	if cfg.SubjectTemplate != "" {
+	if style.SubjectTemplate != "" {
 		if msg.TemplateApplied {
 			// 事件模板已全量渲染：Body 是整篇正文，主题只能走窄渲染器
 			// （否则「[告警] {{title}}」被整篇 markdown 顶替）。
-			subject = renderSubjectTemplate(cfg.SubjectTemplate, msg, ts)
+			subject = renderSubjectTemplate(style.SubjectTemplate, msg, ts)
 		} else {
-			subject = renderStyleTemplate(cfg.SubjectTemplate, msg, ts)
+			subject = renderStyleTemplate(style.SubjectTemplate, msg, ts)
 		}
+	}
+	// 作用域分离：日报用 daily_body_template，事件用 body_template。
+	bodyTemplate := style.BodyTemplate
+	bodyFormat := style.BodyFormat
+	if msg.EventType == EvtDailyReport {
+		bodyTemplate = style.DailyBodyTemplate
 	}
 	// Content-Type 决策必须先于正文渲染：日报模板模式未显式声明 body_format
 	// 时，emailHTMLBody 仍可能按实际渲染格式（ContentFormat=html）发 text/html，
 	// 此时正文必须走 HTML 转义渲染器，否则占位符值（TOP 路径/正文）原样拼进
 	// HTML 即注入面。
-	htmlBody := emailHTMLBody(cfg.BodyTemplate, cfg.BodyFormat, msg)
+	htmlBody := emailHTMLBody(bodyTemplate, bodyFormat, msg)
 	body := msg.Body
-	if cfg.BodyTemplate != "" && !msg.TemplateApplied && !msg.dailyTemplatesSuppressed() {
+	if msg.TemplateApplied && msg.TemplateFormat == "html" {
+		// 规则级通道模板已按邮件形态渲染（HTML 转义）：正文即最终 HTML。
+	} else if bodyTemplate != "" && !msg.TemplateApplied && !msg.dailyTemplatesSuppressed() {
 		// HTML 模板走转义渲染（占位符值 HTML 转义，模板字面量保持声明形态）：
 		// 事件正文/日报变量来自外部输入，原样拼进 HTML 即注入面。
 		if htmlBody {
-			body = renderStyleTemplateHTML(cfg.BodyTemplate, msg, ts)
+			body = renderStyleTemplateHTML(bodyTemplate, msg, ts)
 		} else {
-			body = renderStyleTemplate(cfg.BodyTemplate, msg, ts)
+			body = renderStyleTemplate(bodyTemplate, msg, ts)
 		}
 	}
 	tlsEnabled, insecure := smtpTLSOptions()
-	if htmlBody && msg.EventType != EvtDailyReport && cfg.BodyTemplate == "" {
+	if htmlBody && msg.EventType != EvtDailyReport && bodyTemplate == "" && !msg.TemplateApplied {
 		body = wrapEmailHTML(msg, subject, body, ts)
 	}
 	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, body, htmlBody, tlsEnabled, insecure)
@@ -90,7 +97,9 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 //	  通道正文模板存在时只有显式 html 才 text/html。
 func emailHTMLBody(bodyTemplate, bodyFormat string, msg Message) bool {
 	if msg.TemplateApplied {
-		return false
+		// 规则级通道模板按邮件形态渲染（TemplateFormat=html）时正文是转义后
+		// 的 HTML；事件级文本模板（空）仍是 markdown/文本，必须 text/plain。
+		return msg.TemplateFormat == "html"
 	}
 	if msg.EventType == EvtDailyReport {
 		// 模板模式（通道正文模板生效）：Content-Type 纳入 body_format——用户

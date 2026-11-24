@@ -24,10 +24,9 @@ type webhookSender struct{}
 
 func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) error {
 	var cfg struct {
-		URL             string            `json:"url"`
-		PayloadTemplate string            `json:"payload_template"`
-		Method          string            `json:"method"`  // GET/POST（缺省 POST；保存时已校验）
-		Headers         map[string]string `json:"headers"` // 受限自定义头（白名单校验在保存侧）
+		URL     string            `json:"url"`
+		Method  string            `json:"method"`  // GET/POST（缺省 POST；保存时已校验）
+		Headers map[string]string `json:"headers"` // 受限自定义头（白名单校验在保存侧）
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
 		return fmt.Errorf("webhook 通道目标解析失败: %w", err)
@@ -43,12 +42,26 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 	if fields == nil {
 		fields = map[string]string{}
 	}
+	// 作用域分离：日报用 daily_payload_template，事件用 payload_template。
+	// 经 ParseChannelStyle 解析以获得存量日报模板归一（显式 daily_mode 或
+	// 模板引用日报变量 → 视为日报卡产物）。
+	style := ParseChannelStyle(targetJSON)
+	payloadTemplate := style.PayloadTemplate
+	if msg.EventType == EvtDailyReport {
+		payloadTemplate = style.DailyPayloadTemplate
+	}
 	var payload []byte
-	if msg.TemplateApplied {
-		// 事件模板已全量渲染：Body 即最终消息。载荷与默认分支同 schema
-		// （level/level_label/time/node/title/body/fields），time 用与默认分支
-		// 同源的零值兜底（此前只带 5 键且直格式化 msg.Time，
-		// 接收端恒拿到 0001-01-01 时间戳、title/fields 静默缺失）。
+	if msg.TemplateApplied && msg.TemplateFormat == "json" && json.Valid([]byte(msg.Body)) {
+		// 规则级通道模板已按 webhook 形态渲染（JSON 编码占位符值）：Body 即
+		// 用户声明的载荷本体，直接作为 POST 体（不再套默认信封）。渲染结果
+		// 不是合法 JSON（保存门上线前落库的纯文本模板、或占位符落在键位置的
+		// 模板）时不得原样发出——落到下方默认信封。
+		payload = []byte(msg.Body)
+	} else if msg.TemplateApplied {
+		// 事件级模板（所有通道共用的文本版式）已全量渲染：Body 即消息正文。
+		// 载荷与默认分支同 schema（level/level_label/time/node/title/body/
+		// fields），time 用与默认分支同源的零值兜底（此前只带 5 键且直格式化
+		// msg.Time，接收端恒拿到 0001-01-01 时间戳、title/fields 静默缺失）。
 		var err error
 		payload, err = json.Marshal(map[string]any{
 			"level": msg.Level, "level_label": levelLabelZh(msg.Level),
@@ -58,10 +71,10 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 		if err != nil {
 			return fmt.Errorf("载荷编码失败: %w", err)
 		}
-	} else if cfg.PayloadTemplate != "" && !msg.dailyTemplatesSuppressed() {
+	} else if payloadTemplate != "" && !msg.dailyTemplatesSuppressed() {
 		// 用户 JSON 模板（占位符 {{title}}/{{body}}/{{level}}/{{event}}/
 		// {{time}}/{{node}}；保存时已校验占位符替换后可解析）
-		payload = []byte(renderStyleTemplateJSON(cfg.PayloadTemplate, msg, ts))
+		payload = []byte(renderStyleTemplateJSON(payloadTemplate, msg, ts))
 	} else {
 		var err error
 		payload, err = json.Marshal(map[string]any{

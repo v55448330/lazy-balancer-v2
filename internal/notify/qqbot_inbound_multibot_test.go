@@ -143,11 +143,11 @@ func waitLinkConnected(t *testing.T, get func() (bool, string, time.Time), want 
 }
 
 // waitBindConfirmed 轮询绑定会话确认（入站「绑定测试」异步处理）。
-func waitBindConfirmed(t *testing.T, typ, scannerID, botKey string) string {
+func waitBindConfirmed(t *testing.T, userID int64, typ, scannerID, botKey string) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if phase, receiver := PollBindSession(typ, scannerID, botKey); phase == "confirmed" {
+		if phase, receiver := PollBindSession(userID, typ, scannerID, botKey); phase == "confirmed" {
 			return receiver
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -218,7 +218,7 @@ func TestQQInboundMultiBotSessions(t *testing.T) {
 	// When 第二 bot 入站「绑定测试」（会话已于 Given 注册）
 	ws.sendC2C("APP_B", "oBind", "绑定测试", "MSG_B")
 	// Then 会话确认且 receiver=扫码者；入站不建通道（建通道交弹框保存）
-	if receiver := waitBindConfirmed(t, "qq", "oBind", "APP_B"); receiver != "oBind" {
+	if receiver := waitBindConfirmed(t, 7, "qq", "oBind", "APP_B"); receiver != "oBind" {
 		t.Errorf("绑定会话 receiver=%q, want oBind", receiver)
 	}
 	var n int

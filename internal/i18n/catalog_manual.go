@@ -54,4 +54,11 @@ func init() {
 	// 规则保存：非空通道选择经就绪门清洗后为空（全部已停用/未通过测试/微信会话待刷新）。
 	Register("k_6287f2db", "选定的通知通道均不可用（已停用/未通过测试/微信会话待刷新）", "None of the selected notification channels is available (disabled, not passing the test, or the WeChat session needs to be refreshed)")
 	Register("k_958958af", "无效规则 ID: %s", "Invalid rule ID: %s")
+	// 规则级事件×通道模板保存门（与派发渲染口径同门：webhook=JSON 载荷、
+	// 机器人/邮件=文本模板长度上限）。
+	Register("k_00c1f3e8", "规则模板不是合法 JSON（占位符替换后仍需可解析）", "The rule template is not valid JSON (placeholders must still parse after substitution)")
+	Register("k_0d9a61a4", "规则模板过长（机器人通道 ≤2000 字节，邮件 ≤4000 字节）", "The rule template is too long (≤2000 bytes for bots, ≤4000 bytes for email)")
+	// 任务监控：不可取消任务的取消拒绝（409）。与「任务未在运行中或不支持取消」
+	// 拆分——运行中的不可取消任务不得报「未在运行」（与监控页显示自相矛盾）。
+	Register("k_44b8c98f", "该任务不支持手动取消", "This task cannot be cancelled manually")
 }

@@ -59,16 +59,35 @@ func sessionOwnerFromContext(ctx context.Context) (sessionOwnerContext, bool) {
 	return value, ok
 }
 
+// terminatedSessionRetention 是终止标记的保留上限（个）。标记只增不删时内存
+// 按进程生命周期内的累计终止登记数增长；超过上限即 FIFO 淘汰最旧的标记。
+const terminatedSessionRetention = 65536
+
 // terminatingSessionManager 是有状态会话管理器：生成会话 ID；Validate 仅拒绝
 // 被强制断开的 ID。空 ID 放行——无会话头的单发请求（历史无状态客户端与
 // mcpserver 单测直发 tools/call）按原路径继续可用；未知但格式合法的 ID 同样
 // 放行（mcp-go StatelessGenerating 语义），不存在的会话在 MCP 层本就无注册。
+//
+// 终止标记有界：只保留最近 terminatedSessionRetention 个，满员后 FIFO 淘汰最
+// 旧。取舍——被淘汰的旧 ID 不再被终止标记拒绝：持它的请求此后回到「未知
+// ID 放行」路径，与从未被断开过的任意 ID 同待遇。登记来源不止强制断开：
+// mcp-go 的空闲清扫与关停同样调用 Terminate，普通会话流失也会推进环——
+// 淘汰发生在同进程内其后累计 terminatedSessionRetention 次终止登记之后。
+// MCP 层注销与删会话行在断开当场完成，不受淘汰影响；会话 ID 不是凭据
+// （每个请求仍过 API Key 认证），被淘汰的 ID 拿不到任何新权限。
 type terminatingSessionManager struct {
-	terminated sync.Map // sessionID → struct{}
+	mu         sync.Mutex
+	terminated map[string]struct{} // 保留中的终止标记
+
+	// fifo 是终止标记的插入序环形缓冲：第 i 次插入落在 i % len(fifo)，满员
+	// 后该位正是最旧的标记（淘汰即覆盖）。首次 Terminate 时才分配——从未
+	// 登记过终止的部署不占这块内存。next 是累计插入次数（下一个写入序号）。
+	fifo []string
+	next uint64
 }
 
 func newTerminatingSessionManager() *terminatingSessionManager {
-	return &terminatingSessionManager{}
+	return &terminatingSessionManager{terminated: make(map[string]struct{})}
 }
 
 func (m *terminatingSessionManager) Generate() string {
@@ -86,22 +105,45 @@ func (m *terminatingSessionManager) Validate(sessionID string) (bool, error) {
 	if sessionID == "" {
 		return false, nil
 	}
-	if _, ok := m.terminated.Load(sessionID); ok {
-		return true, nil
-	}
-	return false, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, terminated := m.terminated[sessionID]
+	return terminated, nil
 }
 
+// Terminate 登记终止标记。重复终止幂等：已登记的 ID 不占新额度、不改插入序
+// （否则环形缓冲会持有同一 ID 的两个位，淘汰旧位时误删仍是近期的标记）。
 func (m *terminatingSessionManager) Terminate(sessionID string) (bool, error) {
 	if sessionID == "" {
 		return false, nil
 	}
-	m.terminated.Store(sessionID, struct{}{})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.terminated[sessionID]; ok {
+		return false, nil
+	}
+	if m.fifo == nil {
+		m.fifo = make([]string, terminatedSessionRetention)
+	}
+	slot := m.next % terminatedSessionRetention
+	if len(m.terminated) == terminatedSessionRetention {
+		delete(m.terminated, m.fifo[slot])
+	}
+	m.terminated[sessionID] = struct{}{}
+	m.fifo[slot] = sessionID
+	m.next++
 	return false, nil
 }
 
+// terminatedCount 返回保留中的终止标记数（恒不超过 terminatedSessionRetention）。
+func (m *terminatingSessionManager) terminatedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.terminated)
+}
+
 // activeSessionManager 进程内唯一会话管理器（SetupRouter 装配单例；测试多次
-// 装配共享同一实例——终止标记仅随显式断开增长，无跨测试误伤面）。
+// 装配共享同一实例——终止标记仅随显式断开增长且有界，无跨测试误伤面）。
 var activeSessionManager = newTerminatingSessionManager()
 
 // pushTargetServer 进程内唯一 MCP 装配（推送目标；最后一次装配覆盖，与

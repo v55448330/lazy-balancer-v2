@@ -271,7 +271,6 @@ export default {
         ruleConflictReloadHint: '规则已被他人修改，已刷新列表，请关闭向导后重新打开再编辑',
         ruleCopyConfirm: '确定要复制规则 "{name}" 吗？',
         ruleDeleteConfirm: '确定要删除规则 "{name}" 吗？',
-        ruleModifiedByOther: '规则已被他人修改',
         ruleUpdatedNotice: '规则已更新，请留意',
         securityBindingsCopyFailFirst: '安全策略绑定加载失败，请先重新加载后再复制',
         securityBindingsCopyWait: '安全策略绑定加载中，请稍后再复制',

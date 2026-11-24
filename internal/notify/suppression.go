@@ -10,6 +10,7 @@ package notify
 
 import (
 	"fmt"
+	"log"
 	"net/netip"
 	"strings"
 	"sync"
@@ -28,7 +29,17 @@ var (
 	autobanBurstCount int
 	autobanBurstIPs   []string
 	autobanBurstSent  bool
+	// 解封风暴上界：同一窗口内逐 IP 解封通知的发布上限（首次超界只留一条
+	// WARN，后续静默）。该事件默认不订阅，但 Publish 无条件入队——洪峰轮次
+	// 集体到期时逐 IP 发布会打满总线并挤掉同刻的证书/配置失败等关键事件。
+	expiredBurstStart  time.Time
+	expiredBurstCount  int
+	expiredBurstWarned bool
 )
+
+// autobanExpiredBurstCap 解封通知窗口发布上限（条）。取值远高于正常轮次的
+// 解封数（个位数），又远低于 notify 总线容量 1024，给同刻其它事件留余量。
+const autobanExpiredBurstCap = 16
 
 // suppressionKey 归一抑制/去抖键：IPv6 按 /64 前缀归一，IPv4 保持裸地址。
 // 自动封禁的 IPv6 条目是 /64 CIDR（名单值 "2001:db8::/64"），CC 事件携带的
@@ -139,8 +150,31 @@ func PublishCCTriggered(ip, reason string) {
 	Publish(Event{Type: EvtCCTriggered, Fields: map[string]string{"1": ip, "2": reason}})
 }
 
-// PublishAutobanExpired 发布自动封禁到期解封（逐 IP）。
+// PublishAutobanExpired 发布自动封禁到期解封（逐 IP）。同一窗口（blockedWindow）
+// 内逐 IP 发布有上界：超出部分静默（审计行仍逐条保留），首次超界留一条 WARN，
+// 防止解封风暴打满总线挤掉其它关键事件。
 func PublishAutobanExpired(ip string) {
+	now := time.Now()
+	suppressMu.Lock()
+	if expiredBurstStart.IsZero() || now.Sub(expiredBurstStart) >= blockedWindow {
+		expiredBurstStart = now
+		expiredBurstCount = 0
+		expiredBurstWarned = false
+	}
+	expiredBurstCount++
+	count := expiredBurstCount
+	warn := false
+	if count > autobanExpiredBurstCap && !expiredBurstWarned {
+		expiredBurstWarned = true
+		warn = true
+	}
+	suppressMu.Unlock()
+	if count > autobanExpiredBurstCap {
+		if warn {
+			log.Printf("WARN: 自动解封通知风暴：窗口内超过 %d 条，后续逐 IP 通知静默（审计仍逐条记录）", autobanExpiredBurstCap)
+		}
+		return
+	}
 	Publish(Event{Type: EvtAutobanExpired, Fields: map[string]string{"1": ip}})
 }
 

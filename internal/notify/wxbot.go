@@ -554,11 +554,13 @@ func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error 
 		}
 		return errors.New("微信机器人服务未运行（连接任务已停止或登录态未配置）")
 	}
-	var styled struct {
-		ContentTemplate string `json:"content_template"`
+	// 模板键经样式解析（含存量日报模板归一）。
+	style := ParseChannelStyle(targetJSON)
+	contentTemplate := style.ContentTemplate
+	if msg.EventType == EvtDailyReport {
+		contentTemplate = style.DailyContentTemplate
 	}
-	_ = json.Unmarshal([]byte(targetJSON), &styled)
-	return SendWxText(ctx, targetJSON, renderBotMessage(styled.ContentTemplate, msg, time.Now(), "wx_clawbot"))
+	return SendWxText(ctx, targetJSON, renderBotMessage(contentTemplate, msg, time.Now(), "wx_clawbot"))
 }
 
 // Test 所属 bot 连接离线时返回明确错误；在线则发测试文本。

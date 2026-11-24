@@ -156,15 +156,18 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/config/reload":            AuditPolicyGeneric,
 	// validate 经 /load 真实加载候选配置（handler 成功后回弹权威
 	// 配置）——不再豁免审计，handler 显式记录校验三态。
-	"POST /api/v1/config/validate":                        AuditPolicyExplicit,
-	"POST /api/v1/rules/cert-info":                        AuditPolicySkip,
-	"POST /api/v1/rules":                                  AuditPolicyExplicit,
-	"PUT /api/v1/rules/:caddy_id":                         AuditPolicyExplicit,
-	"DELETE /api/v1/rules/:caddy_id":                      AuditPolicyExplicit,
-	"POST /api/v1/rules/:caddy_id/enable":                 AuditPolicyExplicit,
-	"POST /api/v1/rules/:caddy_id/disable":                AuditPolicyExplicit,
-	"POST /api/v1/rules/:caddy_id/duplicate":              AuditPolicyExplicit,
-	"POST /api/v1/rules/batch-block-pages":                AuditPolicyExplicit,
+	"POST /api/v1/config/validate":           AuditPolicyExplicit,
+	"POST /api/v1/rules/cert-info":           AuditPolicySkip,
+	"POST /api/v1/rules":                     AuditPolicyExplicit,
+	"PUT /api/v1/rules/:caddy_id":            AuditPolicyExplicit,
+	"DELETE /api/v1/rules/:caddy_id":         AuditPolicyExplicit,
+	"POST /api/v1/rules/:caddy_id/enable":    AuditPolicyExplicit,
+	"POST /api/v1/rules/:caddy_id/disable":   AuditPolicyExplicit,
+	"POST /api/v1/rules/:caddy_id/duplicate": AuditPolicyExplicit,
+	// 已停用的零写入兼容端点（只读规则表拼回执）：成功路径不留痕，读失败也
+	// 不构成操作审计——曾把读失败记成「更新失败」，现在底层错误只进运行日志。
+	// 整条路由按「明确不留痕」登记，不再要求 handler 含审计调用。
+	"POST /api/v1/rules/batch-block-pages":                AuditPolicySkip,
 	"POST /api/v1/certificate-configs":                    AuditPolicyExplicit,
 	"PUT /api/v1/certificate-configs/:id":                 AuditPolicyExplicit,
 	"DELETE /api/v1/certificate-configs/:id":              AuditPolicyExplicit,

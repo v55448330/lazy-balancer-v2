@@ -1362,6 +1362,7 @@ import { ref, reactive, onMounted, onUnmounted, computed, watch, h } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
+import { isRuleVersionConflict } from '@/utils/ruleConflict'
 import { isCaddyApplyDegraded } from '@/utils/bulkApplyResult'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -3714,7 +3715,7 @@ const submitWizard = async () => {
   } catch (error: unknown) {
     // 版本前置条件冲突：他人已提交该规则，本表单是陈旧快照。刷新列表并
     // 提示重开——继续用旧表单重试只会重复 409（或在不带版本时静默覆盖）。
-    if (error instanceof ApiRequestError && error.status === 409 && error.message.includes(t('common.app.rules.msgs.ruleModifiedByOther'))) {
+    if (error instanceof ApiRequestError && isRuleVersionConflict(error.status, error.messageKey, error.message)) {
       fetchRules()
       ElMessage.warning(t('common.app.rules.msgs.ruleConflictReloadHint'))
     }
