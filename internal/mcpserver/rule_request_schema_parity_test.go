@@ -129,7 +129,7 @@ func TestRuleToolSchemasCoverRequestStructFields(t *testing.T) {
 		{tool: "create_user", schema: createUserSchema, request: models.CreateUserRequest{}, required: 4},
 		{tool: "update_user", schema: updateUserSchema, fields: anonymousRequestFields(t, "../handlers/users.go", "UpdateUser"), required: 4},
 		{tool: "create_api_key", schema: createAPIKeySchema, request: models.CreateAPIKeyRequest{}, required: 5},
-		{tool: "update_api_key_status", schema: updateAPIKeyStatusSchema, request: models.UpdateAPIKeyRequest{}, required: 4},
+		{tool: "update_api_key_status", schema: updateAPIKeyStatusSchema, request: models.UpdateAPIKeyRequest{}, required: 8},
 		{tool: "update_config", schema: updateConfigSchema, request: models.UpdateConfigRequest{}, required: 45},
 		{tool: "preview_config", schema: previewConfigSchema, request: models.UpdateConfigRequest{}, required: 45},
 	}

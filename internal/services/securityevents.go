@@ -728,6 +728,11 @@ type securityEventsMappingsCacheEntry struct {
 	// 变化时重建，避免每 2s 摄取 pass 重读名单并聚合前缀。
 	trustMatcher *securityEventsTrustMatcher
 	crsExclusion map[int]securityEventsPolicyCRSExclusions
+	// 威胁库名单索引（策略 → 其引用的威胁情报库名单条目前缀集）随映射代际
+	// 构建；threatIndexBuilt 区分「尚未构建」与「构建结果为空」——空结果不得
+	// 每个 pass 重建。
+	threatListIndex  map[int][]netip.Prefix
+	threatIndexBuilt bool
 }
 
 var securityEventsMappingsCache = struct {
@@ -911,6 +916,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		database: database, version: version, loaded: true,
 		rules: rules, bindings: bindings, policyByID: policyByID,
 		trustMatcher: trustMatcher, crsExclusion: crsExclusion,
+		threatListIndex: securityEventsBuildThreatListIndex(policyByID), threatIndexBuilt: true,
 	}
 	return rules, bindings, policyByID, nil
 }
@@ -925,6 +931,116 @@ func securityEventsCachedMatchers(bindings map[string][]int, policyByID map[int]
 		return entry.trustMatcher, entry.crsExclusion
 	}
 	return securityEventsBuildTrustMatcher(bindings, policyByID), securityEventsBuildCRSExclusionMatcher(policyByID)
+}
+
+// securityEventsCachedThreatListIndex 返回当前映射代际的威胁库名单索引（语义同
+// securityEventsCachedMatchers：已装载则取缓存，未命中按传入快照现场构建）。
+func securityEventsCachedThreatListIndex(policyByID map[int]*models.SecurityPolicy) map[int][]netip.Prefix {
+	securityEventsMappingsCache.Lock()
+	entry := securityEventsMappingsCache.entry
+	securityEventsMappingsCache.Unlock()
+	if entry.loaded && entry.threatIndexBuilt {
+		return entry.threatListIndex
+	}
+	return securityEventsBuildThreatListIndex(policyByID)
+}
+
+// securityEventsThreatIntelRuleID 是「命中威胁情报库名单」的触发规则 id（历史固定
+// id：筛选、标签、总览分桶与阶段 1 归属沿用既有口径）。
+const securityEventsThreatIntelRuleID = "14"
+
+// securityEventsThreatIntelRuleTriggered 阶段 1 名单类拒绝（ACL deny / 遗留黑名单
+// 逐策略链）的属主策略引用了威胁情报库名单、且命中 IP 在其中时，返回威胁情报库
+// 的固定 id；其余原样返回。属主归因必须已按原 id（带策略编号）完成——本函数只改
+// 触发类型，不参与归属。GeoIP/爬虫等其它预检族与客户端 IP 不可解析时一律原样。
+func securityEventsThreatIntelRuleTriggered(ruleTriggered string, policy *models.SecurityPolicy, clientIP string, threatIndex map[int][]netip.Prefix) string {
+	if policy == nil || clientIP == "" || ruleTriggered == securityEventsThreatIntelRuleID {
+		return ruleTriggered
+	}
+	family, _, _, ok := decodePrecheckRuleID(ruleTriggered)
+	if !ok || (family != precheckRuleFamilyACLDeny && family != precheckRuleFamilyBlacklist) {
+		return ruleTriggered
+	}
+	set := threatIndex[policy.ID]
+	if len(set) == 0 || !securityEventsIPInPrefixSet(clientIP, set) {
+		return ruleTriggered
+	}
+	return securityEventsThreatIntelRuleID
+}
+
+// securityEventsBuildThreatListIndex 随映射代际构建威胁库名单索引：装载策略引用
+// 的名单（与渲染/归因同一读取路径——威胁库条目来自 .iplist 文件），再交给纯函数
+// 聚合。装载失败只留痕：该代际内命中威胁库的事件保持 IP 访问控制归类，不影响拦截。
+func securityEventsBuildThreatListIndex(policyByID map[int]*models.SecurityPolicy) map[int][]netip.Prefix {
+	seen := make(map[int64]struct{})
+	var refIDs []int64
+	for _, p := range policyByID {
+		if p == nil {
+			continue
+		}
+		for _, ref := range parseIPListRefs(p.IPACLListRefs) {
+			if _, dup := seen[ref]; dup {
+				continue
+			}
+			seen[ref] = struct{}{}
+			refIDs = append(refIDs, ref)
+		}
+	}
+	if len(refIDs) == 0 {
+		return nil
+	}
+	threatIDs := threatIPListIDsVia(nil, refIDs)
+	if len(threatIDs) == 0 {
+		return nil
+	}
+	threatRefIDs := make([]int64, 0, len(threatIDs))
+	for id := range threatIDs {
+		threatRefIDs = append(threatRefIDs, id)
+	}
+	loaded, _, err := loadIPListEntriesVia(nil, threatRefIDs)
+	if err != nil {
+		// 未装载到的名单不进索引：命中它的事件按原触发类型记录。
+		Logf("warn", "security events attribution: load threat intel lists failed: %v", err)
+	}
+	return securityEventsBuildThreatListIndexFrom(policyByID, threatIDs, loaded)
+}
+
+// securityEventsBuildThreatListIndexFrom 由已装载的名单条目构建「策略 → 其引用的
+// 威胁情报库名单条目前缀集」。只收 threatIDs 里的名单（内联条目与其它名单不计）；
+// 引用集合相同（仅顺序不同）的策略共享同一份切片，不重复聚合。
+func securityEventsBuildThreatListIndexFrom(policyByID map[int]*models.SecurityPolicy, threatIDs map[int64]bool, entries map[int64][]string) map[int][]netip.Prefix {
+	index := make(map[int][]netip.Prefix)
+	if len(threatIDs) == 0 {
+		return index
+	}
+	memo := make(map[string][]netip.Prefix)
+	for id, p := range policyByID {
+		if p == nil {
+			continue
+		}
+		var refs []int64
+		for _, ref := range parseIPListRefs(p.IPACLListRefs) {
+			if threatIDs[ref] {
+				refs = append(refs, ref)
+			}
+		}
+		if len(refs) == 0 {
+			continue
+		}
+		sort.Slice(refs, func(i, j int) bool { return refs[i] < refs[j] })
+		key := fmt.Sprint(refs)
+		set, cached := memo[key]
+		if !cached {
+			var list []string
+			for _, ref := range refs {
+				list = append(list, entries[ref]...)
+			}
+			set = securityEventsIPPrefixSet(list)
+			memo[key] = set
+		}
+		index[id] = set
+	}
+	return index
 }
 
 // securityEventsPolicyCRSExclusions 是摄取热路径的排除判定快照：JSON 只在
@@ -2468,6 +2584,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		rulesByID[ref.caddyID] = ref
 	}
 	trustMatcher, crsExclusionMatcher := securityEventsCachedMatchers(bindings, policyByID)
+	threatListIndex := securityEventsCachedThreatListIndex(policyByID)
 	// host→rule 映射在 pass 生命周期内稳定（rules/绑定映射本 pass 一次性
 	// 加载）——无注入头事件的逐事件 IDNA（CanonicalDomains 含 punycode
 	// 分配）在积压补采万级事件时是纯重复劳动，pass 内记忆化（map 随
@@ -2826,6 +2943,10 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				}
 			}
 			policyID, policyName := securityEventsAttributePolicyWithExclusions(rule.caddyID, rec.RuleTriggered, rec.Action, rec.ClientIP, policyByID, bindings, crsExclusionMatcher)
+			// 属主已按原 id（带策略编号）归因；命中属主策略引用的威胁情报库名单时，
+			// 触发类型改记威胁情报库（固定 id:14），下游落库/去重改判/自动封禁/大屏
+			// 同用改写后的值——筛选、标签与总览分桶沿用既有威胁情报库口径。
+			rec.RuleTriggered = securityEventsThreatIntelRuleTriggered(rec.RuleTriggered, policyByID[policyID], rec.ClientIP, threatListIndex)
 			// 链式起始条/OR 计分分支的 raw 不含评分字面量，按发射 id 回查父规则
 			// cr.Score 补齐（否则事件日志评分列/大屏危险等级显示 0=非评分事件）。
 			if rec.AnomalyScore == 0 && rec.customRuleScoreFallback {

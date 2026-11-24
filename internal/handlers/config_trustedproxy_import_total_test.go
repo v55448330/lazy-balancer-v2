@@ -28,7 +28,8 @@ func TestRevalidateImportTrustedProxyRefs_listsCarriedEnforcesTotalGate(t *testi
 	if _, err := db.DB.Exec(`INSERT OR IGNORE INTO global_config (id) VALUES (1)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_ranges='[]', trusted_proxy_range_refs='[701,702]' WHERE id=1`); err != nil {
+	// 引用只在开关开启时参与校验（开关关闭 = 关联字段无意义），锁内总量门同理。
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_ranges='[]', trusted_proxy_range_refs='[701,702]' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	backupRows := func(entriesA, entriesB string) map[string][]map[string]any {

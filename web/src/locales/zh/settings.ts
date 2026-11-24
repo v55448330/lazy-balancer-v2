@@ -18,7 +18,7 @@ export default {
         "timeout": {
           "title": "请求与超时",
           "bodySize": "请求体大小",
-          "bodySizeHint": "MB，请求体上限；默认 128，必须为 1-1024（0 不再表示默认）",
+          "bodySizeHint": "MB，单个请求体的大小上限；1–1024，默认 128",
           "read": "读取超时",
           "readHint": "秒，读请求超时；≥1，常用 60",
           "write": "写入超时",
@@ -46,10 +46,10 @@ export default {
           "rangesPlaceholder": "粘贴该 CDN 回源网段（CIDR），以官方公布为准",
           "saveAsListBtn": "存为列表",
           "saveAsListDefaultName": "受信代理网段",
-          "listLoadWarn": "IP 地址列表加载失败：「引用地址列表」下拉为空≠未配置，下方「合计 N 条」也未计入已引用列表的条目",
+          "listLoadWarn": "IP 名单加载失败：「引用 IP 名单」下拉为空≠未配置，下方「合计 N 条」也未计入已引用名单的条目",
           "reloadBtn": "重新加载",
-          "referencedList": "引用地址列表",
-          "referencedListPlaceholder": "选择要引用的 IP 地址列表",
+          "referencedList": "引用 IP 名单",
+          "referencedListPlaceholder": "选择要引用的 IP 名单",
           "listOptionLabel": "{name}（{count} 条）",
           "reloadEntriesBtn": "重新加载名单条目",
           "headersLabel": "请求头",
@@ -61,10 +61,9 @@ export default {
           "strictMode": "严格模式",
           "strictOffWarn": "关闭后按最左值取 IP，可被伪造，不建议关闭",
           "strictHint": "严格取「最右可信」值；关闭仅用于特殊代理链",
-          "trustOffSaveWarn": "受信代理已关闭，但存量配置仍会被写侧校验：请临时开启「受信代理」修正上述条目后再关闭，否则保存会被拒绝。",
           "headersAcceptedHint": "仅这些网段发来的请求头会被采信；未配对网段时所有头一律被忽略（最小 /8 与 /29）。",
-          "refListLoadFailHint": "{count} 个引用列表的条目未加载成功，「合计」条数按名单记录数估算（重叠网段未去重）；若名单已被删除，保存会被拒绝；服务端以去重后结果为准",
-          "mergedEffectHint": "引用「规则集 → IP 地址列表」中的可复用列表，条目与上方内联网段合并生效（合计 {total} 条，上限 {cap}）",
+          "refListLoadFailHint": "{count} 个引用名单的条目未加载成功，「合计」条数按名单记录数估算（重叠网段未去重）；若名单已被删除，保存会被拒绝；服务端以去重后结果为准",
+          "mergedEffectHint": "引用「规则集 → IP 名单」中的可复用名单，条目与上方内联网段合并生效（合计 {total} 条，上限 {cap}）",
           "currentInlineRanges": "当前内联网段（{count} 条）"
         },
         "accessLog": {
@@ -125,7 +124,6 @@ export default {
           "noChanges": "配置无变化",
           "saved": "保存成功",
           "reloaded": "Caddy 配置已重载",
-          "saveFailTrustOff": "{error}（受信代理已关闭：请临时开启后修正）",
           "confirmSaveSection": "确认保存{section}？",
           "caddyConfig": "Caddy 配置"
         },

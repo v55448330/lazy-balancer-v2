@@ -4121,7 +4121,8 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 // TEXT 列承载 JSON 数组文本，此前导入零门——手造备份可落任意畸形文本，渲染层
 // 对畸形按未启用丢弃，真实 IP 还原静默失效而面板仍宣称已启用。
 // 复用保存侧校验单一口径：形态门+归一+引用存在性+内联∪引用展开总量上限；
-// 载荷未携带的键按库内存量值参与合成判定（与保存侧 PATCH 语义一致）。
+// 载荷未携带的键按库内存量值参与合成判定（与保存侧 PATCH 语义一致）。备份
+// 开关明确关闭（false/0）时三字段归一 "[]" 且不做名单校验。
 // tables 为备份携带表：按「备份是否携带
 // security_ip_lists 表」分流——携带时 refs 存在性/条目/上限仅按备份行集合
 // 解析（全量替换先例：备份行才是导入后的真实数据，指向库内但不在备份内
@@ -4133,7 +4134,12 @@ func validateV2BackupTrustedProxyConfig(config map[string]any, tables map[string
 	}
 	source := trustedProxyBackupListSource(tables)
 	req := models.UpdateConfigRequest{}
-	carried := false
+	// 开关随备份携带时交给同一校验单点：明确关闭（false/0）→ 三字段归一 "[]"，
+	// 备份未携带的三字段同样写回空数组（清掉库内关闭态的残留引用）。
+	if enabled, exists := config["trusted_proxy_enabled"]; exists && isBackupBooleanValue(enabled) {
+		value := backupBooleanEnabled(enabled)
+		req.TrustedProxyEnabled = &value
+	}
 	for _, field := range []struct {
 		key string
 		dst **string
@@ -4151,10 +4157,6 @@ func validateV2BackupTrustedProxyConfig(config map[string]any, tables map[string
 			return fmt.Errorf("备份校验失败：全局配置 %s 需为字符串（JSON 数组文本），实际类型 %T", field.key, raw)
 		}
 		*field.dst = &value
-		carried = true
-	}
-	if !carried {
-		return nil
 	}
 	if err := validateTrustedProxyFieldsWithSource(&req, source); err != nil {
 		// %w 保留错误类型：受信代理校验内含 DB 读取，其失败必须在导入端点
@@ -4651,8 +4653,14 @@ func revalidateImportTrustedProxyRefs(ctx context.Context, tx *sql.Tx, backup *c
 		}
 	case listsCarried && !refsCarried:
 		var refsText string
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&refsText); err != nil {
+		var enabled int
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&enabled, &refsText); err != nil {
 			return importInfraReadFailure(fmt.Errorf("锁内读取受信代理引用列表失败: %w", err))
+		}
+		// 开关关闭 = 受信代理不参与渲染（写侧不变量：关闭即关联字段清空）。库内
+		// 残留的引用可能指向已删除的名单，按备份名单复核只会恒拒绝——跳过。
+		if enabled == 0 {
+			return nil
 		}
 		if strings.TrimSpace(refsText) == "" {
 			return nil

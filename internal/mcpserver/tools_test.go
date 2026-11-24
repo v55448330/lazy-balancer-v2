@@ -369,7 +369,7 @@ func TestWriteToolSchemasDeclareBodyFields(t *testing.T) {
 		{"create_user", []string{"username", "password", "role"}, []string{"username", "password", "role", "display_name"}},
 		{"update_user", []string{"id"}, []string{"id", "username", "role", "display_name", "password"}},
 		{"create_api_key", []string{"name"}, []string{"name", "expires_at", "mcp_enabled", "read_only", "mcp_ip_whitelist"}},
-		{"update_api_key_status", []string{"id"}, []string{"id", "is_enabled", "mcp_enabled", "read_only", "mcp_ip_whitelist"}},
+		{"update_api_key_status", []string{"id"}, []string{"id", "expires_at", "is_enabled", "mcp_enabled", "read_only", "mcp_ip_whitelist"}},
 		{"bind_security_policy", []string{"id", "rule_caddy_id"}, []string{"id", "rule_caddy_id"}},
 		{"remove_ip_from_list", []string{"id", "value"}, []string{"id", "value"}},
 		{"import_config", nil, []string{"meta", "config", "tables"}},

@@ -804,9 +804,8 @@ const fetchBlockedEvents = async () => {
   }
 }
 
-// 「最近拦截事件」卡的下钻：带动作筛选落到事件页（卡片本身就是拦截口径，
-// 不带参数会让用户落在一个全量列表上重新找）。
-const goToEvents = () => { window.open(pageUrl('security-events', { [DEEP_LINK_PARAMS.eventsAction]: 'blocked' }), '_blank', 'noopener') }
+// 「最近拦截事件」卡的下钻：不带筛选打开事件页。
+const goToEvents = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
 
 // 自动封禁卡（独立整行）：数据源 /security/autoban/status，与事件页状态卡同源。
 // IP 名单单通道口径：四统计卡（今日封禁/生效条目/监控身份/累犯升级）+ 配置摘要；

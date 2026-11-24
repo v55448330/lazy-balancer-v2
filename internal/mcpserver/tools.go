@@ -190,7 +190,7 @@ var toolUsage = map[string]string{
 	"delete_user":                  "删除用户；初始化管理员（is_setup_admin=true）不可删除（400）",
 	"reset_user_mfa":               "重置用户 MFA（仅管理员）：操作者已启用 MFA 时须提交本人 6 位动态验证码（未启用传空串）；MCP/API Key 路径不走 428 step-up，直接在本接口验码",
 	"create_api_key":               "创建 API 密钥（可配置 MCP/只读/IP 白名单）",
-	"update_api_key_status":        "更新密钥状态（启用/MCP 开关/只读开关/IP 白名单）",
+	"update_api_key_status":        "更新密钥状态（启用/MCP 开关/只读开关/IP 白名单/有效期）",
 	"delete_api_key":               "删除 API 密钥",
 	"preview_config":               "预览配置变更效果（不实际应用）",
 	"validate_config":              "验证配置文件是否有效",

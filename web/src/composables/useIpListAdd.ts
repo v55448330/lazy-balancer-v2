@@ -18,7 +18,7 @@ export interface IpListOption {
 interface AddIpToListOptions {
   /** 动作词（默认「加入」）：确认框标题/文案与成功反馈共用 */
   verb?: string
-  /** 成功反馈文案覆盖（默认「已{verb}地址列表「{list.name}」」） */
+  /** 成功反馈文案覆盖（默认「已在 IP 名单「{list.name}」中{verb}该 IP」） */
   successText?: string
   /** 确认框附加披露句（拼在主体确认文案后；如 IPv6 /64 连带封禁说明） */
   note?: string

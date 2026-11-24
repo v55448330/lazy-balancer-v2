@@ -56,7 +56,7 @@ func TestUpdateSecurityPolicy_auditRecordsOnlyChangedFields(t *testing.T) {
 	if !strings.Contains(d, "无字段变化") {
 		t.Fatalf("detail=%q, want 含（无字段变化）", d)
 	}
-	for _, notWant := range []string{"人机验证有效期", "CC 突刺阈值", "拦截页", "启用→"} {
+	for _, notWant := range []string{"人机验证有效期", "CC 请求速率阈值", "拦截页", "启用→"} {
 		if strings.Contains(d, notWant) {
 			t.Fatalf("同值提交 detail 不应含 %q: %q", notWant, d)
 		}
@@ -69,7 +69,7 @@ func TestUpdateSecurityPolicy_auditRecordsOnlyChangedFields(t *testing.T) {
 
 	// Then：详情只含这两个字段，且为「旧值→新值」格式
 	d = readDetail()
-	for _, want := range []string{"人机验证有效期：30→45", "CC 突刺阈值：40→60"} {
+	for _, want := range []string{"人机验证有效期：30→45", "CC 请求速率阈值：40→60"} {
 		if !strings.Contains(d, want) {
 			t.Fatalf("detail 缺 %q: %q", want, d)
 		}
@@ -81,7 +81,7 @@ func TestUpdateSecurityPolicy_auditRecordsOnlyChangedFields(t *testing.T) {
 	}
 }
 
-// ID 引用→名称（2026-09-25 用户裁定）：ACL 列表引用/自定义规则/拦截页的
+// ID 引用→名称（2026-09-25 用户裁定）：名单引用/自定义规则/拦截页的
 // 审计详情以名称呈现（缺失 ID 回落 #id，空数组=（空），拦截页 0=（无））。
 func TestUpdateSecurityPolicy_auditResolvesRefNames(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
@@ -118,7 +118,7 @@ func TestUpdateSecurityPolicy_auditResolvesRefNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"ACL 列表引用：中科大恶意 IP 名单（USTC）→中科大恶意 IP 名单（USTC）、测试列表",
+		"名单引用：中科大恶意 IP 名单（USTC）→中科大恶意 IP 名单（USTC）、测试列表",
 		"自定义规则：发版探针规则→（空）",
 		"拦截页：（无）→系统维护页面",
 	} {
@@ -130,5 +130,45 @@ func TestUpdateSecurityPolicy_auditResolvesRefNames(t *testing.T) {
 		if strings.Contains(detail, notWant) {
 			t.Fatalf("详情不应残留裸 ID %q: %q", notWant, detail)
 		}
+	}
+}
+
+// 审计明细的字段名与界面叫法一致：IP 访问控制一侧不出现「ACL」缩写
+// （模式=名单模式、内联条目=内联名单、开关=访问控制开关、引用=名单引用）。
+func TestUpdateSecurityPolicy_auditUsesAccessControlLabels(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	router := newSecurityRouter(t)
+
+	// Given：stage1 策略——访问控制开启、黑名单模式、内联一条
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, ip_acl_enabled, ip_acl_mode, ip_acl_list, enabled, policy_type, geoip_mode, ip_whitelist_enabled)
+		VALUES ('访问控制审计', 'off', 1, 'deny', '["203.0.113.1"]', 1, 'stage1', 'off', 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyID, _ := res.LastInsertId()
+
+	// When：同一请求改模式、改内联条目、关闭访问控制
+	r := putJSON(t, router, fmt.Sprintf("/security/policies/%d", policyID), map[string]any{
+		"policy_type": "stage1", "ip_acl_mode": "allow", "ip_acl_list": `["203.0.113.9"]`, "ip_acl_enabled": false,
+	})
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", r.Code, r.Body.String())
+	}
+
+	// Then：字段名按统一叫法记录，整条明细不出现「ACL」
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='安全策略' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"名单模式：deny→allow", `内联名单：["203.0.113.1"]→["203.0.113.9"]`, "访问控制开关：true→false"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail 缺 %q: %q", want, detail)
+		}
+	}
+	if strings.Contains(detail, "ACL") {
+		t.Fatalf("审计明细不得出现 ACL 缩写: %q", detail)
 	}
 }

@@ -56,5 +56,7 @@ test('功能配置沿用创建的「有效期与来源限制」分组标题，�
 
 test('前端请求类型与后端更新端点同形：expires_at 可为时间串或 null', () => {
   assert.match(code('src/types/index.ts'), /export interface UpdateAPIKeyInput \{[^}]*readonly expires_at\?: string \| null[^}]*\}/)
-  assert.match(repoCode('internal/handlers/apikeys.go'), /ExpiresAt json\.RawMessage `json:"expires_at"`/)
+  // 后端请求类型是 REST 与 MCP 共用的 models.UpdateAPIKeyRequest：REST 处理器直接绑定它。
+  assert.match(repoCode('internal/models/models.go'), /type UpdateAPIKeyRequest struct \{[^}]*ExpiresAt\s+json\.RawMessage `json:"expires_at"`[^}]*\}/)
+  assert.match(repoCode('internal/handlers/apikeys.go'), /var req models\.UpdateAPIKeyRequest/)
 })

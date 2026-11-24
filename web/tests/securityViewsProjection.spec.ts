@@ -173,9 +173,9 @@ test('taskDesc.autoban 四维口径（拦截/检测/挑战发放/挑战失败）
   assert.doesNotMatch(en, /block\/detect\/all/, 'en 不得残留「all」口径')
 })
 
-test('ccModeAuto 突刺口径（配额已退役）：zh/en 与策略表单 ccSection 同词', () => {
-  assert.equal(tSafe('common.app.views.trigDetail.ccModeAuto'), '智能触发（突刺 / 4xx 激增 / 多 UA）')
-  assert.match(code('src/locales/en/views.ts'), /'ccModeAuto': 'Smart trigger \(spike \/ 4xx burst \/ multi-UA\)'/)
+test('ccModeAuto 请求速率口径（配额已退役）：zh/en 与策略表单 ccSection 同词', () => {
+  assert.equal(tSafe('common.app.views.trigDetail.ccModeAuto'), '智能触发（请求速率 / 4xx 激增 / 多 UA）')
+  assert.match(code('src/locales/en/views.ts'), /'ccModeAuto': 'Smart trigger \(request rate \/ 4xx burst \/ multi-UA\)'/)
   assert.doesNotMatch(code('src/locales/zh/views.ts'), /配额突刺/, '配额已退役，不得残留')
 })
 

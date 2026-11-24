@@ -438,7 +438,7 @@
               <el-empty :description="rulesEmptyText" :image-size="80" />
             </template>
           </el-table>
-          <div v-if="ruleCardOverflow" class="rules-card-footer form-tip-line"><span>{{ t('common.app.dashboard.rulesOverflowHint', { shown: ruleCardOverflow.shown, total: ruleCardOverflow.total }) }}</span><AccessibleLink type="primary" @click="openAllRules">{{ t('common.app.dashboard.viewAllRules') }}</AccessibleLink></div>
+          <div v-if="ruleCardOverflow" class="rules-card-footer form-tip-line"><span>{{ t('common.app.dashboard.rulesOverflowHint', { shown: ruleCardOverflow.shown, total: ruleCardOverflow.total }) }}</span></div>
         </el-card>
       </el-col>
     </el-row>
@@ -511,7 +511,6 @@ import { httpStatusColors } from '@/utils/chartTheme'
 import { resolveNodeRole } from '@/utils/nodeRole'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
 import { ruleCardOverflowHint } from '@/utils/dashboardHints'
-import { pageUrl } from '@/utils/deepLink'
 import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsUsageLabel, pidsValueTone } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
@@ -834,10 +833,8 @@ const sortedRules = computed(() => {
   return [...ranked.slice(0, 10), ...failed]
 })
 
-// 规则有未展示行（排行榜截断 / 零流量未进榜）时在卡片底部披露条数并给出全部规则入口。
+// 规则有未展示行（排行榜截断 / 零流量未进榜）时在卡片底部披露条数。
 const ruleCardOverflow = computed(() => ruleCardOverflowHint(rules.value.length, sortedRules.value.length))
-
-const openAllRules = () => { window.open(pageUrl('rules'), '_blank', 'noopener') }
 
 const rulesEmptyText = computed(() => {
   if (rulesUnavailable.value) return t('common.app.dashboard.loadFailed')

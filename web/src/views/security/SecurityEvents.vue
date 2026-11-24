@@ -1078,7 +1078,7 @@ const banSuggestion = async (row: AutobanSuggestion): Promise<void> => {
   // 且与 /64 身份键同键，会让该 /64 整段自动封禁被「已在名单」永久抑制。
   const value = autobanIdentityDisplay(row.ip)
   const ok = await addIpToList(value, { id: listId, name: t('app.security.events.autobanListName'), entry_count: autobanStatus.value.list_entries }, {
-    // 确认句用「加入」保持通顺（「将把 x 加入地址列表…」）；按钮标签已是
+    // 确认句动词用「加入」（「将在 IP 名单「…」中加入 x…」）；按钮标签已是
     // 「永久封禁」，永久性由 useIpListAdd 的 ban 披露句写明。
     verb: t('common.app.views.ipAdd.verbAdd'),
     // 封禁=永久生效且清除累犯记录（securityiplists.go Upsert + DeleteAutobanRecidivismFrom），
@@ -1444,12 +1444,11 @@ const fetchEvents = async () => {
   }
 }
 onMounted(() => {
-  // 跨页深链交接（总览「查看全部」= 动作筛选；策略页「查看自动封禁配置」= 进页打开
-  // 配置弹框）：消费后 replaceState 清除——视图切换走 authStore.currentPage，残留
-  // 参数会在每次回到本页时被重新应用（与 SecurityPolicies 的 sp 口径一致）。
+  // 跨页深链交接（策略页「查看自动封禁配置」= 进页打开配置弹框）：消费后
+  // replaceState 清除——视图切换走 authStore.currentPage，残留参数会在每次回到
+  // 本页时被重新应用（与 SecurityPolicies 的 sp 口径一致）。
   const link = parseSecurityEventsDeepLink(window.location.search)
-  if (link.action || link.openAutobanConfig) window.history.replaceState(null, '', window.location.pathname)
-  if (link.action) filters.value.action = link.action
+  if (link.openAutobanConfig) window.history.replaceState(null, '', window.location.pathname)
   fetchEvents()
   const autobanReady = Promise.all([fetchAutobanStatus(), fetchAutobanConfig()])
   if (link.openAutobanConfig) void autobanReady.then(openAutobanConfigFromLink)

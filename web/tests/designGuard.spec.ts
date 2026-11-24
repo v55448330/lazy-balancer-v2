@@ -220,9 +220,12 @@ test('设计守卫：规则选择器次行提示对齐与间距（DESIGN_SPEC §
   assert.match(editor, /class="picker-rule-detail" :class="\{ 'is-empty': \(bindings\[rule\.caddy_id\] \|\| \[\]\)\.length === 0 \}"/, '绑定规则弹框空态必须落 is-empty')
 })
 
-test('设计守卫：策略状态列二态 / 删除策略只报绑定数量 / 深链过值域（DESIGN_SPEC §22）', () => {
+test('设计守卫：策略状态列即开关 / 删除策略只报绑定数量 / 深链过值域（DESIGN_SPEC §22、§24-1）', () => {
   const policies = code('src/views/security/SecurityPolicies.vue')
-  assert.match(policies, /row\.enabled \? 'success' : 'info'/, '状态列是启用/禁用二态标签')
+  const statusColumn = /<el-table-column :label="t\('app\.security\.policies\.table\.status'\)"[\s\S]*?<\/el-table-column>/.exec(policies)?.[0] ?? ''
+  assert.match(statusColumn, /<el-switch\s+v-model="row\.enabled"/, '状态列直接放启停开关（用户裁定：开关替代状态标签，不另设列）')
+  assert.doesNotMatch(statusColumn, /<el-tag/, '状态列不再并列「启用/禁用」标签')
+  assert.equal([...policies.matchAll(/<el-switch\s+v-model="row\.enabled"/g)].length, 1, '行内启停开关全页只此一个（操作列不得再有）')
   assert.doesNotMatch(policies, /policyListStatus|POLICY_LIST_STATUS_TAG|enabledUnbound/, '「启用 · 未关联规则」复合状态已按用户裁定回退，不得重做（列表已有关联规则数量列）')
   assert.match(policies, /policyDeleteScope\(/, '删除策略的绑定解除数量必须经单源计算')
   const deleteMessage = /const policyDeleteMessage = \(row: PolicySummary\) => \{[\s\S]*?\n\}/.exec(policies)?.[0] ?? ''

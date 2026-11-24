@@ -45,7 +45,7 @@ test('丢失合计 >0 才披露警示行，三分类计数逐项可对账', () =
 test('CC 触发分布逐项展示（三原因计数 + 分布标题）', () => {
   const card = section(page, '<el-card shadow="always" class="cc-card">', '</el-card>')
   assert.match(card, /t\('app\.security\.overview\.cc\.triggerTitle'\)/, '触发分布必须有标题行')
-  assert.match(card, /t\('app\.security\.overview\.cc\.triggerRps'\) \}\} \{\{ fmtStatNum\(humanStats\.cc_triggers\.rps_spike\) \}\}/, '突刺计数消费 rps_spike')
+  assert.match(card, /t\('app\.security\.overview\.cc\.triggerRps'\) \}\} \{\{ fmtStatNum\(humanStats\.cc_triggers\.rps_spike\) \}\}/, '请求速率计数消费 rps_spike')
   assert.match(card, /t\('app\.security\.overview\.cc\.trigger4xx'\) \}\} \{\{ fmtStatNum\(humanStats\.cc_triggers\['4xx_ratio'\]\) \}\}/, '4xx激增计数消费 4xx_ratio')
   assert.match(card, /t\('app\.security\.overview\.cc\.triggerSession'\) \}\} \{\{ fmtStatNum\(humanStats\.cc_triggers\.session_anomaly\) \}\}/, '会话异常计数消费 session_anomaly')
 })
@@ -57,8 +57,9 @@ test('词条 zh/en 成对且语义与后端归因词一致', () => {
     assert.ok(zh.includes(`"${key}"`), `zh 缺词条 ${key}`)
     assert.ok(en.includes(`"${key}"`), `en 缺词条 ${key}`)
   }
-  // 与后端 AutobanCCTriggerReasonLabel 归因词同语义（突刺/4xx激增/会话异常）
-  assert.ok(zh.includes('"triggerRps": "突刺"'), '突刺词条与后端归因词一致')
+  // 图例与后端 AutobanCCTriggerReasonLabel 归因词同一维度（速率/4xx激增/会话异常）：
+  // 速率图例统一叫「请求速率」；后端归因词是写进名单备注的数据值，保持「突刺」。
+  assert.ok(zh.includes('"triggerRps": "请求速率"'), '速率图例统一叫「请求速率」')
   assert.ok(zh.includes('"trigger4xx": "4xx激增"'), '4xx激增词条与后端归因词一致')
   assert.ok(zh.includes('"triggerSession": "会话异常"'), '会话异常词条与后端归因词一致')
   const go = repoCode('internal/services/autoban.go')

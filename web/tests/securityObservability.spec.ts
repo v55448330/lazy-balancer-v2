@@ -1,9 +1,9 @@
 // 安全防护观测面的口径契约：
-//   · 策略列表「状态」：启用/禁用二态标签（关联规则数在独立列，不进状态列）；
+//   · 策略列表「状态」列：启停开关，替代启用/禁用标签（关联规则数在独立列，不进状态列）；
 //   · 删除策略确认：只写明将解除的绑定数量（不列规则名）；列表行内启停只提交 {enabled}；
-//   · 策略页两处跳转与事件页深链消费（「查看全部」带动作筛选 / 「查看自动封禁配置」
-//     进页开弹框 / 「返回策略列表」关闭弹框不新开标签）；
-//   · 安全总览：只在进入页面时取数（无页头刷新、无定时刷新），「最近拦截事件」下钻带筛选；
+//   · 策略页两处跳转与事件页深链消费（「查看自动封禁配置」进页开弹框 / 「返回策略列表」
+//     关闭弹框不新开标签）；
+//   · 安全总览：只在进入页面时取数（无页头刷新、无定时刷新），「最近拦截事件」下钻不带筛选；
 //   · 文案口径：威胁名单误报提示、拦截页 0 选项、封禁弹框副标题与详情 IP 入口、
 //     累犯升级档列、CC 累计标签。
 // 判定逻辑走 utils 真实代码（行为求值）；渲染点与双语词条以「源码钉 + 运行期词表
@@ -34,15 +34,17 @@ const policies = code('src/views/security/SecurityPolicies.vue')
 const events = code('src/views/security/SecurityEvents.vue')
 const overview = code('src/views/security/SecurityOverview.vue')
 
-// ── 策略列表「状态」列：启用/禁用二态标签 ──
+// ── 策略列表「状态」列：启停开关 ──
 
-test('策略列表状态｜状态单元格只看启用态，不按关联规则数改判', () => {
+test('策略列表状态｜状态单元格是绑定启用态的开关，不按关联规则数改判', () => {
   const labelAt = policies.indexOf(`:label="t('app.security.policies.table.status')"`)
   assert.ok(labelAt > 0, '状态列必须在场')
   const column = elementSlice(policies, policies.lastIndexOf('<el-table-column', labelAt), 'el-table-column')
-  assert.match(column, /:type="row\.enabled \? 'success' : 'info'"/, '标签色只看启用态')
-  assert.match(column, /\{\{ row\.enabled \? t\('app\.security\.policies\.status\.enabled'\) : t\('app\.security\.policies\.status\.disabled'\) \}\}/, '标签文案只看启用态')
+  assert.match(column, /<el-switch\s+v-model="row\.enabled"/, '状态列直接渲染绑定启用态的开关')
+  assert.doesNotMatch(column, /el-tag|policies\.status\.(enabled|disabled)/, '状态列不再显示启用/禁用标签')
   assert.doesNotMatch(column, /rule_count/, '状态列不得按关联规则数改判（关联规则数在独立列）')
+  // 行启停开关只此一处：操作列不得再放一个
+  assert.equal((policies.match(/v-model="row\.enabled"/g) ?? []).length, 1, '列表行启停开关只能有一个（状态列）')
 })
 
 test('策略列表状态｜回归：复合状态判定与其词条键一并移除', () => {
@@ -92,16 +94,27 @@ test('删除披露｜词条：zh/en 成对、带数量占位符、以句号收�
 
 // ── 策略列表行内启停 ──
 
-test('策略启停｜操作列开关：一行确认 → 只提交 {enabled} → 成功回读；取消/失败回滚', () => {
+test('策略启停｜状态列开关：加载态、只读禁用并带提示；一行确认 → 只提交 {enabled} → 成功回读；取消/失败回滚', () => {
+  const statusAt = policies.indexOf(`:label="t('app.security.policies.table.status')"`)
+  assert.ok(statusAt > 0, '状态列必须在场')
+  const status = elementSlice(policies, policies.lastIndexOf('<el-table-column', statusAt), 'el-table-column')
+  const switchAt = status.indexOf('<el-switch')
+  assert.ok(switchAt > 0, '状态列必须有启停开关')
+  const toggleSwitch = elementSlice(status, switchAt, 'el-switch')
+  assert.match(toggleSwitch, /v-model="row\.enabled"/)
+  assert.match(toggleSwitch, /:loading="policyTogglingId === row\.id"/, '在途行显示加载态')
+  assert.match(toggleSwitch, /:disabled="isReadOnly \|\| policyTogglingId !== null"/, '只读（从节点/非管理员）与在途时禁用')
+  assert.match(toggleSwitch, /@change="togglePolicy\(row as PolicySummary\)"/)
+  // 只读提示与规则列表状态开关同形：开关包在 tooltip 里，只在只读时出现、内容是只读原因
+  const tooltipAt = status.lastIndexOf('<el-tooltip', switchAt)
+  assert.ok(tooltipAt > 0, '开关必须包在只读提示里')
+  const tooltip = elementSlice(status, tooltipAt, 'el-tooltip')
+  assert.match(tooltip, /:disabled="!isReadOnly"/, '非只读不出现提示')
+  assert.match(tooltip, /:content="readOnlyMessage"/, '只读提示必须是只读原因')
   const actionsAt = policies.indexOf(`:label="t('app.security.policies.table.actions')"`)
   assert.ok(actionsAt > 0, '操作列必须在场')
   const actions = elementSlice(policies, policies.lastIndexOf('<el-table-column', actionsAt), 'el-table-column')
-  const switchAt = actions.indexOf('<el-switch')
-  assert.ok(switchAt > 0, '操作列必须有启停开关')
-  const toggleSwitch = elementSlice(actions, switchAt, 'el-switch')
-  assert.match(toggleSwitch, /v-model="row\.enabled"/)
-  assert.match(toggleSwitch, /:disabled="isReadOnly \|\| policyTogglingId !== null"/, '只读（从节点/非管理员）与在途时禁用')
-  assert.match(toggleSwitch, /@change="togglePolicy\(row as PolicySummary\)"/)
+  assert.doesNotMatch(actions, /el-switch/, '操作列不再放启停开关')
   const fn = member(policies, 'const togglePolicy = async (row: PolicySummary)')
   const confirmAt = fn.indexOf('await ElMessageBox.confirm(')
   const putAt = fn.indexOf('await request.put(`/security/policies/${row.id}`, { enabled: nextEnabled })')
@@ -144,11 +157,11 @@ test('策略页跳转｜「查看自动封禁配置」带配置意图深链；�
   assert.doesNotMatch(policies, /window\.open\(pageUrl\('security-policies'\)/, '返回列表不得新开同页标签')
 })
 
-test('事件页深链消费｜挂载时应用动作筛选并按意图打开自动封禁配置弹框，消费后清除 query', () => {
+test('事件页深链消费｜挂载时按意图打开自动封禁配置弹框，消费后清除 query；不带动作筛选', () => {
   const mounted = section(events, 'onMounted(() => {', '\n})')
   assert.match(mounted, /parseSecurityEventsDeepLink\(window\.location\.search\)/, '消费侧必须走解析单源（非法值不透传成筛选条件）')
-  assert.match(mounted, /filters\.value\.action = link\.action/, '动作筛选必须落到筛选态再拉列表')
   assert.match(mounted, /window\.history\.replaceState\(null, '', window\.location\.pathname\)/, '消费后必须清除参数（否则每次回到本页都被重新应用）')
+  assert.doesNotMatch(mounted, /filters\.value\.action =/, '深链不得带入动作筛选（「查看全部」不带条件打开事件页）')
   assert.match(mounted, /const autobanReady = Promise\.all\(\[fetchAutobanStatus\(\), fetchAutobanConfig\(\)\]\)/, '状态与配置缓存必须先就绪')
   assert.match(mounted, /if \(link\.openAutobanConfig\) void autobanReady\.then\(openAutobanConfigFromLink\)/, '必须等状态与配置就绪后再开弹框')
   const land = section(events, 'const openAutobanConfigFromLink = ', '\nconst ')
@@ -164,12 +177,13 @@ test('安全总览｜只在进入页面时取数：无页头刷新按钮、无�
   assert.equal(overview.split(`@click="reloadAll">{{ t('app.security.overview.page.retryNow') }}</el-button>`).length - 1, 2, '失败态的「立即重试」保留')
 })
 
-test('安全总览下钻｜「查看全部」带拦截筛选', () => {
+test('安全总览下钻｜「查看全部」不带筛选打开事件页', () => {
   assert.match(
     section(overview, 'const goToEvents = ', '\n'),
-    /window\.open\(pageUrl\('security-events', \{ \[DEEP_LINK_PARAMS\.eventsAction\]: 'blocked' \}\), '_blank', 'noopener'\)/,
-    '「最近拦截事件」卡的下钻必须带 action=blocked',
+    /window\.open\(pageUrl\('security-events'\), '_blank', 'noopener'\)/,
+    '「最近拦截事件」卡的下钻不得带动作筛选',
   )
+  assert.doesNotMatch(overview, /eventsAction/, '页面不得引用已删除的 eventsAction 参数')
 })
 
 test('总览黄条「前往绑定规则」｜与事件页同写法：定位判据单源 + 深链复用已登记参数', () => {
@@ -264,4 +278,50 @@ test('IP 快捷处置｜加入黑名单的动词统一为「封禁」：两条�
     code('src/composables/useTrustAssociation.ts'),
     /deny: \{ refField: 'ip_acl_list_refs', suffix: t\('common\.app\.views\.trustAssoc\.suffixDeny'\), verb: t\('common\.app\.views\.trustAssoc\.verbDeny'\) \}/,
   )
+})
+
+// ── 叫法统一 ──
+
+test('叫法统一｜事件表「规则」列头写全称「负载均衡规则」（事件页与总览最近拦截事件）', () => {
+  for (const key of ['app.security.events.colRule', 'app.security.overview.events.colRule']) {
+    assert.equal(zh(key), '负载均衡规则', key)
+    assert.equal(en(key), 'Load balancing rule', key)
+  }
+})
+
+test('叫法统一｜阶段 1 能力名不再出现 ACL 缩写，统一「IP 访问控制」', () => {
+  assert.equal(zh('app.security.policies.summary.aclOff'), '未启用 IP 访问控制')
+  assert.equal(en('app.security.policies.summary.aclOff'), 'IP access control not enabled')
+  assert.equal(zh('common.app.views.stages.allowDisabledAcl'), '白名单模式 · 未启用 IP 访问控制{suffix}')
+  assert.equal(en('common.app.views.stages.allowDisabledAcl'), 'Whitelist mode · IP access control disabled{suffix}')
+})
+
+test('叫法统一｜安全域词条不再出现旧叫法：ACL 缩写、地址列表、突刺、转发规则/负载规则', () => {
+  // views.ts 只扫安全域子树（其余子树属别的域，不在此裁定范围）
+  const securityViewSubtrees = ['ipAdd', 'secRules', 'stages', 'trigDetail', 'trustAssoc']
+  const zhViews = securityViewSubtrees.map((key) => section(code('src/locales/zh/views.ts'), `'${key}': {`, '\n  },')).join('\n')
+  const enViews = securityViewSubtrees.map((key) => section(code('src/locales/en/views.ts'), `'${key}': {`, '\n  },')).join('\n')
+  const zhSec = code('src/locales/zh/security.ts')
+  const enSec = code('src/locales/en/security.ts')
+  const legacyZh: ReadonlyArray<readonly [RegExp, string]> = [
+    [/ACL/, 'ACL 缩写'],
+    [/地址列表/, '地址列表'],
+    [/突刺/, '突刺'],
+    [/转发规则|负载规则/, '转发规则 / 负载规则'],
+  ]
+  for (const [re, label] of legacyZh) {
+    assert.doesNotMatch(zhSec, re, `zh/security.ts 不得出现「${label}」`)
+    assert.doesNotMatch(zhViews, re, `zh/views.ts 安全域子树不得出现「${label}」`)
+  }
+  const legacyEn: ReadonlyArray<readonly [RegExp, string]> = [
+    [/ACL/, 'ACL'],
+    // 「crawler address lists」是爬虫地址库，不是 IP 名单对象
+    [/(?<!crawler )address lists?\b/i, 'address list'],
+    [/\bspikes?\b/i, 'spike'],
+    [/forwarding rules?/i, 'forwarding rule'],
+  ]
+  for (const [re, label] of legacyEn) {
+    assert.doesNotMatch(enSec, re, `en/security.ts 不得出现「${label}」`)
+    assert.doesNotMatch(enViews, re, `en/views.ts 安全域子树不得出现「${label}」`)
+  }
 })

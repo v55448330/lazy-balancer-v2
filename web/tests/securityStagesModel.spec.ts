@@ -325,7 +325,7 @@ test('白名单零生效集：ACL 关闭时不得误报「将拒绝所有请求�
   // IPACLEnabled 门）——「空 allow 集恒拒」不成立，告警在此形态是误报。
   assert.equal(
     formatAclModeDetail([], { ip_acl_enabled: false, ip_acl_mode: 'allow', ip_acl_list: '["1.1.1.1"]', ip_blacklist: '[]' }),
-    '白名单模式 · 未启用 ACL',
+    '白名单模式 · 未启用 IP 访问控制',
   )
   // 零生效集告警必须与「独立黑名单仍生效」并存：两条结论缺一都会误导
   assert.equal(
@@ -335,7 +335,7 @@ test('白名单零生效集：ACL 关闭时不得误报「将拒绝所有请求�
   // ACL 关闭 + 独立黑名单：无恒拒告警，黑名单仍须追告
   assert.equal(
     formatAclModeDetail([], { ip_acl_enabled: false, ip_acl_mode: 'allow', ip_acl_list: '["1.1.1.1"]', ip_blacklist: '["2.2.2.2"]' }),
-    '白名单模式 · 未启用 ACL；独立黑名单 1 条仍生效',
+    '白名单模式 · 未启用 IP 访问控制；独立黑名单 1 条仍生效',
   )
   // 回归：显式开启的空集仍须告警
   assert.equal(formatAclModeDetail([], { ip_acl_enabled: true, ip_acl_mode: 'allow', ip_acl_list: '[]' }), '白名单模式 · 0 条（将拒绝所有请求）')
@@ -872,9 +872,9 @@ test('明细 · 条目合并与 ACL 名单计数：内联优先去重、引用�
   assert.deepEqual(detailsAt(0, trust, ipLists)?.trustEntries, [
     { value: '1.1.1.1', source: '内联' },
     { value: '2.2.2.2', source: '内联' },
-    { value: '3.3.3.3', remark: '备注', source: '列表：名单甲' },
+    { value: '3.3.3.3', remark: '备注', source: 'IP 名单：名单甲' },
     // 引用条目无备注时键存在但为 undefined（消费方按 ?? 展示，不得改写为默认文案）
-    { value: '4.4.4.4', remark: undefined, source: '列表：#11' },
+    { value: '4.4.4.4', remark: undefined, source: 'IP 名单：#11' },
   ])
 
   const acl = policyOf({
@@ -889,8 +889,8 @@ test('明细 · 条目合并与 ACL 名单计数：内联优先去重、引用�
   assert.equal(aclDetails?.aclInlineCount, 2, '内联按去重值计数')
   assert.deepEqual(aclDetails?.aclLists, [
     { name: '名单甲', count: 2 },
-    { name: '列表 #13', count: 0 },
-  ], '未加载的引用名单显性显示为「列表 #id」，不得静默丢弃')
+    { name: 'IP 名单 #13', count: 0 },
+  ], '未加载的引用名单显性显示为「IP 名单 #id」，不得静默丢弃')
 
   // ACL 关闭但保留名单：明细与摘要同门——不出 aclLists/aclInlineCount，
   // 遗留独立黑名单仍照常列出（它不受 ACL 开关门控）。

@@ -153,14 +153,6 @@
         </el-form-item>
       </template>
 
-      <!-- 关闭态：隐藏字段仍参与后端写侧校验（与开关无关），非法存量值
-           必须可见且给出可修复路径——否则用户看不到控件也无法定位。 -->
-      <el-form-item v-else-if="trustedProxyDisabledStaleError" :label="t('app.settings.caddy.trust.title')" for="caddy-trusted-ranges-static">
-        <input type="text" id="caddy-trusted-ranges-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-        <div class="form-tip-line trusted-ranges-error">{{ trustedProxyDisabledStaleError }}</div>
-        <div class="form-tip-line">{{ t('app.settings.caddy.trust.trustOffSaveWarn') }}</div>
-      </el-form-item>
-
       <el-divider content-position="left">{{ t('app.settings.caddy.accessLog.title') }}</el-divider>
       <el-form-item :label="t('app.settings.caddy.accessLog.customFormat')">
         <el-switch v-model="settings.access_log_json" :disabled="formFrozen" :active-text="t('app.settings.caddy.accessLog.customJson')" inactive-text="Caddy JSON" />
@@ -563,11 +555,6 @@ const trustedTotalWarning = computed(() => trustedProxyTotalWarning(trustedRange
 // 引用名单条目同样套用最小前缀/全空间判据（后端对引用条目也执行这两道门），
 // 未加载名单不参与以免把未知当非法；错误按名单名点名，用户可直接定位。
 const trustedReferencedRangesError = computed(() => trustedProxyReferencedRangesError(referencedLists.value))
-// 关闭态存量非法值：开关关闭不影响后端写侧校验，错误必须显性可见
-const trustedProxyDisabledStaleError = computed(() =>
-  settings.value.trusted_proxy_enabled
-    ? ''
-    : [trustedRangesError.value, trustedReferencedRangesError.value, trustedHeadersError.value, trustedTotalError.value].filter(Boolean).join('；'))
 
 // —— 存为列表：内联网段一键建名单并转为引用（镜像策略侧「提取为列表」） ——
 const saveListDialogVisible = ref(false)
@@ -669,32 +656,32 @@ const handleSave = async (): Promise<void> => {
     return
   }
   if (isReadOnly.value || saving.value) return
-  // 关闭态同样被后端写侧校验（开关不影响 validateTrustedProxyFields）：
-  // 提示中给出「临时开启后修正」的修复路径，而不是让用户对着隐藏字段无计可施。
-  const trustedGateMessage = (error: string): string =>
-    settings.value.trusted_proxy_enabled ? error : t('app.settings.caddy.messages.saveFailTrustOff', { error })
-  // 非法/过宽网段在表单内即拦下（后端 PUT/preview 同样拒绝，但不点名具体条目）
-  if (trustedRangesError.value) {
-    ElMessage.warning(trustedGateMessage(trustedRangesError.value))
-    return
+  // 行内校验只在开关开启时生效：关闭态保存由后端把网段/引用名单/请求头归一为
+  // 空数组，隐藏的存量值不参与校验。
+  if (settings.value.trusted_proxy_enabled) {
+    // 非法/过宽网段在表单内即拦下（后端 PUT/preview 同样拒绝，但不点名具体条目）
+    if (trustedRangesError.value) {
+      ElMessage.warning(trustedRangesError.value)
+      return
+    }
+    // 引用名单条目与内联网段同判据（最小前缀/全空间），保存前一并拦下
+    if (trustedReferencedRangesError.value) {
+      ElMessage.warning(trustedReferencedRangesError.value)
+      return
+    }
+    // 请求头（条数/字符集）与「内联 + 引用展开」总量同源同门
+    if (trustedHeadersError.value) {
+      ElMessage.warning(trustedHeadersError.value)
+      return
+    }
+    if (trustedTotalError.value) {
+      ElMessage.warning(trustedTotalError.value)
+      return
+    }
+    // 估算合计越限但无法证明真实并集超限（引用条目未加载，重叠未去重）：
+    // 提示后继续保存，判定以后端去重后的集合为准——前端不得以估算否掉合法配置。
+    if (trustedTotalWarning.value) ElMessage.warning(trustedTotalWarning.value)
   }
-  // 引用名单条目与内联网段同判据（最小前缀/全空间），保存前一并拦下
-  if (trustedReferencedRangesError.value) {
-    ElMessage.warning(trustedGateMessage(trustedReferencedRangesError.value))
-    return
-  }
-  // 请求头（条数/字符集）与「内联 + 引用展开」总量同源同门
-  if (trustedHeadersError.value) {
-    ElMessage.warning(trustedGateMessage(trustedHeadersError.value))
-    return
-  }
-  if (trustedTotalError.value) {
-    ElMessage.warning(trustedGateMessage(trustedTotalError.value))
-    return
-  }
-  // 估算合计越限但无法证明真实并集超限（引用条目未加载，重叠未去重）：
-  // 提示后继续保存，判定以后端去重后的集合为准——前端不得以估算否掉合法配置。
-  if (trustedTotalWarning.value) ElMessage.warning(trustedTotalWarning.value)
   saving.value = true
   try {
     // 显式白名单：settings 是与 BasicSettings 共享的同一对象，全量展开会把

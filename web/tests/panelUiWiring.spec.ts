@@ -319,7 +319,7 @@ test('名单详情 GET 静默，避免与全局拦截器双 toast', () => {
   assert.equal(silentGets.length, 3, `详情/重试/新鲜度核对三处请求都应 silent，实际 ${silentGets.length}`)
   // 本地提示保留（带「已禁用保存」动作信息）——i18n 后双钉:调用点钉键,zh 母本钉原文
   assert.match(text, /t\('common\.app\.views\.secRules\.msgs\.loadEntriesFailReload'\)/)
-  assert.ok(code('src/locales/zh/views.ts').includes('加载列表条目失败，已禁用保存；请重新加载'), '失败提示原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('加载名单条目失败，已禁用保存；请重新加载'), '失败提示原文必须在 zh 母本词条中')
 })
 
 test('库状态未知时自动更新开关显示「—」而非默认开', () => {
@@ -539,7 +539,7 @@ test('辅助端点部分失败必须有可见横幅', () => {
   // i18n 后双钉:失败源标签走 aux.* 键(调用点钉键,zh 母本钉标签原文)
   const auxLabels: Array<[string, string]> = [
     ['rules', '规则列表'], ['crsOptions', 'CRS 规则选项'], ['blockPages', '拦截页面'], ['customRules', '自定义规则'],
-    ['bindings', '规则绑定'], ['users', '用户列表'], ['ipLists', 'IP 地址列表'],
+    ['bindings', '规则绑定'], ['users', '用户列表'], ['ipLists', 'IP 名单'],
   ]
   for (const [key, label] of auxLabels) {
     assert.ok(text.includes(`failures.push(t('app.security.policies.aux.${key}'))`), `必须归集 ${label} 失败源`)

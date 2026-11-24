@@ -225,15 +225,14 @@ import { useAuthStore } from '@/stores/auth'
 import { accountInitial, accountTriggerLabel, sidebarCollapsed, sidebarOverlay, sidebarWidth, toggleSidebarState } from '@/utils/sidebarLayout'
 import type { PageId } from '@/utils/pageIds'
 import { request } from '@/utils/api'
-import { ElMessageBox } from 'element-plus'
 import {Timer,  DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook, Bell } from '@element-plus/icons-vue'
 import ProfileDialog from '@/components/ProfileDialog.vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
 import { restartServiceWithFeedback } from '@/utils/restart'
 import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
-import { SETTINGS_TAB_IDS, settingsBreadcrumbParent, settingsTabOfPage, settingsTabTitle } from '@/utils/settingsPages'
-import { hasDirtySettingsForm } from '@/composables/useSettingsDraft'
+import { SETTINGS_TAB_IDS, settingsBreadcrumbParent, settingsTabTitle } from '@/utils/settingsPages'
+import { confirmLeavingSettingsPage } from '@/composables/useSettingsLeaveGuard'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { hasOwn } from '@/utils/hasOwn'
 import { useI18n } from 'vue-i18n'
@@ -314,30 +313,9 @@ const pageTitle = computed<Record<string, string>>(() => ({
   ...Object.fromEntries(SETTINGS_TAB_IDS.map((tab) => [`settings-${tab}`, `${t('common.app.views.layout.settingsBreadcrumbParent')} / ${settingsTabTitle(tab)}`])),
 }))
 
-// 离开「设置」逻辑页面时若有未保存改动：确认后放弃（刷新/切页都会丢弃草稿）。
-// 判据只看脏态登记与「目标是否设置分页」，不看当前停在哪个分页——登记随卡片
-// 卸载保留（草稿在父级共享模型/设置域单例里），切到 API 接入、任务监控等任一
-// 分页后再离开同样要拦。设置分页之间互切不拦：草稿不随分页切换丢失。
-// 全站非路由驱动，侧栏切页是唯一页面切换入口，因此只能在此拦截。
-const leavingSettingsDraft = (page: PageId): boolean =>
-  settingsTabOfPage(page) === null && hasDirtySettingsForm()
-
 const goPage = async (page: PageId): Promise<void> => {
-  if (leavingSettingsDraft(page)) {
-    try {
-      await ElMessageBox.confirm(
-        t('common.app.views.layout.unsavedLeaveMessage'),
-        t('common.app.views.layout.unsavedLeaveTitle'),
-        {
-          type: 'warning',
-          confirmButtonText: t('common.app.views.layout.unsavedLeaveConfirm'),
-          cancelButtonText: t('common.app.views.layout.unsavedLeaveStay'),
-        },
-      )
-    } catch {
-      return
-    }
-  }
+  // 设置域有未保存改动时先确认（含切到设置内其它分页）；「留在本页」不切页。
+  if (!(await confirmLeavingSettingsPage(page, currentPage.value))) return
   authStore.setCurrentPage(page)
   // 窄屏浮层选完页面即收起（否则浮层挡住新页内容）
   if (isNarrowViewport.value) narrowExpanded.value = false

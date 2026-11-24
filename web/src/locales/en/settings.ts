@@ -18,7 +18,7 @@ export default {
         "timeout": {
           "title": "Requests & timeouts",
           "bodySize": "Request body size",
-          "bodySizeHint": "MB; max request body size, default 128, must be 1-1024 (0 no longer means default)",
+          "bodySizeHint": "MB; maximum size of a single request body; 1–1024, default 128",
           "read": "Read timeout",
           "readHint": "Seconds to read a request; ≥1, commonly 60",
           "write": "Write timeout",
@@ -61,7 +61,6 @@ export default {
           "strictMode": "Strict mode",
           "strictOffWarn": "When off, the left-most value is taken and can be spoofed; disabling is not recommended",
           "strictHint": "Takes the right-most trusted value; disabling is only for special proxy chains",
-          "trustOffSaveWarn": "Trusted proxies is off, but stored config is still validated on save: temporarily enable \"Trusted proxies\", fix the entries above, then switch it off — otherwise saving is rejected. ",
           "headersAcceptedHint": "Only requests from these ranges have their headers trusted; with no matched range, all headers are ignored (min /8 and /29). ",
           "refListLoadFailHint": "Failed to load entries for {count} referenced list(s). Totals are estimated from record counts (overlaps not deduplicated); saving fails if a list was deleted; the server uses the deduplicated count",
           "mergedEffectHint": "Reusable lists from \"Rule sets → IP lists\" are referenced; their entries merge with the inline ranges above (total {total}, cap {cap})",
@@ -125,7 +124,6 @@ export default {
           "noChanges": "No changes",
           "saved": "Saved",
           "reloaded": "Caddy configuration reloaded",
-          "saveFailTrustOff": "{error} (Trusted proxies is off: enable it temporarily to fix)",
           "confirmSaveSection": "Confirm saving {section}?",
           "caddyConfig": "Caddy configuration"
         },

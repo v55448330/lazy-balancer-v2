@@ -49,8 +49,8 @@ func TestUpdateSecurityPolicy_auditDeltaUsesNormalizedValues(t *testing.T) {
 	}
 	// Then：审计不得记录从未落库的 -5，归一后无变更落「（无字段变化）」。
 	detail := readDetail()
-	if strings.Contains(detail, "-5") || strings.Contains(detail, "CC 突刺阈值") {
-		t.Fatalf("detail=%q, want 无 CC 突刺阈值变更（落库值与存量同为 40）", detail)
+	if strings.Contains(detail, "-5") || strings.Contains(detail, "CC 请求速率阈值") {
+		t.Fatalf("detail=%q, want 无 CC 请求速率阈值变更（落库值与存量同为 40）", detail)
 	}
 	if !strings.Contains(detail, "无字段变化") {
 		t.Fatalf("detail=%q, want 含（无字段变化）", detail)
@@ -62,8 +62,8 @@ func TestUpdateSecurityPolicy_auditDeltaUsesNormalizedValues(t *testing.T) {
 	}
 	// Then：审计记归一后的钳制值（40→100000），不是请求原始值。
 	detail = readDetail()
-	if !strings.Contains(detail, "CC 突刺阈值：40→100000") {
-		t.Fatalf("detail=%q, want CC 突刺阈值：40→100000（归一后终值）", detail)
+	if !strings.Contains(detail, "CC 请求速率阈值：40→100000") {
+		t.Fatalf("detail=%q, want CC 请求速率阈值：40→100000（归一后终值）", detail)
 	}
 	if strings.Contains(detail, "200000") {
 		t.Fatalf("detail=%q, 不得记录未落库的请求原始值 200000", detail)

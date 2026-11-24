@@ -103,9 +103,20 @@
             <el-tag v-else disable-transitions size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.policies.table.status')" width="90" align="center">
+        <el-table-column :label="t('app.security.policies.table.status')" width="72" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" disable-transitions size="small" effect="light">{{ row.enabled ? t('app.security.policies.status.enabled') : t('app.security.policies.status.disabled') }}</el-tag>
+            <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
+              <div>
+                <el-switch
+                  v-model="row.enabled"
+                  class="policy-toggle-switch"
+                  :loading="policyTogglingId === row.id"
+                  :disabled="isReadOnly || policyTogglingId !== null"
+                  :aria-label="t('app.security.policies.action.toggleAria', { name: row.name })"
+                  @change="togglePolicy(row as PolicySummary)"
+                />
+              </div>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column :label="t('app.security.policies.table.updatedAt')" width="170" align="center">
@@ -116,14 +127,6 @@
         </el-table-column>
         <el-table-column v-if="!isReadOnly" :label="t('app.security.policies.table.actions')" min-width="230" fixed="right">
           <template #default="{ row }">
-            <el-switch
-              v-model="row.enabled"
-              class="policy-toggle-switch"
-              :loading="policyTogglingId === row.id"
-              :disabled="isReadOnly || policyTogglingId !== null"
-              :aria-label="t('app.security.policies.action.toggleAria', { name: row.name })"
-              @change="togglePolicy(row as PolicySummary)"
-            />
             <el-button size="small" link type="primary" @click="openDialog(row as PolicySummary)">{{ policyTypeOf(row as PolicySummary) === 'mixed' ? t('app.security.policies.action.view') : t('app.security.policies.action.edit') }}</el-button>
             <el-button v-if="policyTypeOf(row as PolicySummary) !== 'mixed'" size="small" link type="primary" :disabled="securityBindingsLoading || securityBindingsFailed || bindRulesOpening" :title="securityBindingsLoading ? t('app.security.policies.bind.loadingTitle') : securityBindingsFailed ? t('app.security.policies.bind.failedTitle') : ''" @click="openBindRulesDialog(row as PolicySummary)">{{ t('app.security.policies.action.bindRules') }}</el-button>
             <el-button v-if="policyTypeOf(row as PolicySummary) === 'mixed'" size="small" link type="warning" @click="openMigrateDialog(row as PolicySummary)">{{ t('app.security.policies.action.migrate') }}</el-button>
@@ -1453,6 +1456,7 @@ const regionCascaderOptions = computed(() => {
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+const readOnlyMessage = computed(() => authStore.readOnlyMessage)
 
 const users = ref<UserListItem[]>([])
 // 更新者显示名走 utils/updaterName 单源
@@ -4253,8 +4257,7 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .policy-summary-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .policy-summary-text { font-size: 13px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .policy-trigger-tag { font-variant-numeric: tabular-nums; }
-/* 操作列启停开关：与规则列表状态开关同形（默认尺寸、开关核心无外边距），与后方按钮留 8px */
-.policy-toggle-switch { margin-right: 8px; vertical-align: middle; }
+/* 状态列启停开关：与规则列表状态开关同形（默认尺寸、开关核心无外边距） */
 .policy-toggle-switch :deep(.el-switch__core) { margin: 0; }
 
 /* 生效投影条（任务 8）：同一信息条左右两段——左=生效说明句、右=关联规则覆盖状态

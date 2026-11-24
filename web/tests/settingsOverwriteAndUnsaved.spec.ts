@@ -5,19 +5,46 @@
 //     给出操作日志入口——全局拦截器只弹一句「网络连接失败」，会被读成「没执行」。
 //  2. 还原确认框必须先请求预览（版本告警/将被禁用的规则/其它告警），预览失败
 //     不得阻断还原；分组与过滤逻辑抽成纯函数在此钉住。
-//  3. 未保存改动必须能被跨组件读取（侧栏切页拦截与 beforeunload 共用同一登记），
-//     且首屏/保存后回填只覆盖「服务端确认值」快照，重挂载不得把未保存编辑当基线。
+//  3. 未保存改动必须能被跨组件读取（离开当前设置页的确认与 beforeunload 共用
+//     同一登记）：切到任何其它页面（含设置内其它分页）都要确认，确认离开即
+//     丢弃全部改动；首屏/保存后回填只覆盖「服务端确认值」快照，重挂载不得把
+//     未保存编辑当基线。
 //
 // 运行：cd web && node --test tests/settingsOverwriteAndUnsaved.spec.ts
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
 import { isConnectionInterruption } from '../src/utils/connectionInterruption.ts'
 import { restorePreviewGroups } from '../src/utils/restorePreview.ts'
-import { hasDirtySettingsForm, resetSettingsDraft, useSettingsFormTracker } from '../src/composables/useSettingsDraft.ts'
-import { code, mountForLifecycle, section } from './_helpers.ts'
+import {
+  discardSettingsDraft,
+  hasDirtySettingsForm,
+  registerSettingsModelRevert,
+  resetSettingsDraft,
+  useSettingsDraft,
+  useSettingsFormTracker,
+} from '../src/composables/useSettingsDraft.ts'
+import { code, mountForLifecycle, registerModuleHooks, section } from './_helpers.ts'
+import { dataModule, STUB_ELEMENT } from './_stubs.ts'
+
+// 离开守卫组合子的依赖用 data: 模块替身（element-plus 是字节级 CSS/DOM 依赖；
+// tSafe 取词条键本身，便于断言确认框用了哪个键）：钩子必须先注册再动态 import。
+registerModuleHooks({
+  'element-plus': STUB_ELEMENT,
+  '../i18n/tSafe.ts': dataModule('export const tSafe = (key) => key'),
+})
+const loadLeaveGuard = () => import('../src/composables/useSettingsLeaveGuard.ts')
+type ConfirmStub = { __confirm: (...args: unknown[]) => Promise<unknown> }
+// 确认框替身：记录本次参数；confirmStay=true 模拟「留在本页」（reject）。
+let confirmArgs: unknown[] = []
+let confirmStay = false
+const confirmHost = globalThis as unknown as ConfirmStub
+confirmHost.__confirm = async (...args: unknown[]) => {
+  confirmArgs = args
+  if (confirmStay) throw new Error('stay')
+}
 
 // —— 断连判定 ——
 
@@ -161,7 +188,12 @@ test('导入/还原的断连提示给出操作日志入口（不是只弹一句�
   const handler = section(page, 'const showTransferInterruption', 'const triggerImport')
   assert.match(handler, /ElMessageBox\.confirm/, '入口在确认框里给出（取消=知道了）')
   assert.match(handler, /gotoAuditLog/)
-  assert.match(handler, /setCurrentPage\('audit-log'\)/, '确认后跳操作日志')
+  // 该入口直接离开设置页，必须与侧栏同一守卫：有未保存改动先确认，留在本页不跳。
+  assert.match(
+    handler,
+    /if \(await confirmLeavingSettingsPage\('audit-log', authStore\.currentPage\)\) authStore\.setCurrentPage\('audit-log'\)/,
+    '确认后跳操作日志，且必须先过离开守卫',
+  )
 })
 
 // —— Caddy 日志失败显性化 ——
@@ -222,6 +254,25 @@ test('超时项提示不再声称 0 = 无超时/默认（控件与后端都要�
   assert.match(zh, /"upstreamKeepaliveHint": "[^"]*0 = 默认/)
 })
 
+test('字段描述只说明字段本身（作用、取值范围、默认值），不写变更叙述', () => {
+  const changeNarrative = {
+    zh: /不再|改为|之前|原来|现已|旧版|升级后/,
+    en: /no longer|previously|used to|formerly|legacy|earlier versions/i,
+  }
+  for (const locale of ['zh', 'en'] as const) {
+    const described: string[] = []
+    for (const line of code(`src/locales/${locale}/settings.ts`).split('\n')) {
+      const field = line.match(/^\s*"([A-Za-z]*(?:Hint|Tip|Desc)[A-Za-z]*)":\s*"(.*)",?$/)
+      if (!field) continue
+      described.push(field[1])
+      assert.doesNotMatch(field[2], changeNarrative[locale], `${locale} 字段描述 ${field[1]} 含变更叙述：${field[2]}`)
+    }
+    assert.ok(described.length > 50, `${locale} 字段描述键只取到 ${described.length} 个（want >50）：匹配形态漂移会让本门空转`)
+  }
+  const zh = code('src/locales/zh/settings.ts')
+  assert.match(section(zh, '"timeout": {', '"upstreamKeepalive"'), /"bodySizeHint": "MB，单个请求体的大小上限；1–1024，默认 128"/)
+})
+
 // —— 未保存改动：组件接线与守卫入口 ——
 
 test('卡片暴露 dirty 并登记：快照基线由父级服务端回填版本驱动', () => {
@@ -233,28 +284,41 @@ test('卡片暴露 dirty 并登记：快照基线由父级服务端回填版本�
   assert.match(caddy, /useSettingsFormTracker\('caddy'\)/)
   assert.match(caddy, /defineExpose\(\{ dirty \}\)/)
   assert.match(caddy, /watch\(\(\) => props\.revision/)
+  const certificates = code('src/views/settings/FreeCertificates.vue')
+  assert.match(certificates, /useSettingsFormTracker\('certificates'\)/)
+  assert.match(certificates, /watch\(\(\) => props\.revision/, '保存/加载回填即刷新基线')
+  assert.match(certificates, /if \(props\.configLoaded\) formTracker\.initSaved\(formSnapshot\(\)\)/, '重挂载只在无基线时初始化')
+  // 模板里直绑共享 global 的表单键必须全部进快照（绑定 ↔ 快照键对表）
+  const boundFields = [...new Set([...certificates.matchAll(/v-model="global\.([a-z_]+)"/g)].map((match) => match[1]))]
+  assert.ok(boundFields.length > 0, '证书卡表单必须直绑共享 global')
+  const snapshotKeys = section(certificates, 'const CERT_FORM_KEYS =', 'const formSnapshot')
+  for (const field of boundFields) {
+    assert.ok(snapshotKeys.includes(`'${field}'`), `证书卡快照缺少表单键 ${field}`)
+  }
 })
 
-test('Settings.vue 传递回填版本并在卸载前拦截刷新丢失', () => {
+test('Settings.vue 三张卡各传自己的回填版本并在卸载前拦截刷新丢失', () => {
   const page = code('src/views/Settings.vue')
-  assert.match(page, /:revision="basicRevision"/)
-  assert.match(page, /:revision="caddyRevision"/)
-  assert.match(page, /basicRevision\.value\+\+/, '任一成功读取/保存回填必须推进基线版本')
+  for (const revision of ['basicRevision', 'caddyRevision', 'certRevision']) {
+    assert.match(page, new RegExp(`:revision="${revision}"`), `${revision} 必须传给对应卡片`)
+  }
+  const fetchAll = section(page, 'const fetchSettings = async', 'const refreshConfigSection')
+  for (const revision of ['basicRevision', 'caddyRevision', 'certRevision']) {
+    assert.ok(fetchAll.includes(`${revision}.value++`), `整包回填必须推进 ${revision}`)
+  }
+  assert.match(section(page, 'const handleSaveCertificates', 'const syncActiveTabFromPage'), /refreshConfigSection\(applyCertKeys, certRevision\)/, '证书卡保存回填推进自己的版本，不借用基础卡版本')
   assert.match(page, /beforeunload/)
   assert.match(page, /hasDirtySettingsForm\(\)/)
   assert.match(page, /removeEventListener\('beforeunload'/)
 })
 
-test('侧栏切页在有未保存改动时拦截；设置分页互切不拦', () => {
+test('侧栏切页走共用守卫：有未保存改动时切到任何其它页面都拦截（含设置内其它分页）', () => {
   const layout = code('src/components/layout/AppLayout.vue')
   const goPage = section(layout, 'const goPage', 'const logout')
-  const guard = section(layout, 'const leavingSettingsDraft', 'const goPage')
-  assert.match(guard, /hasDirtySettingsForm\(\)/, '脏态来自设置域登记')
-  assert.match(guard, /settingsTabOfPage/, '必须区分「离开设置域」与「设置分页互切」')
-  assert.doesNotMatch(guard, /currentPage/, '判据不得依赖当前停在哪一设置分页')
-  assert.match(goPage, /leavingSettingsDraft\(page\)/)
-  assert.match(goPage, /ElMessageBox\.confirm/)
-  assert.match(goPage, /unsavedLeaveConfirm/)
+  assert.match(goPage, /if \(!\(await confirmLeavingSettingsPage\(page, currentPage\.value\)\)\) return/, '「留在本页」不得切页')
+  assert.match(goPage, /authStore\.setCurrentPage\(page\)/, '确认后才切页')
+  assert.doesNotMatch(layout, /settingsTabOfPage|leavingSettingsDraft/, '不得按「目标是否设置分页」放行：设置内互切同样要拦')
+  assert.doesNotMatch(layout, /ElMessageBox/, '确认框只在共用守卫里，侧栏不得另留一份')
   // 词条成对
   for (const locale of ['zh', 'en'] as const) {
     const views = code(`src/locales/${locale}/views.ts`)
@@ -262,6 +326,153 @@ test('侧栏切页在有未保存改动时拦截；设置分页互切不拦', ()
       assert.ok(views.includes(`'${key}'`), `${locale} 缺 layout.${key}`)
     }
   }
+})
+
+test('守卫行为：无未保存改动或点击当前所在页直接放行，不弹确认', async () => {
+  resetSettingsDraft()
+  const { confirmLeavingSettingsPage } = await loadLeaveGuard()
+  confirmArgs = []
+  assert.equal(await confirmLeavingSettingsPage('settings-cluster', 'settings-basic'), true, '无改动不拦')
+  useSettingsFormTracker('basic').setDirty(true)
+  assert.equal(await confirmLeavingSettingsPage('settings-basic', 'settings-basic'), true, '点击当前所在页不拦')
+  assert.equal(confirmArgs.length, 0, '两种放行都不得弹确认框')
+  resetSettingsDraft()
+})
+
+test('守卫行为：有未保存改动时切到其它页面弹确认（设置内其它分页同样拦）；留在本页不丢稿', async () => {
+  resetSettingsDraft()
+  const { confirmLeavingSettingsPage } = await loadLeaveGuard()
+  useSettingsFormTracker('caddy').setDirty(true)
+  confirmStay = true
+  try {
+    assert.equal(await confirmLeavingSettingsPage('settings-cluster', 'settings-basic'), false, '留在本页=不离开')
+    assert.equal(hasDirtySettingsForm(), true, '留在本页不得丢稿')
+    assert.deepEqual(confirmArgs.slice(0, 2), ['common.app.views.layout.unsavedLeaveMessage', 'common.app.views.layout.unsavedLeaveTitle'])
+    const options = confirmArgs[2] as { confirmButtonText?: string; cancelButtonText?: string }
+    assert.equal(options.confirmButtonText, 'common.app.views.layout.unsavedLeaveConfirm')
+    assert.equal(options.cancelButtonText, 'common.app.views.layout.unsavedLeaveStay')
+    confirmArgs = []
+    assert.equal(await confirmLeavingSettingsPage('dashboard', 'settings-basic'), false, '离开设置域同样要拦')
+    assert.deepEqual(confirmArgs.slice(0, 2), ['common.app.views.layout.unsavedLeaveMessage', 'common.app.views.layout.unsavedLeaveTitle'], '离开设置域也要弹确认')
+  } finally {
+    confirmStay = false
+    resetSettingsDraft()
+  }
+})
+
+test('守卫行为：确认「放弃并离开」清空草稿登记并回填共享模型（切回来不再看到改动）', async () => {
+  resetSettingsDraft()
+  const { confirmLeavingSettingsPage } = await loadLeaveGuard()
+  let reverts = 0
+  registerSettingsModelRevert(() => { reverts += 1 })
+  useSettingsDraft().githubTokenInput.value = 'ghp_unsaved'
+  useSettingsFormTracker('basic').setDirty(true)
+  try {
+    assert.equal(await confirmLeavingSettingsPage('settings-cluster', 'settings-basic'), true)
+    assert.equal(reverts, 1, '必须让设置页把共享模型回填为服务端值')
+    assert.equal(hasDirtySettingsForm(), false, '确认离开=丢弃全部未保存改动')
+    assert.equal(useSettingsDraft().githubTokenInput.value, '', '草稿里的暂存输入一并清掉')
+  } finally {
+    registerSettingsModelRevert(null)
+    resetSettingsDraft()
+  }
+})
+
+test('discardSettingsDraft：清草稿登记并调用已登记的回填入口；未登记时不抛错', () => {
+  resetSettingsDraft()
+  const draft = useSettingsDraft()
+  draft.githubTokenInput.value = 'ghp_unsaved'
+  draft.adminTls.value = { enabled: true, mode: 'upload' }
+  useSettingsFormTracker('caddy').setDirty(true)
+  discardSettingsDraft()
+  assert.equal(draft.githubTokenInput.value, '')
+  assert.deepEqual(draft.adminTls.value, { enabled: false, mode: 'selfsigned' })
+  assert.equal(hasDirtySettingsForm(), false)
+  let reverts = 0
+  registerSettingsModelRevert(() => { reverts += 1 })
+  useSettingsFormTracker('basic').setDirty(true)
+  discardSettingsDraft()
+  assert.equal(reverts, 1, '已登记回填入口必须被调用')
+  assert.equal(hasDirtySettingsForm(), false)
+  registerSettingsModelRevert(null)
+})
+
+test('Settings.vue 挂载时登记共享模型回填入口，卸载时注销', () => {
+  const page = code('src/views/Settings.vue')
+  const mounted = section(page, 'onMounted(', 'onUnmounted(')
+  assert.match(mounted, /registerSettingsModelRevert\(\(\) => \{ void fetchSettings\(\) \}\)/, '整包回填三张卡并刷新脏态基线')
+  const unmounted = section(page, 'onUnmounted(', '</script>')
+  assert.match(unmounted, /registerSettingsModelRevert\(null\)/, '卸载即注销，回填入口不得指向已卸载的页面')
+})
+
+test('集群管理「同步间隔」：与服务端当前值不同即登记未保存改动；卡片卸载清登记', () => {
+  const card = code('src/views/settings/cluster/ClusterModeCard.vue')
+  assert.match(card, /useSettingsFormTracker\('cluster'\)/)
+  assert.match(card, /const syncIntervalDirty = computed\(\(\) => props\.status !== null && syncInterval\.value !== props\.status\.sync_interval\)/, 'status 未就绪或等于服务端值都不算未保存')
+  assert.match(card, /watch\(syncIntervalDirty, \(value\) => formTracker\.setDirty\(value\), \{ immediate: true \}\)/)
+  assert.match(card, /onUnmounted\(\(\) => \{ formTracker\.setDirty\(false\) \}\)/, '编辑随卡片卸载消失，登记不得残留')
+})
+
+test('证书卡登记行为：编辑共享 global 即脏；留在本页不丢；放弃并离开后回填服务端值且不再算脏', async () => {
+  resetSettingsDraft()
+  const server = { acme_email: 'ops@example.com', cert_expiry_days: 30 }
+  // 父级共享模型（Settings.vue 持有，切分页不卸载）与父级回填版本
+  const shared = ref({ ...server })
+  const revision = ref(0)
+  // 与证书卡同形态：快照基线由父级回填版本驱动，脏态登记到设置域单例。
+  mountForLifecycle(() => {
+    const tracker = useSettingsFormTracker('certificates')
+    const snapshot = (): string => JSON.stringify([shared.value.acme_email, shared.value.cert_expiry_days])
+    const isDirty = computed(() => tracker.isDirty(snapshot()))
+    watch(isDirty, (value) => tracker.setDirty(value), { immediate: true })
+    watch(revision, () => tracker.markSaved(snapshot()))
+    tracker.initSaved(snapshot())
+  })
+  const { confirmLeavingSettingsPage } = await loadLeaveGuard()
+  assert.equal(await confirmLeavingSettingsPage('settings-cluster', 'settings-certificates'), true, '未编辑不拦')
+  shared.value.acme_email = 'new@example.com'
+  await nextTick()
+  confirmStay = true
+  try {
+    assert.equal(await confirmLeavingSettingsPage('settings-cluster', 'settings-certificates'), false, '编辑后切到设置内其它分页也要拦')
+    assert.equal(hasDirtySettingsForm(), true, '留在本页不丢')
+  } finally {
+    confirmStay = false
+  }
+  registerSettingsModelRevert(() => { Object.assign(shared.value, server); revision.value++ })
+  try {
+    assert.equal(await confirmLeavingSettingsPage('settings-cluster', 'settings-certificates'), true)
+    await nextTick()
+    assert.deepEqual({ ...shared.value }, server, '放弃并离开后共享模型回到服务端值')
+    assert.equal(hasDirtySettingsForm(), false, '切回来不得还看到改动')
+  } finally {
+    registerSettingsModelRevert(null)
+    resetSettingsDraft()
+  }
+})
+
+test('集群管理同步间隔登记行为：改成不同于服务端的值即脏，改回或卡片卸载后不算脏', async () => {
+  resetSettingsDraft()
+  const serverInterval = ref(60)
+  const syncInterval = ref<number | null | undefined>(60)
+  // 与集群卡片同形态：局部输入与服务端当前值比较，卸载时清登记。
+  const host = mountForLifecycle(() => {
+    const tracker = useSettingsFormTracker('cluster')
+    const isDirty = computed(() => syncInterval.value !== serverInterval.value)
+    watch(isDirty, (value) => tracker.setDirty(value), { immediate: true })
+    onUnmounted(() => { tracker.setDirty(false) })
+  })
+  assert.equal(hasDirtySettingsForm(), false, '等于服务端值不算未保存')
+  syncInterval.value = 120
+  await nextTick()
+  assert.equal(hasDirtySettingsForm(), true, '改了没点保存即未保存改动')
+  syncInterval.value = 60
+  await nextTick()
+  assert.equal(hasDirtySettingsForm(), false, '改回服务端值不算未保存')
+  syncInterval.value = 120
+  await nextTick()
+  host.unmount()
+  assert.equal(hasDirtySettingsForm(), false, '卡片卸载（切走分页）后编辑消失，登记不得残留')
 })
 
 test('切走设置分页后卡片已卸载，脏态登记仍在（守卫覆盖全部分页的草稿）', async () => {

@@ -248,7 +248,9 @@ test('渲染钉：色调函数仍吃库值原样（actionTagType 输入不词条
 test('行为钉：zh 原样、en 翻译、表外值回落原文', () => {
   // 测试进程无 localStorage：detectLocale 回落 zh-CN
   assert.equal(auditActionLabel('创建'), '创建', 'zh 下枚举值原样')
-  assert.equal(auditResourceLabel('负载规则'), '负载规则')
+  // 库值（后端审计明细里的资源名）保持原样，显示按安全域统一叫法（用户授权主审定名）。
+  assert.equal(auditResourceLabel('负载规则'), '负载均衡规则', '库值「负载规则」显示为「负载均衡规则」')
+  assert.equal(auditResourceLabel('IP 地址列表'), 'IP 名单', '库值「IP 地址列表」显示为「IP 名单」')
   const saved = i18n.global.locale.value
   try {
     i18n.global.locale.value = 'en'

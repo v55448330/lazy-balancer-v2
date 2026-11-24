@@ -13,10 +13,13 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// 受信代理（CDN 真实 IP）写侧校验与归一（v2.3.x）：UpdateConfig 与
-// PreviewConfigUpdate 共用——未过校验的载荷不得落库、也不得给出变更清单。
+// 受信代理（CDN 真实 IP）写侧校验与归一（v2.3.x）：保存（UpdateConfig/
+// PreviewConfigUpdate）与备份导入共用同一实现——未过校验的载荷不得落库、
+// 也不得给出变更清单。
 //
 // 归一（原地回写 req 字段）：
+//   - 开关明确关闭（trusted_proxy_enabled=false）：ranges/range_refs/headers
+//     三字段归一为 "[]"，不做名单校验。
 //   - ranges：裸 IP 补 /32（v4）//128（v6）；随后统一按
 //     services.TrustedProxyPrefixCanonical 归一（Masked 剥主机位 + 4in6
 //     映射折成等价 v4 前缀）；条数 ≤64；归一后覆盖全部地址空间或前缀长度
@@ -85,6 +88,14 @@ func validateTrustedProxyFields(req *models.UpdateConfigRequest) error {
 }
 
 func validateTrustedProxyFieldsWithSource(req *models.UpdateConfigRequest, source trustedProxyBackupSource) error {
+	// 开关明确关闭：三字段不参与渲染，一律归一为空数组且不校验——关闭态下
+	// 残留的引用可能已指向被删除的名单，照常校验会让保存与还原恒失败。开关
+	// 开启或载荷未带开关时保持严格校验。
+	if req.TrustedProxyEnabled != nil && !*req.TrustedProxyEnabled {
+		ranges, refs, headers := "[]", "[]", "[]"
+		req.TrustedProxyRanges, req.TrustedProxyRangeRefs, req.TrustedProxyHeaders = &ranges, &refs, &headers
+		return nil
+	}
 	if req.TrustedProxyRanges != nil {
 		normalized, err := normalizeTrustedProxyRanges(*req.TrustedProxyRanges)
 		if err != nil {

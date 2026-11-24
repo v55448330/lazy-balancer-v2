@@ -578,6 +578,7 @@ import { restorePreviewGroups, type AutoBackupPreviewPayload, type RestorePrevie
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { useSettingsDraft, useSettingsFormTracker, type AdminTlsCertInfo } from '@/composables/useSettingsDraft'
+import { confirmLeavingSettingsPage } from '@/composables/useSettingsLeaveGuard'
 import { restartServiceWithFeedback } from '@/utils/restart'
 import { adminTlsConfirmDisabled, adminTlsPendingChange, adminTlsReusesSavedCert, adminTlsSendsStagedCert } from '@/utils/adminTlsGate'
 import { formatDate, formatDateShort } from '@/utils/date'
@@ -1230,7 +1231,8 @@ const showTransferInterruption = async (message: string): Promise<void> => {
   } catch {
     return
   }
-  authStore.setCurrentPage('audit-log')
+  // 该入口直接离开设置页：与侧栏同一守卫（有未保存改动先确认，留在本页不跳）。
+  if (await confirmLeavingSettingsPage('audit-log', authStore.currentPage)) authStore.setCurrentPage('audit-log')
 }
 
 const triggerImport = (): void => {

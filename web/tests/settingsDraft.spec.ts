@@ -164,7 +164,7 @@ test('Settings.vue 仅在离开设置页时复位草稿', () => {
     .map((symbol) => symbol.trim())
     .filter((symbol) => symbol !== '')
     .sort()
-  assert.deepEqual(importedSymbols, ['hasDirtySettingsForm', 'resetSettingsDraft', 'syncSettingsDraftIdentity'])
+  assert.deepEqual(importedSymbols, ['hasDirtySettingsForm', 'registerSettingsModelRevert', 'resetSettingsDraft', 'syncSettingsDraftIdentity'])
   const unmounted = section(page, 'onUnmounted(', '</script>')
   assert.match(unmounted, /resetSettingsDraft\(\)/)
   assert.doesNotMatch(

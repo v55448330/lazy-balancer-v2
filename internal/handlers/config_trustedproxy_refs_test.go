@@ -189,8 +189,9 @@ func TestConfigBackup_trustedProxyRangeRefsRoundTrip(t *testing.T) {
 	}
 	// id 3 是内置威胁名单（db 种子）——内置名单引用自本轮起 400
 	// 拒绝（威胁名单条目在 .iplist 文件，DB entries 恒空会让格式/总量门失效），
-	// 本往返用例改用不冲突的自定义 id。
-	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs='[903,907]' WHERE id=1`); err != nil {
+	// 本往返用例改用不冲突的自定义 id。开关须开启：关闭态下三字段随导入归一为
+	// 空数组（钉测见 TestImportConfigBackup_trustedProxyDisabledClearsRelatedFields）。
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_range_refs='[903,907]' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	// 导入门后的语义：备份携带 security_ip_lists 表时（carried=true）名单表
@@ -292,7 +293,8 @@ func TestRevalidateImportTrustedProxyRefs_listsCarriedRejectsBuiltinRef(t *testi
 	if _, err := db.DB.Exec(`INSERT OR IGNORE INTO global_config (id) VALUES (1)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs='[901]' WHERE id=1`); err != nil {
+	// 引用只在开关开启时参与校验（开关关闭 = 关联字段无意义）。
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_range_refs='[901]' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	backup := &configBackup{

@@ -20,7 +20,8 @@ import (
 func TestRevalidateImportTrustedProxyRefsAgainstCarriedLists(t *testing.T) {
 	newBackupTestHandlers(t)
 	listID := seedIPListRow(t, "live-trusted-proxy", `[{"value":"203.0.113.0/24","remark":""}]`)
-	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_range_refs=? WHERE id=1`, fmt.Sprintf("[%d]", listID)); err != nil {
+	// 引用只在开关开启时参与校验（开关关闭 = 关联字段无意义）。
+	if _, err := db.DB.Exec(`UPDATE global_config SET trusted_proxy_enabled=1, trusted_proxy_range_refs=? WHERE id=1`, fmt.Sprintf("[%d]", listID)); err != nil {
 		t.Fatalf("seed live trusted proxy refs: %v", err)
 	}
 

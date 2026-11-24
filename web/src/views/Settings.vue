@@ -50,6 +50,7 @@
       v-model:global="global"
       :config-loaded="configLoaded"
       :on-save="handleSaveCertificates"
+      :revision="certRevision"
     />
   </div>
 </template>
@@ -57,7 +58,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { hasDirtySettingsForm, resetSettingsDraft, syncSettingsDraftIdentity } from '@/composables/useSettingsDraft'
+import { hasDirtySettingsForm, registerSettingsModelRevert, resetSettingsDraft, syncSettingsDraftIdentity } from '@/composables/useSettingsDraft'
 import { request } from '@/utils/api'
 import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { normalizeTrafficSampleN } from '@/utils/threatFlowRules'
@@ -231,9 +232,10 @@ const configLoaded = ref(false)
 // 首屏失败显性化（模板重试入口）；任一成功 /config 读取都恢复保存门
 const configLoadFailed = ref(false)
 // 「已保存」基线版本：每成功回填一次对应卡片字段即自增，卡片据此刷新脏态快照
-// （基础卡与 Caddy 卡各取自己的键，互不吞掉对方的未保存编辑）。
+// （基础卡、Caddy 卡、证书卡各取自己的键，互不吞掉对方的未保存编辑）。
 const basicRevision = ref(0)
 const caddyRevision = ref(0)
+const certRevision = ref(0)
 // 横幅只在消费 /config 的分页成立（集群/任务监控不读它，文案会误导）
 const configBannerVisible = computed(() => configLoadFailed.value && settingsTabConsumesConfig(activeTab.value))
 const fetchSettings = async () => {
@@ -249,6 +251,7 @@ const fetchSettings = async () => {
       configLoadFailed.value = false
       basicRevision.value++
       caddyRevision.value++
+      certRevision.value++
     }
   } catch (error) {
     console.error('Failed to fetch settings:', error)
@@ -283,7 +286,7 @@ const handleSaveCaddy = async () => {
 }
 
 const handleSaveCertificates = async () => {
-  await refreshConfigSection(applyCertKeys)
+  await refreshConfigSection(applyCertKeys, certRevision)
 }
 
 const syncActiveTabFromPage = () => {
@@ -318,14 +321,18 @@ const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
 onMounted(() => {
   syncSettingsDraftIdentity(authStore.user?.id ?? null)
   window.addEventListener('beforeunload', handleBeforeUnload)
+  // 确认放弃未保存改动时整包回填三张卡并刷新脏态基线（页内切分页不卸载本组件，
+  // 共享模型里的编辑值要靠这次回填回到服务端值）。
+  registerSettingsModelRevert(() => { void fetchSettings() })
   if (settingsTabConsumesConfig(activeTab.value)) void fetchSettings()
 })
 
 // 设置草稿（令牌输入/安全事件 dirty/管理面板证书暂存）随「设置」逻辑页面
-// 存活：页内切换分页不重置（否则基础设置卡的暂存内容静默丢失），离开系统
-// 设置（本组件卸载）才复位。
+// 存活：页内切换分页不重置（否则基础设置卡的暂存内容静默丢失），确认放弃
+// 未保存改动或离开系统设置（本组件卸载）才复位。
 onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  registerSettingsModelRevert(null)
   resetSettingsDraft()
 })
 </script>

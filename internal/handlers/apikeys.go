@@ -444,18 +444,6 @@ func (h *Handlers) UpdateAPIKeyStatus(c *gin.Context) {
 	updateAPIKeyStatus(c, false)
 }
 
-// updateAPIKeyRequest 是密钥更新端点的请求体：在 models.UpdateAPIKeyRequest
-// 之上多带 expires_at（改有效期只开放给 REST：MCP 的 update_api_key_status
-// 未暴露该字段，故不进 models——那边有工具 schema 与请求结构的字段对表）。
-// ExpiresAt 留原始 JSON，才能区分「未提交」（空）与「提交 null」。
-type updateAPIKeyRequest struct {
-	models.UpdateAPIKeyRequest
-	ExpiresAt json.RawMessage `json:"expires_at"`
-}
-
-// expirySubmitted 报告请求带了 expires_at（提交 null 也算）。
-func (r updateAPIKeyRequest) expirySubmitted() bool { return len(r.ExpiresAt) > 0 }
-
 func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 导入窗口 409，先于参数解析。
 	if rejectWriteDuringImport(c, "执行 API 密钥写操作") {
@@ -474,7 +462,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_b3459518"), MessageKey: "k_b3459518"})
 		return
 	}
-	var req updateAPIKeyRequest
+	var req models.UpdateAPIKeyRequest
 	if !guardConfiguredJSONBody(c) {
 		return
 	}
@@ -483,14 +471,14 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		return
 	}
 	if req.IsEnabled == nil && req.MCPEnabled == nil && req.APIEnabled == nil && req.ReadOnly == nil &&
-		req.APIReadOnly == nil && req.MCPReadOnly == nil && req.MCPIPWhitelist == nil && !req.expirySubmitted() {
+		req.APIReadOnly == nil && req.MCPReadOnly == nil && req.MCPIPWhitelist == nil && !req.ExpirySubmitted() {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_2e768bc2"), MessageKey: "k_2e768bc2"})
 		return
 	}
 	// expires_at 三态：未提交=不改；null=改为永不过期；时间串=新的过期时间。
 	// 校验与创建同口径：必须是 RFC3339 时间，且不得早于当前时间。
 	var expiresAfter sql.NullTime
-	if req.expirySubmitted() {
+	if req.ExpirySubmitted() {
 		if raw := string(req.ExpiresAt); raw != "null" {
 			var parsed time.Time
 			if err := json.Unmarshal(req.ExpiresAt, &parsed); err != nil {
@@ -613,7 +601,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// （鉴权侧对过期 Key 恒拒绝），与禁用→启用对称，同属授予动作。Key 延期后
 	// 仍处禁用态、或本就只读时，可用性没有变化，不构成特权变更。
 	now := time.Now()
-	reviveExpired := req.expirySubmitted() && beforeEnabled == 1 && (req.IsEnabled == nil || *req.IsEnabled) &&
+	reviveExpired := req.ExpirySubmitted() && beforeEnabled == 1 && (req.IsEnabled == nil || *req.IsEnabled) &&
 		beforeExpires.Valid && beforeExpires.Time.Before(now) && (!expiresAfter.Valid || expiresAfter.Time.After(now)) &&
 		(beforeAPIReadOnly == 0 || beforeMCPReadOnly == 0 || afterMCPEnabled)
 	privilegeEscalation := enablePrivileged || reviveExpired ||
@@ -654,7 +642,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 			}
 		}
 	}
-	if req.expirySubmitted() {
+	if req.ExpirySubmitted() {
 		setClauses = append(setClauses, "expires_at = ?")
 		updateArgs = append(updateArgs, expiresAfter)
 	}
@@ -719,7 +707,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 			changes = append(changes, fmt.Sprintf("IP 白名单（约束全部 REST 与 MCP）：%d 条→%d 条", beforeCount, whitelistCount))
 		}
 	}
-	if req.expirySubmitted() {
+	if req.ExpirySubmitted() {
 		// 按审计展示精度比较：新旧值展示相同（亚秒差异）不算变更。
 		if before, after := apiKeyExpiryLabel(beforeExpires), apiKeyExpiryLabel(expiresAfter); before != after {
 			changes = append(changes, "过期："+before+"→"+after)

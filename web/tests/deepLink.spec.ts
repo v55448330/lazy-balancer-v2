@@ -19,31 +19,26 @@ test('pageUrl：基础形态与参数编码', () => {
     '/?page=security-policies&sp=7',
   )
   assert.equal(
-    pageUrl('security-events', { [DEEP_LINK_PARAMS.eventsAction]: 'blocked' }),
-    '/?page=security-events&action=blocked',
+    pageUrl('security-events', { [DEEP_LINK_PARAMS.eventsAutoban]: EVENTS_AUTOBAN_CONFIG }),
+    '/?page=security-events&autoban=config',
   )
 })
 
-test('事件页深链解析：动作筛选只接受「动作」下拉四值，非法值不透传成筛选条件', () => {
-  assert.deepEqual(parseSecurityEventsDeepLink('?page=security-events&action=blocked'), { action: 'blocked', openAutobanConfig: false })
-  assert.deepEqual(parseSecurityEventsDeepLink(''), { action: '', openAutobanConfig: false })
-  for (const value of ['logged', 'trust', 'challenged']) {
-    assert.equal(parseSecurityEventsDeepLink(`?action=${value}`).action, value)
-  }
-  // 任意字符串不得成为 action 筛选（下钻页带着未知条件查后端，空列表会被读成「无事件」）
-  for (const bad of ['BLOCKED', 'all', '', 'blocked%20']) {
-    assert.equal(parseSecurityEventsDeepLink(`?action=${bad}`).action, '', `action=${bad} 必须被丢弃`)
-  }
+test('事件页深链解析：不消费动作筛选——带 action 参数的旧链接按无参数处理', () => {
+  assert.deepEqual(parseSecurityEventsDeepLink('?page=security-events&action=blocked'), { openAutobanConfig: false })
+  assert.deepEqual(parseSecurityEventsDeepLink(''), { openAutobanConfig: false })
+  // 动作筛选参数已无产生方（「查看全部」不带条件），登记一并删除
+  assert.equal('eventsAction' in DEEP_LINK_PARAMS, false)
 })
 
-test('事件页深链解析：自动封禁配置意图只认 config，可与动作筛选并存', () => {
+test('事件页深链解析：自动封禁配置意图只认 config', () => {
   assert.equal(parseSecurityEventsDeepLink(`?${DEEP_LINK_PARAMS.eventsAutoban}=${EVENTS_AUTOBAN_CONFIG}`).openAutobanConfig, true)
   for (const bad of ['1', '', 'CONFIG', 'view']) {
     assert.equal(parseSecurityEventsDeepLink(`?${DEEP_LINK_PARAMS.eventsAutoban}=${bad}`).openAutobanConfig, false, `autoban=${bad} 必须被丢弃`)
   }
   assert.deepEqual(
-    parseSecurityEventsDeepLink(`?${DEEP_LINK_PARAMS.eventsAction}=blocked&${DEEP_LINK_PARAMS.eventsAutoban}=${EVENTS_AUTOBAN_CONFIG}`),
-    { action: 'blocked', openAutobanConfig: true },
+    parseSecurityEventsDeepLink(`?page=security-events&${DEEP_LINK_PARAMS.eventsAutoban}=${EVENTS_AUTOBAN_CONFIG}`),
+    { openAutobanConfig: true },
   )
 })
 
@@ -52,7 +47,6 @@ test('参数键常量与消费侧解析一致', () => {
   assert.equal(DEEP_LINK_PARAMS.policyId, 'sp')
   assert.equal(DEEP_LINK_PARAMS.policySearch, 'sp-search')
   assert.equal(DEEP_LINK_PARAMS.securityRulesTab, 'tab')
-  assert.equal(DEEP_LINK_PARAMS.eventsAction, 'action')
   assert.equal(DEEP_LINK_PARAMS.eventsAutoban, 'autoban')
   assert.equal(EVENTS_AUTOBAN_CONFIG, 'config')
 })
@@ -83,8 +77,8 @@ test('深链交接入口：11 个 window.open 调用点全部走 pageUrl，视�
   assert.match(events, /window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policySearch\]: row\.policy_name \}\)/)
   // 未生效黄条「前往绑定规则」：定位到 binding 环节那条就绪未绑定的策略
   assert.match(events, /window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policyId\]: autobanBindingPolicyId\.value \}\)/)
-  // 总览「查看全部」=「最近拦截事件」卡的下钻，必须带拦截筛选
-  assert.match(code('src/views/security/SecurityOverview.vue'), /window\.open\(pageUrl\('security-events', \{ \[DEEP_LINK_PARAMS\.eventsAction\]: 'blocked' \}\)/)
+  // 总览「查看全部」=「最近拦截事件」卡的下钻，不带筛选
+  assert.match(code('src/views/security/SecurityOverview.vue'), /window\.open\(pageUrl\('security-events'\), '_blank', 'noopener'\)/)
   // 总览未生效黄条「前往绑定规则」：与事件页同写法，定位到 binding 环节那条就绪未绑定的策略
   assert.match(code('src/views/security/SecurityOverview.vue'), /window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policyId\]: autobanBindingPolicyId\.value \}\)/)
   const policies = code('src/views/security/SecurityPolicies.vue')

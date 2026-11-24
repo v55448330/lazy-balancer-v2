@@ -89,12 +89,18 @@ test('自动备份频率切换把日期夹回该频率上界', () => {
   assert.match(watcher, /Math\.min\(Math\.max\(1, autoBackupForm\.value\.day\), high\)/)
 })
 
-test('受信代理关闭态：存量非法值显性可见且保存提示修复路径', () => {
+test('受信代理关闭态：不做行内校验、不提示存量错误（保存由后端把三字段归一为空数组）', () => {
   const page = code('src/views/settings/CaddyGlobalSettings.vue')
-  assert.match(page, /const trustedProxyDisabledStaleError = computed/)
-  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
-  assert.match(page, /t\('app\.settings\.caddy\.trust\.trustOffSaveWarn'\)/, '关闭态错误必须给出可修复路径')
-  assert.ok(code('src/locales/zh/settings.ts').includes('请临时开启「受信代理」修正'), '关闭态修复路径原文必须在 zh 母本词条中')
+  assert.doesNotMatch(page, /trustedProxyDisabledStaleError|trustOffSaveWarn|saveFailTrustOff/, '关闭态不保留存量校验提示与修复路径')
+  const handleSave = section(page, 'const handleSave = async', 'const preview = await request.post')
+  const gatesStart = handleSave.indexOf('if (settings.value.trusted_proxy_enabled) {')
+  assert.ok(gatesStart > 0, '行内校验必须以开关为门')
+  assert.doesNotMatch(handleSave.slice(0, gatesStart), /trusted(Ranges|ReferencedRanges|Headers|Total)(Error|Warning)\.value/, '关闭态不得再拦保存')
+  const gates = handleSave.slice(gatesStart, handleSave.indexOf('saving.value = true'))
+  for (const check of ['trustedRangesError.value', 'trustedReferencedRangesError.value', 'trustedHeadersError.value', 'trustedTotalError.value', 'trustedTotalWarning.value']) {
+    assert.ok(gates.includes(`if (${check})`), `开启态校验 ${check} 必须保留`)
+  }
+  assert.match(gates.slice(-30), /\n  }\n+\s*$/, '五项校验必须整体落在开关分支内')
   assert.match(page, /t\('app\.settings\.caddy\.trust\.refListLoadFailHint'/, '引用条目未加载的提示不得承诺「不影响保存」')
   assert.ok(code('src/locales/zh/settings.ts').includes('若名单已被删除，保存会被拒绝'), '引用条目口径原文必须在 zh 母本词条中')
   // 引用条目拉取限并发，且名单目录刷新时失效缓存

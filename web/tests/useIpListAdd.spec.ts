@@ -1,4 +1,4 @@
-// 「把 IP 加入地址列表」组合子的行为验收：确认框 → 幂等 POST → added 短成功 /
+// 「把 IP 加入 IP 名单」组合子的行为验收：确认框 → 幂等 POST → added 短成功 /
 // 已存在 info；取消/失败不得谎报完成；重入锁（双击/双动作）只允许一次写入。
 //
 // element-plus / api / saveResult 均为字节级或跨域依赖，用 data: 模块替身记录
@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 
 import { registerModuleHooks, waitForMicrotasks } from './_helpers.ts'
 import { installStubHost, STUB_API, STUB_ELEMENT, STUB_SAVE_RESULT } from './_stubs.ts'
+import { i18n } from '../src/i18n/index.ts'
 
 type Harness = {
   __confirm: (...args: unknown[]) => Promise<unknown>
@@ -58,13 +59,50 @@ test('确认后幂等 POST：added=true 走 showSaveResult，返回完成并复�
   assert.match(String(message), /203\.0\.113\.9/, '确认文案必须点名 IP')
   assert.match(String(message), /办公网/, '确认文案必须点名列表')
   assert.match(String(message), /幂等/, '确认文案必须声明幂等语义')
-  assert.equal(title, '加入地址列表')
+  assert.equal(title, '加入 IP')
   assert.deepEqual(posted, [{ url: '/security/ip-lists/7/ips', body: { value: '203.0.113.9' } }])
 
   const saves = callsOf('showSaveResult')
   assert.equal(saves.length, 1)
-  assert.deepEqual(saves[0].args, [{ data: { added: true } }, '已加入地址列表「办公网」'])
+  assert.deepEqual(saves[0].args, [{ data: { added: true } }, '已在 IP 名单「办公网」中加入该 IP'])
   assert.equal(adding.value, false, '完成后必须释放重入锁')
+})
+
+test('确认句/标题/成功句：加入、封禁、放行、信任四个动词代入后动词落在 IP 上，名单只作位置', async () => {
+  // IP 快捷处置把「封禁 / 放行 / 信任」当动词传入；动词若紧贴名单会拼成
+  // 「将把 1.2.3.4 封禁地址列表」——该动作是把 IP 加入名单，动词必须落在 IP 上。
+  const zhRendered: Record<string, [string, string, string]> = {
+    '加入': ['将在 IP 名单「办公网」中加入 203.0.113.9（幂等，已存在时不会重复添加）。是否继续？', '加入 IP', '已在 IP 名单「办公网」中加入该 IP'],
+    '封禁': ['将在 IP 名单「办公网」中封禁 203.0.113.9（幂等，已存在时不会重复添加）。是否继续？', '封禁 IP', '已在 IP 名单「办公网」中封禁该 IP'],
+    '放行': ['将在 IP 名单「办公网」中放行 203.0.113.9（幂等，已存在时不会重复添加）。是否继续？', '放行 IP', '已在 IP 名单「办公网」中放行该 IP'],
+    '信任': ['将在 IP 名单「办公网」中信任 203.0.113.9（幂等，已存在时不会重复添加）。是否继续？', '信任 IP', '已在 IP 名单「办公网」中信任该 IP'],
+  }
+  for (const [verb, [message, title, saved]] of Object.entries(zhRendered)) {
+    reset()
+    assert.equal(await useIpListAdd().addIpToList('203.0.113.9', list, { verb }), true)
+    const [confirm] = callsOf('confirm')
+    assert.equal(String(confirm.args?.[0]), message, `${verb}：确认句`)
+    assert.equal(confirm.args?.[1], title, `${verb}：标题`)
+    assert.equal(String(callsOf('showSaveResult')[0].args?.[1]), saved, `${verb}：成功句`)
+  }
+  // en 母本同口径：动词置于句首（动词词条首字母大写），名单只作位置
+  const render = (path: string, vars: Record<string, string>): string => {
+    const value = path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown> | undefined)?.[key], i18n.global.messages.value.en)
+    assert.equal(typeof value, 'string', `en 词条 ${path} 必须是字符串叶子`)
+    return (value as string).replace(/\{(\w+)\}/g, (_m, key: string) => vars[key])
+  }
+  const enRendered: Record<string, [string, string, string]> = {
+    Add: ['Add 203.0.113.9 in the IP list "Office" (idempotent — existing entries are not added twice). Continue?', 'Add IP', 'Add: IP list "Office" now contains this IP'],
+    Ban: ['Ban 203.0.113.9 in the IP list "Office" (idempotent — existing entries are not added twice). Continue?', 'Ban IP', 'Ban: IP list "Office" now contains this IP'],
+    Allow: ['Allow 203.0.113.9 in the IP list "Office" (idempotent — existing entries are not added twice). Continue?', 'Allow IP', 'Allow: IP list "Office" now contains this IP'],
+    Trust: ['Trust 203.0.113.9 in the IP list "Office" (idempotent — existing entries are not added twice). Continue?', 'Trust IP', 'Trust: IP list "Office" now contains this IP'],
+  }
+  for (const [verb, [message, title, saved]] of Object.entries(enRendered)) {
+    const vars = { verb, ip: '203.0.113.9', list: 'Office' }
+    assert.equal(render('common.app.views.ipAdd.confirmMessage', vars), message, `${verb}: confirm message`)
+    assert.equal(render('common.app.views.ipAdd.confirmTitle', vars), title, `${verb}: confirm title`)
+    assert.equal(render('common.app.views.ipAdd.successDefault', vars), saved, `${verb}: success message`)
+  }
 })
 
 test('确认框附加披露（note）：拼在主体文案后；缺省不改变既有文案', async () => {
@@ -92,7 +130,7 @@ test('added=false（已存在）以 info 呈现，不弹成功提示', async () 
   assert.equal(await addIpToList('1.2.3.4', list), true, '已存在同样视为动作完成（列表已含该 IP）')
   const infos = callsOf('ElMessage.info')
   assert.equal(infos.length, 1)
-  assert.match(String(infos[0].arg), /已在列表「办公网」中/)
+  assert.match(String(infos[0].arg), /已在 IP 名单「办公网」中/)
   assert.equal(callsOf('showSaveResult').length, 0)
 })
 

@@ -80,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Connection } from '@element-plus/icons-vue'
@@ -88,6 +88,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import type { ClusterNodeMode, ClusterRegistrationInput, ClusterStatus } from '@/types'
 import { shouldCloseRegistrationDialog } from '@/utils/clusterRegistration'
 import { validateClusterUrl } from '@/utils/clusterUrl'
+import { useSettingsFormTracker } from '@/composables/useSettingsDraft'
 
 // 卡片与注册弹框文案走 i18n(批次 D cluster 域,common.app.views.cluster.*)。
 const { t } = useI18n()
@@ -171,6 +172,14 @@ watch(
   },
   { immediate: true },
 )
+
+// —— 未保存改动登记（离开设置页的确认与 beforeunload 守卫共读）——
+// 同步间隔是本卡局部输入：与服务端当前值不同即未保存。卡片卸载编辑随之消失
+//（切走分页即回到服务端值），登记一并清除，不得残留成「有未保存修改」。
+const formTracker = useSettingsFormTracker('cluster')
+const syncIntervalDirty = computed(() => props.status !== null && syncInterval.value !== props.status.sync_interval)
+watch(syncIntervalDirty, (value) => formTracker.setDirty(value), { immediate: true })
+onUnmounted(() => { formTracker.setDirty(false) })
 
 watch(
   () => props.registrationRequest,

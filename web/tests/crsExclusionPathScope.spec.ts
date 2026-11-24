@@ -219,10 +219,10 @@ test('校验与作用域切换：path 作用域必填路径；切换清残留对
   assert.match(filled, /row\.path/)
 })
 
-test('tip 文案：两处作用域说明更新为 IP/地址列表/路径', () => {
+test('tip 文案：两处作用域说明更新为 IP/IP 名单/路径', () => {
   // i18n 后:同源词条两处接线(空态提示+表尾提示),计数钉键而非字面量
   assert.equal((page.match(/t\('app\.security\.policies\.waf\.exclusion(?:EmptyTip|TableTip)'\)/g) ?? []).length, 2, '空态提示与表尾提示同文案各一处')
-  assert.ok(code('src/locales/zh/security.ts').includes('作用域限定排除仅对所选来源 IP/地址列表/路径生效'), '两处 tip 的共享原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('作用域限定排除仅对所选来源 IP、IP 名单或路径生效'), '两处 tip 的共享原文必须在 zh 母本词条中')
 })
 
 test('target 自动补全：el-autocomplete 接线目录数据源，级联退役', () => {

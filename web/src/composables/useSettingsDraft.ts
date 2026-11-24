@@ -8,7 +8,7 @@ import { ref } from 'vue'
 // 调整安全事件保留/行数上限、上传并暂存管理面板证书后去看一眼别的分页，回来
 // 全部还原，而界面明示「已暂存」。需要「提交前只存在于本地」的状态（一次性
 // 令牌输入、dirty 标记、证书暂存）提升到本模块，随「设置」逻辑页面存活；
-// 离开系统设置（Settings.vue 卸载）时由 resetSettingsDraft() 复位。
+// 离开系统设置（Settings.vue 卸载）或确认放弃未保存改动时由 resetSettingsDraft() 复位。
 //
 // 可直接落父级 settings 的字段（大屏视觉模式/流量采样/保留与行数编辑值）在
 // BasicSettings 内改为写回共享模型，不在此重复持有。
@@ -52,11 +52,13 @@ const adminTlsUnavailable = ref(false)
 const stagedAdminTlsCert = ref<StagedAdminTlsCert | null>(null)
 
 // —— 未保存改动登记（设置域单例）——
-// 两张设置卡各自把「当前表单 vs 最近一次服务端确认值」的比较结果登记到此。
-// 守卫（侧栏切页拦截、beforeunload）与卡片不在同一组件树位置，无法用 props/
+// 基础/Caddy/证书三张卡与集群同步间隔各自把「当前表单 vs 服务端确认值」的
+// 比较结果登记到此。
+// 守卫（离开设置页的确认、beforeunload）与卡片不在同一组件树位置，无法用 props/
 // emit 传递；同域单例让「设置」逻辑页面之外（AppLayout）也能读到同一份状态。
-// 卡片卸载**不清**登记：用户可能切到别的设置分页后再离开设置域，此时改动仍在
-// 父级共享模型里，守卫必须继续可见（复位统一由 resetSettingsDraft 负责）。
+// 改动落在父级共享模型与草稿里的卡片，卸载**不清**登记：切分页后改动仍在，
+// 守卫必须继续可见（复位统一由 resetSettingsDraft 负责）；编辑只存在于卡片
+// 局部的（集群同步间隔）随卸载清登记。
 // 基线必须是响应式的：保存回填后 markSaved 只改基线，不触发任何表单字段变更，
 // 若基线是普通 Map，脏态 computed 不会重算——保存成功却继续提示「有未保存修改」。
 const formSnapshots = ref<Record<string, string>>({})
@@ -119,8 +121,23 @@ export const useSettingsFormTracker = (key: string): SettingsFormTracker => ({
   },
 })
 
-/** 任一设置卡存在未保存改动（侧栏切页与 beforeunload 共用判据）。 */
+/** 任一设置卡存在未保存改动（离开设置页的确认与 beforeunload 共用判据）。 */
 export const hasDirtySettingsForm = (): boolean => Object.values(formDirty.value).some(Boolean)
+
+// 放弃全部未保存改动（离开守卫确认「放弃并离开」时调用）：清草稿与脏态登记，
+// 并让设置页把共享模型（settings/global）回填为服务端值——设置内切分页不卸载
+// Settings.vue，留在共享模型里的编辑值不会自行复位，切回来会继续显示。
+let revertSharedModel: (() => void) | null = null
+
+/** 设置页挂载时登记共享模型的回填入口；卸载时传 null 注销。 */
+export const registerSettingsModelRevert = (revert: (() => void) | null): void => {
+  revertSharedModel = revert
+}
+
+export const discardSettingsDraft = (): void => {
+  resetSettingsDraft()
+  revertSharedModel?.()
+}
 
 /** 身份变化时清空草稿；首次挂载只记录身份，不清空页内暂存。 */
 export const syncSettingsDraftIdentity = (userId: number | null): void => {

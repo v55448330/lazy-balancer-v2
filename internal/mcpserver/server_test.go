@@ -1783,3 +1783,76 @@ func TestTransportFailureAfterRequestSentClaimsUncertainty(t *testing.T) {
 		}
 	})
 }
+
+// update_api_key_status 的 expires_at 与 REST PATCH /api-keys/:id/status 同语义：
+// 省略=不改、null=永不过期、时间串=新的过期时间。schema 须把它暴露给 Agent
+// （形态与 create_api_key 的 expires_at 一致），转发层须原样搬进请求体——显式
+// null 被丢弃就变成「不改」，Agent 以为已改为永不过期。
+func TestUpdateAPIKeyStatusToolExposesExpiresAt(t *testing.T) {
+	type property struct {
+		Type json.RawMessage `json:"type"`
+	}
+	declared := map[string]map[string]property{}
+	for _, spec := range tools {
+		if spec.name != "update_api_key_status" && spec.name != "create_api_key" {
+			continue
+		}
+		var schema struct {
+			Properties map[string]property `json:"properties"`
+		}
+		if err := json.Unmarshal([]byte(spec.schema), &schema); err != nil {
+			t.Fatalf("%s schema 解析失败: %v", spec.name, err)
+		}
+		declared[spec.name] = schema.Properties
+	}
+	expiry, exists := declared["update_api_key_status"]["expires_at"]
+	if !exists {
+		t.Fatal("update_api_key_status input_schema 缺少 expires_at（REST 接受却对 Agent 不可见）")
+	}
+	if string(expiry.Type) != `["string","null"]` {
+		t.Fatalf("update_api_key_status.expires_at type=%s, want [\"string\",\"null\"]（时间串或 null=永不过期）", expiry.Type)
+	}
+	if string(expiry.Type) != string(declared["create_api_key"]["expires_at"].Type) {
+		t.Fatalf("expires_at 形态与 create_api_key 不一致：%s vs %s", expiry.Type, declared["create_api_key"]["expires_at"].Type)
+	}
+}
+
+func TestUpdateAPIKeyStatusToolForwardsExpiresAtVerbatim(t *testing.T) {
+	var forwarded []map[string]any
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/api-keys/7/status" {
+			t.Errorf("request=%s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		forwarded = append(forwarded, body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"ok"}`))
+	}))
+	defer rest.Close()
+	handler := NewForTest(rest.URL+"/api/v1", rest.Client())
+
+	callTool(t, handler, "update_api_key_status", `{"id":7,"expires_at":"2030-01-01T00:00:00Z"}`)
+	callTool(t, handler, "update_api_key_status", `{"id":7,"expires_at":null}`)
+	callTool(t, handler, "update_api_key_status", `{"id":7,"is_enabled":false}`)
+
+	if len(forwarded) != 3 {
+		t.Fatalf("forwarded requests=%d, want 3", len(forwarded))
+	}
+	for index, body := range forwarded {
+		if _, hasID := body["id"]; hasID {
+			t.Fatalf("request %d: id 是路径参数，不得进请求体: %v", index, body)
+		}
+	}
+	if got, _ := forwarded[0]["expires_at"].(string); got != "2030-01-01T00:00:00Z" {
+		t.Fatalf("时间串必须原样转发，got %v", forwarded[0]["expires_at"])
+	}
+	if value, exists := forwarded[1]["expires_at"]; !exists || value != nil {
+		t.Fatalf("null 必须原样转发（=改为永不过期），got exists=%v value=%v", exists, value)
+	}
+	if _, exists := forwarded[2]["expires_at"]; exists {
+		t.Fatalf("未提交 expires_at 时请求体不得出现该键（=不改），got %v", forwarded[2])
+	}
+}

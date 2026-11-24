@@ -37,12 +37,18 @@ test('规则卡截断提示：非法数值一律不提示', () => {
   assert.equal(ruleCardOverflowHint(12.5, 10), null)
 })
 
-test('规则卡底部披露截断口径并提供全部规则入口', () => {
+test('规则卡底部只披露截断口径，不提供跳转规则列表的入口（流量排行看的是流量）', () => {
   assert.match(dashboard, /import \{ ruleCardOverflowHint \} from '@\/utils\/dashboardHints'/)
   assert.match(dashboard, /ruleCardOverflowHint\(rules\.value\.length, sortedRules\.value\.length\)/)
-  assert.match(dashboard, /form-tip-line[^>]*>[\s\S]{0,400}t\('common\.app\.dashboard\.rulesOverflowHint', \{ shown: ruleCardOverflow\.shown, total: ruleCardOverflow\.total \}\)/)
-  assert.match(dashboard, /window\.open\(pageUrl\('rules'\), '_blank', 'noopener'\)/)
-  assert.match(dashboard, /@click="openAllRules">[^<]*\{\{ t\('common\.app\.dashboard\.viewAllRules'\) \}\}/)
+  assert.match(
+    dashboard,
+    /class="rules-card-footer form-tip-line"><span>\{\{ t\('common\.app\.dashboard\.rulesOverflowHint', \{ shown: ruleCardOverflow\.shown, total: ruleCardOverflow\.total \}\) \}\}<\/span><\/div>/,
+    '「仅显示前 N 条，共 M 条」的说明保留',
+  )
+  assert.doesNotMatch(dashboard, /openAllRules|viewAllRules|pageUrl/, '入口、处理函数与其 deepLink 依赖一并移除')
+  for (const locale of ['zh', 'en'] as const) {
+    assert.equal(code(`src/locales/${locale}/common.ts`).includes('viewAllRules'), false, `${locale} 词条键 viewAllRules 不得残留`)
+  }
 })
 
 test('概览流量图与连接图各自声明整机口径', () => {
@@ -91,7 +97,7 @@ test('概览七张指标卡各带口径副标题', () => {
 
 test('新增披露文案 zh/en 成对非空且口径用词一致', () => {
   const keys = [
-    'rulesOverflowHint', 'viewAllRules', 'trafficScopeNote', 'connectionsScopeNote',
+    'rulesOverflowHint', 'trafficScopeNote', 'connectionsScopeNote',
     'restartScopeNote', 'stopScopeNote', 'startScopeNote',
     'totalRequestsScope', 'inFlightScope', 'domainCountScope', 'reqRateScope', 'latencyScope',
   ] as const

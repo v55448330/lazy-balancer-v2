@@ -523,15 +523,21 @@ type CreateAPIKeyRequest struct {
 	MCPIPWhitelist []string   `json:"mcp_ip_whitelist"`
 }
 
+// UpdateAPIKeyRequest 密钥更新请求体。ExpiresAt 留原始 JSON：区分「未提交」
+// （空=不改）与「提交 null」（改为永不过期），时间串=新的过期时间。
 type UpdateAPIKeyRequest struct {
-	IsEnabled      *bool     `json:"is_enabled"`
-	MCPEnabled     *bool     `json:"mcp_enabled"`
-	APIEnabled     *bool     `json:"api_enabled"`
-	ReadOnly       *bool     `json:"read_only"` // legacy：同时设置两协议只读
-	APIReadOnly    *bool     `json:"api_read_only"`
-	MCPReadOnly    *bool     `json:"mcp_read_only"`
-	MCPIPWhitelist *[]string `json:"mcp_ip_whitelist"`
+	IsEnabled      *bool           `json:"is_enabled"`
+	MCPEnabled     *bool           `json:"mcp_enabled"`
+	APIEnabled     *bool           `json:"api_enabled"`
+	ReadOnly       *bool           `json:"read_only"` // legacy：同时设置两协议只读
+	APIReadOnly    *bool           `json:"api_read_only"`
+	MCPReadOnly    *bool           `json:"mcp_read_only"`
+	MCPIPWhitelist *[]string       `json:"mcp_ip_whitelist"`
+	ExpiresAt      json.RawMessage `json:"expires_at"`
 }
+
+// ExpirySubmitted 报告请求带了 expires_at（提交 null 也算）。
+func (r UpdateAPIKeyRequest) ExpirySubmitted() bool { return len(r.ExpiresAt) > 0 }
 
 type CreateRuleRequest struct {
 	Name                          string `json:"name" binding:"required"`

@@ -260,10 +260,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, reactive } from 'vue'
+import { ref, onMounted, computed, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { isConfigUnchanged } from '@/utils/saveResult'
+import { useSettingsFormTracker } from '@/composables/useSettingsDraft'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, Connection, Document, OfficeBuilding, Plus, Postcard, Setting } from '@element-plus/icons-vue'
@@ -338,6 +339,8 @@ const props = defineProps<{
   configLoaded: boolean
   /** 父级在保存成功后回填 /config；必须 await 完成再解冻表单。 */
   onSave: () => void | Promise<void>
+  /** 父级每成功回填一次本卡字段即自增：用于刷新「已保存」基线快照。 */
+  revision?: number
 }>()
 
 // 两个独立表单的保存态：原共用一个 saving——任一保存
@@ -915,7 +918,25 @@ const handleSave = async () => {
   }
 }
 
+// —— 未保存改动判定（离开设置页的确认与 beforeunload 守卫共读）——
+// 表单键全部直绑父级共享 global；基线=最近一次服务端确认值，由父级回填版本
+// （revision）驱动刷新：重挂载时 initSaved 只在无基线时初始化，不会把未保存
+// 编辑当成已保存基线。
+const CERT_FORM_KEYS = [
+  'acme_email',
+  'cert_expiry_days',
+  'cert_renewal_days',
+  'cert_renewal_attempts',
+  'default_ca_provider_id',
+] as const satisfies readonly (keyof GlobalCertificateConfig)[]
+const formTracker = useSettingsFormTracker('certificates')
+const formSnapshot = (): string => JSON.stringify(CERT_FORM_KEYS.map((key) => global.value[key]))
+const dirty = computed(() => formTracker.isDirty(formSnapshot()))
+watch(dirty, (value) => formTracker.setDirty(value), { immediate: true })
+watch(() => props.revision, () => formTracker.markSaved(formSnapshot()))
+
 onMounted(() => {
+  if (props.configLoaded) formTracker.initSaved(formSnapshot())
   fetchConfigs()
   fetchProviders()
   fetchCAProviders()

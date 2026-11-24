@@ -302,6 +302,35 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 	return entries, failed, nil
 }
 
+// threatIPListIDsVia 返回 ids 中属于威胁情报库系统名单的 id 集合。判据与
+// loadIPListEntriesVia 的路由分支同源：system=1 且名单名映射到威胁源——
+// 自动封禁、爬虫等其它 system=1 名单不算。store 语义同 loadIPListEntriesVia
+// （nil 回退 db.DB）。
+func threatIPListIDsVia(store caddyConfigStore, ids []int64) map[int64]bool {
+	out := make(map[int64]bool, len(ids))
+	effective := store
+	if effective == nil {
+		effective = db.DB
+	}
+	if effective == nil || len(ids) == 0 {
+		return out
+	}
+	forEachIPListChunk(effective, ids, "id, COALESCE(system,0), COALESCE(name,'')", func(rows *sql.Rows) {
+		for rows.Next() {
+			var id int64
+			var system int
+			var name string
+			if err := rows.Scan(&id, &system, &name); err != nil {
+				continue
+			}
+			if system == 1 && threatSourceByListName(name) != "" {
+				out[id] = true
+			}
+		}
+	})
+	return out
+}
+
 // parseIPListEntriesStrict 解析自定义名单的 entries 列（渲染与摘要共用的
 // 「装载失败」判定单源）：只有 JSON 解析错误算失败——null 与 [] 同为合法
 // 空集（渲染按空集合继续发射，摘要必须同判，否则同一条名单在列表里显示

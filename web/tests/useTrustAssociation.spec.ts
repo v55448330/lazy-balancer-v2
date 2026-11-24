@@ -121,7 +121,7 @@ test('加入指定列表：确认 + 幂等 POST + onChanged 回调，返回完�
   assert.equal(changed, 1, '写入成功后必须通知组件刷新')
   const saves = callsOf('showSaveResult')
   assert.equal(saves.length, 1)
-  assert.match(String(saves[0].args?.[1]), /已信任——已加入列表「办公网段」/)
+  assert.match(String(saves[0].args?.[1]), /已信任——已加入 IP 名单「办公网段」/)
 })
 
 test('单击加入：策略已关联同侧非系统列表时直接加入首个列表，不创建', async () => {
@@ -156,9 +156,9 @@ test('无同侧列表：确认后创建（建单即带 IP）→ 关联 refs，�
 
   assert.equal(confirmArgs.length, 1)
   const [message, title] = confirmArgs[0]
-  assert.match(String(message), /尚未关联信任用地址列表/)
+  assert.match(String(message), /尚未关联信任用 IP 名单/)
   assert.match(String(message), /暂不生效/, '信任未启用必须提示加入后暂不生效')
-  assert.match(String(title), /创建列表并信任/)
+  assert.match(String(title), /创建 IP 名单并信任/)
 
   // 建单即播种条目：创建载荷自带 IP，写序收敛为「创建 → 关联」两次请求。
   // 原写序（创建空名单 → 关联 → 加入 IP）在加入失败时会留下已被策略引用的空名单。
@@ -511,7 +511,7 @@ test('复用路径：IP 已加入但关联失败——显性披露半态且不�
   assert.equal(puts.length, 1, '关联确实尝试过')
   const errors = callsOf('ElMessage.error')
   assert.equal(errors.length, 1, '半态必须显性披露（不得只留全局错误提示）')
-  assert.match(String(errors[0].arg), /已把 203\.0\.113\.9 加入列表「策略 A-信任」/)
+  assert.match(String(errors[0].arg), /已把 203\.0\.113\.9 加入 IP 名单「策略 A-信任」/)
   assert.match(String(errors[0].arg), /关联失败/)
   assert.match(String(errors[0].arg), /不会重复添加/, '须说明重试不会重复写入条目')
   assert.equal(creating.value, false)
@@ -659,7 +659,7 @@ test('复用路径：IP 已在列表中（added=false）且已关联——如实
   assert.equal(callsOf('showSaveResult').length, 0)
   const infos = callsOf('ElMessage.info')
   assert.equal(infos.length, 1, '必须给出「已存在」的事实说明')
-  assert.match(String(infos[0].arg), /该 IP 已在列表「策略 A-信任」中/)
+  assert.match(String(infos[0].arg), /该 IP 已在 IP 名单「策略 A-信任」中/)
   assert.equal(changed, 1, '列表可见状态仍须刷新（entry_count 可能已过期）')
 })
 
