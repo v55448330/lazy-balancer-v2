@@ -591,12 +591,16 @@ func ForeignRunningRuleRoutes(adminURL string, ownIDs map[string]bool) (foreign 
 		own[id] = id
 	}
 	claimed := claimedRouteIDs(own)
+	diagnosticClaimed := redirectDiagnosticRouteClaimed(running, claimed)
 	for routeID := range running {
 		// 只把 lb_ 前缀 @id 视为「规则路由」（外来实例误指探针的启发式面）：
 		// 非 lb_ 的 @id 既可能是导入的非前缀规则（本库 caddy_id 可合法不带
 		// 前缀），也可能来自其他 Caddy 写入方——两类都不构成外来实例证据，
 		// 在此一律跳过，避免导入合法规则后每次启动都响亮误报。
 		if !strings.HasPrefix(routeID, "lb_") {
+			continue
+		}
+		if routeID == httpsRedirectLoopDiagnosticRouteID && diagnosticClaimed {
 			continue
 		}
 		if !routeClaimedByAny(routeID, claimed) {
@@ -620,12 +624,29 @@ func diffExpectedMissing(expected map[string]string, running map[string]bool) []
 	return missing
 }
 
+// redirectDiagnosticRouteClaimed 判定 :80「已是 HTTPS 不再跳转」诊断路由
+// （@id 不带规则前缀）是否属于本库配置：渲染侧只在生成至少一条跳转子路由
+// （<规则ID>_redirect）时才渲染它（caddy.go），所以运行配置里存在被认领的
+// 跳转子路由即认定；否则它是残留/外来路由，由调用方照常计入多余。
+func redirectDiagnosticRouteClaimed(running map[string]bool, claimed map[string]struct{}) bool {
+	for routeID := range running {
+		if strings.HasSuffix(routeID, "_redirect") && routeClaimedByAny(routeID, claimed) {
+			return true
+		}
+	}
+	return false
+}
+
 func diffRunningExtra(expected map[string]string, running map[string]bool) []string {
 	var extra []string
 	claimed := claimedRouteIDs(expected)
+	diagnosticClaimed := redirectDiagnosticRouteClaimed(running, claimed)
 	for routeID := range running {
 		// 子路由（lb_x_redirect / lb_x_path_0 等，caddy.go tagRuleRoute 系）属于其
 		// 主规则——仅当没有任何期望规则认领该 @id 时才计为多余（// 精确匹配会把每条 HTTPS 跳转/路径规则的子路由误报为多余）。
+		if routeID == httpsRedirectLoopDiagnosticRouteID && diagnosticClaimed {
+			continue
+		}
 		if !routeClaimedByAny(routeID, claimed) {
 			extra = append(extra, routeID)
 		}
