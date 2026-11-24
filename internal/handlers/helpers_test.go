@@ -678,7 +678,6 @@ func TestGetCPUPercent_serializes_sample_read_with_baseline_update(t *testing.T)
 		lastCPUStats.mu.Unlock()
 	})
 	firstRead := make(chan struct{})
-	secondRead := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	var callMu sync.Mutex
 	callCount := 0
@@ -695,7 +694,6 @@ func TestGetCPUPercent_serializes_sample_read_with_baseline_update(t *testing.T)
 			<-releaseFirst
 			return []byte("cpu 100 0 0 100 0\n"), nil
 		}
-		close(secondRead)
 		return []byte("cpu 200 0 0 200 0\n"), nil
 	}
 	errorsCh := make(chan error, 2)
@@ -710,9 +708,8 @@ func TestGetCPUPercent_serializes_sample_read_with_baseline_update(t *testing.T)
 		_, err := getCPUPercent()
 		errorsCh <- err
 	}()
-	// 第二次采样在入口锁处阻塞（读+算+写基线整段持锁），只可能在
-	// releaseFirst 之后才 close(secondRead)——原 select 的 secondRead 分支不可达，
-	// 恒空转 100ms。此处直接释放即可；串行化由「持锁贯穿读样本」实现。
+	// 第二次采样在入口锁处阻塞（读+算+写基线整段持锁）；直接释放即可，
+	// 串行化由「持锁贯穿读样本」实现——第二次读样本只发生在 releaseFirst 之后。
 	close(releaseFirst)
 	firstErr, secondErr := <-errorsCh, <-errorsCh
 
@@ -785,7 +782,6 @@ func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testi
 	lastNetStats.mu.Unlock()
 	t.Cleanup(func() { systemMetricsReadFile = originalReader })
 	firstRead := make(chan struct{})
-	secondRead := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	var callMu sync.Mutex
 	callCount := 0
@@ -807,8 +803,6 @@ func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testi
 		if call == 0 {
 			close(firstRead)
 			<-releaseFirst
-		} else {
-			close(secondRead)
 		}
 		return netDevSamples[call], nil
 	}
@@ -828,9 +822,8 @@ func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testi
 		_, err := getRealtimeTraffic()
 		errorsCh <- err
 	}()
-	// 第二次采样在入口锁处阻塞（读+算+写基线整段持锁），只可能在
-	// releaseFirst 之后才 close(secondRead)——原 select 的 secondRead 分支不可达，
-	// 恒空转 100ms。此处直接释放即可；串行化由「持锁贯穿读样本」实现。
+	// 第二次采样在入口锁处阻塞（读+算+写基线整段持锁）；直接释放即可，
+	// 串行化由「持锁贯穿读样本」实现——第二次读样本只发生在 releaseFirst 之后。
 	close(releaseFirst)
 	firstErr, secondErr := <-errorsCh, <-errorsCh
 

@@ -513,8 +513,19 @@ func TestEngine_DescribeAllReleasesLockBeforeFnCalls(t *testing.T) {
 			runtime.Gosched()
 		}
 	}()
-	time.Sleep(50 * time.Millisecond) // 写者进入写锁等待队列
-	close(release)                    // 放行 EnabledFn → IsRunning 的 RLock
+	// 写者就位的确定性判据：sync.RWMutex.TryRLock 在写者持锁或 pending 时恒
+	// 失败（写者优先）——缺陷形态（DescribeAll 持读锁跨 Fn）下写者 pending 在
+	// e.mu.Lock 上直到 DescribeAll 返回，判据必然成立；正确形态下写者只在两次
+	// Register 之间瞬时持锁，判据成立后嵌套 RLock 也不会被饿死。墙钟 Sleep 在
+	// 慢机上可能让写者尚未就位，缺陷形态因此空转通过。
+	waitForEngine(t, "写者进入引擎写锁（持锁或 pending）", 5*time.Second, func() bool {
+		if e.mu.TryRLock() {
+			e.mu.RUnlock()
+			return false
+		}
+		return true
+	})
+	close(release) // 放行 EnabledFn → IsRunning 的 RLock
 
 	select {
 	case <-scanDone:
@@ -880,8 +891,14 @@ func TestEngine_StatusMirrorRoleGated(t *testing.T) {
 			t.Fatalf("从节点不得采纳 MasterOnly 镜像, got %q", m.StatusMirror)
 		}
 	}
-	if m, _ := e.Lookup("t-mirror"); m.StatusMirror != "" {
-		t.Fatalf("Lookup 与 DescribeAll 应同受角色门, got %q", m.StatusMirror)
+	// ok 必须判定：任务缺失时 Lookup 返回零值（StatusMirror 为空），只断值会
+	// 让「从节点角色门」断言空真通过。
+	mirror, found := e.Lookup("t-mirror")
+	if !found {
+		t.Fatal("从节点 Lookup 未找到任务——角色门断言不得空转")
+	}
+	if mirror.StatusMirror != "" {
+		t.Fatalf("Lookup 与 DescribeAll 应同受角色门, got %q", mirror.StatusMirror)
 	}
 	e.SetRole(true)
 	saw := false
@@ -896,8 +913,9 @@ func TestEngine_StatusMirrorRoleGated(t *testing.T) {
 	if !saw {
 		t.Fatal("任务未注册")
 	}
-	if m, _ := e.Lookup("t-mirror"); m.StatusMirror != "running" {
-		t.Fatalf("Lookup 主节点应采纳镜像, got %q", m.StatusMirror)
+	mirror, found = e.Lookup("t-mirror")
+	if !found || mirror.StatusMirror != "running" {
+		t.Fatalf("Lookup 主节点应采纳镜像, got found=%v mirror=%q", found, mirror.StatusMirror)
 	}
 }
 

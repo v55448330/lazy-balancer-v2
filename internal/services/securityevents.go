@@ -746,6 +746,10 @@ func resetSecurityEventsMappingsCacheForTest() {
 	securityEventsMappingsCache.Unlock()
 }
 
+// beforeSecurityEventsMappingsQuery 保留映射装载四条查询前注入缝，供关停
+// 交错回归测试使用（缝后任何对包级 db.DB 的二次读取都会在关停窗口内 panic）。
+var beforeSecurityEventsMappingsQuery = func() {}
+
 // securityEventsLoadMappings batch-loads per-tick indexes: host→rule, plus the
 // v2.2.0 multi-policy attribution inputs — rule→bound policy ids (绑定执行序：
 // rank ASC=提交序/顺序编辑序，policy_id ASC 兜底，so "first bound" is
@@ -754,7 +758,10 @@ func resetSecurityEventsMappingsCacheForTest() {
 // normalizedRuleDomains (db.CanonicalDomains). 同一 (DB,cluster_version) 复用
 // 只读快照；配置写推进版本后重建，失败不缓存。
 func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string][]int, map[int]*models.SecurityPolicy, error) {
-	database := db.DB
+	// 关停竞态守卫：本函数同时服务后台采集 daemon 与 IPC 同步
+	// 入口，统一走 db.GetDB() 单次快照，后续四条查询与缓存键全部用局部变量
+	// ——判空后二次读包级 db.DB 会在 db.Close 窗口内 nil 解引用 panic。
+	database := db.GetDB()
 	if database == nil {
 		return nil, nil, nil, errors.New("security events: database not initialized")
 	}
@@ -762,6 +769,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	if err := database.QueryRow(`SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1`).Scan(&version); err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: read mapping version: %w", err)
 	}
+	beforeSecurityEventsMappingsQuery()
 	securityEventsMappingsCache.Lock()
 	defer securityEventsMappingsCache.Unlock()
 	if cached := &securityEventsMappingsCache.entry; cached.loaded && cached.database == database && cached.version == version {
@@ -776,7 +784,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// created_at 升序把「后创建覆盖」显式化，caddy_id 兜底确定序（同秒创建也
 	// 可复现）；enabled 升序让启用规则最后赋值（覆盖禁用重名规则）。
 	// MapHost 对 host:port 精确键仍优先。
-	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,''), COALESCE(name,''), listen_port FROM lb_rules WHERE protocol='http' AND COALESCE(domain,'') != '' ORDER BY COALESCE(enabled,0) ASC, COALESCE(created_at,'') ASC, caddy_id ASC`)
+	rows, err := database.Query(`SELECT caddy_id, COALESCE(domain,''), COALESCE(name,''), listen_port FROM lb_rules WHERE protocol='http' AND COALESCE(domain,'') != '' ORDER BY COALESCE(enabled,0) ASC, COALESCE(created_at,'') ASC, caddy_id ASC`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load rules: %w", err)
 	}
@@ -809,7 +817,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// （X-LB-Rule-ID → rulesByID）按 caddy_id 直查，必须含 TCP 规则——
 	// 否则 L4 拦截事件 rule_caddy_id/policy 全空（端到端实证实锤）。
 	// TCP 无域名维度，caddy_id 直查不含域名键。
-	tcpRows, err := db.DB.Query(`SELECT caddy_id, COALESCE(name,'') FROM lb_rules WHERE protocol='tcp' ORDER BY COALESCE(enabled,0) ASC, COALESCE(created_at,'') ASC, caddy_id ASC`)
+	tcpRows, err := database.Query(`SELECT caddy_id, COALESCE(name,'') FROM lb_rules WHERE protocol='tcp' ORDER BY COALESCE(enabled,0) ASC, COALESCE(created_at,'') ASC, caddy_id ASC`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load tcp rules: %w", err)
 	}
@@ -829,7 +837,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// （rank ASC=提交序/顺序编辑序，policy_id ASC 兜底遗留行），
 	// 重叠时归因到「绑定顺序第一条」。
 	bindings := make(map[string][]int)
-	bindRows, err := db.DB.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rank ASC, policy_id ASC`)
+	bindRows, err := database.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rank ASC, policy_id ASC`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policy bindings: %w", err)
 	}
@@ -851,7 +859,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// 不发射 CRS，不得认领 CRS 事件）；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(policy_type,''), COALESCE(trust_detection,0) FROM security_policies WHERE enabled=1`)
+	polRows, err := database.Query(`SELECT id, COALESCE(name,''), COALESCE(mode,'off'), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(policy_type,''), COALESCE(trust_detection,0) FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}

@@ -9,7 +9,7 @@
 //
 // api.ts / element-plus 用 data: 模块替身（钩子须先注册）。
 
-import { test } from 'node:test'
+import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ref } from 'vue'
 
@@ -187,5 +187,60 @@ test('dispose 同样复位 starting（组件卸载后不留 loading 残影）', 
   } finally {
     browser.restore()
     g.__post = async () => ({ data: { status: 'started', trigger: 'manual' } })
+  }
+})
+
+// 打开弹框与「立即更新」是同一失败态的两条入口：status=null（瞬时取数失败）
+// 在两处必须同口径——靠 2s 轮询收敛。原实现只在 confirmUpdate 起轮询，
+// onOpened 空白弹框永不自愈（用户只能关掉重开或点更新）。
+test('onOpened 状态取数失败（status=null）→ 与 confirmUpdate 同口径靠轮询收敛', async () => {
+  const browser = installBrowserHost({ visibility: true })
+  mock.timers.enable({ apis: ['setInterval'] })
+  g.__gets = []
+  g.__get = async () => { throw new Error('瞬时取数失败') }
+  const dialog = makeDialog()
+  try {
+    dialog.open()
+    await dialog.onOpened()
+    assert.equal(dialog.status.value, null, '前置：状态未取到')
+    const afterOpen = statusCalls()
+    assert.equal(afterOpen, 1, '前置：打开时拉过一次状态')
+    mock.timers.tick(2000)
+    await flushMicrotasks()
+    assert.ok(statusCalls() > afterOpen, 'status=null 必须继续轮询（与 confirmUpdate 同判据）')
+    // 状态恢复后终态即停：不得无限轮询
+    g.__get = async () => ({ data: { running: false, status: 'ok' } })
+    mock.timers.tick(2000)
+    await flushMicrotasks()
+    const settled = statusCalls()
+    mock.timers.tick(6000)
+    await flushMicrotasks()
+    assert.equal(statusCalls(), settled, '取到终态后必须停轮询（2s 起轮询只服务于收敛）')
+  } finally {
+    dialog.dispose()
+    mock.timers.reset()
+    browser.restore()
+    g.__get = async () => ({ data: { running: false } })
+  }
+})
+
+test('onOpened 取到终态（非运行中）→ 不起轮询（null 判据不得吞掉正常路径）', async () => {
+  const browser = installBrowserHost({ visibility: true })
+  mock.timers.enable({ apis: ['setInterval'] })
+  g.__gets = []
+  g.__get = async () => ({ data: { running: false, status: 'ok' } })
+  const dialog = makeDialog()
+  try {
+    dialog.open()
+    await dialog.onOpened()
+    const afterOpen = statusCalls()
+    mock.timers.tick(6000)
+    await flushMicrotasks()
+    assert.equal(statusCalls(), afterOpen, '终态已取到：打开弹框不得自启轮询')
+  } finally {
+    dialog.dispose()
+    mock.timers.reset()
+    browser.restore()
+    g.__get = async () => ({ data: { running: false } })
   }
 })

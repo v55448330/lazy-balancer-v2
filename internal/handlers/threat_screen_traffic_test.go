@@ -141,10 +141,15 @@ func TestGetThreatScreenTraffic_timeoutGuard(t *testing.T) {
 	}
 }
 
-func TestGetThreatScreenTraffic_shortTTLCacheHit(t *testing.T) {
-	// Given: admin 端点计数器 + 1s TTL 进程内缓存（计数仅统计 traffic-stats
-	// 主路径——l4-conn-stats 是同轮伴生抓取，缺失时静默跳过，不参与主体
-	// 抓取次数断言）
+func TestGetThreatScreenTraffic_cacheHitWithinTTL(t *testing.T) {
+	withIsolatedGlobal(t) // 本用例改写已登记 seam threatTrafficCacheTTL
+	// Given: TTL 接缝放大到 10s——本用例钉「TTL 内第二次请求命中缓存」，
+	// 判别目标不应绑在默认 1s 墙钟窗口上（慢机/-race 首请求到次请求跨 1s 即假红）。
+	old := threatTrafficCacheTTL
+	threatTrafficCacheTTL = 10 * time.Second
+	t.Cleanup(func() { threatTrafficCacheTTL = old })
+	// admin 端点计数器（计数仅统计 traffic-stats 主路径——l4-conn-stats 是同轮
+	// 伴生抓取，缺失时静默跳过，不参与主体抓取次数断言）
 	var hits int32
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/lb/l4-conn-stats" {
@@ -166,7 +171,7 @@ func TestGetThreatScreenTraffic_shortTTLCacheHit(t *testing.T) {
 		t.Fatalf("status=%d/%d", rec1.Code, rec2.Code)
 	}
 	if got := atomic.LoadInt32(&hits); got != 1 {
-		t.Fatalf("upstream hits=%d, want 1（1s TTL 缓存命中）", got)
+		t.Fatalf("upstream hits=%d, want 1（TTL 内必须命中进程内缓存）", got)
 	}
 	if rec1.Body.String() != rec2.Body.String() {
 		t.Fatalf("cached response mismatch:\n%s\n%s", rec1.Body.String(), rec2.Body.String())

@@ -116,8 +116,8 @@ func TestDuplicateRule_tcpClearsStagePages(t *testing.T) {
 	for _, id := range []string{"lb_tcppage", "lb_httppage"} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/"+id+"/duplicate", nil))
-		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-			t.Fatalf("duplicate %s status=%d body=%.200s, want 2xx", id, response.Code, response.Body.String())
+		if response.Code != http.StatusCreated {
+			t.Fatalf("duplicate %s status=%d body=%.200s, want 201", id, response.Code, response.Body.String())
 		}
 	}
 

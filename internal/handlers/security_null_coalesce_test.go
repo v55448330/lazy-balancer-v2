@@ -41,7 +41,7 @@ func newNullCoalesceRouter(t *testing.T) *gin.Engine {
 }
 
 // GetSecurityPolicyBindings 的逐策略查询与 securityPolicySelectColumns
-// 同 41 列但无 COALESCE——绑定策略任一可空列（如 description）为 NULL 时整列表 500。
+// 同列集但无 COALESCE——绑定策略任一可空列（如 description）为 NULL 时整列表 500。
 // 修复后按常量投影返回 200 与该策略的默认值形态。
 func TestGetSecurityPolicyBindings_nullPolicyColumnsReturn200(t *testing.T) {
 	// Given：一条 HTTP 规则绑定一条 description（及其余可空列）为 NULL 的启用策略

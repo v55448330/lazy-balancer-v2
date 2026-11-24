@@ -215,7 +215,7 @@ func TestSharedGeoIPSearcher_v6FormChangeTriggersRebuild(t *testing.T) {
 	v6 := filepath.Join(dir, "ip2region_v6.xdb")
 	writeV6FixtureXDB(t, v6, defaultV6Fixtures(t))
 	key := v4 + "\x00" + v6
-	t.Cleanup(func() { delete(geoipSharedSearchers, key) })
+	t.Cleanup(func() { removeSharedSearcher(key, v4, v6) })
 
 	s1, err := sharedGeoIPSearcher(v4, v6)
 	if err != nil {

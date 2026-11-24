@@ -389,7 +389,7 @@ func TestUpdateSecurityPolicy_omittedModeLeavesFieldUnchanged(t *testing.T) {
 	}
 }
 
-func TestSecurityPolicyWhitelistBlacklist_createAndUpdateRoundTrip(t *testing.T) {
+func TestSecurityPolicyWhitelistBlacklist_updateRoundTrip(t *testing.T) {
 	// Given a legacy mixed policy seeded directly (mixed cannot be created via API).
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)
@@ -411,7 +411,7 @@ func TestSecurityPolicyWhitelistBlacklist_createAndUpdateRoundTrip(t *testing.T)
 		}
 	}
 
-	// Then both columns persist from create
+	// Then the directly-seeded row carries both columns (not a create-path result)
 	assertListColumns(`["192.0.2.0/24","2001:db8::1"]`, `["198.51.100.7"]`)
 
 	// When both lists are replaced via update
@@ -438,6 +438,47 @@ func TestSecurityPolicyWhitelistBlacklist_createAndUpdateRoundTrip(t *testing.T)
 	var white string
 	if err := json.Unmarshal(resp.Data.Policy["ip_whitelist"], &white); err != nil || white != `["203.0.113.9"]` {
 		t.Fatalf("detail ip_whitelist = %s (decoded %q), want string %q", resp.Data.Policy["ip_whitelist"], white, `["203.0.113.9"]`)
+	}
+}
+
+// 创建路径的名单落库（此前 create 的 ip_whitelist/ip_blacklist 无专门用例，
+// 旧用例名把直插夹具当成了 create 结果）：显式 stage0 保留 IP 白名单（黑名单
+// 按阶段矩阵归零）、stage1 保留 IP 黑名单（白名单归零）——两形态共同覆盖
+// create 的两列写入面。
+func TestSecurityPolicyWhitelistBlacklist_createPersistsByStage(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	readLists := func(id int) (string, string) {
+		t.Helper()
+		var white, black string
+		if err := db.DB.QueryRow(`SELECT ip_whitelist, ip_blacklist FROM security_policies WHERE id=?`, id).Scan(&white, &black); err != nil {
+			t.Fatalf("read back policy %d: %v", id, err)
+		}
+		return white, black
+	}
+
+	stage0 := createTestPolicy(t, router, map[string]any{
+		"name": "stage0-名单", "mode": "off", "policy_type": "stage0",
+		"ip_whitelist": `["192.0.2.0/24"]`, "ip_blacklist": `["198.51.100.7"]`,
+	})
+	white, black := readLists(stage0)
+	if white != `["192.0.2.0/24"]` {
+		t.Fatalf("stage0 create ip_whitelist=%q, want 创建载荷落库", white)
+	}
+	if black != "[]" {
+		t.Fatalf("stage0 create ip_blacklist=%q, want 阶段外归零", black)
+	}
+
+	stage1 := createTestPolicy(t, router, map[string]any{
+		"name": "stage1-名单", "mode": "off", "policy_type": "stage1",
+		"ip_whitelist": `["192.0.2.0/24"]`, "ip_blacklist": `["198.51.100.7"]`,
+	})
+	white, black = readLists(stage1)
+	if black != `["198.51.100.7"]` {
+		t.Fatalf("stage1 create ip_blacklist=%q, want 创建载荷落库", black)
+	}
+	if white != "[]" {
+		t.Fatalf("stage1 create ip_whitelist=%q, want 阶段外归零", white)
 	}
 }
 
@@ -1470,7 +1511,7 @@ func TestGetSecurityPolicy_returnsHumanVerifyAndCCFields(t *testing.T) {
 // 否则类型切换后旧配置残留在别的阶段里（列表/预览宣称存在但永不发射）。
 // 显式类型 + 阶段外「生效中」人机/CC 字段 = 矛盾载荷 400（与其余阶段外族同口径）；
 // 不携带阶段外字段的纯类型切换则静默归零。
-func TestUpdateSecurityPolicy_zeroesHumanFieldsOutsideStage3(t *testing.T) {
+func TestUpdateSecurityPolicy_zeroesHumanFieldsOutsideStage2(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	useCRSRuleIndexFixture(t)
 	router := newSecurityRouter(t)

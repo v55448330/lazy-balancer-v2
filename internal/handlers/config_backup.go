@@ -3761,6 +3761,15 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		if utf8.RuneCountInString(backupString(page["description"])) > securityDescriptionMaxRunes {
 			return fmt.Errorf("拦截页面 #%d（%s）：拦截页面描述不能超过 %d 字符", index+1, name, securityDescriptionMaxRunes)
 		}
+		// 正文/JSON 变体的 64KB 上限与保存侧 validateBlockPagePayload 同界同
+		// 文案：导入是第二条落库通道，手造备份可把数百 KB 正文带入 Caddy 渲染
+		// 配置（响应体与 reload 成本逐页膨胀）。拒绝并点名该条，不静默截断。
+		if len(backupString(page["content"])) > 64<<10 {
+			return fmt.Errorf("拦截页面 #%d（%s）：拦截页面内容不能超过 64KB", index+1, name)
+		}
+		if len(backupString(page["json_content"])) > 64<<10 {
+			return fmt.Errorf("拦截页面 #%d（%s）：拦截页面 JSON 内容不能超过 64KB", index+1, name)
+		}
 		if backupBooleanEnabled(page["is_builtin"]) {
 			id, idOK := backupInteger(page["id"])
 			validIdentity := false

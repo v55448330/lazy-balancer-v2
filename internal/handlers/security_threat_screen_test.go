@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1795,7 +1796,7 @@ func TestGetSecurityThreatScreen_hourlyHistDayBuckets(t *testing.T) {
 	// Given: 30 小时前与 2 小时前各 1 条事件
 	setupSecurityPolicyTestDB(t)
 	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
-	// 固定时间轴：否则 now:=time.Now() 与下方 today:=time.Now() 跨午夜时
+	// 固定时间轴：否则夹具的 now 与 handler 内部 time.Now() 跨午夜时
 	// 日桶标签会整体错位一天（本地 00:xx 窗口可稳定复现）。
 	now := time.Now()
 	installThreatClock(t, now)
@@ -1944,23 +1945,39 @@ func TestThreatRollupRewindTo_lockContentionReturnsAndClampsWindow(t *testing.T)
 				t.Fatal(err)
 			}
 		}
+		threatRollupRewindPending.Store(0)
+		t.Cleanup(func() { threatRollupRewindPending.Store(0) })
 		threatRollupMu.Lock()
 		done := make(chan struct{})
 		go func() {
 			ThreatRollupRewindTo(base.Add(-30*time.Minute), nil)
 			close(done)
 		}()
-		returned := false
-		select {
-		case <-done:
-			returned = true
-		case <-time.After(150 * time.Millisecond):
+		// 确定性判定「非阻塞」：持锁期间 rewind 必须走 TryLock 失败分支把目标
+		// 入队（pending），而不是等锁。入队发生在返回之前，故等待 pending 非零
+		// 即等待该次调用推进到非阻塞路径；10s 仅作活性看门狗（远大于调度抖动），
+		// 超时即证明它阻塞在锁上。原实现的 150ms 就要求协程「已被调度并返回」，
+		// 慢机/高并发下与实现是否阻塞无关地假红。
+		deadline := time.Now().Add(10 * time.Second)
+		for threatRollupRewindPending.Load() == 0 {
+			select {
+			case <-done:
+				threatRollupMu.Unlock()
+				t.Fatal("rewind 在锁被占用时返回却未入队待处理目标（TryLock 失败分支未执行）")
+			default:
+			}
+			if time.Now().After(deadline) {
+				threatRollupMu.Unlock()
+				<-done
+				t.Fatal("rollup rewind 阻塞在 ingest 锁上（必须 TryLock + 入队待重试）")
+			}
+			runtime.Gosched()
 		}
 		threatRollupMu.Unlock()
-		if !returned {
-			<-done
-			t.Fatal("rollup rewind must not block ingest behind a long warmer batch")
+		if want := threatRollupRewindMinute(base.Add(-30 * time.Minute)).Unix(); threatRollupRewindPending.Load() != want {
+			t.Fatalf("pending rewind=%d, want %d（入队目标必须是请求的分钟）", threatRollupRewindPending.Load(), want)
 		}
+		<-done // 入队后函数必然返回；此处等待仅为收口协程，无时间窗断言。
 		if err := ensureThreatRollup(24); err != nil {
 			t.Fatal(err)
 		}

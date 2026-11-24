@@ -2260,15 +2260,9 @@ func (h *Handlers) GetThreatScreenAttackFlow(c *gin.Context) {
 		if isMissingOrReservedIP(ev.ClientIP) {
 			continue
 		}
-		location := enrichIPLocation(ev.ClientIP)
-		country := ""
-		province := ""
-		if parts := strings.Split(location, "·"); len(parts) > 0 {
-			country = parts[0]
-			if len(parts) > 1 {
-				province = parts[1]
-			}
-		}
+		// 归属地结构化单源：ISP-only 段展示为「中国·阿里」，二次按「·」拆串
+		// 会把 ISP 当省名（enrichIPLocationParts 注释已把该形态定为回归）。
+		country, province := enrichIPLocationParts(ev.ClientIP)
 		if country == "" {
 			country = "未知"
 		}

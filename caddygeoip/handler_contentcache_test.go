@@ -14,18 +14,69 @@ import (
 	"github.com/lionsoul2014/ip2region/binding/golang/xdb"
 )
 
+// removeSharedSearcher 移除一个共享 searcher 条目与指定的内容缓存条目（测试
+// 清理单源）。共享表的一切读写都在 geoipSharedMu 内（与生产侧 Provision 同
+// 锁口径）：裸 delete 会与并发装载/换库重建构成数据竞争。
+func removeSharedSearcher(key string, contentPaths ...string) {
+	geoipSharedMu.Lock()
+	delete(geoipSharedSearchers, key)
+	geoipSharedMu.Unlock()
+	geoipContentMu.Lock()
+	for _, path := range contentPaths {
+		delete(geoipContentCache, path)
+	}
+	geoipContentMu.Unlock()
+}
+
 // cleanupSharedSearcher 移除测试注入的共享 searcher 条目与内容缓存条目
 // （测试间串扰防线：路径键唯一但内容缓存按路径键共享，必须一并清理）。
 func cleanupSharedSearcher(t *testing.T, path string) {
 	t.Helper()
+	t.Cleanup(func() { removeSharedSearcher(path+"\x00", path) })
+}
+
+// TestRemoveSharedSearcher_takesSharedLock：共享表的删除必须持有 geoipSharedMu
+// ——生产侧 Provision 在锁内读写该表，测试清理若裸 delete，与并发装载/换库
+// 重建构成数据竞争。判据是「另一 goroutine 持锁期间删除不得生效」：持锁方
+// 未释放前条目必须仍在表内，释放后删除必须完成（不依赖调度时序）。
+func TestRemoveSharedSearcher_takesSharedLock(t *testing.T) {
+	const key = "remove-shared-searcher-probe\x00"
+	geoipSharedMu.Lock()
+	geoipSharedSearchers[key] = &geoipSharedSearcher{}
+	geoipSharedMu.Unlock()
 	t.Cleanup(func() {
 		geoipSharedMu.Lock()
-		delete(geoipSharedSearchers, path+"\x00")
+		delete(geoipSharedSearchers, key)
 		geoipSharedMu.Unlock()
-		geoipContentMu.Lock()
-		delete(geoipContentCache, path)
-		geoipContentMu.Unlock()
 	})
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	geoipSharedMu.Lock()
+	go func() {
+		close(started)
+		removeSharedSearcher(key)
+		close(done)
+	}()
+	<-started
+	select {
+	case <-done:
+		geoipSharedMu.Unlock()
+		t.Fatal("removeSharedSearcher 在 geoipSharedMu 被他人持有时完成了删除：删除路径必须先取锁")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, ok := geoipSharedSearchers[key]; !ok {
+		geoipSharedMu.Unlock()
+		t.Fatal("持锁期间条目被删除：删除路径未走 geoipSharedMu")
+	}
+	geoipSharedMu.Unlock()
+	<-done
+	geoipSharedMu.Lock()
+	_, still := geoipSharedSearchers[key]
+	geoipSharedMu.Unlock()
+	if still {
+		t.Fatal("释放锁后条目仍在表内：removeSharedSearcher 未删除目标键")
+	}
 }
 
 func seedXdbCopy(t *testing.T) string {

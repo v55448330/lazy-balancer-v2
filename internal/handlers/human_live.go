@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -54,13 +56,28 @@ func (h *Handlers) GetHumanLiveChallenges(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3d85d047"), MessageKey: "k_3d85d047"})
 		return
 	}
-	target := h.cfg.CaddyAdminURL + "/lb/human/live?scope=" + url.QueryEscape(scope)
 	out := humanLiveChallengePayload{Sessions: []humanLiveChallengeSession{}}
+	// 未装配 cfg 的嵌入/测试形态：与 /security/human/stats 同口径返回零值
+	// 200，不得裸解引用 panic（gin Recovery 会吞成空体 500 且无归因日志）。
+	if h == nil || h.cfg == nil || h.cfg.CaddyAdminURL == "" {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: out})
+		return
+	}
+	target := h.cfg.CaddyAdminURL + "/lb/human/live?scope=" + url.QueryEscape(scope)
 	resp, err := humanAdminClient.Get(target)
-	if err == nil {
+	if err != nil {
+		// 降级容错（旧二进制/端点缺失/超时返回空运行态）但必须留痕：状态转换
+		// 去重（首报 warn、恢复 info），不逐轮刷日志。
+		services.LogConfigReadFailure("human-live-challenges", fmt.Errorf("人机验证实时挑战拉取失败（返回空运行态）: %w", err))
+	} else {
 		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
+		if resp.StatusCode != http.StatusOK {
+			services.LogConfigReadFailure("human-live-challenges", fmt.Errorf("人机验证实时挑战端点返回 %d（返回空运行态）", resp.StatusCode))
+		} else {
+			services.LogConfigReadRecovered("human-live-challenges")
+			if derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); derr != nil {
+				services.LogConfigReadFailure("human-live-challenges", fmt.Errorf("人机验证实时挑战响应解析失败（返回空运行态）: %w", derr))
+			}
 		}
 	}
 	if out.Sessions == nil {

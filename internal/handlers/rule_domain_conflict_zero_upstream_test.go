@@ -39,8 +39,8 @@ func TestCreateRule_zeroEnabledUpstreamRuleDoesNotOccupyDomain(t *testing.T) {
 
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 2xx（零启用上游规则不占位）", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s, want 201（零启用上游规则不占位）", response.Code, response.Body.String())
 	}
 }
 

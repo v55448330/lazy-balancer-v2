@@ -35,3 +35,34 @@ export const dailySampleValues: ReadonlyArray<readonly [string, string]> = [
   ['backup_status', '成功 7 / 失败 0'],
   ['login_status', '成功 40 / 失败 3 / MFA失败 1'],
 ]
+
+/** 预览替换的格式口径（与各通道实发渲染器同族）：
+ * - json：webhook 载荷模板——值**一律 JSON 编码**（模板写 `"date": {{date}}`，
+ *   运行时得 `"date": "2026-11-18"`），与后端 renderStyleTemplateJSON 同口径；
+ * - markdown：QQ 富文本——多值变量（top_ips 等）展开为语义表格；
+ * - text：微信纯文本/邮件纯文本——多行值原样保留。 */
+type DailySampleFormat = 'json' | 'markdown' | 'text'
+
+/** 把日报样例值代入模板占位符（预览用；事件变量由调用方先替换）。 */
+export const renderDailySamples = (
+  text: string,
+  options: {
+    format: DailySampleFormat
+    /** markdown 多值变量展开（返回 null = 该键不展开，回落原始多行值） */
+    mdMultiValue?: (key: string, value: string) => string | null
+  },
+): string => {
+  let out = text
+  for (const [key, value] of dailySampleValues) {
+    const placeholder = `{{${key}}}`
+    if (!out.includes(placeholder)) continue
+    if (options.format === 'json') {
+      out = out.split(placeholder).join(JSON.stringify(value))
+      continue
+    }
+    const md = options.format === 'markdown' ? options.mdMultiValue?.(key, value) ?? null : null
+    // 表格前后留空行（与后端展开同口径）：粘连时解析器把相邻标签/表头吞成上一表数据行
+    out = out.split(placeholder).join(md ? `\n${md}\n` : value)
+  }
+  return out
+}

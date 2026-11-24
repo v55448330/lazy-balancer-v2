@@ -23,22 +23,19 @@ import (
 // 链路：旧 JWT（无 mfa_ts）→ verify-step 验码 → 新 JWT（新鲜 mfa_ts）→
 // disable 空码体 → 守卫宽限窗置标记放行 → handler 见标记跳过本层验码 → 200。
 // 无此接缝时 handler 对空码必 401。
-// totpCodeAwayFromBoundary 生成 TOTP 码并避开时间片边界：距边界 ≤2s 时等到
-// 下一片再生码——「片尾生成、请求跨片到达」会让验证落到下一片，造成与实现
-// 无关的偶发假红。
-func totpCodeAwayFromBoundary(t *testing.T, secret string) string {
-	t.Helper()
-	const periodSeconds = 30
-	now := time.Now()
-	if remaining := periodSeconds - now.Unix()%periodSeconds; remaining <= 2 {
-		time.Sleep(time.Duration(remaining) * time.Second)
-		now = time.Now()
-	}
-	code, err := totp.GenerateCodeCustom(secret, now, totp.ValidateOpts{Period: periodSeconds, Skew: 0, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1})
-	if err != nil {
-		t.Fatalf("generate totp code: %v", err)
-	}
-	return code
+// totpPeriod 是 TOTP 时间片长度（与校验器 services.MFAVerifyTOTPCode 的周期一致）。
+const totpPeriod = 30 * time.Second
+
+// totpCodeForStep 生成「at 所在时间片」的 TOTP 码。码只由片起点决定——片内
+// 任意时刻（含片尾最后一毫秒）生成的码相同——因此不读第二遍时钟，也不做
+// 真实等待。「片尾生成、请求跨片到达」由校验器的 ±1 片容差兜住，无需在片尾
+// 睡到下一片；该容差由 TestMFAStepUpSeam_totpCodeSurvivesStepBoundary 以注入
+// 时刻钉住，容差被收窄时在那里点名报红，而不是在这里靠睡眠掩盖。
+func totpCodeForStep(secret string, at time.Time) (string, error) {
+	// 按 30 秒取整；Unix 纪元是 30 秒的整数倍，取整结果与 TOTP 计数器
+	// floor(unix/30) 的片起点对齐。
+	stepStart := at.Truncate(totpPeriod)
+	return totp.GenerateCodeCustom(secret, stepStart, totp.ValidateOpts{Period: 30, Skew: 0, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1})
 }
 
 func TestMFAStepUpSeam_guardMarkerFlowDisablesWithoutCode(t *testing.T) {
@@ -94,7 +91,12 @@ func TestMFAStepUpSeam_guardMarkerFlowDisablesWithoutCode(t *testing.T) {
 	}
 
 	// When①：verify-step 验码 → 新 JWT 携新鲜 mfa_ts。
-	code := totpCodeAwayFromBoundary(t, secret)
+	// 码只取决于生成时刻所在的时间片；校验器带 ±1 片容差，「片尾生成、请求跨片
+	// 到达」照样通过——无需为避让边界而真实睡眠（边界契约见文末用例）。
+	code, err := totpCodeForStep(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
 	rec := do(http.MethodPost, "/api/v1/auth/mfa/verify-step", fmt.Sprintf(`{"code":%q}`, code), oldToken)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("verify-step: status=%d body=%s, want 200", rec.Code, rec.Body.String())
@@ -120,5 +122,66 @@ func TestMFAStepUpSeam_guardMarkerFlowDisablesWithoutCode(t *testing.T) {
 	}
 	if enabled != 0 {
 		t.Fatalf("mfa_enabled=%d, want 0（disable 未真实执行）", enabled)
+	}
+}
+
+// 时间片边界契约：verify-step 用的校验器（services.MFAVerifyTOTPCode）带 ±1 片
+// 容差——片尾生成的码，请求落到下一片仍须通过。上面的端到端用例据此不再为
+// 避让边界而真实睡眠；容差一旦被收窄，这里立即红并点名，而不是让端到端用例
+// 在「恰好在片尾生成」的偶发时刻假红。到达时刻全部注入，零墙钟等待。
+func TestMFAStepUpSeam_totpCodeSurvivesStepBoundary(t *testing.T) {
+	newMiddlewareTestRouter(t)
+	res, err := db.DB.Exec("INSERT INTO users (username,password_hash,role,is_enabled,password_version) VALUES ('seam-boundary','x','admin',1,0)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID, _ := res.LastInsertId()
+	secret, _, err := services.MFAGenerateSecret("seam-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE users SET mfa_enabled=1, mfa_secret=? WHERE id=?`, secret, userID); err != nil {
+		t.Fatal(err)
+	}
+	// 每个断言独立持有干净的重放状态：校验成功会推进 mfa_last_timestep，
+	// 同一片的码第二次提交将被重放防护拒绝——那不是本用例要测的东西。
+	resetReplay := func() {
+		t.Helper()
+		if _, err := db.DB.Exec(`UPDATE users SET mfa_last_timestep=0 WHERE id=?`, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 固定时间轴：片起点按 30 秒对齐。
+	stepStart := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	endOfStep := stepStart.Add(totpPeriod - 10*time.Millisecond)
+
+	for _, tc := range []struct {
+		name     string
+		arriveAt time.Time
+	}{
+		{name: "同片到达", arriveAt: endOfStep.Add(5 * time.Millisecond)},
+		{name: "跨片到达", arriveAt: stepStart.Add(totpPeriod + 500*time.Millisecond)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetReplay()
+			code, err := totpCodeForStep(secret, endOfStep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, verr := services.MFAVerifyTOTPCode(int(userID), code, tc.arriveAt); !ok || verr != nil {
+				t.Fatalf("片尾生成的码在片起点 +%v 到达被拒: ok=%v err=%v（±1 片容差被收窄？）", tc.arriveAt.Sub(stepStart), ok, verr)
+			}
+		})
+	}
+
+	// 反向对照：容差是 ±1 片而非无界——落后两片到达的码必须拒绝（排除
+	// 「任何码都通过」的假绿）。重放状态已复位，拒绝只能来自容差窗本身。
+	resetReplay()
+	stale, err := totpCodeForStep(secret, stepStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, verr := services.MFAVerifyTOTPCode(int(userID), stale, stepStart.Add(3*totpPeriod-10*time.Millisecond)); ok || verr != nil {
+		t.Fatalf("落后两片到达的码不得通过: ok=%v err=%v", ok, verr)
 	}
 }

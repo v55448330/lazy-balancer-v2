@@ -58,8 +58,8 @@ func TestRulePayload_hostHeaderAndDnsServerValidation(t *testing.T) {
 
 	// 形状三(回归):合法形状放行
 	rec = create(base(`"host_header":"api.backend.local"`))
-	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
-		t.Fatalf("legit host_header must pass, got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("legit host_header must pass with 201, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 

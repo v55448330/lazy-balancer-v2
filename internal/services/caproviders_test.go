@@ -484,7 +484,18 @@ func TestCAProviderService_UpdateCAProvider_concurrentDisable_neverReachesZeroEn
 				errs <- err
 			}(id)
 		}
-		wg.Wait()
+		// 有界等待：守卫若引入锁序问题，回归必须是一条点名轮次的明确 FAIL，
+		// 而不是无超时 wg.Wait() 挂到 go test 全局超时（哪轮/谁持锁的定位信息全丢）。
+		joined := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(joined)
+		}()
+		select {
+		case <-joined:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: 并发禁用未在 10s 内完成（疑似死锁）", round)
+		}
 		close(errs)
 
 		// Then：错误仅允许 nil 或 ErrCAProviderLastEnabled，且终态恰好一个启用

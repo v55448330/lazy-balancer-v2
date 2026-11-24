@@ -8,6 +8,7 @@ package services
 // reverse_proxy 实例，不经过本规则的 WAF/审计/CC 防护处理链。
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -46,6 +47,12 @@ func ValidateForwardAuthGatewayAddress(upstream string) (string, bool, error) {
 	return net.JoinHostPort(host, port), parsed.Scheme == "https", nil
 }
 
+// ErrForwardAuthGatewayCredentials 标记「认证网关地址携带用户名/密码凭据」。
+// 渲染只消费 host:port，凭据会被静默丢弃（网关子请求一律无认证信息）。
+// 哨兵置于错误串前缀：handler 经 errors.Is 判别，i18n 按前缀锚定模板翻译，
+// 两者都不依赖对整句错误文本做匹配。
+var ErrForwardAuthGatewayCredentials = errors.New("认证网关地址不能包含用户名/密码凭据")
+
 // ValidateForwardAuthGatewayAddressForWrite 在保存/导入/启用门额外拒绝地址中
 // 的 path/query/fragment：渲染层只消费 host:port，路径由 ForwardAuthURI 单独
 // 配置；静默丢弃会让用户以为网关走 /auth 而实际走 /。渲染层保留宽容，避免
@@ -57,6 +64,12 @@ func ValidateForwardAuthGatewayAddressForWrite(upstream string) error {
 	parsed, err := url.Parse(strings.TrimSpace(upstream))
 	if err != nil {
 		return fmt.Errorf("认证网关地址 %q 无法解析: %v", upstream, err)
+	}
+	// 凭据与 path/query 同族：渲染只消费 host:port，userinfo 被静默丢弃会让
+	// 所有网关子请求都不带认证信息（网关一律 401/302），而配置看起来合法。
+	// 同仓集群节点地址对 userinfo 已判非法——本字段补上同一条门。
+	if parsed.User != nil {
+		return fmt.Errorf("%w（地址只承载 host:port；网关鉴权请在网关侧配置）: %q", ErrForwardAuthGatewayCredentials, upstream)
 	}
 	if parsed.Path != "" && parsed.Path != "/" {
 		return fmt.Errorf("认证网关地址 %q 不能包含路径（请在同规则的认证路径字段配置）", upstream)

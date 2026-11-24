@@ -78,8 +78,8 @@ func TestCreateRule_rejects_ntlm_on_tcp_rule(t *testing.T) {
 func ntlmCreateAndWait(t *testing.T, router *gin.Engine, body string) string {
 	t.Helper()
 	created := serveJSON(t, router, http.MethodPost, "/rules", body)
-	if created.Code != http.StatusCreated && created.Code != http.StatusOK {
-		t.Fatalf("seed create status=%d body=%s", created.Code, created.Body.String())
+	if created.Code != http.StatusCreated {
+		t.Fatalf("seed create status=%d body=%s, want 201", created.Code, created.Body.String())
 	}
 	var createdPayload struct {
 		Data struct {
@@ -137,8 +137,8 @@ func TestCreateRule_persists_ntlm_and_getrule_returns_it(t *testing.T) {
 		"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,
 		"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]
 	}`)
-	if created.Code != http.StatusCreated && created.Code != http.StatusOK {
-		t.Fatalf("create ntlm+cookie status=%d body=%s", created.Code, created.Body.String())
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create ntlm+cookie status=%d body=%s, want 201", created.Code, created.Body.String())
 	}
 
 	var stored int

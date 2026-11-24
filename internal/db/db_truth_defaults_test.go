@@ -940,9 +940,11 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			required:  []string{"db.DefaultTimezone", "db.DefaultCaddyLogLevel", "db.DefaultGitHubProxyURL"},
 		},
 		{
+			// 时区已改走 services.CurrentLocation() 单源：本文件不再持有治理常量
+			// （默认值由下方 tz.go 条目的 db.DefaultTimezone 治理；本文件不得再绕过
+			// 单源直接读 timezone）。
 			file:      "../handlers/auditlog.go",
 			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`},
-			required:  []string{"db.DefaultTimezone"},
 		},
 		{
 			file:      "../handlers/config_changes.go",

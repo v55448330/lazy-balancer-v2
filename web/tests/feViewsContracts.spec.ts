@@ -79,7 +79,8 @@ test('Caddy 配置失败使用独立错误态与重试，不伪造 JSON', () => 
 test('五个错误横幅重试按钮绑定各自真实在途状态', () => {
   // i18n 后按钮文案为 t() 键(立即重试原文钉在 zh 母本)
   assert.ok(code('src/locales/zh/rules.ts').includes("retryNow: '立即重试'"), '立即重试原文必须在 zh 母本词条中')
-  const retryLabel = `\\{\\{ t\\('common\\.app\\.rules\\.list\\.retryNow'\\) \\}\\}</el-button>`
+  const retryLabel = "{{ t('common.app.rules.list.retryNow') }}</el-button>"
+  const buttons = openTags(rules, 'el-button')
   for (const [handler, flag] of [
     ['retryCertPolling', 'certRetryLoading'],
     ['retryCertInfo', 'certInfoRetryLoading'],
@@ -87,7 +88,14 @@ test('五个错误横幅重试按钮绑定各自真实在途状态', () => {
     ['fetchRules', 'loading'],
     ['retryAuxData', 'auxDataRetryLoading'],
   ] as const) {
-    assert.match(rules, new RegExp(`<el-button link type="danger" :loading="${flag}" @click="${handler}(?:\\(\\))?">${retryLabel}`), `${handler} 必须绑定 ${flag}`)
+    // 按「按钮属性集」定位：把 link/type/loading/@click 的顺序钉进一条正则会在
+    // 无害重排或补属性时假红（同文件其余用例早已用 openTags 判属性集）。
+    const button = buttons.find((tag) => new RegExp(`@click="${handler}(?:\\(\\))?"`).test(tag))
+    assert.ok(button, `${handler} 重试按钮缺失`)
+    assert.match(button, /\blink\b/, `${handler} 按钮必须为 link 形态`)
+    assert.match(button, /type="danger"/, `${handler} 按钮必须为 danger 色`)
+    assert.match(button, new RegExp(`:loading="${flag}"`), `${handler} 必须绑定 ${flag}`)
+    assert.ok(rules.includes(`${button}${retryLabel}`), `${handler} 按钮文案必须是「立即重试」词条`)
   }
   for (const handler of ['retryCertPolling', 'retryCertInfo', 'retryHealthPolling', 'retryAuxData']) {
     const body = member(rules, `const ${handler} =`)

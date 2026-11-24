@@ -472,6 +472,7 @@ export default {
         resendConfirm: 'Redeliver this notification to all channels. Continue?',
         resendPartialConfirm: 'Some channels failed; only the failed channels will be retried. Continue?',
         expandNoError: 'No error',
+        expandErrorMissing: 'Failure reason not recorded',
         expandEmpty: 'No per-channel result for this record',
         loadFailed: 'Failed to load delivery log',
         emptyText: 'No delivery records',

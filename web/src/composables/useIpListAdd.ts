@@ -22,6 +22,12 @@ interface AddIpToListOptions {
   successText?: string
   /** 确认框附加披露句（拼在主体确认文案后；如 IPv6 /64 连带封禁说明） */
   note?: string
+  /**
+   * 本次动作是「封禁」（黑名单直填）：确认框必须披露封禁是永久生效且会清除
+   * 累犯记录——后端 securityiplists.go 手动加入即 Upsert 且 DeleteAutobanRecidivismFrom，
+   * 事前不说等于用户不知道这一步是不可逆的。
+   */
+  ban?: boolean
 }
 
 /**
@@ -43,10 +49,13 @@ export const useIpListAdd = () => {
     try {
       try {
         const confirmMessage = t('common.app.views.ipAdd.confirmMessage', { ip, verb, list: list.name })
+        // DESIGN_SPEC §20 同口径：不可逆处置（封禁）必须在确认框内披露后果，
+        // 与调用方传来的附加说明（IPv6 /64 连带范围）合并成同一段。
+        const noteParts = [options.note, options.ban ? t('common.app.views.ipAdd.banNote') : undefined].filter(Boolean)
         await ElMessageBox.confirm(
-          options.note ? `${confirmMessage} ${options.note}` : confirmMessage,
+          noteParts.length > 0 ? `${confirmMessage} ${noteParts.join(' ')}` : confirmMessage,
           t('common.app.views.ipAdd.confirmTitle', { verb }),
-          { confirmButtonText: t('common.app.views.ipAdd.confirmOk'), cancelButtonText: t('common.app.views.ipAdd.cancel'), type: 'info' },
+          { confirmButtonText: t('common.app.views.ipAdd.confirmOk'), cancelButtonText: t('common.app.views.ipAdd.cancel'), type: options.ban ? 'warning' : 'info' },
         )
       } catch { return false }
       // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效

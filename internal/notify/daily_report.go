@@ -751,18 +751,7 @@ func RenderDaily(data DailyData, items []string, format string) string {
 	return renderDailyFromValues(data.Date, dailyValues(data), items, format)
 }
 
-// renderDailyForChannel 投递派发时的按通道格式渲染（deliverOne 挂钩）：
-// body 为日报数据载荷 JSON→用户 per-channel 配置优先，缺省自动映射
-// （webhook=JSON、email=HTML、QQ=markdown、微信=纯文本、未知=text）；
-// 非日报事件原样透传。不关心格式的调用方（模板链路/测试）用本入口；
-// 需要 Content-Type 决序的派发侧用 renderDailyForChannelFormat。
-// testseam: 导出供用例/预览链路直接断言按通道渲染结果（保持对外可见）。
-func renderDailyForChannel(msg Message, channelType, styleFormat string) string {
-	body, _ := renderDailyForChannelFormat(msg, channelType, styleFormat)
-	return body
-}
-
-// renderDailyForChannelFormat 同 renderDailyForChannel，并返回正文实际采用的
+// renderDailyForChannelFormat 按通道格式渲染日报正文，并返回正文实际采用的
 // 渲染格式（"html"/"markdown"/"text"/"json"；非日报/载荷损坏回空串=未知）。
 // 派发侧把它写入 Message.ContentFormat，邮件通道据此决定 Content-Type
 // （只有 html 渲染可按 text/html 发送；text/markdown/json 必须

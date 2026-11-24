@@ -15,7 +15,7 @@ func TestBlockPageResponseModeAndDerivedJSON(t *testing.T) {
 	base := map[string]interface{}{"host": []string{"example.com"}}
 	content := `<html><head><title>Too Many Requests</title></head><body>slow down</body></html>`
 
-	htmlRoutes := buildDualBlockPageRoutes(base, content, "", "text/html; charset=utf-8", 429, nil, "html")
+	htmlRoutes := buildDualBlockPageRoutes(base, content, "", "text/html; charset=utf-8", 429, "html")
 	if len(htmlRoutes) != 1 {
 		t.Fatalf("html 模式应只有 1 条路由，got %d", len(htmlRoutes))
 	}
@@ -24,7 +24,7 @@ func TestBlockPageResponseModeAndDerivedJSON(t *testing.T) {
 		t.Fatalf("html 模式应返回页面原文，got %v", htmlBody)
 	}
 
-	jsonRoutes := buildDualBlockPageRoutes(base, content, "", "text/html; charset=utf-8", 429, nil, "json")
+	jsonRoutes := buildDualBlockPageRoutes(base, content, "", "text/html; charset=utf-8", 429, "json")
 	if len(jsonRoutes) != 1 {
 		t.Fatalf("json 模式应只有 1 条路由，got %d", len(jsonRoutes))
 	}
@@ -45,7 +45,7 @@ func TestBlockPageResponseModeAndDerivedJSON(t *testing.T) {
 		t.Fatalf("json 模式 Content-Type=%q", got)
 	}
 
-	autoRoutes := buildDualBlockPageRoutes(base, content, "", "text/html; charset=utf-8", 403, nil, "auto")
+	autoRoutes := buildDualBlockPageRoutes(base, content, "", "text/html; charset=utf-8", 403, "auto")
 	if len(autoRoutes) != 4 {
 		t.Fatalf("auto 模式应为 3 条 JSON matcher + 1 条 HTML，got %d", len(autoRoutes))
 	}
@@ -67,7 +67,7 @@ func TestDefaultBlockPageJSONMessage_complexTitle(t *testing.T) {
 func TestBlockPageResponseModeKeepsCustomJSON(t *testing.T) {
 	base := map[string]interface{}{"host": []string{"example.com"}}
 	custom := `{"error":"blocked"}`
-	routes := buildDualBlockPageRoutes(base, "<html><title>x</title></html>", custom, "text/html; charset=utf-8", 403, nil, "json")
+	routes := buildDualBlockPageRoutes(base, "<html><title>x</title></html>", custom, "text/html; charset=utf-8", 403, "json")
 	body := routes[0]["handle"].([]interface{})[0].(map[string]interface{})["body"].(string)
 	if body != custom {
 		t.Fatalf("自定义 JSON 必须优先，got %q", body)

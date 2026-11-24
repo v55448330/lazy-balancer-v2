@@ -559,21 +559,25 @@ func TestGlobalStateGuard_detectsScalarKnobLeaks(t *testing.T) {
 	})
 }
 
-// 静态门的 seam 名单必须与快照键集完全一致：名单漏登一个 seam，该 seam 的
-// 测试写入就对静态门不可见（importCleanupShouldStop 曾因此长期逃逸）。
+// 静态门的 seam 名单必须覆盖生产源码里的全部「可赋值 seam」：只拿名单与
+// captureHandlerGlobalSeams（名单的派生源）互相比对是自比较——两侧永远同键集，
+// 名单漏登仍恒绿。此处对账的独立来源是生产源码的类型派生集合
+// （productionAssignableSeams，见 global_state_seam_coverage_test.go）。
 func TestHandlerRegisteredSeamNames_matchSnapshotKeys(t *testing.T) {
-	seams := captureHandlerGlobalSeams()
+	if len(handlerRegisteredSeamNames) == 0 {
+		t.Fatal("静态门名单为空——写侧隔离门对所有 seam 失明")
+	}
 	registered := make(map[string]bool, len(handlerRegisteredSeamNames))
 	for _, name := range handlerRegisteredSeamNames {
+		if registered[name] {
+			t.Errorf("静态门名单含重复条目 %q", name)
+		}
 		registered[name] = true
 	}
-	for name := range seams {
+	for name, pos := range productionAssignableSeams(t) {
 		if !registered[name] {
-			t.Errorf("快照登记的 seam %s 不在静态门名单中（写侧隔离门对它不可见）", name)
+			t.Errorf("生产 seam %s 不在静态门名单中（写侧隔离门对它不可见）", pos)
 		}
-	}
-	if len(registered) != len(seams) {
-		t.Errorf("静态门名单 %d 项, 快照 %d 项（名单含过期条目）", len(registered), len(seams))
 	}
 	if !sort.StringsAreSorted(handlerRegisteredSeamNames) {
 		t.Error("名单必须排序（派生确定性与报错可读性）")

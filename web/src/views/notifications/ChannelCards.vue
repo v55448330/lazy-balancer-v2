@@ -128,16 +128,16 @@
             <div class="bind-helper">
               <el-button v-if="bindPhase === 'idle' && !editTarget" size="small" :loading="bindLoading" @click="startBind">{{ t('app.notification.channels.bindGenerate') }}</el-button>
               <el-button v-if="bindPhase === 'idle' && editTarget" size="small" type="primary" plain :loading="rebindStarting" :disabled="writeBlocked" @click="startRebind">{{ t('app.notification.channels.rebindAction') }}</el-button>
-              <div v-if="bindPhase === 'idle' && editTarget" class="bind-hint">{{ t('app.notification.channels.rebindIdleHint') }}</div>
+              <div v-if="bindPhase === 'idle' && editTarget" class="form-tip-line bind-tip">{{ t('app.notification.channels.rebindIdleHint') }}</div>
               <!-- 重绑暂停提示：连接成功前只说暂停+扫码，不提前要求发送「绑定测试」
                    （指令延迟到 awaiting_message 阶段——用户裁定 2026-11-21）。 -->
               <el-alert v-if="rebindActive && bindPhase !== 'awaiting_message' && bindPhase !== 'confirmed'" type="warning" :closable="false" show-icon class="bind-success-alert">
                 <template #title><span v-for="(p, i) in bindParts(t('app.notification.channels.rebindPausedHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></template>
               </el-alert>
               <img v-if="bindQrImg" :src="bindQrImg" class="bind-qr-img" />
-              <div v-if="bindPhase === 'scanning'" class="bind-hint">{{ t('app.notification.channels.bindScanHint') }}</div>
-              <div v-if="bindPhase === 'scanning' && bindQrExpiresAt" class="bind-hint">{{ t('app.notification.channels.bindQrCountdown', { time: bindCountdownText }) }}</div>
-              <div v-if="bindPhase === 'scanning' && !bindQrExpiresAt" class="bind-hint">{{ t('app.notification.channels.bindQrWxHint') }}</div>
+              <div v-if="bindPhase === 'scanning'" class="form-tip-line bind-tip">{{ t('app.notification.channels.bindScanHint') }}</div>
+              <div v-if="bindPhase === 'scanning' && bindQrExpiresAt" class="form-tip-line bind-tip">{{ t('app.notification.channels.bindQrCountdown', { time: bindCountdownText }) }}</div>
+              <div v-if="bindPhase === 'scanning' && !bindQrExpiresAt" class="form-tip-line bind-tip">{{ t('app.notification.channels.bindQrWxHint') }}</div>
               <el-alert v-if="bindPhase === 'expired'" type="error" :closable="false" show-icon class="bind-success-alert">
                 <template #title>{{ t('app.notification.channels.bindExpiredHint') }}</template>
               </el-alert>
@@ -151,10 +151,10 @@
               <el-alert v-if="bindPhase === 'confirmed'" type="success" :closable="false" show-icon class="bind-success-alert">
                 <template #title>{{ t('app.notification.channels.bindConfirmed') }}</template>
               </el-alert>
-              <div v-if="bindPhase === 'idle' && drawerForm.type === 'wx_clawbot' && wxAlreadyLoggedIn" class="bind-hint"><span v-for="(p, i) in bindParts(t('app.notification.channels.wxAlreadyLoggedInHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></div>
-              <div class="bind-hint"><span v-for="(p, i) in bindParts(drawerForm.type === 'qq' ? t('app.notification.channels.qqBindHint') : t('app.notification.channels.wxSendMsgHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></div>
+              <div v-if="bindPhase === 'idle' && drawerForm.type === 'wx_clawbot' && wxAlreadyLoggedIn" class="form-tip-line bind-tip"><span v-for="(p, i) in bindParts(t('app.notification.channels.wxAlreadyLoggedInHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></div>
+              <div class="form-tip-line bind-tip"><span v-for="(p, i) in bindParts(drawerForm.type === 'qq' ? t('app.notification.channels.qqBindHint') : t('app.notification.channels.wxSendMsgHint'))" :key="i"><b v-if="p.bold">{{ p.text }}</b><template v-else>{{ p.text }}</template></span></div>
             </div>
-            <div v-if="drawerForm.targetValue" class="bind-hint bind-receiver">{{ t('app.notification.channels.bindReceiverCaptured', { id: drawerForm.targetValue }) }}</div>
+            <div v-if="drawerForm.targetValue" class="form-tip-line bind-receiver">{{ t('app.notification.channels.bindReceiverCaptured', { id: drawerForm.targetValue }) }}</div>
           </div>
         </template>
       </el-form>
@@ -171,7 +171,7 @@
                   <el-radio-button value="POST">POST</el-radio-button>
                   <el-radio-button value="GET">GET</el-radio-button>
                 </el-radio-group>
-                <div class="form-hint">{{ t('app.notification.channels.styleMethodHint') }}</div>
+                <div class="form-tip-line">{{ t('app.notification.channels.styleMethodHint') }}</div>
               </div>
             </el-form-item>
             <el-form-item :label="t('app.notification.channels.styleHeaders')" class="headers-form-item" :title="t('app.notification.channels.helpHeaders')">
@@ -185,7 +185,7 @@
                 </div>
                 <div class="header-foot">
                   <el-button size="small" link type="primary" :disabled="headerRows.length >= 8" @click="addHeaderRow">+ {{ t('app.notification.channels.styleHeaderAdd') }}</el-button>
-                  <span class="form-hint">{{ t('app.notification.channels.styleHeadersHint') }}</span>
+                  <span class="form-tip-inline">{{ t('app.notification.channels.styleHeadersHint') }}</span>
                 </div>
               </div>
             </el-form-item>
@@ -221,6 +221,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDate } from '@/utils/date'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { safeLocalStorageGet, safeLocalStorageSet } from '@/utils/safeWebStorage'
+import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { useAuthStore } from '@/stores/auth'
 import {
   buildChannelStyleConfig, channelStyleExtras, channelStyleFormFrom, emptyChannelStyleForm, parseStyleConfig,
@@ -916,18 +917,21 @@ const deleteChannel = async (ch: NotificationChannel): Promise<void> => {
   }
 }
 
-let linkPoll: ReturnType<typeof setInterval> | null = null
+let linkPoll: ReturnType<typeof createVisibilityIntervals> | null = null
 onMounted(() => {
   loadRebindIncomplete()
   void fetchChannels()
-  // 实时连接态：常驻入站会话在线态周期刷新（静默，不闪 loading）。
-  linkPoll = setInterval(() => { void fetchChannels(true) }, 15000)
+  // 实时连接态：常驻入站会话在线态周期刷新（静默，不闪 loading）。轮询走
+  // 可见性单源——页面隐藏即停摆、恢复可见立即补一轮；后台标签页不再每 15s
+  // 拉一次全量通道（管理员视角含 style_config JSON）。
+  linkPoll = createVisibilityIntervals({ intervals: [{ tick: () => { void fetchChannels(true) }, ms: 15000 }] })
+  linkPoll.start()
   if (isAdminUser.value) {
     request.get<{ data?: { users: { id: number; username: string }[] } }>('/notification/admin/overview', { silent: true })
       .then(r => { userList.value = r.data?.users ?? [] }).catch(() => {})
   }
 })
-onUnmounted(() => { if (linkPoll) clearInterval(linkPoll) })
+onUnmounted(() => { linkPoll?.stop() })
 
 defineExpose({ fetchChannels })
 </script>
@@ -979,9 +983,6 @@ defineExpose({ fetchChannels })
 /* 底栏：测试态（左）+文字操作（右），分隔线收口，margin-top:auto 齐高 */
 .ch-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--el-border-color-extra-light); padding-top: 8px; margin-top: auto; }
 .ch-verified { font-size: 12px; color: #6b7280; margin-right: auto; }
-.test-ok { color: #059669; }
-.test-fail { color: #f56c6c; }
-.test-none { color: #9ca3af; }
 
 .ch-actions { display: flex; align-items: center; gap: 4px; }
 
@@ -994,11 +995,11 @@ defineExpose({ fetchChannels })
 .bind-area { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; border: 1px dashed var(--el-border-color); width: 100%; box-sizing: border-box; }
 .bind-helper { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .bind-qr-img { width: 200px; height: 200px; }
-.bind-hint { font-size: 12px; color: #6b7280; text-align: center; }
+/* 绑定辅助区描述走 §16 标准类 form-tip-line（块级），此处仅补居中摆放 */
+.bind-tip { text-align: center; }
 .bind-center { align-items: center; text-align: center; }
-.bind-receiver { word-break: break-all; color: #059669; }
+.bind-receiver { text-align: center; word-break: break-all; color: #059669; }
 .bind-success-alert { margin-bottom: 8px; }
-.form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
 .field-col { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 /* 自定义请求头：label 与右侧第一行输入框（无行时与添加按钮）垂直对齐 */
 .headers-form-item { align-items: flex-start; }
@@ -1009,5 +1010,4 @@ defineExpose({ fetchChannels })
 .header-value { width: 100%; }
 .header-del { flex: none; }
 .header-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.header-foot .form-hint { margin: 0; }
 </style>

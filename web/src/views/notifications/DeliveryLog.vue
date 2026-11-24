@@ -40,8 +40,8 @@
           <div class="ch-expand">
             <div v-for="ch in scope.row.channels" :key="ch.channel_id" class="ch-expand-row">
               <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small" effect="plain" class="ch-expand-name">{{ ch.channel_name }}</el-tag>
-              <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small">{{ channelStatusLabel(ch.status) }}</el-tag>
-              <span class="ch-expand-error" :class="{ 'ch-expand-error-failed': ch.status !== 'sent' }">{{ ch.error || t('app.notification.deliveries.expandNoError') }}</span>
+              <el-tag :type="channelStatusTagType(ch.status)" size="small">{{ channelStatusLabel(ch.status) }}</el-tag>
+              <span class="ch-expand-error" :class="{ 'ch-expand-error-failed': ch.status !== 'sent' }">{{ channelErrorText(ch) }}</span>
               <span class="ch-expand-dur">{{ ch.duration_ms ? ch.duration_ms + ' ms' : '—' }}</span>
             </div>
             <span v-if="!scope.row.channels?.length" class="ev-more">{{ t('app.notification.deliveries.expandEmpty') }}</span>
@@ -132,7 +132,7 @@ import { ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { hasOwn } from '@/utils/hasOwn'
-import { latestChannelResults } from '@/utils/deliveryLog'
+import { latestChannelResults, channelErrorKind, channelStatusMessageKey, channelStatusTagType } from '@/utils/deliveryLog'
 import type {
   DeliveryStatus,
   NotificationDeliveriesResponse,
@@ -187,13 +187,19 @@ const statusTagType = (status: DeliveryStatus): 'info' | 'success' | 'warning' |
   }
 }
 
-// 分通道状态标签（行内通道 status 为 string；未知值按失败兜底）
+// 分通道状态标签（行内通道 status 为 string）：已知状态走词条，未知状态原样
+// 回显（不得伪装成「失败」——见 utils/deliveryLog 契约）。
 const channelStatusLabel = (status: string): string => {
-  switch (status) {
-    case 'pending': return t('app.notification.deliveries.statusPending')
-    case 'sent': return t('app.notification.deliveries.statusSent')
-    case 'dead': return t('app.notification.deliveries.statusDead')
-    default: return t('app.notification.deliveries.statusFailed')
+  const key = channelStatusMessageKey(status)
+  return key ? t(`app.notification.deliveries.${key}`) : status
+}
+
+// 展开行错误文案：失败但无错误时不得显示「无错误」（与红色失败标签自相矛盾）。
+const channelErrorText = (ch: { status: string; error?: string | null }): string => {
+  switch (channelErrorKind(ch)) {
+    case 'error': return (ch.error ?? '').trim()
+    case 'missing': return t('app.notification.deliveries.expandErrorMissing')
+    default: return t('app.notification.deliveries.expandNoError')
   }
 }
 
@@ -287,9 +293,7 @@ defineExpose({ fetchDeliveries })
 .card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
-.delivery-filters { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .status-select { width: 130px; }
-.scope-hint { font-size: 12px; color: var(--text-secondary, #6b7280); }
 .deliveries-footer { margin-top: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: nowrap; }
 .deliveries-pagination { flex: 0 0 auto; white-space: nowrap; }
 .ch-result { font-size: 13px; font-weight: 600; }

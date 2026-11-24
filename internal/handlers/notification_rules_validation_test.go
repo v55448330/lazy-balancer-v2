@@ -1,10 +1,10 @@
 package handlers
 
 // 通知规则聚合端点修复钉测：
-// -：概览/趋势/分布读失败必须 500（不得静默展示全零）；
-// -：聚合规则写端点复用兄弟端点的 min_level/send_time/items
+// - 概览/趋势/分布读失败必须 500（不得静默展示全零）；
+// - 聚合规则写端点复用兄弟端点的 min_level/send_time/items
 //     白名单校验；
-// -：组写单事务（失败零部分写入）+ 读错误区分 ErrNoRows。
+// - 组写单事务（失败零部分写入）+ 读错误区分 ErrNoRows。
 
 import (
 	"net/http"

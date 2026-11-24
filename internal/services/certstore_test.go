@@ -702,11 +702,14 @@ func TestCertStore_perRuleWritesParallelGlobalRestoreExclusive(t *testing.T) {
 	certWriteMu.RLock()
 	restoreDone := make(chan error, 1)
 	go func() { restoreDone <- RestoreCertFiles(CertFilesSnapshot{}) }()
+	// 「等 100ms 没返回」不是证明：协程尚未被调度、或等待点被删掉时同样通过。
+	// 断言协程确实阻塞在 RWMutex.Lock（等待点存在是可断言的确定事实）。
+	waitGoroutineBlockedOn(t, "TestCertStore_perRuleWritesParallelGlobalRestoreExclusive", "sync.(*RWMutex).Lock")
 	select {
 	case err := <-restoreDone:
 		certWriteMu.RUnlock()
 		t.Fatalf("跨规则回滚在并发文件操作进行中放行: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	certWriteMu.RUnlock()
 	if err := <-restoreDone; err != nil {

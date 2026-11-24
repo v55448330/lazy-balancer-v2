@@ -137,18 +137,30 @@ func TestIssuer_waitForValidation_retriesTransientErrors(t *testing.T) {
 	fake := newValidationPollServer(t)
 	fake.failNextChalRequests(2)
 	issuer := &Issuer{Client: newValidationTestClient(t, fake.server, &flakyTransport{fake: fake, inner: http.DefaultTransport})}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 翻转授权状态的后台协程必须随用例退出：ctx 取消即停，cleanup 等它收口
+	// ——否则用例在 challenge 首次成功前失败时，它会每 50ms 空转到进程结束。
+	flipDone := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-flipDone
+	})
 	go func() {
+		defer close(flipDone)
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
 		for {
-			_, success := fake.counts()
-			if success > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if _, success := fake.counts(); success > 0 {
 				fake.setAuthStatus("valid")
 				return
 			}
-			time.Sleep(50 * time.Millisecond)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
 	// When
 	err := issuer.waitForValidation(ctx, fake.server.URL+"/auth/1", fake.server.URL+"/chal/1")

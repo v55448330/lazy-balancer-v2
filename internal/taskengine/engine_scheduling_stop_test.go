@@ -53,8 +53,9 @@ func TestEngine_PeriodicNonPositiveIntervalStopsWithFailedRun(t *testing.T) {
 	if status != "failed" || !strings.Contains(message, "IntervalFn 必须返回正周期") {
 		t.Fatalf("停调应落 failed 行并带原因, got status=%q message=%q", status, message)
 	}
-	// 停调是终态：再等若干个 tick 不得追加运行行（循环已关闭）。
-	time.Sleep(100 * time.Millisecond)
+	// 停调是终态：确定性驱动若干 tick 不得追加运行行（循环已关闭）。非正周期
+	// 分支在 tick 内同步落行，driveTicks 返回后计数即终值。
+	driveTicks(e, 30)
 	if got := countRuns(t, id); got != 1 {
 		t.Fatalf("停调后仍追加运行行, 共 %d 行（应在停调时恰落一行）", got)
 	}
@@ -272,7 +273,10 @@ func TestEngine_RearmLoopHasWorkKeepsConsumedSlotWhenAlreadyOn(t *testing.T) {
 	if _, done, _, _ := scheduleStateOf(t, e, id); done.IsZero() {
 		t.Fatal("已开启任务的唤醒不得复位槽消费水位（会把过期槽重新投递）")
 	}
-	time.Sleep(200 * time.Millisecond) // ≈20 个 tick
+	// 唤醒后的负断言走确定性 tick 驱动：先等首轮完全落定（在途占位会让整批
+	// tick 被单飞门跳过），再驱动 ≈20 个 tick——已消费的过期槽不得重新投递。
+	settleTaskRuns(t, e, id)
+	driveTicksSettled(t, e, 20, id)
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("已开启任务被唤醒后重复投递: runs=%d, want 1", got)
 	}

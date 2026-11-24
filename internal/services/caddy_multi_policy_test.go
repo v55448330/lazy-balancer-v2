@@ -184,20 +184,23 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 		t.Fatalf("routes[2] must be the main route (no path matcher): %#v", routes[2])
 	}
 
-	// 主路由处理器链（阶段化模型）：headers(X-LB-Rule-ID 注入） →
-	// lb_rule_metrics → lb_security_blocked_counter → 阶段 1 预检 waf（p1/p3
-	// GeoIP 链）→ request_body → 阶段 2 人机挑战（段内）→ 阶段 3 waf(p2
-	// blocking) → waf(p3 detection，不含 GeoIP) → lb_security_timing_end
-	// (放行事件耗时收点,v2.3.3 双点计时) → reverse_proxy。
+	// 主路由处理器链（阶段化模型）：headers(X-LB-Rule-ID 注入) →
+	// lb_rule_metrics → lb_security_blocked_counter → lb_reqmon（连接详情内存
+	// 观测，counter 之后、预检之前）→ 阶段 1 预检 waf（p1/p3 GeoIP 链）→
+	// lb_security_timing_pre → request_body → 阶段 2 人机挑战(p2) →
+	// 阶段 3 waf(p2 blocking) → waf(p3 detection，不含 GeoIP) →
+	// lb_security_timing_end（放行事件耗时收点，v2.3.3 双点计时）→ reverse_proxy。
 	// （耗时双头的剥离走 proxyRequestHeaders 删除清单，与 X-LB-Rule-ID
 	// 同机制，不额外占位。）
-	names := handlerNames(t, mainRoute)
-	// lb_reqmon（连接详情内存观测）置于 counter 之后、预检之前（索引 3）。
-	if len(names) != 12 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "lb_human" || names[8] != "waf" || names[9] != "waf" || names[10] != "lb_security_timing_end" {
-		t.Fatalf("main chain=%v, want [headers, lb_rule_metrics, lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, lb_human(p2), waf(p2), waf(p3), lb_security_timing_end, reverse_proxy]", names)
+	wantChain := []string{
+		"headers", "lb_rule_metrics", "lb_security_blocked_counter", "lb_reqmon",
+		"waf", "lb_security_timing_pre", "request_body",
+		"lb_human", "waf", "waf", "lb_security_timing_end", "reverse_proxy",
 	}
-	if names[len(names)-1] != "reverse_proxy" {
-		t.Fatalf("main chain last handler=%v, want reverse_proxy", names)
+	names := handlerNames(t, mainRoute)
+	assertHandlerChainPrefix(t, names, wantChain)
+	if len(names) != len(wantChain) {
+		t.Fatalf("main chain=%v, want %v（长度须精确一致，不得有额外处理器）", names, wantChain)
 	}
 	wafs := wafHandlers(t, mainRoute)
 	if len(wafs) != 3 {
@@ -405,7 +408,8 @@ func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 // 极简 coraza 预检 WAF，置于处理器链最前（先于全部 lb_human/waf）——被拒
 // IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件；
 // 预检仍是 coraza 拒绝（audit log 留痕、403 interruption → 拦截页错误路由）。
-// 单策略同构亦走预检（见 caddy.go:3180-3194）：ACL 并集与引擎 id:2/4 幂等重复无害——预检先拦，引擎内不再命中。
+// 单策略同构亦走预检（发射点在 buildHTTPHandleChain 的阶段 1，directives 由
+// buildIPPrecheckDirectives 生成）：ACL 并集与引擎 id:2/4 幂等重复无害——预检先拦，引擎内不再命中。
 func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：p1(detection CRS) < p2(deny ACL 203.0.113.5)
@@ -425,14 +429,15 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 		t.Fatalf("main chain too short: %#v", handlers)
 	}
 	names := handlerNames(t, mainRoute)
-	// 方案 B(2026-09-15):counter 在 headers 之后、precheck 之前——包 precheck
-	// +全部策略 waf(IP 预检的 IP ACL/GeoIP 中断也计入)。
-	// request_body 恒发射,位于 precheck waf 之后、策略 waf 之前。
-	// (v2.3.3 分段计时:waf(precheck) 之后是 lb_security_timing_pre 收点)
+	// 方案 B(2026-09-15)：counter 在 headers 之后、precheck 之前——包 precheck
+	// +全部策略 waf（IP 预检的 IP ACL/GeoIP 中断也计入）。
+	// request_body 恒发射，位于 precheck waf 之后、策略 waf 之前。
+	// (v2.3.3 分段计时：waf(precheck) 之后是 lb_security_timing_pre 收点)
 	// lb_reqmon（连接详情内存观测）置于 counter 之后、预检之前（索引 3）。
-	if names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "waf" || names[8] != "waf" {
-		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, waf, waf, ...]", names)
-	}
+	assertHandlerChainPrefix(t, names, []string{
+		"headers", "lb_rule_metrics", "lb_security_blocked_counter", "lb_reqmon",
+		"waf", "lb_security_timing_pre", "request_body", "waf", "waf",
+	})
 	// 注入头值=规则 caddy id 且覆盖客户端伪造
 	inject := mustMap(t, handlers[0], "X-LB-Rule-ID inject handler")
 	setHeaders := mustMap(t, inject["request"], "inject request")["set"].(map[string]interface{})
@@ -731,7 +736,7 @@ func TestCCStage_chainOrder_challengeThenWAF(t *testing.T) {
 // HTML 之前（terminal 语义下顺序即优先级）。
 func TestBlockPageDualRoutes_jsonFirstForAPIRequests(t *testing.T) {
 	base := map[string]interface{}{"host": []string{"a.example.test"}, "expression": "{http.error.status_code} == 403"}
-	routes := buildDualBlockPageRoutes(base, "<html>denied</html>", `{"code":403,"error":"custom"}`, "", 403, nil, "auto")
+	routes := buildDualBlockPageRoutes(base, "<html>denied</html>", `{"code":403,"error":"custom"}`, "", 403, "auto")
 	// 3 条 JSON 变体（Accept / X-Requested-With / Sec-Fetch-Mode）+ 1 条 HTML 兜底。
 	if len(routes) != 4 {
 		t.Fatalf("HTML 页面必须出 3 JSON + 1 HTML 路由，实际 %d", len(routes))
@@ -762,19 +767,34 @@ func TestBlockPageDualRoutes_jsonFirstForAPIRequests(t *testing.T) {
 	}
 	htmlBody := routes[3]["handle"].([]interface{})[0].(map[string]interface{})["body"].(string)
 	if htmlBody != "<html>denied</html>" {
-		t.Fatalf("第二条必须是 HTML 主档：%s", htmlBody)
+		t.Fatalf("末条必须是 HTML 主档：%s", htmlBody)
 	}
 
 	// JSON 内容为空 → 引擎生成最小 JSON（API 客户端永不收 HTML）
-	plain := buildDualBlockPageRoutes(base, "<html>x</html>", "", "", 429, map[string][]string{"Retry-After": {"1"}}, "auto")
+	plain := buildDualBlockPageRoutes(base, "<html>x</html>", "", "", 403, "auto")
 	gen := plain[0]["handle"].([]interface{})[0].(map[string]interface{})["body"].(string)
 	if got, want := strings.TrimSpace(gen), `{"message":"Request blocked"}`; got != want {
 		t.Fatalf("空 JSON 档必须从页面派生消息且不含状态码：got %s, want %s", got, want)
 	}
 
 	// 非 HTML 主档保持单条（内容本身机器可读）
-	single := buildDualBlockPageRoutes(base, `{"x":1}`, "ignored", "application/json; charset=utf-8", 403, nil, "auto")
+	single := buildDualBlockPageRoutes(base, `{"x":1}`, "ignored", "application/json; charset=utf-8", 403, "auto")
 	if len(single) != 1 {
 		t.Fatalf("JSON 主档页面不应再加 HTML 分支，实际 %d 条", len(single))
+	}
+}
+
+// assertHandlerChainPrefix 断言 handler 名链以 want 为前缀。期望序列=断言与
+// 失败消息的共同来源：此前手写的 want 文案与同行索引断言不同源，文案漏掉
+// lb_reqmon / lb_rule_metrics，红灯时按文案排查会找错方向。
+func assertHandlerChainPrefix(t *testing.T, names, want []string) {
+	t.Helper()
+	if len(names) < len(want) {
+		t.Fatalf("handler chain=%v, want 前缀 %v（实际链长 %d < 期望 %d）", names, want, len(names), len(want))
+	}
+	for i, expected := range want {
+		if names[i] != expected {
+			t.Fatalf("handler chain=%v, want 前缀 %v（索引 %d：%q ≠ %q）", names, want, i, names[i], expected)
+		}
 	}
 }

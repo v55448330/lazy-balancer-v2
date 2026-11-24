@@ -127,6 +127,9 @@ func run() error {
 	services.ApplyLogLevel()
 	// 通知中心分发循环与 pending 重投兜底（库装配后尽早挂接——启动期已发生
 	// 的事件（自动封禁/证书任务恢复等）由此可落投递队列）。
+	// 注意：这是全局通知总线的唯一装配点。internal/handlers 的用例依赖
+	// 「测试进程内总线未装配」（Publish 计入 DroppedCount 供发布条数断言），
+	// 不要在其它地方（尤其测试）调用 notify.Start/Bootstrap/Stop。
 	notify.Bootstrap()
 	// 主节点事件标签（2026-11-22 用户裁定：主从事件都要可辨识——主节点带
 	// 出站 IP+面板端口，从节点由上报端点按 nodes 表拼「从节点 name(ip:port)」）。

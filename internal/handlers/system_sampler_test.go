@@ -176,8 +176,9 @@ func TestGetRealtimeTraffic_sharesOneSampleWithinWindow(t *testing.T) {
 	if traffic, err := getRealtimeTraffic(); err != nil || traffic.BytesIn != 0 || traffic.BytesOut != 0 {
 		t.Fatalf("首轮 traffic=%+v err=%v, want 0/0", traffic, err)
 	}
-	// 窗口内：只读一次 /proc/net/dev，速率=0（基线刚建立）。
-	time.Sleep(20 * time.Millisecond)
+	// 窗口内：零间隔连读也必须共享同一采样（只读一次 /proc/net/dev，速率=0
+	// 基线刚建立）。原实现的 20ms 睡在 50ms 窗口内，慢机/高负载下窗口先到期即假红；
+	// 零间隔是更强的形态（真正钉「窗口内共享」而非「20ms 内共享」）。
 	if _, err := getRealtimeTraffic(); err != nil {
 		t.Fatalf("窗口内读取 err=%v", err)
 	}

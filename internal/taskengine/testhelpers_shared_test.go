@@ -34,6 +34,27 @@ func driveTicks(e *Engine, n int) {
 	}
 }
 
+// settleTaskRuns 等任务的在途轮落定（终态行与退避/槽水位在 executeRun 尾部
+// 写入，晚于 Run 体返回，占位释放在其后）。负断言前的驱动必须先在稳定态下
+// 发生：在途占位会让整批 tick 被单飞门跳过（断言空转通过）。
+func settleTaskRuns(t *testing.T, e *Engine, id string) {
+	t.Helper()
+	waitForEngine(t, "任务在途轮落定（"+id+"）", 5*time.Second, func() bool { return !e.IsTaskInFlight(id) })
+}
+
+// driveTicksSettled 驱动 n 个 tick 并等这批 tick 准入的轮次落定，供
+// 「窗口内不得再执行/不得再落行」类负断言使用：tick 内的准入（running CAS）
+// 同步完成——driveTicks 返回时被派发的轮次或已落定、或仍在途；后者须等落定
+// 后计数才是终值（派发 goroutine 异步才跑到 Run 体，紧跟 driveTicks 读计数
+// 会读到旧值，负断言空转通过）。
+func driveTicksSettled(t *testing.T, e *Engine, n int, id string) {
+	t.Helper()
+	driveTicks(e, n)
+	if e.IsTaskInFlight(id) {
+		settleTaskRuns(t, e, id)
+	}
+}
+
 func waitForEngineSignal(t *testing.T, what string, ch <-chan struct{}) {
 	t.Helper()
 	select {

@@ -50,6 +50,8 @@ func TestDeployIssuedCertificate_holdsCaddyOpLockBeforeDeployLock(t *testing.T) 
 		t.Fatal("部署链重载点未持有 CaddyOpLock——锁序为 DeployLock→CaddyOpLock，与恢复链（CaddyOpLock→DeployLock）构成 AB-BA")
 	}
 	// 同一时点 DeployLock 也必须仍被持有（恢复链同规则恢复须排队）。
+	// 阻塞证据取协程栈（阻塞在 (*refCountedLock).Lock 的等待帧）而非 150ms
+	// 固定观测窗——「睡 150ms 没拿到」在探测协程尚未被调度时同样成立。
 	deployLockFree := make(chan struct{})
 	go func() {
 		unlock := DeployLock(ruleID)
@@ -61,8 +63,9 @@ func TestDeployIssuedCertificate_holdsCaddyOpLockBeforeDeployLock(t *testing.T) 
 		close(releaseReloader)
 		<-deployDone
 		t.Fatal("部署链重载点未持有 DeployLock")
-	case <-time.After(150 * time.Millisecond):
+	default:
 	}
+	waitGoroutineBlockedOn(t, "TestDeployIssuedCertificate_holdsCaddyOpLockBeforeDeployLock", "(*refCountedLock).Lock")
 
 	close(releaseReloader)
 	select {

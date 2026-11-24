@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,42 @@ func TestServeWithToolVisibility_gatewayMetaNonToolsListSkipsFiltering(t *testin
 	}
 	if names := toolNamesFromResponse(t, response.Body.Bytes()); len(names) != 2 {
 		t.Fatalf("非 tools/list 响应被过滤: %v", names)
+	}
+}
+
+// tools/list 过滤重写响应体后，上游声明的表示元数据必须一并失效：过滤结果
+// 更短且内容不同，沿用上游 Content-Length 会让客户端按旧长度截读（unexpected
+// EOF / JSON 解析失败），沿用 ETag 会让缓存把改写的工具列表当成同一实体。
+// 上游显式声明这两个头由注入的上游 handler 复现——传输层当前不声明它们，
+// 契约防的是「头随体重写后漂移」这类加固缺口。
+func TestServeWithToolVisibility_dropsUpstreamRepresentationHeadersOnRewrite(t *testing.T) {
+	resolver := func(string) (apiKeyVisibility, error) { return apiKeyVisibility{readOnly: true}, nil }
+	upstreamBody := []byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"list_rules"},{"name":"create_rule"}]}}`)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(upstreamBody)))
+		w.Header().Set("ETag", `"upstream-unfiltered-body"`)
+		_, _ = w.Write(upstreamBody)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+	request = request.WithContext(WithRequestMeta(request.Context(), RequestMeta{Method: "tools/list", ID: json.RawMessage(`1`)}))
+	response := httptest.NewRecorder()
+
+	serveWithToolVisibility(response, request, next, resolver)
+
+	filtered := response.Body.Bytes()
+	if len(filtered) >= len(upstreamBody) {
+		t.Fatalf("前置条件不成立：过滤后体未变短（%d vs 上游 %d）", len(filtered), len(upstreamBody))
+	}
+	if got := response.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(len(filtered)) {
+		t.Fatalf("Content-Length=%q 与重写后体长 %d 不一致（客户端会按旧长度截读）", got, len(filtered))
+	}
+	if got := response.Header().Get("ETag"); got != "" {
+		t.Fatalf("ETag=%q 未随重写的响应体失效（缓存会把不同工具列表当同一实体）", got)
+	}
+	if names := toolNamesFromResponse(t, filtered); len(names) != 1 || names[0] != "list_rules" {
+		t.Fatalf("过滤结果=%v, want [list_rules]", names)
 	}
 }
 

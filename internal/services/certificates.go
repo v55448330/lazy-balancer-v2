@@ -2924,7 +2924,7 @@ func warnRenewalWindowNotExecutable(ruleID string, windowDays int, effective, li
 // checkFailedFirstIssuance 的同构行扫描体收敛单份——规范域名比对（规则/任务
 // 域名不一致跳过该行）+ 已有证书判读（选中证书域名匹配且有效期晚于续期窗口则
 // 跳过）+ 行收集。warnPrefix 仅区分 Scan 失败告警的来源扫描
-// 「不静默」口径，同 checkManualCertExpiration）。
+// 「不静默」口径，同 runManualCertExpiryCheck）。
 //
 // 逐行 Scan 失败计数返回（scanSkipped），
 // 迭代级 rows.Err() 显式上抛——此前两者都只进应用日志甚至完全静默，巡检

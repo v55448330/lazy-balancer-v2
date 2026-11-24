@@ -7,7 +7,7 @@
 // branding 依赖 api.ts（element-plus 字节级依赖），用替身加载；highlight 顶层
 // 导入 Prism CSS（node 不可加载），兜底分支用源码钉。
 
-import { test } from 'node:test'
+import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { code, registerModuleHooks, repoCode, section } from './_helpers.ts'
@@ -301,6 +301,9 @@ test('Blob 下载单源：四路导出共用 saveBlob', async () => {
   }
   URL.createObjectURL = (): string => { objectUrls++; return 'blob:unit-test' }
   URL.revokeObjectURL = (url: string): void => { revoked.push(url) }
+  // 回收延迟用假时钟推进（真实 1100ms 睡眠在 CI 负载下会抖动，且纯等待无收益）：
+  // 只替换 setTimeout，微任务/其它时钟语义不受影响。
+  mock.timers.enable({ apis: ['setTimeout'] })
   try {
     const blob = new Blob(['x'])
     saveBlob(blob, 'lazy-balancer-backup.lbbak')
@@ -308,9 +311,12 @@ test('Blob 下载单源：四路导出共用 saveBlob', async () => {
     assert.equal(created[0]?.href, 'blob:unit-test')
     assert.deepEqual(clicked, ['lazy-balancer-backup.lbbak'], '下载名必须透传到 a.download')
     assert.deepEqual(revoked, [], '不得立即回收（Safari 下会截断下载）')
-    await new Promise((resolve) => setTimeout(resolve, 1100))
+    mock.timers.tick(999)
+    assert.deepEqual(revoked, [], '不足 1s 不得回收')
+    mock.timers.tick(1)
     assert.deepEqual(revoked, ['blob:unit-test'], '延迟 1s 后必须回收')
   } finally {
+    mock.timers.reset()
     URL.createObjectURL = originalCreate
     URL.revokeObjectURL = originalRevoke
     if (originalDocument === undefined) delete host.document

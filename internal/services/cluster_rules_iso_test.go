@@ -57,6 +57,11 @@ func TestSnapshotRules_masterSlaveRoundTripHashEqual(t *testing.T) {
 		t.Fatal(err)
 	}
 	masterHash := masterSnap.SectionHashes["rules"]
+	// 先断言两侧哈希非空再比较：SectionHashes 漏 rules 键时两侧都是 ""，
+	// 空==空会让「同步后不同构」的根因以「相等」形态静默通过。
+	if masterHash == "" {
+		t.Fatal("主端快照 SectionHashes 缺 rules 节哈希（不变量守卫失效）")
+	}
 
 	// 从端视角：另一空库应用同一快照（replaceSnapshotDB 内部无 skips=全量重放）后重建
 	slaveSvc, slaveDB := newClusterTestService(t)
@@ -67,6 +72,9 @@ func TestSnapshotRules_masterSlaveRoundTripHashEqual(t *testing.T) {
 	slaveLocal, err := slaveSvc.driftGuardSectionHashes(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if slaveLocal["rules"] == "" {
+		t.Fatal("从端重建 SectionHashes 缺 rules 节哈希（不变量守卫失效）")
 	}
 	if masterHash != slaveLocal["rules"] {
 		t.Fatalf("主端 rules 节哈希 %s ≠ 从端重建 %s——同步后不同构（分区滞后永续根因）", masterHash[:16], slaveLocal["rules"][:16])

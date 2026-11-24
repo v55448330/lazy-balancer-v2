@@ -48,7 +48,7 @@ var deleteCertJobPreRestoreHook func(jobID int)
 // deleteCertJobPreLockHook 是测试专用钩子：在 DeleteCertJob 取得 caddyOpMu
 // 之前触发。并发用例用它在「即将取锁」处确定性停驻删除请求，替代固定的
 // 墙钟等待（慢机上删除 goroutine 可能在 300ms 内还没跑到锁，导致负向断言
-// 假通过/假失败，（回归）。
+// 假通过/假失败。
 var deleteCertJobPreLockHook func(jobID int)
 
 // certJobLogPathForRule 解析规则的任务日志路径（测试缝：镜像 cancelCertJob 的

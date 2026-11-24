@@ -33,7 +33,11 @@
                     <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
                   </div>
                   <div class="card-header-actions">
-                    <el-switch v-if="isAdmin" v-model="apiEnabled" size="small" :disabled="switchSaving" :active-text="t('app.notification.keysAccess.apiEnabled')" @update:model-value="(val: string | number | boolean) => toggleApi(val === true)" />
+                    <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+                      <div>
+                        <el-switch v-if="isAdmin" v-model="apiEnabled" size="small" :disabled="switchSaving || nodeWriteBlocked" :active-text="t('app.notification.keysAccess.apiEnabled')" @update:model-value="(val: string | number | boolean) => toggleApi(val === true)" />
+                      </div>
+                    </el-tooltip>
                     <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
                       {{ t('common.app.views.keys.apiDocs') }}
                     </el-button>
@@ -73,7 +77,11 @@
                     <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
                   </div>
                   <div class="card-header-actions">
-                    <el-switch v-if="isAdmin" v-model="mcpEnabled" size="small" :disabled="switchSaving" :active-text="t('app.notification.creds.mcpEnabled')" @update:model-value="(val: string | number | boolean) => toggleMcp(val === true)" />
+                    <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+                      <div>
+                        <el-switch v-if="isAdmin" v-model="mcpEnabled" size="small" :disabled="switchSaving || nodeWriteBlocked" :active-text="t('app.notification.creds.mcpEnabled')" @update:model-value="(val: string | number | boolean) => toggleMcp(val === true)" />
+                      </div>
+                    </el-tooltip>
                     <el-button size="small" @click="mcpDocsVisible = true">
                       {{ t('common.app.views.keys.mcpDocs') }}
                     </el-button>
@@ -542,7 +550,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, h, ref, onMounted } from 'vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
@@ -666,10 +674,38 @@ const fetchAccessSwitches = async (): Promise<void> => {
     mcpEnabled.value = res.data?.mcp_enabled !== false
   } catch { /* 缺省启用 */ }
 }
+// 关闭全局接入（DESIGN_SPEC §20）：一键断掉全部 API 密钥 / MCP 接入，是必须
+// 披露的可用性变更——确认框列出后果，取消则把开关拨回。
+const confirmAccessOff = async (kind: 'api' | 'mcp'): Promise<boolean> => {
+  // 确认文案里的名词取卡片标题（「REST API 接入」/「MCP 接入」）——不能用开关
+  // 文案（「启用 API 接入」），否则正文成「确定关闭启用 API 接入吗」。
+  const accessName = t(kind === 'api' ? 'app.notification.keysAccess.apiCardTitle' : 'app.notification.keysAccess.mcpCardTitle')
+  const scope = kind === 'api'
+    ? [t('common.app.views.keys.accessOffApi1'), t('common.app.views.keys.accessOffApi2')]
+    : [t('common.app.views.keys.accessOffMcp1'), t('common.app.views.keys.accessOffMcp2')]
+  try {
+    await ElMessageBox.confirm(
+      h('div', [
+        h('div', t('common.app.views.keys.accessOffConfirm', { access: accessName })),
+        h('p', { class: 'confirm-scope-lead' }, t('common.app.views.keys.accessOffLead')),
+        h('ul', { class: 'confirm-scope-list' }, scope.map((item) => h('li', item))),
+      ]),
+      t('common.app.views.keys.accessOffTitle', { access: accessName }),
+      { confirmButtonText: t('common.app.views.keys.accessOffOk'), cancelButtonText: t('common.app.views.keys.cancel'), type: 'warning' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
 const toggleApi = async (on: boolean): Promise<void> => {
-  if (switchSaving.value) return
+  if (switchSaving.value || nodeWriteBlocked.value) return
   switchSaving.value = true
   try {
+    if (!on && !(await confirmAccessOff('api'))) {
+      apiEnabled.value = true
+      return
+    }
     await request.put('/notification/settings', { api_enabled: on })
     mfaAwareSuccess(on ? t('app.notification.keysAccess.apiEnabledToast') : t('app.notification.keysAccess.apiDisabledToast'))
   } catch {
@@ -677,9 +713,13 @@ const toggleApi = async (on: boolean): Promise<void> => {
   } finally { switchSaving.value = false }
 }
 const toggleMcp = async (on: boolean): Promise<void> => {
-  if (switchSaving.value) return
+  if (switchSaving.value || nodeWriteBlocked.value) return
   switchSaving.value = true
   try {
+    if (!on && !(await confirmAccessOff('mcp'))) {
+      mcpEnabled.value = true
+      return
+    }
     await request.put('/notification/settings', { mcp_enabled: on })
     mfaAwareSuccess(on ? t('app.notification.keysSessions.mcpEnabledToast') : t('app.notification.keysSessions.mcpDisabledToast'))
   } catch {

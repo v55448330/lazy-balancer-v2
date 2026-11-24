@@ -11,17 +11,59 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-func TestNotificationDeliveryRetentionCleanup_clampsDaysToMax(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+// initRetentionCleanupDB 装配保留清理用例的临时主库，返回「四句柄成对还原」
+// 闭包并注册为 t.Cleanup。后台刷新链消费原子句柄 db.GetDB()：只还原导出
+// 变量会让它继续指向已关闭的临时库（顺序相关假红/假绿），故必须同时
+// db.SetDB(oldCurrent)。闭包可显式调用（幂等），供还原不变量的钉测使用。
+func initRetentionCleanupDB(t *testing.T) func() {
+	t.Helper()
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
-	t.Cleanup(func() {
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldCurrent)
+	}
+	t.Cleanup(restore)
+	return restore
+}
+
+func TestInitRetentionCleanupDB_restoresAtomicDBHandle(t *testing.T) {
+	// 外层活动库（模拟同包前序夹具已装配的库）：还原后 db.GetDB() 必须指回
+	// 它，而不是内层临时库（已关闭）或 nil。
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize outer database: %v", err)
+	}
+	outer := db.DB
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = nil, nil, nil
+		db.SetDB(nil)
 	})
 
-	// 带外写入超上限保留期（写侧 UpdateConfig 会拒绝该值）。
+	restore := initRetentionCleanupDB(t)
+	inner := db.GetDB()
+	if inner == nil || inner == outer {
+		t.Fatalf("内层夹具必须装配自己的原子句柄（inner=%p outer=%p）", inner, outer)
+	}
+	restore()
+	if got := db.GetDB(); got != outer {
+		t.Fatalf("还原后 db.GetDB()=%p，必须指回外层库 %p（只还原导出变量会让后台读路径空转/读到已关闭的临时库）", got, outer)
+	}
+	if db.DB != outer {
+		t.Fatalf("还原后 db.DB=%p，want 外层库 %p", db.DB, outer)
+	}
+}
+
+func TestNotificationDeliveryRetentionCleanup_clampsDaysToMax(t *testing.T) {
+	initRetentionCleanupDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET notification_delivery_retention_days=? WHERE id=1`,
 		db.MaxNotificationDeliveryRetentionDays+1350); err != nil {
 		t.Fatal(err)

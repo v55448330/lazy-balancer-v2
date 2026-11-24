@@ -8,7 +8,7 @@ package taskengine
 // EnabledFn 杀（门只作用于调度判定，当前轮跑完，下一轮才停）。
 
 import (
-	"sync"
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,26 +87,30 @@ func TestEngine_EnabledFnFalseSkipsScheduledScheduling(t *testing.T) {
 }
 
 // Given Periodic 在途 Run（阻塞于释放通道）+ EnabledFn 中途翻 false。
-// When 在途期间跑过若干 tick 后释放。
-// Then 在途 Run 跑完落 success（不被 EnabledFn 杀——门只作用于调度判定），
-// 且此后不再调度新轮（下一轮才停）。
+// When 在途期间确定性地跑过若干 tick 后释放。
+// Then 在途 Run 的上下文不被取消、跑完落 success（不被 EnabledFn 杀——门只
+// 作用于调度判定），且此后不再调度新轮（下一轮才停）。
 func TestEngine_EnabledFnFalseDoesNotKillInFlightRun(t *testing.T) {
 	e := newTestEngine(t)
 	var enabled atomic.Bool
 	enabled.Store(true)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	// 放弃形态（Run 未启动即失败）由 newTestEngine 的 Stop→ctx.Done 兜底，
-	// 不另设 close cleanup（与测试体 close(release) 双重关闭会 panic）。
-	// Run 体须重入安全：RED 阶段（门未实现）业务关不拦新轮，Run 会被
-	// 连续再调度——close 用 sync.Once 幂等，避免 close of closed channel
-	// panic 噪音淹没断言。
-	var startOnce sync.Once
+	firstCtx := make(chan context.Context, 1)
+	// 误投递的新轮滞留在途（等到引擎 Stop 的 ctx 取消）：准入（running CAS）
+	// 在 tick 内同步完成，故 driveTicks 返回后「有新轮在途」确定性可见——
+	// 负断言不再依赖墙钟窗口内恰好发生 tick。
+	var starts atomic.Int32
 	if err := e.Register(Descriptor{ID: "t-enf", Family: "t", Name: "业务门在途", Kind: KindPeriodic, RunsOn: RoleAny,
 		IntervalFn: func() time.Duration { return 20 * time.Millisecond },
 		EnabledFn:  func() bool { return enabled.Load() },
 		Run: func(rc RunContext) error {
-			startOnce.Do(func() { close(started) })
+			if starts.Add(1) > 1 {
+				<-rc.Ctx.Done()
+				return rc.Ctx.Err()
+			}
+			firstCtx <- rc.Ctx
+			close(started)
 			select {
 			case <-rc.Ctx.Done():
 				return rc.Ctx.Err()
@@ -118,21 +122,35 @@ func TestEngine_EnabledFnFalseDoesNotKillInFlightRun(t *testing.T) {
 	}
 	e.StartLoop("t-enf")
 	waitForEngineSignal(t, "业务门在途 Run 启动", started)
-	// 在途期间业务关：给足 tick 轮次——若实现误杀（SetRole 同型取消），终态已翻转
+	inflight := <-firstCtx
+
+	// 在途期间业务关：确定性驱动 tick——误杀形态（SetRole 同型取消）在 tick
+	// 内同步取消本轮上下文，紧接着读 ctx.Err() 即终值。
 	enabled.Store(false)
-	time.Sleep(100 * time.Millisecond)
-	close(release)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if lr := e.LatestRun("t-enf"); lr != nil && lr.Status == "success" {
-			// 下一轮才停：关闭后不再有新轮落行
-			time.Sleep(100 * time.Millisecond)
-			if n := countRuns(t, "t-enf"); n != 1 {
-				t.Fatalf("EnabledFn=false 后不得再调度新轮，got %d 行", n)
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	driveTicks(e, 30)
+	if err := inflight.Err(); err != nil {
+		t.Fatalf("EnabledFn=false 不得杀在途 Run（本轮上下文已取消: %v）", err)
 	}
-	t.Fatalf("在途 Run 应跑完落 success（不被 EnabledFn 杀），got %+v", e.LatestRun("t-enf"))
+
+	// 释放首轮：落 success（占位释放在终态行之后，settle 保证读到终值）
+	close(release)
+	settleTaskRuns(t, e, "t-enf")
+	if lr := e.LatestRun("t-enf"); lr == nil || lr.Status != "success" {
+		t.Fatalf("在途 Run 应跑完落 success（不被 EnabledFn 杀），got %+v", lr)
+	}
+
+	// 下一轮才停：关闭期再驱动若干 tick 不得准入新轮（误投递的新轮滞留在途）。
+	// 先把节拍置零（=从未执行过）让周期到期判定确定成立——否则 20ms 间隔下
+	// 紧跟驱动 tick 的「现在」可能尚未到期，负断言空转。
+	reg := regOf(t, e, "t-enf")
+	reg.mu.Lock()
+	reg.lastCheck = time.Time{}
+	reg.mu.Unlock()
+	driveTicks(e, 30)
+	if e.IsTaskInFlight("t-enf") {
+		t.Fatal("EnabledFn=false 后不得再调度新轮（有新轮在途）")
+	}
+	if n := countRuns(t, "t-enf"); n != 1 {
+		t.Fatalf("EnabledFn=false 后不得再调度新轮，got %d 行", n)
+	}
 }

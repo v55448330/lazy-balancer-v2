@@ -548,16 +548,16 @@ func TestGetAuditLogs_500BodyHidesDriverDetails(t *testing.T) {
 
 // COUNT 与明细查询两个早期失败面也必须走统一 5xx 写点：响应保持固定文案，
 // 运行日志区分操作名并保留底层原因，避免线上只有前端 500 而无法排障。
-// 时区读取失败/非法值时时间筛选按 UTC 解析（整体偏移）——降级必须并入
-// partial 披露，消费方按「时间筛选可能整体偏移」感知，而不是静默拿到
-// 偏移结果；合法时区不得误报降级。
-func TestGetAuditLogs_timezoneDegradedDisclosedInPartial(t *testing.T) {
+// 时区单源：global_config.timezone 不再被审计列表消费（时间窗口按
+// services.CurrentLocation() 解析，与页面其余时间字段同源）。因此无论存量值
+// 非法还是合法都不改变 partial（时区降级披露归 services 的刷新状态机），
+// 也不吞数据。
+func TestGetAuditLogs_storedTimezoneNotConsulted(t *testing.T) {
 	for _, tc := range []struct {
 		name, timezone string
-		wantPartial    bool
 	}{
-		{name: "非法时区披露降级", timezone: "Not/AZone", wantPartial: true},
-		{name: "合法时区不置降级", timezone: "Asia/Shanghai", wantPartial: false},
+		{name: "非法存量时区不影响列表", timezone: "Not/AZone"},
+		{name: "合法存量时区不置降级", timezone: "Asia/Shanghai"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given 主库时区为 tc.timezone 的双库夹具 + 一条已知 UTC 时间行
@@ -581,7 +581,7 @@ func TestGetAuditLogs_timezoneDegradedDisclosedInPartial(t *testing.T) {
 			if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, ?)", tc.timezone); err != nil {
 				t.Fatal(err)
 			}
-			// users 表就位：display_name 富化成功——partial 的唯一来源必须是时区降级。
+			// users 表就位：display_name 富化成功（partial 无其他来源）。
 			if _, err := mainDB.Exec("CREATE TABLE users (username VARCHAR(50) PRIMARY KEY, display_name VARCHAR(100)); INSERT INTO users VALUES ('admin', '管理员')"); err != nil {
 				t.Fatal(err)
 			}
@@ -595,12 +595,12 @@ func TestGetAuditLogs_timezoneDegradedDisclosedInPartial(t *testing.T) {
 			router := gin.New()
 			router.GET("/audit-logs", (&Handlers{}).GetAuditLogs)
 
-			// When 带时间范围筛选请求（解析时区=配置时区，降级时按 UTC）
+			// When 带时间范围筛选请求（解析时区=services.CurrentLocation()）
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
 				"/audit-logs?page=1&page_size=10&start_time=2026-07-19%2000:00:00&end_time=2026-07-19%2023:59:59", nil))
 
-			// Then 200 + partial 披露时区降级 + 数据不因披露被吞
+			// Then 200 + 无降级披露 + 数据不被吞
 			if response.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
@@ -615,8 +615,8 @@ func TestGetAuditLogs_timezoneDegradedDisclosedInPartial(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if body.Data.Partial != tc.wantPartial {
-				t.Fatalf("partial=%v, want %v（时区=%q）", body.Data.Partial, tc.wantPartial, tc.timezone)
+			if body.Data.Partial {
+				t.Fatalf("partial=true（时区=%q）——列表已不消费 global_config.timezone，不得再据其披露降级", tc.timezone)
 			}
 			if len(body.Data.List) != 1 || body.Data.List[0].CreatedAt != "2026-07-19 12:00:00" {
 				t.Fatalf("list=%+v, want 原始 UTC 行原样返回（披露不吞数据）", body.Data.List)

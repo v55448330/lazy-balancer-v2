@@ -2,7 +2,7 @@ package handlers
 
 // L4 阶段 0/1 绑定校验面 RED 测试（契约 C4）：
 //   - TCP 规则可绑定 stage0/stage1 特征策略（四绑定入口全部放开）；
-//   - 含 G2（限流）/G3（WAF）特征的策略对 TCP 绑定 → 400「该策略含 TCP 不支持的能力（限流/WAF）」；
+//   - 含 G2（CC 防护）/G3（WAF）特征的策略对 TCP 绑定 → 400「该策略含 TCP 不支持的能力（CC 防护/WAF）」；
 //   - HTTP 规则绑定不受影响（回归形状）；
 //   - TCP 终态解绑按新语义收口：只清 G2/G3 特征绑定，stage0/1 保留。
 import (

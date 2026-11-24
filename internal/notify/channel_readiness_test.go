@@ -9,7 +9,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 // fakeWxSender 记录是否被调用（不触网）。
@@ -49,5 +48,4 @@ func TestSendToChannels_skipsStaleWxSession(t *testing.T) {
 	if fake.calls != 1 || !sent2 || len(errs2) != 0 {
 		t.Fatalf("就绪后应正常发送: calls=%d sent=%v errs=%v", fake.calls, sent2, errs2)
 	}
-	_ = time.Now
 }

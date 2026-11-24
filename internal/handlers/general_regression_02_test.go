@@ -534,8 +534,8 @@ func TestOBS_manualTLSResidualACMEReferenceNormalized(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create manual TLS rule status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create manual TLS rule status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 	var acmeID int
 	if err := db.DB.QueryRow(`SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE name='l7-manual'`).Scan(&acmeID); err != nil {
@@ -639,8 +639,8 @@ func TestOBS_tcpLogEnabledDeadConfigNormalized(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create tcp rule status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create tcp rule status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 	var logEnabled int
 	if err := db.DB.QueryRow(`SELECT COALESCE(log_enabled,0) FROM lb_rules WHERE name='l7-log-tcp'`).Scan(&logEnabled); err != nil {

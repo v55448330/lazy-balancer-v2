@@ -181,9 +181,6 @@ var catalog = []catalogEntry{
 	{EvtNotifyRuleChanged, LevelInfo, false, "通知规则变更", "用户 %s %s了通知规则「%s」"},
 }
 
-// defaultSubscribedFor 新用户默认订阅集：critical+warn 全开，info 与日报默认关。
-func defaultSubscribedFor(e catalogEntry) bool { return e.DefaultSub }
-
 // CatalogLookup 外部目录查询（集群上报端点的目录门——与 Publish 同口径）。
 func CatalogLookup(id string) bool {
 	_, ok := catalogByID(id)

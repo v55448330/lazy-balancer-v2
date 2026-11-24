@@ -26,3 +26,38 @@ export const latestChannelResults = <T extends DeliveryChannelResultLike>(channe
   }
   return [...byChannel.values()]
 }
+
+/** 分通道状态词条叶子键（app.notification.deliveries.*）；未知状态返回 null。
+ *
+ * 展开行/状态列的兜底：把未知状态（后端新增通道结果态）一律映射成「失败」
+ * 会让排障读到与事实不符的结论——未知即原样回显状态码 + 中性着色。 */
+type ChannelStatusMessageKey = 'statusPending' | 'statusSent' | 'statusFailed' | 'statusDead'
+
+export const channelStatusMessageKey = (status: string): ChannelStatusMessageKey | null => {
+  switch (status) {
+    case 'pending': return 'statusPending'
+    case 'sent': return 'statusSent'
+    case 'failed': return 'statusFailed'
+    case 'dead': return 'statusDead'
+    default: return null
+  }
+}
+
+/** 分通道状态标签的 el-tag 类型：success=已投递、danger=失败/死信、其余（含未知）中性。 */
+type ChannelStatusTagType = 'info' | 'success' | 'warning' | 'danger'
+
+export const channelStatusTagType = (status: string): ChannelStatusTagType => {
+  if (status === 'sent') return 'success'
+  return channelStatusMessageKey(status) === null ? 'info' : 'danger'
+}
+
+/** 展开行错误文案形态：有错误原文 / 失败但未记录原因 / 无错误（未失败）。
+ *
+ * 「失败但 error 为空」是历史行与聚合行的真实形态（写入侧正常带原因）：直接
+ * 显示「无错误」与红色失败标签自相矛盾，读起来像投递成功。 */
+type ChannelErrorKind = 'error' | 'missing' | 'none'
+
+export const channelErrorKind = (channel: { status: string; error?: string | null }): ChannelErrorKind => {
+  if ((channel.error ?? '').trim() !== '') return 'error'
+  return channel.status === 'failed' || channel.status === 'dead' ? 'missing' : 'none'
+}

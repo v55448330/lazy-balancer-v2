@@ -49,11 +49,14 @@ test('提示条行数文案与后端 certJobRowsLimit 同值（改上限必须�
       for (const key of ['app.settings.taskMonitor.certQueue.truncatedNote', 'app.settings.taskMonitor.chart.distHint']) {
         const text = i18n.global.t(key)
         assert.notEqual(text, key, `${locale} 词条 ${key} 不得裸键回退`)
-        const digits = [...text.matchAll(/\d+/g)].map((m) => m[0])
-        assert.ok(digits.length > 0, `${locale} 词条 ${key} 必须含行数上限数字：${text}`)
-        for (const digit of digits) {
-          assert.equal(digit, String(limit), `${locale} 词条 ${key} 数字「${digit}」与后端上限 ${limit} 漂移：${text}`)
-        }
+        // 只钉「上限数本身以独立数字形态出现」（`100 条` / `at 100`）：扫描词条里
+        // **所有**数字会把任何无关数字（如「近 24 小时」）当漂移（假红），零命中
+        // 又会漏掉上限漂移——边界正则两头都咬得住。
+        assert.match(
+          text,
+          new RegExp(`(?:^|[^0-9])${limit}(?:[^0-9]|$)`),
+          `${locale} 词条 ${key} 必须以独立数字形态给出后端上限 ${limit}：${text}`,
+        )
       }
     }
   } finally {

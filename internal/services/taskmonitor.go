@@ -123,9 +123,11 @@ func CollectSystemTasks() (tasks []TaskInfo, certJobsTruncated bool) {
 // collectCertJobRows 逐签发任务行：非终态（实时队列内容）+ 24h 内终态
 // （结果可见）；id=cert-job:{jobID}，日志走 /certificates/jobs/{id}/logs。
 func collectCertJobRows() ([]TaskInfo, bool) {
-	// db.DB nil 防护——与引擎侧导出 DB 函数同形
-	// （装配顺序变化即 nil panic，曾裸用）。
-	if db.DB == nil {
+	// 关停竞态守卫：单次句柄快照后整函数只用局部变量——nil
+	// 判空与 RoleOf/Query 之间若被 db.Close 置 nil，二次读包级变量会
+	// nil-deref panic（本视图由 HTTP 5s 轮询驱动）。
+	database := db.GetDB()
+	if database == nil {
 		return nil, false
 	}
 	// 2026-10-01 用户裁定：行存在即显示（无状态/时间过滤——曾按
@@ -140,14 +142,15 @@ func collectCertJobRows() ([]TaskInfo, bool) {
 	// 节点自己的签发工作项）。读角色失败按主节点处理（行可见：多展示无害，
 	// 静默丢行不可恢复）。
 	isMaster := 1
-	if role, err := RoleOf(context.Background(), db.DB); err == nil && !role {
+	beforeTaskMonitorCertJobsQuery()
+	if role, err := RoleOf(context.Background(), database); err == nil && !role {
 		isMaster = 0
 	}
 	readFailed := false
 	// 查询单源（db.CertJobsMonitorRowsQuery）：排序键 COALESCE(updated_at,
 	// created_at) DESC 由表达式索引 idx_cert_jobs_updated_fallback 承载，计划
 	// 钉测在 db 包内看守两者一致。
-	rows, err := db.DB.Query(db.CertJobsMonitorRowsQuery, isMaster, certJobRowsLimit+1)
+	rows, err := database.Query(db.CertJobsMonitorRowsQuery, isMaster, certJobRowsLimit+1)
 	if err != nil {
 		// 任务行读失败留痕：查询失败不再静默空列表（对照下方 rows.Err 留痕形态）。
 		// 5s 轮询下按失败态转换留痕（首报一条，故障持续期静默，恢复补一条）。
@@ -312,11 +315,22 @@ const taskMonitorDaemonBootLogKey = "task-monitor-daemon-boot"
 // （同族首报/恢复节流口径）。
 const taskIP2RegionStatusLogKey = "task-ip2region-status"
 
+// beforeTaskMonitorCertJobsQuery 保留 cert-job 行查询前注入缝，供关停交错
+// 回归测试使用。
+var beforeTaskMonitorCertJobsQuery = func() {}
+
+// beforeTaskMonitorWaitingCAQuery 保留 cert-waiting-ca 下次可用时间查询前
+// 注入缝，供关停交错回归测试使用。
+var beforeTaskMonitorWaitingCAQuery = func() {}
+
 // collectEngineFamilies 引擎注册族统一视图（终态：零特化零收集器——
 // 元数据/开关/下一槽/状态镜像全来自 DescribeAll，最近运行与 24h 统计
 // 来自 task_runs，下次时间兜底 last+interval）。
 func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 	var out []TaskInfo
+	// 关停竞态守卫：视图层唯一的裸库读取（cert-waiting-ca
+	// 分支）用单次快照到底，判空与解引用之间不得再读包级 db.DB。
+	database := db.GetDB()
 	// 最近运行与 24h 统计一次批量取（修复前逐任务 LatestRun+Stats24h
 	// = 2N 条 SQL，前端 5s 轮询下为稳定常驻负载）。
 	latestRuns, runStats := te.RunOverview()
@@ -429,7 +443,7 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 				ti.NextRunAt = m.NextSlot
 			}
 		}
-		if m.ID == "cert-waiting-ca" && m.RoleApplicable && db.DB != nil {
+		if m.ID == "cert-waiting-ca" && m.RoleApplicable && database != nil {
 			// 仅展示「下次 CA 可用时间」，不参与 Periodic 调度；Descriptor 不再携带
 			// Scheduled 专用 NextSlotFn。扫描口径=「仍有待消费的退避窗口」：
 			// failed 是统一失败语义后的现役形态（窗口到期前由 cert-waiting-ca
@@ -440,7 +454,8 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 			// 自动通道消费（仅手动重试可达），展示其重排时刻会误导运维等待；
 			// waiting_ca 遗留行按导入归一契约恒未超限，同门无副作用。
 			var at string
-			if err := db.DB.QueryRow(`SELECT COALESCE(MIN(NULLIF(ca_available_after,'')),'') FROM cert_jobs
+			beforeTaskMonitorWaitingCAQuery()
+			if err := database.QueryRow(`SELECT COALESCE(MIN(NULLIF(ca_available_after,'')),'') FROM cert_jobs
 				WHERE status IN ('failed','waiting_ca') AND ca_available_after IS NOT NULL AND datetime(ca_available_after)>datetime('now')
 				AND COALESCE(renewal_attempts,0) < ?`, getCertRenewalAttempts()).Scan(&at); err != nil {
 				// 查询失败不得静默丢弃（否则页面「—」与「无 waiting_ca 任务」

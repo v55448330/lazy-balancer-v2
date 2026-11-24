@@ -1888,10 +1888,13 @@ func TestCertIssuer_Issue_fastPathMaterialReadFailure_issuedStaysIssued(t *testi
 	if !errors.As(err, &deploymentErr) {
 		t.Fatalf("issue error=%v, want certificateDeploymentError（不得回落全签）", err)
 	}
+	// 同步可观测：本路径的确定性判据是下方 cert_jobs 行断言（attempts=0 且窗口
+	// 为空=部署失败链未进入）——deploymentFailedFrom 对 issued 行在 SQL 门即早退，
+	// 部署重试桩不可达；固定观测窗在负载下只会白等 50ms 且不增加判别力。
 	select {
 	case <-retried:
 		t.Fatal("issued 形态不得登记部署重试（deploymentFailed 的 from 集合不含 issued）")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	var status string
 	var attempts int

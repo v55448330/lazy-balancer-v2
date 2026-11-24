@@ -180,13 +180,19 @@ test('ccModeAuto 突刺口径（配额已退役）：zh/en 与策略表单 ccSec
 })
 
 test('keys.whitelistPlaceholder 真实换行（字面 \\n 不得渲染成可见文本，zh/en 双语）', () => {
-  for (const loc of ['zh-CN', 'en'] as const) {
-    i18n.global.locale.value = loc
-    const text = tSafe('common.app.views.keys.whitelistPlaceholder')
-    assert.ok(text.includes('\n'), `${loc}: 占位文案必须含真实换行`)
-    assert.doesNotMatch(text, /\\n/, `${loc}: 字面 backslash-n 会渲染成可见文本`)
+  // 临时切换必须还原（仓内单源范式：taskMonitorTruncation/任务监控用例同形）：
+  // 断言失败时不得把 en 泄漏给同文件后续用例（否则级联假红，排障指向错方向）。
+  const savedLocale = i18n.global.locale.value
+  try {
+    for (const loc of ['zh-CN', 'en'] as const) {
+      i18n.global.locale.value = loc
+      const text = tSafe('common.app.views.keys.whitelistPlaceholder')
+      assert.ok(text.includes('\n'), `${loc}: 占位文案必须含真实换行`)
+      assert.doesNotMatch(text, /\\n/, `${loc}: 字面 backslash-n 会渲染成可见文本`)
+    }
+  } finally {
+    i18n.global.locale.value = savedLocale
   }
-  i18n.global.locale.value = 'zh-CN'
   // zh/en 源文件成对：真实转义 \n（单反斜杠），不得双反斜杠字面量
   assert.doesNotMatch(code('src/locales/zh/views.ts'), /'whitelistPlaceholder':[^\\]*\\\\n/, 'zh 不得双反斜杠字面量')
   assert.doesNotMatch(code('src/locales/en/views.ts'), /'whitelistPlaceholder':[^\\]*\\\\n/, 'en 不得双反斜杠字面量')

@@ -688,6 +688,38 @@ func TestAuditMessagesBudget_clampsToFloorAndCeiling(t *testing.T) {
 	}
 }
 
+// 零预算/次下限边界的机械真值表：固定段把字节预算压到上界、旧下限两侧与 0
+// 时，字节与条目预算必须逐格符合「1MiB − 固定段 − 余量，夹到 [0, 上界]，
+// 条目按 512B/条换算；仅当字节仍达旧下限才抬到旧条目下限」——条目下限不得
+// 反向吃掉固定段空间（那会把整行推回单条上限之外）。
+func TestAuditMessagesBudget_zeroAndSubFloorBoundaries(t *testing.T) {
+	// 基数 = 1MiB 行预算 − 动态预算余量：字节预算随固定段从该处开始收缩。
+	base := auditItemMaxBytes - auditMessagesBudgetReserve
+	cases := []struct {
+		name        string
+		fixed       int64
+		wantBytes   int64
+		wantEntries int
+	}{
+		{"字节上界命中", base - 128*1024, 128 * 1024, 256},
+		{"字节上界下方 1B", base - 128*1024 + 1, 128*1024 - 1, 255},
+		{"旧下限命中", base - 32*1024, 32 * 1024, 64},
+		{"旧下限下方 1B", base - 32*1024 + 1, 32*1024 - 1, 63},
+		{"零预算", base, 0, 0},
+		{"负预算夹到零", base + 1, 0, 0},
+		{"固定段等于单条上限", auditItemMaxBytes, 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gotBytes, gotEntries := auditMessagesBudget(c.fixed)
+			if gotBytes != c.wantBytes || gotEntries != c.wantEntries {
+				t.Fatalf("fixed=%d 预算=%d/%d, want %d/%d",
+					c.fixed, gotBytes, gotEntries, c.wantBytes, c.wantEntries)
+			}
+		})
+	}
+}
+
 // 旧形态（小集合、远低于旧上限）必须逐条原样保留：动态预算的下限等于旧固定
 // 上限，因此「旧时期能完整装下」的集合在新形态下输出不变（顺序/条数/零丢弃）。
 func TestSnapshotAuditLog_legacySmallMessageSetUnchanged(t *testing.T) {

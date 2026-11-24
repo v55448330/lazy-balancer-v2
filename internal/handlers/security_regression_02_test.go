@@ -194,9 +194,9 @@ func (securityRowsErrConn) QueryContext(_ context.Context, query string, _ []dri
 	}
 }
 
-// securityRowsErrPolicyColumns 与生产 securityPolicySelectColumns 同 41 列同序
+// securityRowsErrPolicyColumns 与生产 securityPolicySelectColumns 同列集同序
 // （假库行形状必须与投影 arity 一致——旧 33 列形状含已退役 rate_limit 三列、
-// 缺人机/CC/响应方式八列，Scan 列数错使拆分在绑定迭代前即 500，钉测空转）。
+// 缺人机/CC/响应方式各列，Scan 列数错使拆分在绑定迭代前即 500，钉测空转）。
 var securityRowsErrPolicyColumns = []string{
 	"id", "name", "description", "mode", "anomaly_threshold", "ip_acl_mode", "ip_acl_list", "ip_acl_enabled",
 	"ip_whitelist_enabled", "ip_whitelist", "ip_blacklist",

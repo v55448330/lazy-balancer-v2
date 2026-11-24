@@ -60,6 +60,12 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
 		return
 	}
+	// 通知设置（含全局 API / MCP 接入开关）只对主节点生效：从节点放行 =
+	// 面板显示「已关闭」而实际接入面在主节点。与
+	// 通知中心其它写端点共用 requireNotifyMaster，不得只做到管理员门。
+	if !requireNotifyMaster(c) {
+		return
+	}
 	var req struct {
 		SMTP *struct {
 			Host     *string `json:"host"`

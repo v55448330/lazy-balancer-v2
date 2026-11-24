@@ -1933,7 +1933,9 @@ const (
 
 // auditMessagesBudget 按 1MiB 行预算反算单条快照可用的 messages 预算：固定段
 // （transaction/request/response/producer 的全部非 messages 内容 + 骨架开销）
-// 扣除后再留 auditMessagesBudgetReserve，最后夹到 [旧下限, clamp 上界]。
+// 扣除后再留 auditMessagesBudgetReserve，字节预算夹到 [0, 上界]；条目预算按
+// 512B/条换算，仅当字节预算仍达旧下限（32KiB）时抬回旧条目下限（64 条）——
+// 固定段吃满时预算归零，不会把整行推过 auditItemMaxBytes。
 //
 // fixedBytes 必须来自 estimateAuditSnapshotFixedBytes（同一估算口径）：动态预算
 // 与实际落盘字节同口径，才能保证「预算吃满 + 固定段封顶」仍不超过
@@ -1948,14 +1950,12 @@ func auditMessagesBudget(fixedBytes int64) (maxBytes int64, maxEntries int) {
 	if maxBytes < 0 {
 		maxBytes = 0
 	}
-	if maxBytes < auditMessagesMinBytes {
-		// 旧下限是「兼容下限」而非硬下限：仅在空间足够时应用。
-		if maxBytes <= 0 {
-			maxEntries = 0
-			return maxBytes, maxEntries
-		}
+	// 零字节预算 = 零条目：兼容下限不得反向吃掉固定段空间。
+	if maxBytes == 0 {
+		return 0, 0
 	}
 	maxEntries = int(maxBytes / auditMessageBudgetBytesPerEntry)
+	// 旧条目下限仅在字节预算仍达旧下限时应用（两条口径同源缩放：32KiB↔64 条）。
 	if maxEntries < auditMessagesMinEntries && maxBytes >= auditMessagesMinBytes {
 		maxEntries = auditMessagesMinEntries
 	}

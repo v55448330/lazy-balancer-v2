@@ -8,6 +8,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -21,6 +22,13 @@ type NotificationDeliveryRetentionResult struct {
 	Channels     int // 每通道结果删除行数
 	WxContexts   int // 过期微信会话上下文 KV 清理数
 	BindSessions int // 过期绑定会话清理数
+}
+
+// notificationRetentionDeleteExec 保留分批删除的 Exec 注入缝，供「RowsAffected
+// 错误不得被当成 0 行并按清理成功收尾」回归测试注入真实错误结果使用。
+// 生产恒走 database.Exec（批间 ctx 检查语义不变：首批仍执行后才发现取消）。
+var notificationRetentionDeleteExec = func(database *sql.DB, query string, args ...any) (sql.Result, error) {
+	return database.Exec(query, args...)
 }
 
 // NotificationDeliveryRetentionCleanup 按保留期删除过期投递记录（分批，
@@ -46,12 +54,17 @@ func NotificationDeliveryRetentionCleanup(ctx context.Context) (NotificationDeli
 	const batch = 500
 	// 先删子表（每通道结果），再删主表——按 created_at 年龄裁剪。
 	for {
-		res, err := db.DB.Exec(`DELETE FROM notification_delivery_channels WHERE id IN (
+		res, err := notificationRetentionDeleteExec(db.DB, `DELETE FROM notification_delivery_channels WHERE id IN (
 			SELECT id FROM notification_delivery_channels WHERE created_at < datetime('now', printf('-%d days', ?)) ORDER BY id ASC LIMIT ?)`, days, batch)
 		if err != nil {
 			return result, err
 		}
-		affected, _ := res.RowsAffected()
+		affected, rerr := res.RowsAffected()
+		if rerr != nil {
+			// 行数不可知≠0 行：按失败上报，否则任务摘要把未清完的一轮谎报成
+			// 「清理完成」（与同函数的 Exec/ctx 错误口径一致）。
+			return result, fmt.Errorf("读取每通道结果删除行数失败（清理未完成）: %w", rerr)
+		}
 		result.Channels += int(affected)
 		if affected == 0 {
 			break
@@ -65,12 +78,15 @@ func NotificationDeliveryRetentionCleanup(ctx context.Context) (NotificationDeli
 		}
 	}
 	for {
-		res, err := db.DB.Exec(`DELETE FROM notification_deliveries WHERE id IN (
+		res, err := notificationRetentionDeleteExec(db.DB, `DELETE FROM notification_deliveries WHERE id IN (
 			SELECT id FROM notification_deliveries WHERE created_at < datetime('now', printf('-%d days', ?)) ORDER BY id ASC LIMIT ?)`, days, batch)
 		if err != nil {
 			return result, err
 		}
-		affected, _ := res.RowsAffected()
+		affected, rerr := res.RowsAffected()
+		if rerr != nil {
+			return result, fmt.Errorf("读取投递记录删除行数失败（清理未完成）: %w", rerr)
+		}
 		result.Deliveries += int(affected)
 		if affected == 0 {
 			break

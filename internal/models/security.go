@@ -210,6 +210,11 @@ type SecurityPolicy struct {
 	//（无引用或非生成路径加载），发射端回退 inline-only。不参与 JSON 序列化。
 	MergedACLList   []string `json:"-"`
 	MergedWhitelist []string `json:"-"`
+	// IPACLRefsNonEmpty 是摘要/列表路径的轻量判定：引用的 IP 名单中是否有含
+	// 生效条目的名单（只查条数，不装载条目内容）。空白名单判定（ACL 开启 +
+	// allow + 生效条目为零 → 绑定即全拒）不得为此复用渲染装载函数——读端点
+	// 不得写副作用、也不该为摘要全量展开名单。不参与 JSON 序列化。
+	IPACLRefsNonEmpty bool `json:"-"`
 	// IPRefMissing（RDB 文件化严格模式）：引用的威胁库 .iplist 文件缺失时置位，
 	// 渲染发射端跳过该策略并记 ERROR+审计——宁缺勿假（绝不以空条目集静默收窄
 	// ACL 保护面）。不参与 JSON 序列化。
@@ -257,6 +262,7 @@ type SecurityPolicySummary struct {
 	IPACLMode            string `json:"ip_acl_mode"`
 	IPACLEnabled         bool   `json:"ip_acl_enabled"`
 	IPACLList            string `json:"ip_acl_list"`
+	ACLEmptyAllow        bool   `json:"acl_empty_allow"`
 	IPWhitelist          string `json:"ip_whitelist"`
 	IPWhitelistEnabled   bool   `json:"ip_whitelist_enabled"`
 	IPBlacklist          string `json:"ip_blacklist"`

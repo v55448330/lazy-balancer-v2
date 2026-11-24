@@ -182,14 +182,13 @@ func formatBotText(msg Message) string {
 	}
 	// 日报渲染底座已含品牌+时间署名，避免重复；事件消息附加署名。
 	if msg.EventType != EvtDailyReport {
-		b.WriteString("\n\n" + brandFooter(msg.Time))
+		b.WriteString("\n\n" + brandFooter())
 	}
 	return b.String()
 }
 
 // brandFooter 消息署名（只留品牌；时间已在详情区呈现，署名带时间是重复）。
-func brandFooter(ts time.Time) string {
-	_ = ts
+func brandFooter() string {
 	return "—— " + BrandName()
 }
 

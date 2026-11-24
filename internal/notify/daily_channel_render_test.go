@@ -12,8 +12,16 @@ import (
 	"time"
 )
 
-func dailyPayloadBody(items []string) string {
+func dailyPayloadBody() string {
 	return `{"date":"2026-11-17","items":["requests","blocked"],"values":{"requests":"1200","blocked":"34","attack_top":"sql-i","autoban":"2","cert_status":"活跃 3 / 失败 0","cluster_status":"正常（主节点）"}}`
+}
+
+// renderDailyForChannel 按通道格式渲染正文（测试专用包装：只取正文，丢弃
+// 派发侧才会消费的实际渲染格式）。生产派发链直接调用
+// renderDailyForChannelFormat 以便按格式决序 Content-Type。
+func renderDailyForChannel(msg Message, channelType, styleFormat string) string {
+	body, _ := renderDailyForChannelFormat(msg, channelType, styleFormat)
+	return body
 }
 
 func TestRenderDailyForChannel_nonDailyPassThrough(t *testing.T) {
@@ -31,7 +39,7 @@ func TestRenderDailyForChannel_corruptPayloadFallsBack(t *testing.T) {
 }
 
 func TestRenderDailyForChannel_channelFormats(t *testing.T) {
-	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil), Title: "每日日报"}
+	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(), Title: "每日日报"}
 
 	webhook := renderDailyForChannel(msg, "webhook", "")
 	if !strings.Contains(webhook, `"requests": "1200"`) || strings.Contains(webhook, "attack_top") {
@@ -63,7 +71,7 @@ func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 // 缺省 markdown）；非机器人通道卡 daily_format 覆盖自动映射；日报页 per-channel
 // 配置优先于一切。
 func TestRenderDailyForChannel_styleOverride(t *testing.T) {
-	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil), Title: "每日日报"}
+	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(), Title: "每日日报"}
 	got := renderDailyForChannel(msg, "qq", "text")
 	if !strings.Contains(got, "| 请求数 | 1200 |") {
 		t.Fatalf("qq 协议固定应 markdown（样式 text 不覆盖）: %q", got)
@@ -74,14 +82,14 @@ func TestRenderDailyForChannel_styleOverride(t *testing.T) {
 		t.Fatalf("webhook style 覆盖未生效（应纯文本）: %q", wh)
 	}
 	// 机器人协议固定优先于一切配置：payload.formats.qq=text 仍 markdown。
-	msg.Body = strings.Replace(dailyPayloadBody(nil),
+	msg.Body = strings.Replace(dailyPayloadBody(),
 		`"values":`, `"formats":{"qq":"text"},"values":`, 1)
 	got = renderDailyForChannel(msg, "qq", "text")
 	if !strings.Contains(got, "| 请求数 | 1200 |") {
 		t.Fatalf("qq 协议固定应不受配置覆盖: %q", got)
 	}
 	// 非机器人日报页配置优先：payload.formats.webhook=html → html 胜出。
-	msg.Body = strings.Replace(dailyPayloadBody(nil),
+	msg.Body = strings.Replace(dailyPayloadBody(),
 		`"values":`, `"formats":{"webhook":"html"},"values":`, 1)
 	wh = renderDailyForChannel(msg, "webhook", "text")
 	if !strings.Contains(wh, "<table") {

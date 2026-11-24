@@ -161,7 +161,7 @@
 
       <!-- Tab 1: 通道管理 -->
       <el-tab-pane :label="t('app.notification.rules.channelsTab')" name="channels">
-        <ChannelCards />
+        <ChannelCards ref="channelCardsRef" />
       </el-tab-pane>
 
       <!-- Tab 2: 通知规则（每日摘要独立卡片 + 事件规则表格） -->
@@ -332,12 +332,12 @@
 
       <!-- Tab 3: 投递记录 -->
       <el-tab-pane :label="t('app.notification.rules.deliveriesTab')" name="deliveries">
-        <DeliveryLog />
+        <DeliveryLog ref="deliveryLogRef" />
       </el-tab-pane>
 
       <!-- Tab 4: 邮件服务（管理员） -->
       <el-tab-pane v-if="isAdmin" :label="t('app.notification.rules.smtpTab')" name="smtp">
-        <SystemCredentials />
+        <SystemCredentials ref="systemCredentialsRef" />
       </el-tab-pane>
     </el-tabs>
 
@@ -395,7 +395,7 @@
           <CodeEditor v-if="tplEditorLang !== 'text'" v-model="tplText" :language="tplEditorLang" height="220px" :aria-label="tplEditorLabel" :readonly="tplMode === 'daily' && tplDailyMode === 'modules'" />
           <el-input v-else v-model="tplText" type="textarea" :rows="7" :placeholder="tplPlaceholder" :readonly="tplMode === 'daily' && tplDailyMode === 'modules'" />
           <div v-if="tplLengthLimit > 0" class="tpl-length-row">
-            <span class="form-hint" :class="{ 'tpl-length-over': tplByteLength > tplLengthLimit }">{{ tplByteLength }} / {{ tplLengthLimit }}</span>
+            <span class="form-tip-inline" :class="{ 'tpl-length-over': tplByteLength > tplLengthLimit }">{{ tplByteLength }} / {{ tplLengthLimit }}</span>
           </div>
           <div class="ph-row">
             <el-tag v-for="ph in tplActivePh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag>
@@ -464,7 +464,7 @@ import {
 } from '@/utils/channelStyle'
 import { overviewDeliveryStats } from '@/utils/notificationOverview'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
-import { dailySampleValues } from '@/utils/dailySamples'
+import { renderDailySamples } from '@/utils/dailySamples'
 import {
   channelTemplateByteLimit, mergeChannelTemplateDrafts, ruleTemplateIsHtml, toggleDailyModules, utf8ByteLength,
 } from '@/utils/notificationDrafts'
@@ -476,6 +476,11 @@ const { t, tm, locale } = useI18n()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 const activeTab = ref('overview')
+// tab 重入刷新：三个子组件各自 defineExpose 取数入口，父组件按 tab 切换调用
+//（此前 expose 零消费 = 死导出，切回投递/邮件服务仍显示旧数据）。
+const channelCardsRef = ref<{ fetchChannels: (silent?: boolean) => Promise<void> } | null>(null)
+const deliveryLogRef = ref<{ fetchDeliveries: () => Promise<void> } | null>(null)
+const systemCredentialsRef = ref<{ fetchSettings: () => Promise<void> } | null>(null)
 
 interface RuleChannel { id: number; type: string; name: string; last_test_ok?: boolean; enabled?: boolean; session_ready?: boolean }
 interface Rule {
@@ -830,8 +835,9 @@ const tplEditorLabel = computed(() => {
   if (typ === 'email') return t('app.notification.rules.tplBody')
   return t('app.notification.rules.tplText')
 })
-// 占位符集：rule 模式=事件变量；daily 模式机器人/邮件=日报+事件变量（后端日报
-// 派发对 daily_content_template/daily_body_template 两类同时替换）；webhook 载荷模板仅事件变量。
+// 占位符集：rule 模式=事件变量；daily 模式机器人/邮件/webhook 全部=日报+事件变量
+// （后端日报派发对 daily_content_template/daily_body_template/daily_payload_template
+// 都替换日报变量；webhook 的值按 JSON 编码嵌入，见 renderStyleTemplateJSON）。
 const tplActivePh = computed<string[]>(() => {
   if (tplMode.value === 'daily') return [...dailyPh, ...tplPh]
   return tplPh
@@ -944,13 +950,17 @@ const previewText = computed(() => {
     .replace(/\{\{node\}\}/g, 'node-a')
     .replace(/\{\{time\}\}/g, '2026-11-18 09:00')
     .replace(/\{\{brand\}\}/g, 'Lazy Balancer')
-  if (tplMode.value === 'daily' && tplActiveChannel.value?.type !== 'webhook') {
-    for (const [k, v] of dailySampleValues) {
+  if (tplMode.value === 'daily') {
+    // webhook 载荷模板同样含日报变量（后端日报派发对 daily_payload_template 也替换），
+    // 只是值按 JSON 编码嵌入（模板写 "date": {{date}}）——预览必须与实发同形，
+    // 否则用户看到的是永远不展开的字面占位符。
+    const isWebhookPayload = tplActiveChannel.value?.type === 'webhook'
+    const format = isWebhookPayload ? 'json' : tplEditorLang.value === 'markdown' ? 'markdown' : 'text'
+    text = renderDailySamples(text, {
+      format,
       // QQ（markdown）多值变量展开语义表格（与实际投递同口径）；其余格式回退原始多行值
-      const md = tplEditorLang.value === 'markdown' ? dailyMultiValueMd(k, v) : null
-      // 表格前后留空行（与后端展开同口径）：粘连时解析器把相邻标签/表头吞成上一表数据行
-      text = text.split(`{{${k}}}`).join(md ? `\n${md}\n` : v)
-    }
+      mdMultiValue: dailyMultiValueMd,
+    })
   }
   return text
 })
@@ -1651,8 +1661,15 @@ onMounted(() => {
   void fetchRules(true)
   void loadOverview()
 })
-// 回到规则页即时刷新：通道管理里刚停用的通道必须立刻反映为禁选（已选自动移出草稿）
-watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
+// 回到规则页即时刷新：通道管理里刚停用的通道必须立刻反映为禁选（已选自动移出草稿）。
+// 其余 tab 同理按需重取（子组件在首次渲染后保留实例，切回不会自动重挂载）：
+// 投递记录/邮件服务/通道卡都可能在别处被外部改动，陈旧展示会误导操作。
+watch(activeTab, v => {
+  if (v === 'rules') void fetchRules(false)
+  else if (v === 'channels') void channelCardsRef.value?.fetchChannels(true)
+  else if (v === 'deliveries') void deliveryLogRef.value?.fetchDeliveries()
+  else if (v === 'smtp') void systemCredentialsRef.value?.fetchSettings()
+})
 </script>
 
 <style scoped>
@@ -1708,7 +1725,6 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 .tpl-format-label { flex: none; font-size: 12px; color: #6b7280; }
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
 .tpl-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .tpl-hints .form-tip-line { margin-top: 0; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; height: 360px; max-height: 46vh; overflow: auto; }
@@ -1767,7 +1783,7 @@ watch(activeTab, v => { if (v === 'rules') void fetchRules(false) })
 /* 日报预览弹窗 */
 /* 模板长度计数：右对齐贴编辑器；超限红字+info-note-bar 明示（保存侧同口径拦截） */
 .tpl-length-row { display: flex; justify-content: flex-end; margin-top: 4px; }
-.tpl-length-row .form-hint { margin-top: 0; font-variant-numeric: tabular-nums; }
+.tpl-length-row .form-tip-inline { margin-top: 0; font-variant-numeric: tabular-nums; }
 .tpl-length-over { color: #ef4444; font-weight: 600; }
 </style>
 

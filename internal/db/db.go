@@ -2538,7 +2538,7 @@ func runMigrations() error {
 	return nil
 }
 
-// migrateDropDeadMFAColumns(2026-09-10 审计 ):users.mfa_failed_attempts/
+// migrateDropDeadMFALockColumns:users.mfa_failed_attempts/
 // mfa_locked_until 是残留死列——现行锁定走 login_failed_attempts/
 // login_locked_until(auth.go),该二列零消费(仅残留清零写与快照搬运)。删除
 // 列+全部搬运/清零写点;集群同步不做向下兼容(2026-09-09 裁定),新旧快照
@@ -3561,7 +3561,7 @@ func normalizeForwardAuthConsistencyMigration() error {
 	}
 	// 逐列独立回填：任一列为空只补该列，另一列的非空自定义值必须保留。
 	// 曾把两列合并进一条 SET（谓词「任一列为空」）：一空一自定义的行会把
-	// 自定义列一并覆盖成默认值（回归）。
+	// 自定义列一并覆盖成默认值。
 	filled := 0
 	if res != nil {
 		if n, _ := res.RowsAffected(); n > 0 {
@@ -4317,8 +4317,6 @@ func SeedSystemIPLists(database *sql.DB) error {
 	return nil
 }
 
-// ensureNewColumns 按清单逐列补齐（幂等：列已存在零命中）。提取自
-// runMigrations 内联循环：三个整表重建迁移之后需再次调用，收敛重建以陈旧 DDL
 // orderNewColumnKeys 把 newColumns 登记键排成确定性执行顺序：
 // ①键按字典序排序（map 迭代序随机，排序后每轮启动的补列顺序与失败诊断
 // 位置稳定）；②回填 SQL 引用同批其他登记表的键（跨表回填，如
@@ -4379,6 +4377,8 @@ func orderNewColumnKeys(columns, backfills map[string]string) ([]string, error) 
 	return append(ordered, deferred...), nil
 }
 
+// ensureNewColumns 按清单逐列补齐（幂等：列已存在零命中）。提取自
+// runMigrations 内联循环：三个整表重建迁移之后需再次调用，收敛重建以陈旧 DDL
 // 重建时丢失的列（数据按列默认值回填，不再永久丢失）。
 func ensureNewColumns(columns, backfills map[string]string) error {
 	keys, err := orderNewColumnKeys(columns, backfills)
@@ -4423,7 +4423,7 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 	// 回填是「补列当刻的一次性派生」，只对本次真正新增的列执行。列已存在
 	// （升级后重启的常态）时不得重跑：回填 SQL 语义是「把运行期可编辑值压回
 	// 派生默认」（如 api_read_only=read_only），重跑会把用户设置的非对称只读
-	// 配置压平——（回归） 即此路径（api_read_only=0/mcp_read_only=1 重启后
+	// 配置压平——即此路径（api_read_only=0/mcp_read_only=1 重启后
 	// 恢复为 0/0）。
 	addedThisRun := map[string]struct{}{}
 	for _, col := range keys {
@@ -4456,7 +4456,7 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 	// 第二趟：被延后的同表依赖回填（此时全部登记列已补齐）。只回填本次新增
 	// 的列——列已存在时回填必须视为已完成（见上方 addedThisRun 说明）。
 	// 裸 DB.Exec 计入零写口径：否则重跑回填在「二次启动零写」测试里不可见，
-	// （回归） 这类「每启动重写用户值」的回归会被静默放过。
+	// 这类「每启动重写用户值」的回归会被静默放过。
 	for _, col := range keys {
 		backfill := backfills[col]
 		if backfill == "" {

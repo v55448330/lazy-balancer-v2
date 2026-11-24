@@ -4,6 +4,7 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import { i18n } from './i18n/index'
 import { loadBranding } from './utils/branding'
+import { reportGlobalError } from './utils/globalError'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import './styles/main.css'
@@ -14,10 +15,9 @@ const pinia = createPinia()
 // 全局渲染错误兜底：未捕获异常/Promise 拒绝不得静默吞掉（面板表现是
 // 「点了没反应」且无任何留痕）。此处只留痕不恢复——局部错误边界仍由
 // AsyncPageError（异步页面加载）与各调用点自己的 try/catch 承担。
-const reportGlobalError = (kind: string, error: unknown): void => {
-  console.error(`[global:${kind}]`, error)
-}
-app.config.errorHandler = (err, _instance, info) => reportGlobalError('render', `${info}: ${String(err)}`)
+// 错误对象原样透传（保留 stack），info 单独成参——拼成一行字符串会丢掉
+// 组件栈/调用栈，两条入口（渲染/rejection）的诊断能力必须一致。
+app.config.errorHandler = (err, _instance, info) => reportGlobalError('render', err, info)
 window.addEventListener('unhandledrejection', (event) => reportGlobalError('unhandledrejection', event.reason))
 
 app.use(pinia)

@@ -179,7 +179,7 @@
     </el-dialog>
 
     <!-- 混合策略只读查看：按阶段分组展示全部内容，零可编辑字段，底部唯一操作=更新迁移 -->
-    <el-dialog v-model="viewPolicyVisible" width="min(760px, 94vw)" top="6vh">
+    <el-dialog v-model="viewPolicyVisible" class="dialog-body-inset" width="min(760px, 94vw)" top="6vh">
       <template #header>
         <DialogHeader :icon="Lock" :title="viewPolicyDetail?.name || viewPolicyRow?.name || ''"
           :subtitle="t('app.security.policies.view.subtitle')" />
@@ -1077,7 +1077,12 @@
               :key="section.key + row.name"
               class="defaults-row"
               :class="{ 'is-open': defaultsExpanded.has(section.key + row.name) }"
+              role="button"
+              :tabindex="0"
+              :aria-expanded="defaultsExpanded.has(section.key + row.name)"
               @click="toggleDefaultsRow(section.key + row.name)"
+              @keydown.enter.prevent="activateOnce($event, () => toggleDefaultsRow(section.key + row.name))"
+              @keydown.space.prevent="activateOnce($event, () => toggleDefaultsRow(section.key + row.name))"
             >
               <div class="defaults-row-head">
                 <el-icon class="defaults-chevron"><ArrowRight /></el-icon>
@@ -1365,7 +1370,7 @@ const goToPoliciesList = () => { window.open(pageUrl('security-policies'), '_bla
 
 const blockPages = ref<BlockPage[]>([])
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_excluded_count: number; custom_rules_count: number; custom_rules_ref_count?: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; trigger_24h?: number; human_verify_mode?: string; human_verify_type?: string; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; acl_empty_allow?: boolean; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_excluded_count: number; custom_rules_count: number; custom_rules_ref_count?: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; trigger_24h?: number; human_verify_mode?: string; human_verify_type?: string; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number }
 
 
 
@@ -4234,7 +4239,7 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .migrate-preview-empty { font-size: 12px; color: #9ca3af; }
 
 /* 混合策略只读查看（共享分区头 + 详情面板） */
-.view-policy-body { min-height: 120px; }
+.view-policy-body { min-height: 120px; max-height: calc(100vh - 300px); overflow-y: auto; }
 .view-policy-section { margin-bottom: 12px; }
 .view-policy-row { display: flex; align-items: baseline; gap: 12px; font-size: 13px; line-height: 1.9; }
 .view-policy-label { color: #6b7280; flex: 0 0 96px; }

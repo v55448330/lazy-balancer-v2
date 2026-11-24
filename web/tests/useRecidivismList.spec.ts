@@ -8,7 +8,7 @@
 //
 // 运行：cd web && npm test
 
-import { test } from 'node:test'
+import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { nextTick } from 'vue'
 
@@ -19,12 +19,15 @@ const row = (identity: string): RecidivismRecord => ({
   identity, offense_count: 2, last_ban_at: '2026-11-15 10:00:00', escalated_duration: '24h',
 })
 
-/** 防抖窗口收尾：真实时钟等待 > 300ms（composable 用 setTimeout(300)），
- * 再排空微任务让 fetch 链收敛。仅搜索防抖用例需要真实时钟。 */
+// 防抖窗口用假时钟推进（真实 360ms 睡眠在多处用例 × 慢机上会抖动并累计数秒）：
+// 只替换 setTimeout——本文件其余收尾全靠 nextTick/微任务，不依赖真实时钟。
+mock.timers.enable({ apis: ['setTimeout'] })
+
+/** 防抖窗口收尾：先让 pre-flush watch 注册防抖定时器，再把假时钟推过 300ms
+ * 窗口，最后排空微任务让 fetch 链收敛。 */
 const waitDebounce = async (): Promise<void> => {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, 360)
-  await promise
+  await nextTick()
+  mock.timers.tick(300)
   await flushMicrotasks()
 }
 

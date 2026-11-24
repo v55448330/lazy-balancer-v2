@@ -1,8 +1,10 @@
 package caddyl4sec
 
 // l4Ring 覆写环形缓冲（方案③）：固定容量、槽预分配、newest-wins——入队
-// 永不阻塞（满环覆写最旧），内存精确上界=容量×槽字节。与攻击光流环形缓冲
-// 同构（全系统 newest-wins 口径一致）。
+// 永不阻塞（满环覆写最旧）。内存上界=容量×单行上限（槽按行长度一次性扩容
+// 后保持，环本身不限制槽长，单行上限由调用方 enqueueEvent 的 l4LineMaxBytes
+// 把守）；常驻量≈容量×槽预分配字节（实际行 ~300B，增长在实践中不发生）。
+// 与攻击光流环形缓冲同构（全系统 newest-wins 口径一致）。
 //
 // 生命周期安全：纯内存结构，无 goroutine、无 channel send——任何 Cleanup
 // /负载切换路径都不可能因它阻塞（上游 remote_ip_list 死锁的同型缺陷在此
@@ -12,7 +14,7 @@ import "sync"
 
 type l4Ring struct {
 	mu          sync.Mutex
-	slots       [][]byte // 预分配槽数据（容量=slotBytes；写入复用缓冲，零增量分配）
+	slots       [][]byte // 槽数据（预分配 slotBytes；行更长时一次性扩容，之后保持）
 	lens        []int    // 各槽有效长度
 	count       int      // 有效条目数（≤容量）
 	head        int      // 最旧条目位

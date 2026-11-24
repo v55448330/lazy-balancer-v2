@@ -347,7 +347,7 @@ const executeAdd = async (): Promise<void> => {
   let done = false
   try {
     if (target.kind === 'list' && target.listId) {
-      done = await joinSpecificList({ id: target.listId, name: target.name, entry_count: target.entryCount }, trimmedIp.value, verb)
+      done = await joinSpecificList({ id: target.listId, name: target.name, entry_count: target.entryCount }, trimmedIp.value, verb, side)
     } else if (target.policyId) {
       const policy = policies.value.find((item) => item.id === target.policyId)
       if (policy) done = await ensureListAndJoin(policy, trimmedIp.value, side)

@@ -1208,11 +1208,14 @@ func TestAutobanForgetIPs_deleteThenNoNewEventsNoReban(t *testing.T) {
 // 不受展示截断影响。
 func TestAutobanSuggestions_displayTruncatedToTop50(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
+	// 乱序喂入（升序）+ 同 Count 的并列项：order 分支与 IP 兜序并列分支都必须
+	// 由 getter 自己产生——喂入已降序时「getter 负责降序」的注释从未被断言。
 	var seeds []AutobanSuggestion
-	for i := 60; i >= 1; i-- {
+	for i := 1; i <= 60; i++ {
 		seeds = append(seeds, AutobanSuggestion{IP: fmt.Sprintf("10.0.0.%d", i), Count: i})
 	}
-	autobanSetSuggestions(seeds) // 喂入已降序——getter 仍负责降序+截断（防任意顺序依赖）
+	seeds = append(seeds, AutobanSuggestion{IP: "10.0.0.61", Count: 30})
+	autobanSetSuggestions(seeds)
 
 	got := AutobanSuggestions()
 	if len(got) != 50 {
@@ -1221,8 +1224,14 @@ func TestAutobanSuggestions_displayTruncatedToTop50(t *testing.T) {
 	if got[0].IP != "10.0.0.60" || got[0].Count != 60 {
 		t.Fatalf("首行=%s/%d, want 10.0.0.60/60（按 Count 降序）", got[0].IP, got[0].Count)
 	}
-	if got[49].IP != "10.0.0.11" || got[49].Count != 11 {
-		t.Fatalf("末行=%s/%d, want 10.0.0.11/11", got[49].IP, got[49].Count)
+	// Count=30 的并列项按 IP 升序兜序（10.0.0.30 < 10.0.0.61）；索引 30/31 紧随
+	// 60..31 之后。
+	if got[30].IP != "10.0.0.30" || got[30].Count != 30 || got[31].IP != "10.0.0.61" || got[31].Count != 30 {
+		t.Fatalf("并列 Count 行=%s/%d,%s/%d, want 10.0.0.30/30,10.0.0.61/30（IP 升序兜序）",
+			got[30].IP, got[30].Count, got[31].IP, got[31].Count)
+	}
+	if got[49].IP != "10.0.0.12" || got[49].Count != 12 {
+		t.Fatalf("末行=%s/%d, want 10.0.0.12/12（截断边界：60..12 共 49 项 + 并列项占位）", got[49].IP, got[49].Count)
 	}
 }
 

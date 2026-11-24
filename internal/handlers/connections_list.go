@@ -63,7 +63,6 @@ type connectionEntry struct {
 	Country  string `json:"country"`  // 远端归属地（enrichIPLocation）
 }
 
-// requestEntry 反代请求明细行（来自 lb_reqmon 内存环形快照）。
 // domainStat 聚合指标行（Caddy Prometheus per-host）。
 type domainStat struct {
 	Host      string `json:"host"`

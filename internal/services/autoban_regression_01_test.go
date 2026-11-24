@@ -183,8 +183,13 @@ func TestAutobanRunGate_enabledReadFailureKeepsLoopOn(t *testing.T) {
 
 	orig := db.DB
 	db.DB = openAutobanEnabledFailingDB(t)
+	// 生产读路径走 db.GetDB() 快照：失败注入必须同时登记，否则读到的是原库。
+	db.SetDB(db.DB)
 	// LIFO：本清理先于夹具清理执行，恢复真实库后再 StopTaskEngine/db.Close。
-	t.Cleanup(func() { db.DB = orig })
+	t.Cleanup(func() {
+		db.DB = orig
+		db.SetDB(orig)
+	})
 
 	err := RunAutobanCycle(taskengine.RunContext{Trigger: "manual"})
 	if err == nil || !strings.Contains(err.Error(), "启用状态") {
@@ -196,6 +201,7 @@ func TestAutobanRunGate_enabledReadFailureKeepsLoopOn(t *testing.T) {
 
 	// 恢复真实 DB：下一轮照常执行（不停环后无需外部事件即可自愈）。
 	db.DB = orig
+	db.SetDB(orig)
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("DB 恢复后正常轮不得被门拦: %v", err)
 	}

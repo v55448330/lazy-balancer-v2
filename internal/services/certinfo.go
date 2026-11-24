@@ -81,7 +81,7 @@ func CertDaysRemaining(notAfter, now time.Time) int {
 // CertificateExpiryStatus 证书到期状态单源：天粒度判定，
 // 过期优先于临期（-1h 过期时 CertDaysRemaining=0，不得回落 expiring）。
 // 消费点：certinfo 列表（FormatRuleCertInfo）、任务列表（handlers.ListCertJobs）、
-// 手动巡检（checkManualCertExpiration）——三处必须同结论，禁止各自比较完整时长
+// 手动巡检（runManualCertExpiryCheck，生产入口 CertManualCheckOnce）——三处必须同结论，禁止各自比较完整时长
 // 或另写 switch（原 certjobs 用 `<= days*24h` 纳秒口径，与截断天数在阈值边界分叉）。
 func CertificateExpiryStatus(notAfter, now time.Time, thresholdDays int) string {
 	if !now.Before(notAfter) {

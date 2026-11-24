@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -41,6 +42,18 @@ func writeInternalError(c *gin.Context, status int, message string, cause error)
 		services.Logf("error", "%s: %v", message, cause)
 	}
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
+}
+
+// writeInternalErrorKey 是 writeInternalError 的键化形态：文案经 i18n 词条
+// 翻译并回传 message_key（前端按稳定键判定），底层原因同样只进运行日志。
+// 供已键化的 5xx 出口迁移到统一写点时保持响应契约不降级（不得为了统一写点
+// 丢掉 message_key）。
+func writeInternalErrorKey(c *gin.Context, status int, key string, cause error) {
+	message := apimsg.T(c, key)
+	if cause != nil {
+		services.Logf("error", "%s: %v", message, cause)
+	}
+	c.JSON(status, models.APIResponse{Code: status, Message: message, MessageKey: key})
 }
 
 // internalError 是「固定文案 + 服务端留痕」5xx 响应的唯一装配实现（返回形态）：日志标签

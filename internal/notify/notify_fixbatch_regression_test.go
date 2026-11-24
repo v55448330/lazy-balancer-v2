@@ -262,6 +262,15 @@ func TestDeliverDailyForAllCrossMidnightSlot(t *testing.T) {
 	}
 }
 
+// blockedAggregateEvent 汇总事件（测试专用：按窗口当前计数重建「应当发布」
+// 的聚合事件，供文案/字段断言；生产发布路径只用 blockedEventAtLevel）。
+// 窗口跨度用实际 time.Since(w.start)：全局 ticker 的相位与首个事件无关
+// （窗口可能在 tick 前几秒才开启），固定写「5 分钟内」会把几秒的爆发夸大
+// 成 5 分钟持续攻击。
+func blockedAggregateEvent(w *blockedWindowState) Event {
+	return blockedEventAtLevel(w, blockedWindowLevel(w))
+}
+
 // 聚合文案按窗口实际跨度生成——ticker 相位与首个事件无关，
 // 窗口可能只开启几秒，固定断言「5 分钟内」会夸大攻击持续时间。
 func TestBlockedAggregateBodyUsesActualWindowSpan(t *testing.T) {
@@ -468,8 +477,8 @@ func TestAuthCountersBucketByDate(t *testing.T) {
 	}
 }
 
-// TestAuthCountersTimezoneShiftKeepsNewerBucket 清理边界（NOTIF153 P3 计数桶
-// 跨时区）：设置页切时区会让本地日期标签整体前移——在「旧时区今天」写入的桶
+// TestAuthCountersTimezoneShiftKeepsNewerBucket 清理边界（计数桶跨时区）：
+// 设置页切时区会让本地日期标签整体前移——在「旧时区今天」写入的桶
 // 在新时区下标签是明天，旧实现的 {date, date-1} 白名单会把它当陈旧数据删掉，
 // 昨日/当日报告读数从 0 起算。保留 ≥昨天（含未来标签）后桶不再丢失。
 func TestAuthCountersTimezoneShiftKeepsNewerBucket(t *testing.T) {
@@ -751,7 +760,7 @@ func TestCollectDailyDataPeakQPSFromCounterDiff(t *testing.T) {
 
 // TestCollectDailyDataPeakQPSFirstSampleWithoutBaseline 窗口首样本无窗口前基线
 // 时不产增量：累计计数器首样本的值本身跨越窗口之前的历史，计入即为假峰值
-// （NOTIF153 P3 峰值差分首样本基线；生产逻辑已按此实现，此前无测试覆盖）。
+// （峰值差分首样本基线；生产逻辑已按此实现，此前无测试覆盖）。
 func TestCollectDailyDataPeakQPSFirstSampleWithoutBaseline(t *testing.T) {
 	withLocalLocation(t, testLocShanghai(t))
 	newDailyTestDBs(t)

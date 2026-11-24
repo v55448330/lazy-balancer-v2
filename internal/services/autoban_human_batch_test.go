@@ -82,9 +82,15 @@ func installAutobanConfigProbe(t *testing.T) *autobanConfigReadProbe {
 		dsn:   path + "?_txlock=immediate&_pragma=busy_timeout(30000)",
 	})
 	t.Cleanup(func() { _ = wrapped.Close() })
-	old := db.DB
+	// 生产读路径走 db.GetDB() 快照：探针必须同时登记到 SetDB，否则计数恒 0
+	// （db.DB 保留赋值，兼容仍直接读 db.DB 的夹具与辅助函数）。
+	old := db.GetDB()
 	db.DB = wrapped
-	t.Cleanup(func() { db.DB = old })
+	db.SetDB(wrapped)
+	t.Cleanup(func() {
+		db.DB = old
+		db.SetDB(old)
+	})
 	return probe
 }
 

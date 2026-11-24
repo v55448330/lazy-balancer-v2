@@ -110,11 +110,13 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
     visible.value = true
   }
 
-  // 打开弹框只拉取一次当前状态与既有日志；若有任务在跑则继续实时轮询
+  // 打开弹框只拉取一次当前状态与既有日志；若有任务在跑则继续实时轮询。
+  // 与 confirmUpdate 同判据：状态未取到（status=null，瞬时失败）同样靠轮询收敛——
+  // 否则「打开瞬间后端抖动」落成空状态+空日志且永不自愈（只能关掉重开）。
   const onOpened = async () => {
     options.onOpen?.()
     await refreshStatus()
-    if (updating.value) startPolling()
+    if (updating.value || status.value === null) startPolling()
   }
 
   const onClosed = () => {

@@ -703,7 +703,9 @@ func (e *Engine) Register(d Descriptor) error {
 	// 先报真正缺失的字段（排障指向正确），合法描述符仍被 ErrEngineStopped 拒绝。
 	// stopped 检查与登记同属 e.mu 临界区（与 reserveRunInternal admission
 	// 同族）：锁外 check-then-lock 会让并发 Stop 穿过检查，留下静默注册项。
-	taskEventMeta.Store(d.ID, taskEventMetaEntry{name: d.Name, kind: string(d.Kind)})
+	// 事件元数据只在注册成功后写入（临界区内、登记之后）：写在准入门之前会
+	// 让被拒的重复注册覆盖在册任务的事件名称/类型（终态通知显示从未运行过的
+	// 描述符），停止态拒绝则留下无消费方的孤儿项。
 	beforeRegisterAdmission()
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -714,6 +716,7 @@ func (e *Engine) Register(d Descriptor) error {
 		return fmt.Errorf("taskengine: %s 重复注册", d.ID)
 	}
 	e.regs[d.ID] = &registration{desc: d}
+	taskEventMeta.Store(d.ID, taskEventMetaEntry{name: d.Name, kind: string(d.Kind)})
 	return nil
 }
 

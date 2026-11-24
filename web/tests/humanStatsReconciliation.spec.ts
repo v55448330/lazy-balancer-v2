@@ -13,14 +13,21 @@ import { code, member, repoCode, section } from './_helpers.ts'
 
 const page = code('src/views/security/SecurityOverview.vue')
 
-test('取数类型与后端 JSON tag 名册逐字对齐（7 字段全量）', () => {
+// 前后端逐字对表的字段名册（单源）：标题里的数量由长度派生，避免
+// 「标题写 7、列表 10」这类覆盖声明失真。
+const HUMAN_STATS_FIELDS = [
+  'challenges', 'passes', 'fails', 'cc_triggers', 'rps_spike', '4xx_ratio',
+  'session_anomaly', 'events_dropped', 'events_deliver_failed', 'events_shutdown_lost',
+] as const
+
+test(`取数类型与后端 JSON tag 名册逐字对齐（${HUMAN_STATS_FIELDS.length} 字段全量）`, () => {
   const fetch = member(page, 'const fetchHumanStats = async')
   // 三丢失计数 + cc_triggers 三原因 + 既有三计数：任一 tag 改名必红
-  for (const tag of ['challenges', 'passes', 'fails', 'cc_triggers', 'rps_spike', '4xx_ratio', 'session_anomaly', 'events_dropped', 'events_deliver_failed', 'events_shutdown_lost']) {
+  for (const tag of HUMAN_STATS_FIELDS) {
     assert.ok(fetch.includes(tag), `取数类型缺字段 ${tag}`)
   }
   const go = repoCode('internal/handlers/human_stats.go')
-  for (const tag of ['challenges', 'passes', 'fails', 'cc_triggers', 'rps_spike', '4xx_ratio', 'session_anomaly', 'events_dropped', 'events_deliver_failed', 'events_shutdown_lost']) {
+  for (const tag of HUMAN_STATS_FIELDS) {
     assert.ok(go.includes(`json:"${tag}"`), `后端 JSON tag 漂移: ${tag}`)
   }
 })

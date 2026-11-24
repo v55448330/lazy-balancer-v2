@@ -108,10 +108,6 @@ func TestThreatUpdate_runsEnabledSourcesInOrder(t *testing.T) {
 	setupThreatTest(t, nil, nil, nil)
 	for _, name := range []string{"ustc", "firehol_l1", "et_compromised"} {
 		name := name
-		var url string
-		if err := db.DB.QueryRow(`SELECT url FROM security_threat_sources WHERE name=?`, name).Scan(&url); err != nil {
-			t.Fatal(err)
-		}
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			mu.Lock()
 			order = append(order, name)

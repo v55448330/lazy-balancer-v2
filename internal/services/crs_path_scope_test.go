@@ -254,7 +254,24 @@ func TestEngineBehavior_pathScopeRemovesRuleOnlyUnderPrefix(t *testing.T) {
 	if !interrupted(scoped, "/api/admin/list?id=1+union+select") {
 		t.Fatal("前缀外同载荷必须照常拦（排除不得越界）")
 	}
-	// 前缀真语义：仅前缀命中，"7/api/public" 等非边界路径不受豁免。
+	// 前缀真语义：@beginsWith 是**字符前缀**匹配。含 /api/public 子串但不在开头
+	// 的路径一律不得豁免（写成 @contains 时这两条会变红）。
+	// （原有 /api/private 与 /api/public 完全不相交，@beginsWith 退化成
+	// @contains 也测不出来——补上真正的子串形态。）
+	for _, nonPrefix := range []string{
+		"/x/api/public/list?id=1+union+select",
+		"/prefix/api/public/list?id=1+union+select",
+	} {
+		if !interrupted(scoped, nonPrefix) {
+			t.Fatalf("非前缀路径 %q 必须照常拦（前缀匹配不得退化为子串匹配）", nonPrefix)
+		}
+	}
+	// 字符前缀不保证路径段边界：作用域写 /api/public 时 /api/publicity 同样
+	// 命中（要段边界须把作用域写成 /api/public/）。钉住这条现役语义，防止
+	// 「顺带收紧」把已豁免路径悄悄变回拦截。
+	if interrupted(scoped, "/api/publicity/list?id=1+union+select") {
+		t.Fatal("字符前缀命中的 /api/publicity 按现役语义应豁免（作用域 /api/public 无段边界）")
+	}
 	if interrupted(scoped, "/api/private/list?id=1+union+select") == false {
 		t.Fatal("前缀外的 /api/private 必须照常拦")
 	}

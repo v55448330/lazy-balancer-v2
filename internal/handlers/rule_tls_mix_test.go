@@ -92,8 +92,8 @@ func TestRulePortTLSMix_rejected(t *testing.T) {
 	// 形状三(回归):同 TLS 形态共存放行
 	seedTLSMixRule(t, "lb_mix_tls3", "mix-e.test", 18445, true, 1)
 	rec = create(tlsMixBody("mix-tls-4", "mix-f.test", 18445, true))
-	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
-		t.Fatalf("same-TLS coexistence must pass, got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("same-TLS coexistence must pass with 201, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	// 形状四:启用方向——禁用明文规则 + 同端口已启用 TLS 规则 → enable 400
@@ -140,8 +140,8 @@ func TestRulePortTLSMix_null_enable_tls_row_normalized_as_plaintext(t *testing.T
 	// 形状二（回归）：NULL 行归一为明文后不得误拦同形态明文新建
 	seedNullTLSRule("lb_mix_null2", "mix-null-c.test", 18448)
 	rec = create(tlsMixBody("mix-plain-null", "mix-null-d.test", 18448, false))
-	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
-		t.Fatalf("plaintext coexistence with NULL-enable_tls row must pass, got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("plaintext coexistence with NULL-enable_tls row must pass with 201, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 

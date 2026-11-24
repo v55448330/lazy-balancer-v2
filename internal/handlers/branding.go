@@ -472,6 +472,20 @@ func (h *Handlers) brandingApplyAfterSync() {
 }
 
 func (h *Handlers) GetBranding(c *gin.Context) {
+	// 未装配 cfg 的嵌入/降级形态：与 caddy 读端点（GetCaddyStatus/
+	// GetCaddyConfig）的 nil-cfg 零值契约对齐。数据目录未知，跳过 branding.json
+	// 读取与幂等同步/播种/镜像副作用，直接回默认品牌——裸解引用会 panic 被
+	// gin Recovery 吞成空体 500，登录页白屏且无归因线索。
+	if h.cfg == nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: brandingResponse{
+			AppName:            defaultBranding.AppName,
+			FooterText:         defaultFooterText,
+			LandingText:        services.DefaultLandingText,
+			FooterUsesDefault:  true,
+			LandingUsesDefault: true,
+		}})
+		return
+	}
 	cfg := loadBrandingConfig(h.cfg.DataDir)
 	resp := brandingResponse{
 		AppName:            cfg.AppName,
@@ -773,8 +787,13 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	// 标志修复与内容库存同事完成，仅漂移时写（updated_at 不抖动）。
 	for _, bp := range builtinBlockPageIdentities {
 		stock := renderBuiltinBlockPage(cfg, bp.variant)
-		if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, FALSE, TRUE, datetime('now'), datetime('now'))`, bp.id, bp.name, bp.desc, stock); err != nil {
+		if inserted, err := db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, FALSE, TRUE, datetime('now'), datetime('now'))`, bp.id, bp.name, bp.desc, stock); err != nil {
 			return changed, fmt.Errorf("播种内置拦截页面 %d: %w", bp.id, err)
+		} else if n, _ := inserted.RowsAffected(); n > 0 {
+			// 缺行补回（导入全量替换/旧快照/带外改库）同样是渲染输入变化：缺页
+			// 期间运行配置按回落页渲染，只补库不重应用=回落页持续到下一次配置
+			// 变更。id 被自定义页占用时 IGNORE 零行命中，不计变化（下方告警并跳过）。
+			changed = true
 		}
 		// name/description/content 裸!= 对 NULL 不命中（带外改库
 		// 置 NULL 正是本函数自称要自愈的形态）——COALESCE 同:510 默认页

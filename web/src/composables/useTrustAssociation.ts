@@ -157,8 +157,8 @@ export const useTrustAssociation = (options: {
   }
 
   /** 加入指定列表（确认+幂等+反馈，历史暴露供逐列表按钮直调） */
-  const joinSpecificList = async (list: IpListOption, ip: string, verb = t('common.app.views.trustAssoc.verbJoin')): Promise<boolean> => {
-    const done = await addIpToList(ip, list, { verb, successText: t('common.app.views.trustAssoc.joinedList', { verb, name: list.name }) })
+  const joinSpecificList = async (list: IpListOption, ip: string, verb = t('common.app.views.trustAssoc.verbJoin'), side?: ListSide): Promise<boolean> => {
+    const done = await addIpToList(ip, list, { verb, ban: side === 'deny', successText: t('common.app.views.trustAssoc.joinedList', { verb, name: list.name }) })
     if (done) await options.onChanged?.()
     return done
   }
@@ -170,7 +170,7 @@ export const useTrustAssociation = (options: {
     const existing = resolveSideLists(policy, side)[0] ?? null
     if (existing) {
       const opt: IpListOption = { id: existing.id, name: existing.name, entry_count: 0 }
-      const done = await addIpToList(ip, opt, { verb: cfg.verb, successText: t('common.app.views.trustAssoc.joinedList', { verb: cfg.verb, name: existing.name }) })
+      const done = await addIpToList(ip, opt, { verb: cfg.verb, ban: side === 'deny', successText: t('common.app.views.trustAssoc.joinedList', { verb: cfg.verb, name: existing.name }) })
       if (done) await options.onChanged?.()
       return done
     }
@@ -184,6 +184,10 @@ export const useTrustAssociation = (options: {
     // 否则确认后创建必然 400，动作无法在当前弹框内完成。
     const auto = fitAutoListName(policy.name, cfg.suffix)
     const truncatedNote = auto.truncated ? t('common.app.views.trustAssoc.nameTruncated') : ''
+    // 封禁侧（deny）在自动建单确认里同样披露永久生效与累犯清零（与
+    // useIpListAdd 的 ban 分支同文案、同判据 = side）。
+    const banNote = side === 'deny' ? t('common.app.views.ipAdd.banNote') : ''
+    const createNote = [truncatedNote, banNote].filter(Boolean).join(' ')
     const listNow = options.getList()
     const isNameTaken = (name: string): boolean => listNow.some((l) => ipListNameKey(l.name) === ipListNameKey(name))
     // 同名列表只在「未被其它引用面引用」时可复用（category 无关）；判据与后端
@@ -199,8 +203,8 @@ export const useTrustAssociation = (options: {
       try {
         await ElMessageBox.confirm(
           reuseTarget
-            ? t('common.app.views.trustAssoc.confirmJoinExisting', { ip, name: reuseTarget.name, tip })
-            : t('common.app.views.trustAssoc.confirmCreateJoin', { lead, name: createName, note: truncatedNote, ip, tip }),
+            ? t('common.app.views.trustAssoc.confirmJoinExisting', { ip, name: reuseTarget.name, tip, note: banNote ? ' ' + banNote : '' })
+            : t('common.app.views.trustAssoc.confirmCreateJoin', { lead, name: createName, note: createNote, ip, tip }),
           reuseTarget ? t('common.app.views.trustAssoc.titleJoinExisting', { verb: cfg.verb }) : t('common.app.views.trustAssoc.titleCreateJoin', { verb: cfg.verb }),
           { confirmButtonText: t('common.app.views.trustAssoc.confirmOk'), cancelButtonText: t('common.app.views.trustAssoc.confirmCancel'), type: 'info' },
         )

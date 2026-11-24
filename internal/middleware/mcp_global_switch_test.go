@@ -24,8 +24,7 @@ func withIsolatedSwitchDatabase(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Errorf("close database: %v", err)
 		}
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-		db.SetDB(oldDB)
+		restoreTestDBHandles(oldDB, oldMetricsDB, oldAuditDB)
 	})
 }
 

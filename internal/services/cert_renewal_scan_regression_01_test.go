@@ -82,9 +82,26 @@ func TestScheduleDelayedReload_isCancelledByPause(t *testing.T) {
 	t.Cleanup(cancel)
 	service := &CertificateService{ctx: ctx, cancel: cancel}
 	service.scheduleDelayedReload(7, "lb_delayed", 50*time.Millisecond)
+	service.timerMu.Lock()
+	entry := service.delayedReloads[7]
+	service.timerMu.Unlock()
+	if entry == nil {
+		t.Fatal("前置：一次性延迟重载未登记")
+	}
 	service.pauseDeploymentRetries()
 
-	time.Sleep(200 * time.Millisecond)
+	// 确定性断言（替代 200ms 观测窗）：暂停必须摘除登记项并置 canceled——
+	// 回调触发时以二者为唯一判据（见 scheduleDelayedReload 的
+	// delayedReloads[jobID]==entry 与 entry.canceled 检查），故「暂停后不得
+	// 触发」由状态直接决定，无需等真实时钟；旧写法在定时器恰好已先触发时
+	// 还会假红。
+	service.timerMu.Lock()
+	_, stillRegistered := service.delayedReloads[7]
+	canceled := entry.canceled
+	service.timerMu.Unlock()
+	if stillRegistered || !canceled {
+		t.Fatalf("暂停后延迟重载仍可触发：registered=%v canceled=%v", stillRegistered, canceled)
+	}
 	if got := reloads.Load(); got != 0 {
 		t.Fatalf("reloads=%d, want 0（暂停后不得再触发一次性重载）", got)
 	}

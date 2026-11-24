@@ -300,7 +300,7 @@ const sourceUpdateStatusRunning = "running"
 // 直到下一个排程槽才自愈。UPDATE 带旧值条件，避免与并发终态写相互覆盖。
 func normalizeInterruptedUpdateStatuses() {
 	// 关停窗口内 db.DB 可能被置 nil：单次快照后全流程使用局部句柄，
-	// 判空与解引用之间不得再读包级变量（回归）。
+	// 判空与解引用之间不得再读包级变量。
 	database := db.DB
 	if database == nil {
 		return
@@ -920,7 +920,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				return ""
 			}
 			// nil 库守卫——空状态 fail-closed。单次句柄快照避免判空后
-			// 关停窗口再读 db.DB（回归）。
+			// 关停窗口再读 db.DB。
 			database := db.DB
 			if database == nil {
 				return ""

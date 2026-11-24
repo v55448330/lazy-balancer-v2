@@ -402,6 +402,9 @@ func TestRequeueNonTerminalCertJobs_schedules_downloaded_deployment(t *testing.T
 		retried <- gotJobID
 		return nil
 	}
+	// 收口注册在创建后（而非断言之后）：断言失败即 Fatal，尾部语句不再执行，
+	// 活跃 timer/回调会留进同包后续用例。
+	t.Cleanup(service.pauseDeploymentRetries)
 
 	// When
 	err := RequeueNonTerminalCertJobs()
@@ -413,7 +416,6 @@ func TestRequeueNonTerminalCertJobs_schedules_downloaded_deployment(t *testing.T
 	if gotJobID := <-retried; gotJobID != jobID {
 		t.Fatalf("retried job ID=%d, want %d", gotJobID, jobID)
 	}
-	service.pauseDeploymentRetries()
 }
 
 func TestRequeueNonTerminalCertJobs_pausedQueueLeavesDownloadedJobUntouched(t *testing.T) {
@@ -543,6 +545,9 @@ func TestCertificateService_deployment_retry_replacesPendingTimer(t *testing.T) 
 	// Given
 	service := NewCertificateService()
 	resetCertificateServiceForTest(t)
+	// 收口注册在创建后（而非断言之后）：断言失败即 Fatal，尾部语句不再执行，
+	// 活跃 timer/回调会留进同包后续用例。
+	t.Cleanup(service.pauseDeploymentRetries)
 	calls := make(chan int, 2)
 	service.retryDeployment = func(_ context.Context, jobID int) error {
 		calls <- jobID
@@ -594,10 +599,13 @@ func TestCertificateService_deployment_retry_replacesPendingTimer(t *testing.T) 
 		time.Sleep(5 * time.Millisecond)
 	}
 	service.pauseDeploymentRetries()
+	// 同步可观测：上方循环已在 timerMu 下证 timer 与在途回调均为空，pause 又
+	// 停掉全部 timer——回调只能由 timer 启动，故此处「无第二次回调」已确定，
+	// 无需固定观测窗（负载下窗口内尚未调度即假绿）。
 	select {
 	case jobID := <-calls:
 		t.Fatalf("duplicate retry ran for job %d", jobID)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 }
 
@@ -612,6 +620,18 @@ func TestCertificateService_scheduleDeploymentRetry_waits_for_inflight_callback_
 	resetCertificateServiceForTest(t)
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	releasedOnce := false
+	// 失败路径（含下方 Fatal）必须放行回调并收口服务：残留的在途回调会让
+	// 同包后续用例在「同 jobID 串行等待」上排队。
+	releaseCallback := func() {
+		if releasedOnce {
+			return
+		}
+		releasedOnce = true
+		close(release)
+	}
+	t.Cleanup(service.pauseDeploymentRetries)
+	t.Cleanup(releaseCallback)
 	calls := make(chan int, 2)
 	var firstOnce sync.Once
 	service.retryDeployment = func(_ context.Context, jobID int) error {
@@ -634,25 +654,42 @@ func TestCertificateService_scheduleDeploymentRetry_waits_for_inflight_callback_
 	}()
 
 	// When：在途期间补扫重排
-	// Then：不得返回、不得放行第二个并发回调
+	// Then：不得返回、不得放行第二个并发回调。确定性证据取协程栈：重排必须
+	// 阻塞在 waitDoneOrTimeout 的等待点（在途回调 done 未关闭），而不是
+	// 「睡 50ms 还没返回」——后者在重排协程尚未被调度时同样成立（负载下假绿）。
 	select {
 	case <-rescheduled:
 		t.Fatal("scheduleDeploymentRetry returned while the first callback was still in-flight")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
+	waitGoroutineBlockedOn(t, "TestCertificateService_scheduleDeploymentRetry_waits_for_inflight_callback_before_rescheduling", "waitDoneOrTimeout")
+	// 重排停在等待点=尚未创建新 timer；回调只能由 timer 启动，故此刻不可能
+	// 有第二个并发回调。
 	select {
 	case jobID := <-calls:
 		t.Fatalf("second callback ran concurrently with the in-flight one (job %d)", jobID)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
-	close(release)
+	releaseCallback()
 
-	// 退出后重排完成，新 timer 触发第二个回调（与串行）
-	<-rescheduled
-	if jobID := <-calls; jobID != 42 {
-		t.Fatalf("rescheduled retry job ID=%d, want 42", jobID)
+	// 退出后重排完成，新 timer 触发第二个回调（与串行）——带超时等待：
+	// 回归成「不重排」时给出明确 FAIL 而非挂到 go test 全局超时。
+	select {
+	case <-rescheduled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reschedule did not complete after the in-flight callback exited")
+	}
+	select {
+	case jobID := <-calls:
+		if jobID != 42 {
+			t.Fatalf("rescheduled retry job ID=%d, want 42", jobID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("rescheduled retry was never executed")
 	}
 	service.pauseDeploymentRetries()
+	// 同步可观测：pause 已停掉全部 timer，串行重排的第二个回调也已消费——
+	// 只剩「多出来的 timer」能再产生回调，非阻塞核查即可。
 	select {
 	case jobID := <-calls:
 		t.Fatalf("unexpected extra retry for job %d", jobID)
@@ -666,6 +703,16 @@ func TestCertificateService_cancelDeploymentRetry_waits_for_running_callback(t *
 	resetCertificateServiceForTest(t)
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	releasedOnce := false
+	releaseCallback := func() {
+		if releasedOnce {
+			return
+		}
+		releasedOnce = true
+		close(release)
+	}
+	t.Cleanup(service.pauseDeploymentRetries)
+	t.Cleanup(releaseCallback)
 	service.retryDeployment = func(_ context.Context, _ int) error {
 		close(entered)
 		<-release
@@ -673,25 +720,29 @@ func TestCertificateService_cancelDeploymentRetry_waits_for_running_callback(t *
 	}
 	service.scheduleDeploymentRetry(42, "lb_retry", 0)
 	<-entered
-	cancelStarted := make(chan struct{})
 	cancelDone := make(chan struct{})
 	go func() {
-		close(cancelStarted)
 		service.cancelDeploymentRetry(42)
 		close(cancelDone)
 	}()
-	<-cancelStarted
 
-	// When
+	// When：在途回调未退出前 cancel 不得返回。确定性证据=协程栈阻塞在
+	// waitDoneOrTimeout 的等待点（此前立即 default 判定：取消协程尚未被
+	// 调度即通过，负载下假绿）。
 	select {
 	case <-cancelDone:
 		t.Fatal("cancel returned while retry callback was running")
 	default:
 	}
-	close(release)
+	waitGoroutineBlockedOn(t, "TestCertificateService_cancelDeploymentRetry_waits_for_running_callback", "waitDoneOrTimeout")
+	releaseCallback()
 
 	// Then
-	<-cancelDone
+	select {
+	case <-cancelDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancel did not return after the retry callback exited")
+	}
 }
 
 func TestCertificateService_cancelDeploymentRetry_boundedWaitOnStuckCallback(t *testing.T) {
@@ -699,12 +750,27 @@ func TestCertificateService_cancelDeploymentRetry_boundedWaitOnStuckCallback(t *
 	// 挂起时 HTTP 调用方必须能在 cancelWaitTimeout 内返回，不能永久阻塞。
 	service := NewCertificateService()
 	resetCertificateServiceForTest(t)
+	// 终态断言（Cleanup 后进先出：release → pause → 本检查）：放行并收口后该
+	// 任务的回调登记项必须已回收——此前 select{} 永久阻塞，goroutine 与
+	// deploymentCallbacks[42] 常驻到进程结束。
+	t.Cleanup(func() {
+		service.timerMu.Lock()
+		defer service.timerMu.Unlock()
+		if len(service.deploymentCallbacks[42]) != 0 {
+			t.Errorf("job 42 的部署回调登记项未回收（stuck callback 泄漏）")
+		}
+	})
+	t.Cleanup(service.pauseDeploymentRetries)
 	service.cancelWaitTimeout = 50 * time.Millisecond
 	entered := make(chan struct{})
+	release := make(chan struct{})
+	// 不可取消的慢回调：阻塞在 release 上，测试结束（含失败路径）即放行。
 	service.retryDeployment = func(_ context.Context, _ int) error {
 		close(entered)
-		select {} // 永久阻塞，模拟 Caddy admin 请求挂起
+		<-release
+		return nil
 	}
+	t.Cleanup(func() { close(release) })
 	service.scheduleDeploymentRetry(42, "lb_stuck", 0)
 	<-entered
 
@@ -2253,6 +2319,9 @@ func TestCertificateService_resumeDeploymentRetries_reschedulesDroppedRetries(t 
 	}
 	service := NewCertificateService()
 	resetCertificateServiceForTest(t)
+	// 收口注册在断言前：失败即 Fatal，尾部语句不再执行，恢复态服务
+	// （timersPaused=false）与其可能登记的 timer 会留进同包后续用例。
+	t.Cleanup(service.pauseDeploymentRetries)
 	var scheduled []int
 	var delays []time.Duration
 	service.deploymentRetry = func(jobID int, _ issuedCertificate, delay time.Duration) error {
@@ -2649,6 +2718,10 @@ func TestCertificateService_rescanSkipsJobsWithActiveTimer(t *testing.T) {
 		return nil
 	}
 
+	// 收口注册在断言前：失败即 Fatal，尾部语句不再执行，活跃 timer（本用例
+	// 刻意持有一个 1h timer）会留进同包后续用例。
+	t.Cleanup(service.pauseDeploymentRetries)
+
 	// 已有活跃 timer(模拟正常重试链在跑)
 	service.scheduleDeploymentRetry(jobID, "lb_rescan_skip", time.Hour)
 	service.timerMu.Lock()
@@ -2680,7 +2753,6 @@ func TestCertificateService_rescanSkipsJobsWithActiveTimer(t *testing.T) {
 		t.Fatalf("rescan rescheduled job %d despite active timer", id)
 	default:
 	}
-	service.pauseDeploymentRetries()
 }
 
 // 对偶:断链任务(无活跃 timer)必须被周期补扫重排。
@@ -2707,6 +2779,9 @@ func TestCertificateService_rescanPicksUpDroppedRetry(t *testing.T) {
 		return nil
 	}
 
+	// 收口注册在断言前：失败即 Fatal，尾部语句不再执行。
+	t.Cleanup(service.pauseDeploymentRetries)
+
 	// When:周期补扫
 	service.rescanDroppedDeploymentRetries()
 
@@ -2719,7 +2794,6 @@ func TestCertificateService_rescanPicksUpDroppedRetry(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("dropped retry was not rescheduled")
 	}
-	service.pauseDeploymentRetries()
 }
 
 func TestCertificateService_rescanPicksUpCleanupAfterWritebackFailure(t *testing.T) {
@@ -2742,6 +2816,7 @@ func TestCertificateService_rescanPicksUpCleanupAfterWritebackFailure(t *testing
 		rescheduled <- id
 		return nil
 	}
+	t.Cleanup(service.pauseDeploymentRetries)
 	service.rescanDroppedDeploymentRetries()
 	select {
 	case id := <-rescheduled:
@@ -2751,7 +2826,6 @@ func TestCertificateService_rescanPicksUpCleanupAfterWritebackFailure(t *testing
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("cleanup job with failed status writeback was not rescheduled")
 	}
-	service.pauseDeploymentRetries()
 }
 
 // 首签发 confirm/persist 瞬时失败走 deploymentFailed 时,
@@ -2943,11 +3017,19 @@ func TestRestoreCertJobs_deploy_lock_and_epoch_guard(t *testing.T) {
 	case restoreErr := <-restoreDone:
 		unlock()
 		t.Fatalf("restore err=%v 在部署锁释放前返回——恢复未与部署事务互斥", restoreErr)
-	case <-time.After(150 * time.Millisecond):
+	default:
 	}
+	// 阻塞证据取协程栈（恢复链阻塞在 (*refCountedLock).Lock 的等待帧）而非
+	// 150ms 固定观测窗——后者在恢复协程尚未被调度时同样成立（负载下假绿）。
+	waitGoroutineBlockedOn(t, "TestRestoreCertJobs_deploy_lock_and_epoch_guard", "(*refCountedLock).Lock")
 	unlock()
-	if err := <-restoreDone; err != nil {
-		t.Fatalf("restore err=%v, want nil", err)
+	select {
+	case err := <-restoreDone:
+		if err != nil {
+			t.Fatalf("restore err=%v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("restore 未在部署锁释放后返回")
 	}
 
 	// Then：快照后的签发成果不被回滚

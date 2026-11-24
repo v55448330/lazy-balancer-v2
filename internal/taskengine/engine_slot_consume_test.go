@@ -184,7 +184,7 @@ func TestEngine_ScheduledUserCancelConsumesSlot(t *testing.T) {
 // 系统先以 nil 原因取消 ctx），Run 尚未返回。
 // When 用户 Cancel 在系统中止之后到达。
 // Then 不得消费本槽——业务按系统性中止不推进槽，消费会把「恢复后到期轮
-// 补跑」语义永久压掉（回归）。
+// 补跑」语义永久压掉。
 func TestEngine_SystemCancelThenUserCancelKeepsDueSlot(t *testing.T) {
 	e := newTestEngine(t)
 	pastSlot := time.Now().Add(-time.Minute)
@@ -393,9 +393,12 @@ func TestEngine_ManualAndDemoteCancelKeepDueSlot(t *testing.T) {
 		t.Fatal("自动轮未启动")
 	}
 	e.SetRole(false)
+	// demote 中止的 Run 体返回 ctx.Err()（不是 ErrTaskSkipped）→ 终态恒为
+	// cancelled；接受 skipped 会让「跳过/取消」分叉的回归（如 ctx 取消被误判
+	// 为 skipped）静默通过——本夹具不存在产生 skipped 的路径。
 	waitForEngine(t, "demote 中止落定", 2*time.Second, func() bool {
 		lr := e.LatestRun("t-keep")
-		return lr != nil && (lr.Status == "skipped" || lr.Status == "cancelled")
+		return lr != nil && lr.Status == "cancelled"
 	})
 	r := regOf(t, e, "t-keep")
 	r.mu.Lock()

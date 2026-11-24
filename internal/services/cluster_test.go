@@ -1076,6 +1076,9 @@ func TestSyncService_restart_callback_runs_when_synced_admin_TLS_changes(t *test
 		t.Fatalf("seed slave mode: %v", err)
 	}
 	RecordRuntimeAdminTLS(AdminTLSConfig{Enabled: false, Mode: "selfsigned"})
+	// 进程级运行态快照：写入者必须复位（生产注释明文警告 -shuffle 顺序依赖），
+	// 与 cluster_apply_test.go / admintls_test.go 的四处同口径。
+	t.Cleanup(ResetRuntimeAdminTLSForTest)
 	restarted := make(chan struct{}, 1)
 	SetRestartRequiredHandler(func() { restarted <- struct{}{} })
 	t.Cleanup(func() { SetRestartRequiredHandler(nil) })

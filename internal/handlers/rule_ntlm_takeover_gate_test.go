@@ -99,7 +99,7 @@ func TestCreateRule_ntlmOn_fullTakeoverColumns_accepted(t *testing.T) {
 		"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]
 	}`)
 
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+	if response.Code != http.StatusCreated {
 		t.Fatalf("create full takeover status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 }

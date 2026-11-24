@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -279,9 +280,17 @@ func TestUpdateRuleTables_frozenAgainstInPlaceMutation(t *testing.T) {
 	baselineExprs := updateRuleBaselineSelectExprs()
 	baselineGaps := updateRuleColumnParityGaps(updateRuleColumnParitySets())
 
-	// When：原地破坏源表（乱序 + 追加未知列；恢复由 defer 保证）
-	original := updateRuleBaselineSelectColumns
-	defer func() { updateRuleBaselineSelectColumns = original }()
+	// When：原地破坏源表（乱序 + 追加未知列；以复制副本在 t.Cleanup 全量还原，
+	// 只还原切片头会把包级源表永久留在被破坏的顺序上）
+	original := append([]updateRuleSelectColumn(nil), updateRuleBaselineSelectColumns...)
+	t.Cleanup(func() {
+		// LIFO：本断言先于下方还原注册，因此先执行还原、再核验整表复原。
+		// 对照 init 冻结快照（独立副本），可检出「只还原切片头」的假还原。
+		if !slices.Equal(updateRuleBaselineSelectColumns, updateRuleBaselineSelectColumnsSnapshot) {
+			t.Errorf("包级源表未被完整还原：got=%v want=%v", updateRuleBaselineSelectColumns, updateRuleBaselineSelectColumnsSnapshot)
+		}
+	})
+	t.Cleanup(func() { updateRuleBaselineSelectColumns = original })
 	sort.Slice(updateRuleBaselineSelectColumns, func(i, j int) bool {
 		return updateRuleBaselineSelectColumns[i].column > updateRuleBaselineSelectColumns[j].column
 	})

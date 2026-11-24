@@ -97,3 +97,82 @@ test('设计守卫：通知面标准（描述类/分区竖条/弹框体高度/�
   // 卡头保存为实体按钮（非 link）
   assert.ok(!/link type="primary" :loading="savingDaily"/.test(nc), '每日摘要保存必须为实体按钮（与规则卡头一致）')
 })
+
+test('设计守卫：保存/删除确认的后果清单（DESIGN_SPEC §20）', () => {
+  const rules = code('src/views/Rules.vue')
+  // 规则删除确认必须列出后端真实级联对象（不得只有一句「确定删除吗」）
+  assert.match(rules, /ruleDeleteScopeLead/, '删除确认必须引导查看级联清单')
+  assert.match(rules, /h\('ul', \{ class: 'confirm-scope-list' \}, deleteScopeItems\.map/, '删除确认必须以 .confirm-scope-list 列出级联对象')
+  // 保存响应 warnings 同形逐条披露（创建与更新同口径）
+  assert.match(rules, /h\('ul', \{ class: 'confirm-scope-list' \}, submitWarnings\.map/, '保存披露必须以同一清单形态逐条展示')
+  // 钉三元形态本身：只要求键出现过的话，把创建/更新的标题写反也绿。
+  assert.match(rules, /t\(wasEditing \? '[^']*ruleUpdatedNotice' : '[^']*ruleCreatedNotice'\)/, '披露标题：更新走 ruleUpdatedNotice、创建走 ruleCreatedNotice（三元不得写反）')
+  // 删除清单必须覆盖后端同删的证书文件与日志文件（removeRuleCertFiles / RemoveRuleLogFiles）
+  assert.match(rules, /ruleDeleteScopeCertFiles/, '删除清单必须列出证书文件')
+  assert.match(rules, /ruleDeleteScopeLogFiles/, '删除清单必须列出日志文件')
+  // 禁用同样披露影响面（流量中断 + 防护失效），同样用标准清单类
+  assert.match(rules, /ruleDisableScopeLead/, '禁用确认必须披露影响面')
+  assert.match(rules, /h\('ul', \{ class: 'confirm-scope-list' \}, \[/, '禁用影响面必须以 .confirm-scope-list 列出')
+  // 单源：该类只允许定义在 main.css
+  const css = code('src/styles/main.css')
+  assert.match(css, /\.confirm-scope-list \{/, '.confirm-scope-list 必须定义在 main.css')
+  assert.match(css, /\.confirm-scope-lead \{/, '.confirm-scope-lead 必须定义在 main.css')
+  for (const f of webFiles('src', ['.vue'])) {
+    assert.ok(!/^\.confirm-scope-(list|lead) \{/m.test(code(f)), `${f} 重复定义 .confirm-scope-* 全局类（DESIGN_SPEC §20 单源）`)
+  }
+})
+
+test('设计守卫：不可逆封禁必须披露永久生效与累犯清零', () => {
+  const add = code('src/composables/useIpListAdd.ts')
+  assert.match(add, /options\.ban \? t\('common\.app\.views\.ipAdd\.banNote'\)/, 'useIpListAdd 必须支持 ban 披露')
+  const assoc = code('src/composables/useTrustAssociation.ts')
+  // 逐调用点钉（两处各有独立参数对象；只钉「出现过一次」会让单点变异假绿）
+  assert.match(assoc, /addIpToList\(ip, list, \{ verb, ban: side === 'deny', successText:/, 'joinSpecificList 的 deny 侧必须传 ban 披露')
+  assert.match(assoc, /addIpToList\(ip, opt, \{ verb: cfg\.verb, ban: side === 'deny', successText:/, 'ensureListAndJoin 的 deny 侧必须传 ban 披露')
+  assert.equal((assoc.match(/ban: side === 'deny'/g) ?? []).length, 2, 'deny 侧 ban 披露必须恰好覆盖两个调用点')
+  assert.match(assoc, /const banNote = side === 'deny' \? t\('common\.app\.views\.ipAdd\.banNote'\)/, '自动建单确认同样披露封禁后果')
+  // deny 侧共四条写路径：复用既有名单的确认绕过 addIpListAdd 直发 POST，同样必须带披露
+  assert.match(assoc, /confirmJoinExisting', \{ ip, name: reuseTarget\.name, tip, note: banNote/, '复用既有名单的确认必须带封禁披露')
+  const viewsZh = code('src/locales/zh/views.ts')
+  assert.match(viewsZh, /'confirmJoinExisting': '[^']*\{tip\}\{note\}/, '复用既有名单的词条必须有 note 槽位')
+  // 关闭接入的确认名词必须是卡片标题而非开关文案（否则成「确定关闭启用 API 接入吗」）
+  const keysNaming = code('src/views/Keys.vue')
+  assert.match(keysNaming, /accessName = t\(kind === 'api' \? 'app\.notification\.keysAccess\.apiCardTitle' : 'app\.notification\.keysAccess\.mcpCardTitle'\)/, '接入关闭确认的名词必须取卡片标题')
+  // SMTP 凭据页写的是同一端点，从节点必须同样禁写（与 Keys.vue 两个开关同门）
+  const creds = code('src/views/notifications/SystemCredentials.vue')
+  assert.match(creds, /:disabled="!canSave \|\| nodeWriteBlocked"/, 'SMTP 凭据页保存在从节点必须禁用')
+  assert.match(creds, /:disabled="!form\.smtpHost \|\| nodeWriteBlocked"/, 'SMTP 凭据页测试在从节点必须禁用')
+  const events = code('src/views/security/SecurityEvents.vue')
+  assert.match(events, /ban: true/, '候选行封禁必须传 ban 披露')
+  assert.match(events, /disableScopePermanent/, '禁用自动封禁必须披露永久条目不会解除')
+  const zh = code('src/locales/zh/views.ts')
+  assert.match(zh, /'banNote': '封禁立即生效且默认永久/, '封禁披露文案必须写明永久')
+})
+
+test('设计守卫：全局 API / MCP 接入开关关闭必须披露后果且从节点不可拨', () => {
+  const keys = code('src/views/Keys.vue')
+  assert.match(keys, /const confirmAccessOff = async/, '关闭全局接入必须走确认')
+  assert.match(keys, /h\('ul', \{ class: 'confirm-scope-list' \}, scope\.map/, '接入关闭确认必须用标准清单类披露后果')
+  assert.match(keys, /if \(!on && !\(await confirmAccessOff\('api'\)\)\)/, '关闭 API 接入必须确认')
+  assert.match(keys, /if \(!on && !\(await confirmAccessOff\('mcp'\)\)\)/, '关闭 MCP 接入必须确认')
+  // 从节点：后端 requireNotifyMaster 已拒写，开关必须同步禁用并给出原因
+  const switches = keys.match(/<el-switch v-if="isAdmin" v-model="(apiEnabled|mcpEnabled)"[^>]*>/g) ?? []
+  assert.equal(switches.length, 2, '应有两个全局接入开关')
+  for (const sw of switches) {
+    assert.match(sw, /:disabled="switchSaving \|\| nodeWriteBlocked"/, '接入开关在从节点必须禁用')
+  }
+  assert.equal((keys.match(/<el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">\s*<div>\s*<el-switch v-if="isAdmin"/g) ?? []).length, 2, '两个开关都必须带禁用原因提示')
+})
+
+test('设计守卫：空白名单策略绑定入口必须警示并确认', () => {
+  const editor = code('src/components/SecurityBindingEditor.vue')
+  assert.match(editor, /acl_empty_allow\?: boolean/, '策略行必须承接后端摘要的空白名单判定')
+  assert.match(editor, /v-if="policy.acl_empty_allow"[^>]*type="warning"/, '空白名单策略在选项行必须有警示标记')
+  assert.match(editor, /v-if="currentPolicyEmptyAllow" class="info-note-bar"/, '策略侧绑定弹框必须有整页警示条')
+  const submit = editor.slice(editor.indexOf('const submit = async'))
+  // 规则侧：提交前确认（取消即不提交）
+  assert.match(submit, /if \(emptyAllowSelected\.value\.length > 0\) \{[\s\S]*?if \(!\(await confirmEmptyAllow\(/, '规则侧提交前必须确认空白名单策略')
+  // 策略侧：只对「本次新绑定」的规则确认
+  assert.match(submit, /if \(currentPolicyEmptyAllow\.value && toBind\.length > 0\) \{[\s\S]*?if \(!\(await confirmEmptyAllow\(/, '策略侧提交前必须确认空白名单策略')
+  assert.match(editor, /h\('ul', \{ class: 'confirm-scope-list' \}, names\.map/, '确认清单必须用标准清单类')
+})

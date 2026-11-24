@@ -13,6 +13,12 @@
 #      作业面无扩展名约定文件（.gitignore/.gitattributes）与 Python 脚本同样在面内：
 #      批量脚本与忽略清单的注释块都是审计编号的真实混入面（扫描面声明见
 #      content_scan_exts / content_scan_basenames）。
+#      Go 代码行（非注释/非声明行）里的字符串字面量同样入面：批次号会随
+#      t.Fatalf/错误信息输出给使用者。该通道只判「强形态」（短横线家族与空格
+#      序数形态，即「批次号-序号」与「批次号 Pn」）且要求同行出现审计动作词
+#      （修复/审计/裁定/同源…）——产品 token 与夹具数据字符串（自定义头名、
+#      示例域名、日志/生成标号）不判罚，故整行字符串里的裸编号（无动作词）不在
+#      本通道的知识边界内，属有意收窄而非漏扫。
 #      刻意例外：web/package-lock.json（npm 生成物，integrity 为混合大小写
 #      base64、随依赖升级整份重写，人工审计标注不进该文件）不入内容面。
 #      轮次引用按「审计动作共现」判定：裸轮次＋审计
@@ -344,6 +350,19 @@ my $legacy = join '|',
 # 连写形态（无短横线）：1-5 位大写字母 + 2-3 位数字 + 1-2 位大写字母收尾。
 my $concat = q{\b[A-Z]{1,5}[0-9]{2,3}[A-Z]{1,2}\b};
 
+# 空格分隔的序数形态：批次号家族 + 「 P<数字>」——批次标识被空格拆开书写时
+# 短横线家族（$fam）不命中，属同一族编号的书写变体。
+my $ordinal = q{\b[A-Z]{2,8}[0-9]{2,4}[ \t]+P[0-9]{1,2}\b};
+
+# 强形态（短横线家族 + 空格序数）：Go 代码行字符串字面量通道只用这一组——弱
+# 形态（$legacy/$tname/$concat，如示例域名标签、轮次缩写、生成标号）在产品
+# token 与夹具数据字符串里合法出现，不能按字面量判罚。
+my $strong = qr/$fam|$ordinal/;
+
+# 审计动作词：字符串字面量里的批次引用几乎总是「（批次号 动作/口径）」形态；
+# 产品 token 与夹具数据字符串不带它们。字符串通道据此收窄（见文件头说明）。
+my $audit_ctx = qr/\xe4\xbf\xae\xe5\xa4\x8d|\xe5\xae\xa1\xe8\xae\xa1|\xe8\xa3\x81\xe5\xae\x9a|\xe5\x8f\x91\xe7\x8e\xb0|\xe6\x94\xb6\xe6\x95\x9b|\xe5\x8a\xa0\xe5\x9b\xba|\xe5\xa4\x8d\xe6\xa0\xb8|\xe5\x90\x8c\xe6\xba\x90|\xe5\x9b\x9e\xe5\xbd\x92|\xe5\x9f\xba\xe7\xba\xbf|\xe7\xbc\xba\xe9\x99\xb7|\xe6\xa0\xb9\xe5\x9b\xa0|\xe6\xbc\x82\xe7\xa7\xbb|\xe6\x89\xb9\xe6\xac\xa1|\xe7\xbc\x96\xe5\x8f\xb7|\xe8\xbd\xae\xe6\xac\xa1|\xe7\x95\x99\xe5\xad\x98|\xe9\x81\x97\xe7\x95\x99/;
+
 # 下划线/小驼峰测试名形态：测试前缀 + 编号段 + 下划线接业务描述。
 my $tname = q{\bTest[A-Za-z]{0,3}[0-9]+(?:_[0-9A-Za-z]+)+};
 
@@ -394,18 +413,27 @@ while (my $f = <$lf>) {
   # 字符串值、HTML 的文本节点没有注释前缀，只扫注释行等于给编号留通道
   # （夹具/种子 JSON、模板文案是真实混入面）。
   my $is_doc = ($f =~ /\.(?:md|markdown|txt|html|htm|json)$/i);
+  my $is_go = ($f =~ /\.go$/i);
 
   $text =~ s/(?:$shield)//g;
 
   my @lines = split /\n/, $text, -1;
   for my $i (0 .. $#lines) {
     my $l = $lines[$i];
-    next unless $is_doc || $l =~ $comment_re || $l =~ $decl_re;
-    my $hit = ($l =~ /$fam/ || $l =~ /$legacy/ || $l =~ /$tname/);
-    if (!$hit && $l =~ /$concat/) {
-      # 纯十六进制字母数字连写不是编号；出现十六进制之外的字母才是编号形态。
-      my @toks = ($l =~ /($concat)/g);
-      $hit = grep { !/^[0-9A-F]+$/ } @toks;
+    my $hit;
+    if (!$is_doc && $l !~ $comment_re && $l !~ $decl_re) {
+      # Go 代码行上的字符串字面量：批次号会随 t.Fatalf/错误信息输出给使用者。
+      # 仅强形态且同行出现审计动作词时判罚（弱形态在产品 token/夹具数据字符串
+      # 里合法存在，见 $strong/$audit_ctx 说明）。
+      next unless $is_go && $l =~ /"/ && $l =~ $audit_ctx && $l =~ $strong;
+      $hit = 1;
+    } else {
+      $hit = ($l =~ /$strong/ || $l =~ /$legacy/ || $l =~ /$tname/);
+      if (!$hit && $l =~ /$concat/) {
+        # 纯十六进制字母数字连写不是编号；出现十六进制之外的字母才是编号形态。
+        my @toks = ($l =~ /($concat)/g);
+        $hit = grep { !/^[0-9A-F]+$/ } @toks;
+      }
     }
     report($f, $i + 1, $l) if $hit;
   }

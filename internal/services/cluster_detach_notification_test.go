@@ -34,7 +34,10 @@ func TestNotifyMasterDetach_residualRedirectIsVisibleFailure(t *testing.T) {
 	}
 }
 
-func TestNotifyMasterDetach_rejectionAndSuccessLoggingRemainDistinct(t *testing.T) {
+// 生产语义：4xx 记 "rejected"；2xx 成功**不记任何日志**（best-effort 脱离通知）。
+// 用例名与断言必须与这条真实契约一致——旧名承诺「拒绝/成功日志可区分」，
+// 但生产根本没有成功分支，断言只覆盖拒绝路径（名不副实 → 泛化文案也不变红）。
+func TestNotifyMasterDetach_rejectionLoggedAndSuccessSilent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
@@ -43,5 +46,15 @@ func TestNotifyMasterDetach_rejectionAndSuccessLoggingRemainDistinct(t *testing.
 	notifyMasterDetach(context.Background(), server.URL, "old-token", "")
 	if !strings.Contains(logs.String(), "cluster detach notify rejected") {
 		t.Fatalf("4xx logs=%q, want rejected", logs.String())
+	}
+
+	successServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer successServer.Close()
+	successLogs := captureLogf(t)
+	notifyMasterDetach(context.Background(), successServer.URL, "old-token", "")
+	if successLogs.Len() != 0 {
+		t.Fatalf("2xx 成功路径必须静默（不得出现 rejected/failed 文案）, got %q", successLogs.String())
 	}
 }

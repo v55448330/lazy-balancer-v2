@@ -500,8 +500,7 @@ func TestDeleteCertJob_aborts_when_rule_reenabled_during_delete(t *testing.T) {
 	router.DELETE("/jobs/:id", h.DeleteCertJob)
 	// 模拟 EnableRule 临界区进行中：持 caddyOpMu，删除请求必须排队等待。
 	// 用 pre-lock 钩子把删除 goroutine 确定性停在取锁之前，替代固定的
-	// 300ms 墙钟窗口——慢机上 goroutine 可能还没跑到锁，负向断言会假通过
-	//（回归）。
+	// 300ms 墙钟窗口——慢机上 goroutine 可能还没跑到锁，负向断言会假通过。
 	h.caddyOpMu.Lock()
 	preLockReached := make(chan struct{})
 	allowAcquire := make(chan struct{})
@@ -1307,7 +1306,7 @@ func TestDeleteCertJob_recoveryKeepsCanonicalLockOrder(t *testing.T) {
 	// T1 会持 operationLock 反向取 caddyOpMu → 等 T2；T2 的 lock.Lock() 再等
 	// T1 → 必然死锁（与 T2 何时调用 lock.Lock() 无关）。修复后 T1 先释放
 	// operationLock，T2 得以完成并释放 caddyOpMu。固定的 2s 墙钟窗口因此
-	// 删除（慢机不退化，（回归）。
+	// 删除（慢机不退化）。
 	close(allowCancelReturn)
 
 	select {

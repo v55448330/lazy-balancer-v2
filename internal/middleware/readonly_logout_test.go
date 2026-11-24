@@ -33,7 +33,7 @@ func TestIsSelfServicePath_includesLogout(t *testing.T) {
 // Given 只读/可写两种 API Key 身份。
 // When POST /api/v1/auth/logout。
 // Then 都落到 handler（统一 404「无会话令牌可吊销」），守卫不截断；
-// 同守卫对其他写路由的 403 语义不变（回归）。
+// 同守卫对其他写路由的 403 语义不变。
 func TestAPIKeyReadOnlyGuard_allowsLogoutToHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, readOnly := range []bool{true, false} {

@@ -444,6 +444,21 @@ func ReadAutobanConfigFrom(ctx context.Context, q AutobanConfigQuerier) (Autoban
 	}, nil
 }
 
+// beforeAutobanConfigRead 保留自动封禁配置读取前注入缝，供关停交错回归测试使用。
+var beforeAutobanConfigRead = func() {}
+
+// beforeAutobanConfigWrite 保留自动封禁配置写入前注入缝，供关停交错回归测试使用。
+var beforeAutobanConfigWrite = func() {}
+
+// beforeAutobanPresetListQuery 保留预置名单查询前注入缝，供关停交错回归测试使用。
+var beforeAutobanPresetListQuery = func() {}
+
+// beforeAutobanMergeTx 保留名单合并事务开启前注入缝，供关停交错回归测试使用。
+var beforeAutobanMergeTx = func() {}
+
+// beforeAutobanListEntriesQuery 保留名单条目查询前注入缝，供关停交错回归测试使用。
+var beforeAutobanListEntriesQuery = func() {}
+
 // GetAutobanConfig 读十项配置（COALESCE 仅归一存量 NULL；读失败显性返回错误）。
 func GetAutobanConfig() (AutobanConfig, error) {
 	cfg := AutobanConfig{
@@ -457,10 +472,15 @@ func GetAutobanConfig() (AutobanConfig, error) {
 		SuspicionMultiplier: db.DefaultAutobanSuspicionMultiplier,
 		ConfirmFloorRatio:   db.DefaultAutobanConfirmFloorRatio,
 	}
-	if db.DB == nil {
+	// 关停竞态守卫：单次句柄快照后只用局部变量。判空与解引用之间若被
+	// db.Close（SetDB(nil)+DB=nil）抢占，二次读包级变量会把 nil 交给下层
+	// 直接 panic，而不是得到可留痕的读失败。
+	database := db.GetDB()
+	if database == nil {
 		return cfg, errors.New("自动封禁配置数据库未装配")
 	}
-	read, err := ReadAutobanConfigFrom(context.Background(), db.DB)
+	beforeAutobanConfigRead()
+	read, err := ReadAutobanConfigFrom(context.Background(), database)
 	if err != nil {
 		return cfg, err
 	}
@@ -565,7 +585,15 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if cfg.DryRun {
 		dry = 1
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_escalation=?, autoban_counting_mode=?, autoban_suspicion_multiplier=?, autoban_confirm_floor_ratio=? WHERE id=1`,
+	// 关停竞态守卫：GetAutobanConfig 的快照不外泄，写入前重新快照一次并
+	// 用局部变量到底——两次取值之间的 db.Close 不得把 nil 交给 Exec。
+	database := db.GetDB()
+	if database == nil {
+		autobanConfigReplaceMu.Unlock()
+		return errors.New("数据库未初始化")
+	}
+	beforeAutobanConfigWrite()
+	if _, err := database.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_escalation=?, autoban_counting_mode=?, autoban_suspicion_multiplier=?, autoban_confirm_floor_ratio=? WHERE id=1`,
 		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry, cfg.Escalation,
 		cfg.CountingMode, cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio); err != nil {
 		autobanConfigReplaceMu.Unlock()
@@ -1550,22 +1578,25 @@ func parseAutobanEntryTime(s string) time.Time {
 // 幂等、描述按代码文案归一、同名用户列表留痕都在单源内完成——手写 INSERT
 // 曾与播种在 category 字面量/描述来源/幂等性三处漂移。
 func ensureAutobanPresetListID() (int64, error) {
-	if db.DB == nil {
+	// 关停竞态守卫：单次句柄快照后整函数只用局部变量（含补建与复查）。
+	database := db.GetDB()
+	if database == nil {
 		return 0, errors.New("数据库未初始化")
 	}
 	var id int64
-	err := db.DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND COALESCE(system,0)=1`, AutobanPresetListName).Scan(&id)
+	beforeAutobanPresetListQuery()
+	err := database.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND COALESCE(system,0)=1`, AutobanPresetListName).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
-	created, cerr := db.EnsureSystemIPList(db.DB, AutobanPresetListName, autobanPresetListDescription, "自动封禁")
+	created, cerr := db.EnsureSystemIPList(database, AutobanPresetListName, autobanPresetListDescription, "自动封禁")
 	if cerr != nil {
 		return 0, fmt.Errorf("补建预置名单「%s」: %w", AutobanPresetListName, cerr)
 	}
-	if err := db.DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND COALESCE(system,0)=1`, AutobanPresetListName).Scan(&id); err != nil {
+	if err := database.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND COALESCE(system,0)=1`, AutobanPresetListName).Scan(&id); err != nil {
 		return 0, fmt.Errorf("预置名单「%s」补建后仍不可见: %w", AutobanPresetListName, err)
 	}
 	if created {
@@ -1578,7 +1609,9 @@ func ensureAutobanPresetListID() (int64, error) {
 // 清到期 → 已在名单过滤 → 追加新封 → 超限挤最早到期自动条目 → 回写。
 func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (autobanMergeOutcome, error) {
 	var out autobanMergeOutcome
-	if db.DB == nil {
+	// 关停竞态守卫：单次句柄快照后整函数（含事务与泄漏收尾）只用局部变量。
+	database := db.GetDB()
+	if database == nil {
 		return out, errors.New("数据库未初始化")
 	}
 	// 零值/未知升级形态按 off 消费（与写侧枚举校验同口径）：配置结构体
@@ -1601,7 +1634,8 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	out.ListID = id
 	// 读改写包进单一事务：集群 apply/导入可能在两步之间整表替换该行，
 	// 无事务时陈旧快照会覆盖刚同步的名单（RowsAffected=0 还会被当成成功）。
-	tx, err := db.DB.Begin()
+	beforeAutobanMergeTx()
+	tx, err := database.Begin()
 	if err != nil {
 		return out, err
 	}
@@ -1821,7 +1855,7 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
+		db.RollbackLeakedTx(database, db.MainPoolMaxOpen)
 		return out, err
 	}
 	return out, nil
@@ -2508,7 +2542,9 @@ func AutobanTrackedIPs() int { return autobanTrackedCount() }
 
 // AutobanListEntries 预置名单条目与名单 ID（/status 名单条数与前端条目管理数据源）。
 func AutobanListEntries() ([]models.IPListEntry, int64, error) {
-	if db.DB == nil {
+	// 关停竞态守卫：单次句柄快照后整函数只用局部变量。
+	database := db.GetDB()
+	if database == nil {
 		return nil, 0, errors.New("数据库未初始化")
 	}
 	id, err := ensureAutobanPresetListID()
@@ -2516,7 +2552,8 @@ func AutobanListEntries() ([]models.IPListEntry, int64, error) {
 		return nil, 0, err
 	}
 	var raw string
-	if err := db.DB.QueryRow(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?`, id).Scan(&raw); err != nil {
+	beforeAutobanListEntriesQuery()
+	if err := database.QueryRow(`SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?`, id).Scan(&raw); err != nil {
 		return nil, id, err
 	}
 	var entries []models.IPListEntry

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -399,23 +398,12 @@ func TestRefreshBrandingMirror_skipsInvalidJSON(t *testing.T) {
 	if changed, err := RefreshBrandingMirror(dir); err != nil || !changed {
 		t.Fatalf("initial mirror: changed=%v err=%v", changed, err)
 	}
-	// 半截写(内容变化但非法)
-	st, err := os.Stat(filepath.Join(dir, "branding.json"))
-	if err != nil {
-		t.Fatalf("stat branding file: %v", err)
-	}
+	// 半截写(内容变化但非法)：被测函数按「文件内容 vs global_config 内容」
+	// 判定（RefreshBrandingMirrorDB 只读文件内容并做 JSON 解析，从不读 mtime），
+	// 故无需等时间戳前进——此前用最多 1s 的真实时钟轮询等 mtime，是无断言、
+	// 不影响结论的死脚手架。
 	if err := os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"坏`), 0644); err != nil {
 		t.Fatalf("write invalid branding: %v", err)
-	}
-	for i := 0; i < 20; i++ {
-		st2, err := os.Stat(filepath.Join(dir, "branding.json"))
-		if err != nil {
-			t.Fatalf("stat branding file: %v", err)
-		}
-		if st2.ModTime().After(st.ModTime()) {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
 	}
 	if changed, err := RefreshBrandingMirror(dir); err != nil {
 		t.Fatalf("mirror on invalid: %v", err)

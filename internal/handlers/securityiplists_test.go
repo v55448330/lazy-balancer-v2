@@ -66,8 +66,8 @@ func TestSecurityPolicyRefs_createAndUpdatePersistDedupedJSON(t *testing.T) {
 	response := postJSON(t, router, "/security/policies", map[string]any{
 		"name": "refs-dedupe-policy", "mode": "off", "ip_acl_enabled": true, "ip_acl_mode": "deny", "ip_acl_list_refs": refs,
 	})
-	if response.Code != http.StatusOK && response.Code != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s, want 200（finishTxApply 默认成功码）", response.Code, response.Body.String())
 	}
 	var policyID int
 	var stored string
@@ -261,7 +261,7 @@ func TestCreateIPList_quotaCountsUserListsOnly(t *testing.T) {
 
 	// 第 200 个用户名单：放行（系统名单不占额度）。
 	rec := postJSON(t, router, "/security/ip-lists", map[string]any{"name": "额度边界-200", "entries": "[]"})
-	if rec.Code != http.StatusOK && rec.Code != http.StatusCreated {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200（系统名单不占用户额度）", rec.Code, rec.Body.String())
 	}
 	// 第 201 个用户名单：拒绝。

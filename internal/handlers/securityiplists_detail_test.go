@@ -320,12 +320,24 @@ func TestListIPLists_emptyEntriesOnSystemRows(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
+	// 名单名同源单源：种子改名/换语种时本用例必须失靶报错，不得整体空转仍绿。
+	wantName := db.ThreatListNameBySource("ustc")
+	if wantName == "" {
+		t.Fatal("威胁名单名称单源未返回 ustc 名单（种子数据形态变化）")
+	}
+	matched := false
 	for _, row := range payload.Data {
-		if row["system"] == true && strings.Contains(row["name"].(string), "USTC") {
+		system, _ := row["system"].(bool)
+		name, _ := row["name"].(string)
+		if system && name == wantName {
+			matched = true
 			if row["entry_count"] != float64(14189) {
 				t.Fatalf("威胁库 entry_count 须取自 threat_sources: got %v want 14189", row["entry_count"])
 			}
 		}
+	}
+	if !matched {
+		t.Fatalf("系统名单 %q 未出现在列表载荷中——用例失靶（entry_count 断言未执行）", wantName)
 	}
 }
 

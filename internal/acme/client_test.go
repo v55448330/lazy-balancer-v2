@@ -73,67 +73,6 @@ func TestACMEAccountKeyPath_changes_when_EAB_HMAC_changes(t *testing.T) {
 	}
 }
 
-// 名称按现断言更名——轮换前代密钥是不同账户身份，必须保留
-// （删除前代密钥会让被删方以再生密钥撞既有账户，签发持续失败）。
-func TestClient_RegisterAccount_keeps_rotated_predecessor_key(t *testing.T) {
-	// Given
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Replay-Nonce", "test-nonce")
-		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/directory":
-			_, _ = writer.Write([]byte(`{"newNonce":"` + server.URL + `/nonce","newAccount":"` + server.URL + `/account","newOrder":"` + server.URL + `/order","revokeCert":"` + server.URL + `/revoke","keyChange":"` + server.URL + `/key-change"}`))
-		case "/nonce":
-			writer.WriteHeader(http.StatusOK)
-		case "/account":
-			writer.Header().Set("Location", server.URL+"/account/1")
-			writer.WriteHeader(http.StatusCreated)
-			_, _ = writer.Write([]byte(`{"status":"valid"}`))
-		default:
-			http.NotFound(writer, request)
-		}
-	}))
-	t.Cleanup(server.Close)
-	dataDir := t.TempDir()
-	directoryURL := server.URL + "/directory"
-	oldKeyPath := acmeAccountKeyPath(dataDir, directoryURL, "admin@example.com", "same-kid", []byte("old-secret"))
-	if _, err := newClient(directoryURL, "admin@example.com", dataDir, &acme.ExternalAccountBinding{KID: "same-kid", Key: []byte("old-secret")}); err != nil {
-		t.Fatalf("create old EAB client: %v", err)
-	}
-	// 轮换前代密钥须闲置超 1h 才会被清理：把旧密钥 mtime
-	// 回拨 2h，模拟真正下线已久的轮换遗留密钥。
-	idle := time.Now().Add(-2 * time.Hour)
-	for _, path := range []string{oldKeyPath, oldKeyPath + ".json"} {
-		if err := os.Chtimes(path, idle, idle); err != nil {
-			t.Fatalf("backdate stale key %s: %v", path, err)
-		}
-	}
-	client, err := newClient(directoryURL, "admin@example.com", dataDir, &acme.ExternalAccountBinding{KID: "same-kid", Key: []byte("new-secret")})
-	if err != nil {
-		t.Fatalf("create rotated EAB client: %v", err)
-	}
-
-	// When
-	err = client.RegisterAccount(t.Context())
-
-	// Then
-	if err != nil {
-		t.Fatalf("register rotated EAB account: %v", err)
-	}
-	// 契约更新：同 (directory,email,KID) 不同 HMAC 的密钥是不同账户身份，
-	// 不再被互删——旧断言（删除轮换前代密钥）正是定性的有害行为：被删方
-	// 下次以再生密钥撞既有账户，签发持续失败直至人工恢复。轮换遗留密钥保留仅是
-	// 字节级残留，无功能影响。
-	if _, err := os.Stat(oldKeyPath); err != nil {
-		t.Fatalf("rotated-HMAC account key must be preserved (different account identity), stat err=%v", err)
-	}
-	if _, err := os.Stat(acmeAccountKeyPath(dataDir, directoryURL, "admin@example.com", "same-kid", []byte("new-secret"))); err != nil {
-		t.Fatalf("current account key missing: %v", err)
-	}
-
-}
-
 // EAB HMAC 轮换后旧代的账户密钥必须保留：它是不同账户身份（目录/邮箱/KID 相同
 // 但 HMAC 摘要不同），删掉会让旧账户身份无法恢复。这里断言的是「身份不同即
 // 保留」——本包不存在任何陈旧密钥回收机制（见 accountKeyMetadata 的退役裁定），
@@ -174,11 +113,15 @@ func TestClient_RegisterAccount_keeps_predecessor_identity_key(t *testing.T) {
 		t.Fatalf("register rotated EAB account: %v", err)
 	}
 
-	// Then：前代身份密钥及其元数据均保留
+	// Then：前代身份密钥及其元数据均保留，当前（轮换后）身份密钥在位
 	for _, path := range []string{oldKeyPath, oldKeyPath + ".json"} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("predecessor identity key %s was removed: %v", path, err)
+			t.Errorf("predecessor identity key %s was removed: %v", path, err)
 		}
+	}
+	currentKeyPath := acmeAccountKeyPath(dataDir, directoryURL, "admin@example.com", "same-kid", []byte("new-secret"))
+	if _, err := os.Stat(currentKeyPath); err != nil {
+		t.Errorf("current account key missing: %v", err)
 	}
 }
 
@@ -460,8 +403,8 @@ func TestNewClientRetryBackoff_curve(t *testing.T) {
 	}
 
 	// When/Then：n 从 1 起跳（x/crypto 文档：首次失败 n=1）— 基线
-	// 1,2,4,8,10,10,10 秒 + 0~1s 抖动（多规则并发签发不得在同一 CA
-	// 5xx 窗口以相同延迟同步重试）。原测试从 n=0 起跳
+	// 1,2,4,8 秒各 + 0~1s 抖动（多规则并发签发不得在同一 CA 5xx 窗口以
+	// 相同延迟同步重试），封顶档（含抖动）恒 10s。原测试从 n=0 起跳
 	// 断言 1,2,4,8,10…，而生产首召即 n=1 → 曲线整体右移一档（2,4,8,10…）却
 	// 恰好被 n=0 这一永不出现的档位掩蔽。
 	assertCurve := func(n int, base time.Duration) {
@@ -473,12 +416,15 @@ func TestNewClientRetryBackoff_curve(t *testing.T) {
 			}
 		}
 	}
-	bases := []time.Duration{
-		1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
-		10 * time.Second, 10 * time.Second, 10 * time.Second,
-	}
+	bases := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
 	for idx, base := range bases {
 		assertCurve(idx+1, base)
+	}
+	// 封顶是含抖动的硬上限：基线到达封顶档后抖动不再叠加，等待恒 10s。
+	for _, n := range []int{5, 6, 7} {
+		if got := backoff(n, nil, nil); got != 10*time.Second {
+			t.Fatalf("backoff(n=%d)=%v, want 10s（封顶含抖动）", n, got)
+		}
 	}
 	// n<1 仅防御（生产不出现）：不得小于 1s 基线。
 	assertCurve(0, 1*time.Second)
@@ -531,11 +477,11 @@ func TestNewClientRetryBackoff_prefersRetryAfterHeader(t *testing.T) {
 	if got := backoff(1, nil, withRetryAfter(http.StatusBadGateway, "5")); got < 5*time.Second || got > 6*time.Second {
 		t.Fatalf("backoff(n=1, 502, Retry-After:5)=%v, want [5s,6s]", got)
 	}
-	// 远超上限（3600s）被钳到 10s，与分段预算口径一致
+	// 远超上限（3600s）被钳到 10s（封顶含抖动），与分段预算口径一致
 	for range 20 {
 		got := backoff(1, nil, withRetryAfter(http.StatusServiceUnavailable, "3600"))
-		if got < 10*time.Second || got > 11*time.Second {
-			t.Fatalf("backoff(n=1, 503, Retry-After:3600)=%v, want [10s,11s]（上限 10s + 抖动）", got)
+		if got != 10*time.Second {
+			t.Fatalf("backoff(n=1, 503, Retry-After:3600)=%v, want 10s（封顶含抖动，不得再叠抖动）", got)
 		}
 	}
 	// Retry-After 短于曲线时取曲线（不得缩短既有退避）

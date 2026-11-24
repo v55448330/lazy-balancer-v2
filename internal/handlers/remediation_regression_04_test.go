@@ -313,8 +313,7 @@ func TestV2ImportCustomRuleRefs(t *testing.T) {
 }
 
 func TestPostLockRevalidationCatchesLiveDrift(t *testing.T) {
-	h := newBackupTestHandlers(t)
-	_ = h
+	newBackupTestHandlers(t) // 仅初始化/迁移测试库；本用例直接驱动锁内复核函数。
 	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_frequency='weekly', auto_backup_day=9 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}

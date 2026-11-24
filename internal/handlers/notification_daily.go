@@ -151,6 +151,11 @@ func (h *Handlers) PreviewNotificationDaily(c *gin.Context) {
 // TriggerNotificationDaily POST /notification/daily/trigger——管理员手动触发
 // 全员日报（复用 DeliverDailyForAll：与 Scheduled 任务体单源同路径）。审计留痕。
 func (h *Handlers) TriggerNotificationDaily(c *gin.Context) {
+	// 与 TestNotificationRule/TestNotificationDaily 同族主节点门：从节点没有
+	// pending 消费方（投递 Daemon 只在主节点），放行=200 假成功 + 投递行堆积。
+	if !requireNotifyMaster(c) {
+		return
+	}
 	if !isAdminRequest(c) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, msgDailyTriggerForbidden), MessageKey: msgDailyTriggerForbidden})
 		return

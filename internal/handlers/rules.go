@@ -1833,7 +1833,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	notify.Publish(notify.Event{Type: notify.EvtRuleCreated,
 		Fields: map[string]string{"1": c.GetString("username"), "2": req.Name}})
 	reloadNote.finalize()
-	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_6162ed62"), MessageKey: "k_6162ed62", Data: gin.H{"caddy_id": caddyID}})
+	createData := gin.H{"caddy_id": caddyID}
+	// 握手失败类证书警告（域名不匹配/链不完整）随成功响应返回面板弹框披露；
+	// 审计已由上方「证书警告」单列留痕，过期/未生效不进响应。
+	if hard := certWarningsForResponse(certWarnings); len(hard) > 0 {
+		createData["warnings"] = hard
+	}
+	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_6162ed62"), MessageKey: "k_6162ed62", Data: createData})
 }
 
 // certEnqueueErrorResponse 证书任务入队失败的状态/文案单源
@@ -3788,6 +3794,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	notify.Publish(notify.Event{Type: notify.EvtRuleUpdated,
 		Fields: map[string]string{"1": c.GetString("username"), "2": req.Name}})
 	reloadNote.finalize()
+	// 握手失败类证书警告（域名不匹配/链不完整）与可用性变更同通道返回面板；
+	// 审计已由上方「证书警告」单列留痕，过期/未生效不进响应。
+	updateWarnings = append(updateWarnings, certWarningsForResponse(certWarnings)...)
 	if len(updateWarnings) > 0 {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_a79e5c4d"), MessageKey: "k_a79e5c4d", Data: gin.H{"warnings": updateWarnings}})
 		return

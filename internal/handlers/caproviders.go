@@ -17,7 +17,7 @@ import (
 func (h *Handlers) ListCAProviders(c *gin.Context) {
 	list, err := h.caProviderService.ListCAProviders()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_5543faca"), MessageKey: "k_5543faca"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "k_5543faca", fmt.Errorf("查询 CA 提供商列表: %w", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: list})
@@ -36,7 +36,7 @@ func (h *Handlers) GetCAProvider(c *gin.Context) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_4c8b8a15"), MessageKey: "k_4c8b8a15"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_a747ff69"), MessageKey: "k_a747ff69"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "k_a747ff69", fmt.Errorf("查询 CA 提供商 #%d: %w", id, err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: p})
@@ -173,7 +173,8 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		default:
 			services.Logf("error", "Failed to update CA provider %d: %v", id, err)
 			recordCAProviderUpdateFailure(c, id, err.Error())
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_56164731"), MessageKey: "k_56164731"})
+			// 底层原因已就地留痕（cause=nil 不再重复日志）。
+			writeInternalErrorKey(c, http.StatusInternalServerError, "k_56164731", nil)
 		}
 		return
 	}
@@ -266,7 +267,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			return
 		}
 		services.Logf("error", "Failed to query CA provider %d before test: %v", id, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_a747ff69"), MessageKey: "k_a747ff69"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "k_a747ff69", nil)
 		return
 	}
 	providerName := provider.Name
@@ -297,13 +298,13 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			default:
 				auditCAProviderTestResult(c, id, providerName, result)
 				services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_09f156ac"), MessageKey: "k_09f156ac"})
+				writeInternalErrorKey(c, http.StatusInternalServerError, "k_09f156ac", nil)
 			}
 			return
 		}
 		auditCAProviderTestResult(c, id, providerName, result)
 		services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_09f156ac"), MessageKey: "k_09f156ac"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "k_09f156ac", nil)
 		return
 	}
 

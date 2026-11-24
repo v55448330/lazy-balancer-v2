@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/taskengine"
 )
+
+// strandedSeedUpdatedAt 是滞留任务夹具的固定 updated_at 基准：写库用 SQL 墙钟串
+// 形态，断言侧归一为 time.Time 比较（驱动把 DATETIME 投影成 RFC3339，
+// 与 SQL 串直接比较只在格式碰巧一致时成立）。
+var strandedSeedUpdatedAt = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func setupStrandedRequeueRoleFixture(t *testing.T) *CAQueueManager {
 	t.Helper()
@@ -30,7 +36,7 @@ func setupStrandedRequeueRoleFixture(t *testing.T) *CAQueueManager {
 		id             int
 		ruleID, domain string
 	}{{71, "lb_stranded_role_one", "stranded-one.example.test"}, {72, "lb_stranded_role_two", "stranded-two.example.test"}} {
-		if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id,message,updated_at) VALUES (?, ?, ?, 'queued', 11, 'stranded-original', '2000-01-01 00:00:00')`, job.id, job.ruleID, job.domain); err != nil {
+		if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id,message,updated_at) VALUES (?, ?, ?, 'queued', 11, 'stranded-original', ?)`, job.id, job.ruleID, job.domain, strandedSeedUpdatedAt.Format("2006-01-02 15:04:05")); err != nil {
 			t.Fatalf("seed stranded job: %v", err)
 		}
 	}
@@ -54,12 +60,13 @@ func setupStrandedRequeueRoleFixture(t *testing.T) *CAQueueManager {
 func assertStrandedRequeueJobsUntouched(t *testing.T, manager *CAQueueManager) {
 	t.Helper()
 	for _, jobID := range []int{71, 72} {
-		var status, message, updatedAt string
+		var status, message string
+		var updatedAt time.Time
 		if err := db.DB.QueryRow(`SELECT status, message, updated_at FROM cert_jobs WHERE id=?`, jobID).Scan(&status, &message, &updatedAt); err != nil {
 			t.Fatalf("read stranded job %d: %v", jobID, err)
 		}
-		if status != "queued" || message != "stranded-original" || updatedAt != "2000-01-01T00:00:00Z" {
-			t.Fatalf("job %d changed after role gate closed: status=%q message=%q updated_at=%q", jobID, status, message, updatedAt)
+		if status != "queued" || message != "stranded-original" || !updatedAt.Equal(strandedSeedUpdatedAt) {
+			t.Fatalf("job %d changed after role gate closed: status=%q message=%q updated_at=%v", jobID, status, message, updatedAt)
 		}
 		if manager.IsJobActive(jobID) {
 			t.Fatalf("job %d entered queue after role gate closed", jobID)

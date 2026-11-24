@@ -1619,20 +1619,9 @@ func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID 
 // 按端口二选一,混布会把整个端口监听器切为 TLS,明文规则流量全部握手失败。
 // 判定键=enable_tls 意图(不看证书存在性:ACME 签发中/延迟翻转的同端口规则
 // 同样会被监听器形态波及);仅统计启用中的规则。
+// 80/443 端口-TLS 语义不在此实现:单源=portTLSSemanticsError（保存/启用/聚合
+// 三门均先于本函数执行，重复分支永远命不中且文案已漂移）。
 func checkPortTLSMix(excludeCaddyID string, port int, enableTLS bool) error {
-	// 协议/端口默认语义冲突（用户裁定 2026-11-08，与同端口混布拦截同族）：
-	//   TLS 规则禁 80——80 是 HTTP 默认端口，Caddy http app 在 80 永不终止
-	//     TLS（useTLS 判端口 != httpPort），规则将按明文转发而面板/证书队列
-	//     仍按「已启用 HTTPS」运转（静默降级比拒绝更贵）；
-	//   明文 HTTP 规则禁 443——443 是 HTTPS 默认端口，明文监听器对
-	//     https://域名:443 的 TLS 握手必然失败。
-	// 放置于本方法=创建/更新/启用三个调用点统一覆盖。
-	if enableTLS && port == 80 {
-		return fmt.Errorf("80 端口是 HTTP 端口，TLS 规则不可监听 80（Caddy 不会在此端口终止 TLS，规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS")
-	}
-	if !enableTLS && port == 443 {
-		return fmt.Errorf("443 端口是 HTTPS 默认端口，明文 HTTP 规则不可监听 443（https://域名:443 握手必败），请开启 HTTPS 或改用其他端口；443 不适用同端口跳转（走 80→443 既有通道）")
-	}
 	opposite := 1
 	if enableTLS {
 		opposite = 0

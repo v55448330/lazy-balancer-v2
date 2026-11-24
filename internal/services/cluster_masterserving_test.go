@@ -418,11 +418,9 @@ func TestMasterServingRound_dbErrorWarnsAndContinues(t *testing.T) {
 	if _, err := db.DB.Exec(`DROP TABLE nodes`); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if _, err := db.DB.Exec(`CREATE TABLE nodes (id INTEGER PRIMARY KEY, name TEXT, mode TEXT)`); err != nil {
-			t.Fatal(err)
-		}
-	})
+	// DROP 的库由 newServingTestEnv 的 teardown 整库关闭+丢弃：不得以「还原」
+	// 名义重建缺列的畸形 nodes 表（真实 schema 有 health_json/last_seen/
+	// is_approved 等十余列），那只会把误导性残缺结构留给后续复用该库的用例。
 	w := newServingWatch()
 	ctx := context.Background()
 	masterSyncServingRound(ctx, servingBase, w)

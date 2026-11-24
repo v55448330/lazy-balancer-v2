@@ -6,10 +6,29 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 gate_source="$repo_root/scripts/test-shuffle.sh"
 check_test_all_wiring() {
-  local source="$1"
+  local source="$1" want='-shuffle="$canonical_shuffle_seed"'
   grep -F 'canonical_shuffle_seed="${CANONICAL_SHUFFLE_SEED:-1}"' "$source" >/dev/null &&
-    grep -F '(cd "$module" && go test ./... -count=1 -shuffle="$canonical_shuffle_seed")' "$source" >/dev/null &&
-    grep -F './scripts/test-shuffle.sh' "$source" >/dev/null
+    grep -F './scripts/test-shuffle.sh' "$source" >/dev/null &&
+    # 每一条「非 -race 的 go test -count=1」循环行都必须带固定 seed 的 -shuffle
+    # （默认全量与 --fast 两档同等对待；-race 行与 -list 行不走乱序，显式排除），
+    # 且默认全量循环行（go test ./... + -p 4）必须在场：只锚某个分支的精确串时，
+    # 单独删掉默认全量循环的 -shuffle 仍会静默通过。
+    awk -v want="$want" '
+      {
+        cmd = $0
+        sub(/^[[:space:]]+/, "", cmd)
+        if (cmd ~ /^#/) next
+        # 只认「执行 go test」的行：`(cd "$module" && go test …` 与独立的
+        # `go test …`；echo/注释/命令替换里的字面串（如门禁自报行）不入面。
+        if (cmd !~ /^(\(cd [^)]*&& *)?go test /) next
+        if (cmd !~ /-count=1/) next
+        if (cmd ~ /-race/) next
+        seen++
+        if (index($0, want) == 0) { print "missing " want ": " $0 > "/dev/stderr"; bad++ }
+        if (cmd ~ /go test \.\/\.\.\. / && index(cmd, "-p 4") > 0) full++
+      }
+      END { exit (seen > 0 && bad == 0 && full > 0) ? 0 : 1 }
+    ' "$source"
 }
 if ! check_test_all_wiring "$repo_root/scripts/test-all.sh"; then
   echo "FAIL [shuffle gate wiring] test-all main loop must use CANONICAL_SHUFFLE_SEED and invoke the shuffle gate" >&2
@@ -29,10 +48,60 @@ if cmp -s "$repo_root/scripts/test-all.sh" "$mutated_test_all"; then
   echo "FAIL [shuffle wiring mutation] fixture did not remove the main-loop shuffle argument" >&2
   exit 1
 fi
-if check_test_all_wiring "$mutated_test_all"; then
+if check_test_all_wiring "$mutated_test_all" 2>/dev/null; then
   echo "FAIL [shuffle wiring mutation] main loop without -shuffle survived" >&2
   exit 1
 fi
+
+# 分支级变异：只删默认全量循环行的 -shuffle（--fast 分支仍在）必须判红。
+# 历史自检只锚 --fast 分支的精确串，该形态曾静默存活——门禁丢乱序而自检仍绿。
+mutated_full_loop="$tmp_root/test-all-no-shuffle-full-loop.sh"
+full_loop_touched=0
+while IFS= read -r line; do
+  if [[ "$line" == *' -shuffle="$canonical_shuffle_seed"'* && "$line" == *'-p 4'* ]]; then
+    printf '%s\n' "${line/ -shuffle=\"\$canonical_shuffle_seed\"/}"
+    full_loop_touched=$((full_loop_touched + 1))
+  else
+    printf '%s\n' "$line"
+  fi
+done <"$repo_root/scripts/test-all.sh" >"$mutated_full_loop"
+if [[ $full_loop_touched -eq 0 ]]; then
+  echo "FAIL [shuffle wiring mutation] fixture did not touch the default full-loop line" >&2
+  exit 1
+fi
+if check_test_all_wiring "$mutated_full_loop" 2>/dev/null; then
+  echo "FAIL [shuffle wiring mutation] default full loop without -shuffle survived" >&2
+  exit 1
+fi
+
+# 分支级变异：只删 --fast 分支两条测试行的 -shuffle（默认全量仍在）必须判红。
+mutated_fast="$tmp_root/test-all-no-shuffle-fast.sh"
+fast_touched=0
+while IFS= read -r line; do
+  if [[ "$line" == *'(cd '*'go test'* && "$line" == *' -shuffle="$canonical_shuffle_seed"'* && "$line" != *'-p 4'* ]]; then
+    printf '%s\n' "${line/ -shuffle=\"\$canonical_shuffle_seed\"/}"
+    fast_touched=$((fast_touched + 1))
+  else
+    printf '%s\n' "$line"
+  fi
+done <"$repo_root/scripts/test-all.sh" >"$mutated_fast"
+if [[ $fast_touched -eq 0 ]]; then
+  echo "FAIL [shuffle wiring mutation] fixture did not touch the --fast loop lines" >&2
+  exit 1
+fi
+if check_test_all_wiring "$mutated_fast" 2>/dev/null; then
+  echo "FAIL [shuffle wiring mutation] --fast loop without -shuffle survived" >&2
+  exit 1
+fi
+
+# 新增循环行漏带 -shuffle 同样判红：接线断言是全量覆盖而非只锚已知行。
+mutated_new_line="$tmp_root/test-all-new-loop-without-shuffle.sh"
+{ cat "$repo_root/scripts/test-all.sh"; printf '%s\n' '(cd "$module" && go test -count=1 ./...)'; } >"$mutated_new_line"
+if check_test_all_wiring "$mutated_new_line" 2>/dev/null; then
+  echo "FAIL [shuffle wiring mutation] newly added loop line without -shuffle survived" >&2
+  exit 1
+fi
+echo "ok   [shuffle wiring mutation] global/full-loop/fast-branch/new-line mutants all rejected"
 printf 'module example.com/shufflegate\n\ngo 1.26\n' >"$tmp_root/go.mod"
 cat >"$tmp_root/order/order_test.go" <<'EOF'
 package order
@@ -165,4 +234,4 @@ if printf '%s\n' "$gate_output" | grep -q '^-- -shuffle='; then
   exit 1
 fi
 
-echo "shuffle gate selftest: order-leak RED, fixed-seed replay, timeout, random seed, default single round, empty-seed fail-closed and wiring ok"
+echo "shuffle gate selftest: order-leak RED, fixed-seed replay, timeout, random seed, default single round, empty-seed fail-closed and wiring ok (global/full-loop/fast-branch/new-line mutants rejected)"

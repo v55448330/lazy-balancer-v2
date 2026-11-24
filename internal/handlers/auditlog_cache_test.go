@@ -4,8 +4,8 @@ package handlers
 //   - 下拉选项并发 miss 只跑一趟聚合（single-flight），不再 3N 次全表 GROUP BY；
 //   - 列表 total 走短 TTL 缓存并以 total_stale 披露（百万行库的每请求全表
 //     COUNT(*) 是首屏固定成本）；
-//   - 时区读失败/非法值按状态转换留痕（首报 warn、恢复 info），不得每请求
-//     记一条 error 淹没真实故障。
+//   - 时区单源：时间窗口按 services.CurrentLocation()，不逐请求重读
+//     global_config（配置时区降级留痕归 services 的刷新状态机）。
 
 import (
 	"context"
@@ -126,20 +126,12 @@ func TestGetAuditLogs_totalServedFromShortCacheWithDisclosure(t *testing.T) {
 	}
 }
 
-func TestGetAuditLogs_invalidTimezoneLoggedByStateTransitionOnly(t *testing.T) {
-	// Given：先以合法时区跑一轮，把状态机位复位为「健康」——同一 key 的状态
-	// 跨用例共享（前序用例可能已报过失败），不复位则首轮 fail 可能被去重成 0
-	// 条，断言随用例执行顺序漂移。
+// 时区单源回归：审计列表不再逐请求重读 global_config.timezone / LoadLocation
+// ——带外非法值既不影响列表（恒 200，窗口按 services.CurrentLocation()，与
+// 页面其余时间字段同源），也不由本端点留痕（降级归 services 的
+// timezone-refresh 状态机：首报 warn、恢复 info）。
+func TestGetAuditLogs_timezoneDegradationOwnedByServices(t *testing.T) {
 	router := newAuditLogTestRouter(t, "")
-	if _, err := db.DB.Exec(`UPDATE global_config SET timezone='Asia/Shanghai' WHERE id=1`); err != nil {
-		t.Fatalf("seed valid timezone: %v", err)
-	}
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/audit-logs", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("prime status=%d body=%s, want 200", rec.Code, rec.Body.String())
-	}
-
 	// Given：带外写入非法时区值，此后开始捕获日志。
 	if _, err := db.DB.Exec(`UPDATE global_config SET timezone='Mars/Phobos' WHERE id=1`); err != nil {
 		t.Fatalf("seed invalid timezone: %v", err)
@@ -154,22 +146,12 @@ func TestGetAuditLogs_invalidTimezoneLoggedByStateTransitionOnly(t *testing.T) {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/audit-logs", nil))
 		if rec.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s, want 200（非法时区按 UTC 继续）", rec.Code, rec.Body.String())
+			t.Fatalf("status=%d body=%s, want 200（列表不消费 global_config.timezone）", rec.Code, rec.Body.String())
 		}
 	}
 
-	// Then：断言绑定真实日志文案单源（services.LogConfigReadFailure 的固定
-	// 格式）——失败留痕恰 1 条（第二轮状态未变、不再刷屏）。
-	const failureLine = "读取配置失败（audit-log-timezone-value）"
-	const detailLine = `审计日志筛选时区 "Mars/Phobos" 非法`
-	if got := strings.Count(logs.String(), failureLine); got != 1 {
-		t.Fatalf("状态转换失败留痕 %d 条, want 1（首报去重）: %q", got, logs.String())
-	}
-	if got := strings.Count(logs.String(), detailLine); got != 1 {
-		t.Fatalf("失败详情留痕 %d 条, want 1: %q", got, logs.String())
-	}
-	// 级别契约：状态转换首报为 warn，不得落到 error（旧实现每请求 error）。
-	if strings.Contains(logs.String(), "ERROR:") {
-		t.Fatalf("非法时区留痕出现 error 级别: %q", logs.String())
+	// Then：本端点零时区留痕（逐请求重读的残留信号 = 旧实现回归）。
+	if strings.Contains(logs.String(), "audit-log-timezone") {
+		t.Fatalf("审计列表仍逐请求留痕时区降级（单源应归 services 刷新状态机）: %q", logs.String())
 	}
 }

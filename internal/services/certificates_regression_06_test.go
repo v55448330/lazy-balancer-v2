@@ -17,6 +17,28 @@ func TestCertificateService_scheduleDeploymentRetry_reentry_does_not_deadlock(t 
 	resetCertificateServiceForTest(t)
 	entered := make(chan struct{}, 4)
 	release := make(chan struct{})
+	releasedOnce := false
+	// 成功/失败同一口径收口：close(release) 与 service.Stop 放 t.Cleanup——
+	// 此前两者都写在 t.Fatal 之后，前置断言一旦失败，在途回调永久阻塞、
+	// 包级单例的定时器族未收口，污染同包后续用例。
+	releaseCallback := func() {
+		if releasedOnce {
+			return
+		}
+		releasedOnce = true
+		close(release)
+	}
+	// 收口终态断言（LIFO：release → Stop → 本检查）：Stop 后不得残留 timer
+	// 或在途回调登记——本用例的历史缺陷正是失败路径把两者留进同包后续用例。
+	t.Cleanup(func() {
+		service.timerMu.Lock()
+		defer service.timerMu.Unlock()
+		if len(service.deploymentTimers) != 0 || len(service.deploymentCallbacks) != 0 {
+			t.Errorf("服务收口后仍残留部署定时器(%d)/在途回调(%d)", len(service.deploymentTimers), len(service.deploymentCallbacks))
+		}
+	})
+	t.Cleanup(service.Stop)
+	t.Cleanup(releaseCallback)
 	service.retryDeployment = func(_ context.Context, _ int) error {
 		entered <- struct{}{}
 		<-release
@@ -29,18 +51,21 @@ func TestCertificateService_scheduleDeploymentRetry_reentry_does_not_deadlock(t 
 		service.scheduleDeploymentRetry(42, "lb_reentry", time.Hour)
 		close(rescheduled)
 	}()
+	// 确定性证据=协程栈：重排必须阻塞在 waitDoneOrTimeout 的等待点（在途回调
+	// done 未关闭），而不是「睡 50ms 还没返回」——后者在重排协程尚未被调度时
+	// 同样成立（负载下假绿）。
 	select {
 	case <-rescheduled:
 		t.Fatal("reschedule returned while callback in-flight (dedup broken)")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
-	close(release)
+	waitGoroutineBlockedOn(t, "TestCertificateService_scheduleDeploymentRetry_reentry_does_not_deadlock", "waitDoneOrTimeout")
+	releaseCallback()
 	select {
 	case <-rescheduled:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("reschedule deadlocked waiting for callback exit (历史修复)")
 	}
-	service.pauseDeploymentRetries()
 }
 
 // TestWaitDoneOrTimeout_returns_on_closed_channel

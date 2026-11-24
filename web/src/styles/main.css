@@ -492,6 +492,20 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
 .el-message-box__header { padding: 20px 20px 12px; }
 .el-message-box__container { padding: 0 20px; }
 .el-message-box__btns { padding: 18px 20px 20px; }
+/* 保存/删除确认的后果清单（DESIGN_SPEC §20 单源）——组件内禁止另写列表样式 */
+.confirm-scope-lead {
+  margin: 12px 0 0;
+  color: var(--el-text-color-regular, #4b5563);
+}
+.confirm-scope-list {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  color: var(--el-text-color-regular, #4b5563);
+  line-height: 1.7;
+}
+.confirm-scope-list li::marker {
+  color: var(--el-text-color-placeholder, #9ca3af);
+}
 .el-drawer__header { margin-bottom: 0; padding: 20px; }
 .popover-title {
   margin-bottom: 8px;

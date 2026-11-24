@@ -48,24 +48,28 @@
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTls')">
         <el-switch v-model="form.smtpTls" />
-        <span class="form-hint creds-inline-hint">{{ t('app.notification.creds.smtpTlsHint') }}</span>
+        <span class="form-tip-inline">{{ t('app.notification.creds.smtpTlsHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpInsecure')">
         <el-switch v-model="form.smtpInsecure" :disabled="!form.smtpTls" />
-        <span class="form-hint creds-inline-hint">{{ t('app.notification.creds.smtpInsecureHint') }}</span>
+        <span class="form-tip-inline">{{ t('app.notification.creds.smtpInsecureHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTestTo')">
         <div class="smtp-test-row">
           <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')" />
-          <el-button size="small" :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">{{ t('app.notification.creds.smtpTest') }}</el-button>
+          <el-button size="small" :loading="smtpTesting" :disabled="!form.smtpHost || nodeWriteBlocked" @click="testSMTP">{{ t('app.notification.creds.smtpTest') }}</el-button>
         </div>
-        <div class="form-hint">{{ t('app.notification.creds.smtpTestHint') }}</div>
+        <div class="form-tip-line">{{ t('app.notification.creds.smtpTestHint') }}</div>
       </el-form-item>
       <el-form-item>
-        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveSettings">
-          {{ t('app.notification.creds.save') }}
-        </el-button>
-        <div v-if="smtpDirty && !smtpTestOk" class="form-hint">{{ t('app.notification.creds.smtpSaveGateHint') }}</div>
+        <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+          <div>
+            <el-button type="primary" :loading="saving" :disabled="!canSave || nodeWriteBlocked" @click="saveSettings">
+              {{ t('app.notification.creds.save') }}
+            </el-button>
+          </div>
+        </el-tooltip>
+        <div v-if="smtpDirty && !smtpTestOk" class="form-tip-line">{{ t('app.notification.creds.smtpSaveGateHint') }}</div>
       </el-form-item>
     </el-form>
   </el-card>
@@ -80,6 +84,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Message } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import { useAuthStore } from '@/stores/auth'
 import { createSmtpTestGate, smtpPortError } from '@/utils/smtpTestGate'
 import type {
   NotificationSettingsPayload,
@@ -88,9 +93,16 @@ import type {
 
 const { t } = useI18n()
 
+const authStore = useAuthStore()
 const loading = ref(false)
 const loadError = ref(false)
 const saving = ref(false)
+// 该页写的是通知设置（PUT /notification/settings），后端只允许主节点写：从节点/
+// 节点未知时页面必须先自证不可写，否则用户填满表单、测试通过、保存才 403。
+const nodeWriteBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
+const nodeWriteBlockedReason = computed(() => authStore.isSlaveNode
+  ? t('common.app.views.keys.slaveReadOnly')
+  : t('common.app.views.keys.nodeUnknownReadOnly'))
 
 const form = ref({
   smtpHost: '',
@@ -230,6 +242,4 @@ defineExpose({ fetchSettings })
 .creds-port { width: 160px; }
 .creds-pass-row { display: flex; align-items: center; gap: 10px; width: 100%; }
 .smtp-test-row { display: flex; gap: 8px; width: 100%; align-items: center; }
-.form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
-.creds-inline-hint { margin-top: 0; margin-left: 12px; }
 </style>

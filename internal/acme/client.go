@@ -147,17 +147,23 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 				// first call on failure is 1」（acme.go），实际序列必须从 n=1
 				// 起跳为 1s——原实现 1<<min(n,4) 使首召即 2s，整条曲线右移一档
 				// 且提前封顶。n<1 仅防御（生产不出现）。
+				const retryDelayCap = 10 * time.Second
 				attempt := max(n, 1)
-				base := min(time.Duration(1<<min(attempt-1, 4))*time.Second, 10*time.Second)
+				base := min(time.Duration(1<<min(attempt-1, 4))*time.Second, retryDelayCap)
 				// CA 用 Retry-After 明确要求等待（5xx 过载常见）时取较大值，
 				// 与 x/crypto 默认实现「Retry-After 优先」及本仓 DNS 重试层
 				// （internal/retryafter 单源）口径一致；上限沿用 10s（分段预算不变）。
 				if resp != nil {
 					if hinted := retryafter.Parse(resp.Header.Get("Retry-After"), time.Now()); hinted > 0 {
-						base = max(base, min(hinted, 10*time.Second))
+						base = max(base, min(hinted, retryDelayCap))
 					}
 				}
-				return base + time.Duration(mathrand.IntN(1000))*time.Millisecond
+				// 抖动同样受封顶约束（封顶是含抖动的硬上限，分段预算按它核算）：
+				// 此前抖动加在封顶之后，基线落在封顶档时实际等待 10~11s。基线已
+				// 到封顶档时等待恒为 10s——与 x/crypto 默认实现里 Retry-After
+				// 覆盖退避且不带抖动一致；并发实例在到达封顶档之前的低档位已各自
+				// 抖开。
+				return min(base+time.Duration(mathrand.IntN(1000))*time.Millisecond, retryDelayCap)
 			},
 		},
 		accountKeyPath: acmeAccountKeyPath(dataDir, directoryURL, email, eabKID, eabKey),

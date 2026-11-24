@@ -372,8 +372,7 @@ func TestHandleClusterEventReport_carriesOriginalTimeOriginHop(t *testing.T) {
 }
 
 // 未来时刻不得原样入总线：created_at 落在远未来会让 7 天过期/保留清理永不
-// 命中。parseReportEventTime 按零值返回，Publish 回填当前时刻（回归
-// （回归）。
+// 命中。parseReportEventTime 按零值返回，Publish 回填当前时刻。
 func TestHandleClusterEventReport_futureEventTimeClampedToZero(t *testing.T) {
 	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)

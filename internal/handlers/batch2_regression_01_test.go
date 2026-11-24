@@ -225,8 +225,8 @@ func TestCreateRule_accepts_port_443_tls_redirect(t *testing.T) {
 	router.ServeHTTP(response, request)
 
 	// Then
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create port-443 TLS redirect status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create port-443 TLS redirect status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 }
 

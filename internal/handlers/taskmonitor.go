@@ -23,6 +23,9 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
+// msgInvalidJobID 畸形 cert-job ID 的 400 词条键（zh/en 见 catalog_manual.go）。
+const msgInvalidJobID = "k_688f8e91"
+
 // ListSystemTasks 聚合全部任务族状态（全员可见）。
 func (h *Handlers) ListSystemTasks(c *gin.Context) {
 	tasks, certJobsTruncated := services.CollectSystemTasks()
@@ -131,7 +134,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	if strings.HasPrefix(id, "cert-job:") {
 		jobID, ok := parseCertJobTaskID(id)
 		if !ok || jobID > int64(^uint(0)>>1) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, msgInvalidJobID), MessageKey: msgInvalidJobID})
 			return
 		}
 		h.retryCertJobByID(c, int(jobID))
@@ -418,7 +421,7 @@ func (h *Handlers) GetSystemTaskHistory(c *gin.Context) {
 func (h *Handlers) certJobRunHistory(c *gin.Context, taskID string) {
 	jobID, ok := parseCertJobTaskID(taskID)
 	if !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, msgInvalidJobID), MessageKey: msgInvalidJobID})
 		return
 	}
 	// 库句柄缺失属「服务暂不可用」而非任务不存在——与 requireMasterNode

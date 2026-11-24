@@ -113,10 +113,14 @@ func TestCertIssuer_deployIssuedCertificate_quietWhenNotBeforePast(t *testing.T)
 	}
 
 	// Then
+	// 同步可观测：deployIssuedCertificate 在返回路径上同步调用
+	// noteFutureNotBefore → notBeforeReloadScheduler（本用例的桩是缓冲通道的
+	// 直接发送），调用已在本协程内完成；返回后不存在「还没被调度」的可能——
+	// 固定观测窗只会白等 200ms。
 	select {
 	case delay := <-scheduled:
 		t.Fatalf("已生效证书登记了延迟重载（delay=%v），want 不登记", delay)
-	case <-time.After(200 * time.Millisecond):
+	default:
 	}
 	var n int
 	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='警告' AND resource='证书任务' AND detail LIKE '%尚未生效%'`).Scan(&n); err != nil {

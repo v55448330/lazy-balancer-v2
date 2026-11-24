@@ -578,7 +578,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 	// 通知表随用户连带清理：通道是已删账号仍可继续收安全事件的外部投递面
 	// （投递侧不 JOIN users），订阅行在重建同名账号时会串用旧意志——二者都
-	// 必须在删除事务内一并移除（回归）。投递流水保留：它是
+	// 必须在删除事务内一并移除。投递流水保留：它是
 	// 安全事件留痕，不是可再触达的凭据面。
 	for _, stmt := range []string{
 		"DELETE FROM notification_channels WHERE user_id = ?",

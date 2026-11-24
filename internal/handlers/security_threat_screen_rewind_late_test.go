@@ -411,11 +411,29 @@ func TestThreatFixMinute_noNewEventsSkipsAggregateScan(t *testing.T) {
 	recorder.reset()
 	fixThreatRewindMinute(t, minute) // 第二次：窗口内无新行
 
-	scans := recorder.count(func(query string) bool {
-		return strings.Contains(query, "FROM security_events") && strings.Contains(query, "GROUP BY client_ip")
+	// 负断言判据不得绑定分组子句：聚合语句一旦调整 GROUP BY 列（如加入
+	// rule_triggered），旧判据（FROM security_events + GROUP BY client_ip）会
+	// 恒计 0——全范围扫描实际发生也判绿。改为「任何 security_events 聚合形态」
+	// 加「高水位预检必须真被执行」双向守卫。
+	aggregateScan := func(query string) bool {
+		q := strings.ToLower(strings.Join(strings.Fields(query), " "))
+		if !strings.Contains(q, " from security_events") {
+			return false
+		}
+		// 高水位预检是早退路径的合法点查（SELECT COALESCE(MAX(id),0) …），
+		// 不是聚合扫描；其余带聚合/排序/分组特征的 security_events 语句都算。
+		return strings.Contains(q, "group by") || strings.Contains(q, "count(") ||
+			strings.Contains(q, "sum(") || strings.Contains(q, "avg(") || strings.Contains(q, "order by")
+	}
+	precheck := recorder.count(func(query string) bool {
+		q := strings.ToLower(strings.Join(strings.Fields(query), " "))
+		return strings.Contains(q, " from security_events") && strings.Contains(q, "max(id)") && !aggregateScan(query)
 	})
-	if scans != 0 {
-		t.Fatalf("无新事件的重复固化仍发出 %d 条全范围聚合扫描, want 0（只应更新高水位）", scans)
+	if precheck == 0 {
+		t.Fatal("第二次固化未发出 security_events 高水位预检——用例失靶（早退路径未被覆盖）")
+	}
+	if scans := recorder.count(aggregateScan); scans != 0 {
+		t.Fatalf("无新事件的重复固化仍发出 %d 条 security_events 聚合扫描, want 0（只应更新高水位）", scans)
 	}
 	// 早退与 deltaTotal==0 分支等价：已固化计数不变。
 	if got := threatRollupCountForMinute(t, minute.Format(threatRewindMinuteLayout)); got != 2 {

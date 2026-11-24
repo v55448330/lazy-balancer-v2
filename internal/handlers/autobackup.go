@@ -578,9 +578,21 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	// 备份下会取到他人行。
 	view, verr := scanAutoBackupRowView(db.DB.QueryRowContext(ctx, `SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id))
 	if verr != nil {
-		// 留 warn(备份已落盘,视图扫描失败不再静默)
+		// 留 warn(备份已落盘,视图回读失败不再静默)。返回值必须由已知局部事实
+		// 构造而非零值：调用方回执与 defer 的「备份完成」通知都取该视图（尤其
+		// Filename）——零值会让通知携带空文件名，运维无法定位产物。
 		services.Logf("warn", "自动备份行视图扫描失败(备份已落盘): %v", verr)
-		return autoBackupRowView{}, nil
+		return autoBackupRowView{
+			ID:          id,
+			Filename:    filename,
+			CreatedAt:   formatAutoBackupTimestamp(now),
+			Status:      "success",
+			SizeBytes:   int64(len(payload)),
+			Sections:    exportedSections,
+			TriggerType: trigger,
+			Message:     countsSummary,
+			AppVersion:  h.cfg.Version,
+		}, nil
 	}
 	return view, nil
 }

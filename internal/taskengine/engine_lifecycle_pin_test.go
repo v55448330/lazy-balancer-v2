@@ -300,8 +300,9 @@ func TestEngine_LookupMatchesDescribeAll(t *testing.T) {
 
 // Given Scheduled 任务槽恒过期且 Run 每次返回 ErrTaskSkipped。
 // When tick 循环运转。
-// Then 跳过轮同享有界退避（350ms 窗口内至多 2 次执行），退避到期后恢复重投，
-// 且 task_runs 记录 skipped 终态。
+// Then 跳过轮同享有界退避：首轮落定后的退避窗口（首档 1s）内再多的 tick 也
+// 不重投（恒 1 次执行），退避到期后恢复重投（有界，不是停摆），且 task_runs
+// 记录 skipped 终态。
 func TestEngine_ScheduledSkippedSlotGetsBoundedBackoff(t *testing.T) {
 	e := newTestEngine(t)
 	pastSlot := time.Now().Add(-time.Minute)
@@ -315,9 +316,12 @@ func TestEngine_ScheduledSkippedSlotGetsBoundedBackoff(t *testing.T) {
 	e.StartLoop("t-skip-slot")
 
 	waitForEngine(t, "首轮跳过落定", 2*time.Second, func() bool { return runs.Load() == 1 })
-	driveTicks(e, 35)
+	// 首轮完全落定（退避水位在 executeRun 尾部写入，晚于 Run 体返回）后再驱动
+	// tick：在途占位会让整批 tick 被单飞门跳过，退避是否生效无从判定。
+	settleTaskRuns(t, e, "t-skip-slot")
+	driveTicksSettled(t, e, 35, "t-skip-slot")
 	if got := runs.Load(); got != 1 {
-		t.Fatalf("350ms 窗口内执行 %d 次, want 1（跳过轮须共用首档退避）", got)
+		t.Fatalf("退避窗口内执行 %d 次, want 1（跳过轮须进入首档退避，窗口内不重投）", got)
 	}
 	if got := countRunsByStatus(t, "t-skip-slot", "skipped"); got != 1 {
 		t.Fatalf("跳过轮 task_runs.status=skipped 行数=%d, want 1", got)
@@ -359,7 +363,9 @@ func TestEngine_LoopEntriesRejectOneshot(t *testing.T) {
 	if loopOn() {
 		t.Fatal("Oneshot 任务 RearmLoop(hasWork) 后 LoopOn=true")
 	}
-	time.Sleep(100 * time.Millisecond)
+	// 负断言走确定性 tick 驱动：tick 内的准入同步完成，driveTicksSettled 后
+	// 计数即终值（墙钟窗口内「没看到执行」不等于「不会执行」）。
+	driveTicksSettled(t, e, 30, id)
 	if got := runs.Load(); got != 0 {
 		t.Fatalf("Oneshot 任务调度入口触发了 %d 轮执行, want 0（触发类不进调度面）", got)
 	}

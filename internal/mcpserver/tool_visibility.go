@@ -190,6 +190,12 @@ func serveWithToolVisibility(writer http.ResponseWriter, request *http.Request, 
 	for name, values := range recorder.header {
 		writer.Header()[name] = append([]string(nil), values...)
 	}
+	// 响应体已按身份重写（更短、内容不同）：上游声明的表示元数据必须一并失效。
+	// 沿用上游 Content-Length 会让客户端按旧长度截读过滤后的短体（unexpected
+	// EOF），沿用 ETag 会让缓存把改写的工具列表当成同一实体。Content-Length
+	// 由最终写入方按实际字节数重算（gzip 层压缩时同样自行删除/重算）。
+	writer.Header().Del("Content-Length")
+	writer.Header().Del("ETag")
 	writer.WriteHeader(recorder.statusCode)
 	_, _ = writer.Write(filtered)
 }

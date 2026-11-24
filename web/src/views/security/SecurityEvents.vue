@@ -881,6 +881,21 @@ const autobanEnableConfirmHtml = computed(() => `
   </div>
   <div class="autoban-confirm-howto"><span class="autoban-confirm-howto-label">${t('app.security.events.enableHowtoLabel')}</span>${t('app.security.events.enableHowtoText')}</div>
 </div>`)
+// 停用二次确认（DESIGN_SPEC §20）：既有文案只说「未到期条目保留至到期」，
+// 但时长为「永久」的条目没有到期日——禁用后仍持续封禁该 IP。以标准清单
+// (.confirm-scope-list) 把「永久条目不会解除」「禁用期间不再新增」写清楚。
+// 纯静态文案、无用户输入插值，无注入面（与启用确认同形态）。
+const autobanDisableConfirmHtml = computed(() => `
+<div class="autoban-confirm">
+  <div class="autoban-confirm-head">
+    <div class="autoban-confirm-heading">${t('app.security.events.disableConfirm')}</div>
+  </div>
+  <ul class="confirm-scope-list">
+    <li>${t('app.security.events.disableScopePermanent')}</li>
+    <li>${t('app.security.events.disableScopeKept')}</li>
+  </ul>
+</div>`)
+
 const confirmAutobanApply = async (): Promise<boolean> => {
   try {
     await ElMessageBox.confirm(autobanEnableConfirmHtml.value, t('app.security.events.enableConfirmTitle'), {
@@ -911,9 +926,15 @@ const toggleAutobanEnabled = async (): Promise<void> => {
   autobanToggling.value = true
   try {
     await ElMessageBox.confirm(
-      t('app.security.events.disableConfirm'),
+      autobanDisableConfirmHtml.value,
       t('app.security.events.disableConfirmTitle'),
-      { confirmButtonText: t('app.security.events.confirmDisable'), cancelButtonText: t('app.security.events.cancel'), type: 'warning' },
+      {
+        confirmButtonText: t('app.security.events.confirmDisable'),
+        cancelButtonText: t('app.security.events.cancel'),
+        dangerouslyUseHTMLString: true,
+        customClass: 'autoban-confirm-box',
+        customStyle: { width: '540px', paddingTop: '16px' },
+      },
     )
     await request.put('/security/autoban', {
       enabled: false,
@@ -1012,7 +1033,12 @@ const banSuggestion = async (row: AutobanSuggestion): Promise<void> => {
   // 且与 /64 身份键同键，会让该 /64 整段自动封禁被「已在名单」永久抑制。
   const value = autobanIdentityDisplay(row.ip)
   const ok = await addIpToList(value, { id: listId, name: t('app.security.events.autobanListName'), entry_count: autobanStatus.value.list_entries }, {
-    verb: t('app.security.events.banVerb'),
+    // 确认句用「加入」保持通顺（「将把 x 加入地址列表…」）；按钮标签已是
+    // 「永久封禁」，永久性由 useIpListAdd 的 ban 披露句写明。
+    verb: t('common.app.views.ipAdd.verbAdd'),
+    // 封禁=永久生效且清除累犯记录（securityiplists.go Upsert + DeleteAutobanRecidivismFrom），
+    // 必须在确认框披露；ban 分支由 useIpListAdd 统一拼入同一条说明。
+    ban: true,
     // /64 连带封禁披露：确认框明示同前缀其它地址一并受影响
     note: value.endsWith('/64') ? t('app.security.events.enableNote4') : undefined,
   })

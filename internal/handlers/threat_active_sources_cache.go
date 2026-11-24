@@ -277,7 +277,7 @@ func enrichIPLocationCached(ip string) string {
 
 // enrichIPLocationParts 返回 IP 的结构化归属 (国家, 省简称)，与展示串共用同一
 // 代际缓存。威胁大屏省级聚合必须用它而非解析展示串：ISP-only 行展示为
-// 「中国·阿里」，二次按「·」拆分会把 ISP 当省名（回归）。
+// 「中国·阿里」，二次按「·」拆分会把 ISP 当省名。
 // 保留地址/空 IP 返回空。
 func enrichIPLocationParts(ip string) (country, province string) {
 	if ip == "" || isReservedIP(ip) {

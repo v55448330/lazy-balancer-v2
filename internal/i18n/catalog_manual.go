@@ -15,7 +15,7 @@ func init() {
 	// 通知中心 REST（订阅/投递/设置）响应词条：zh 母本 + en 译文成对。
 	Register("k_20b2245c", "仅管理员可管理通知设置", "Only administrators can manage notification settings")
 	// API Key 接入统计（REST 采集）非管理员 403——与「通知设置」文案区分，
-	// 此前误复用通知设置文案指向无关页面（回归）。
+	// 此前误复用通知设置文案指向无关页面。
 	Register("k_83dc5539", "仅管理员可查看接入统计", "Only administrators can view access statistics")
 	// 审计日志深翻页 400（i18n 化；此前 fmt.Sprintf 直写中文绕过词条表）。
 	Register("k_c17e3275", "结果过多（超过 %d 页），请使用时间范围/用户/动作筛选缩小范围", "Too many results (more than %d pages); narrow the range by time range, user, or action")
@@ -58,6 +58,9 @@ func init() {
 	// 机器人/邮件=文本模板长度上限）。
 	Register("k_00c1f3e8", "规则模板不是合法 JSON（占位符替换后仍需可解析）", "The rule template is not valid JSON (placeholders must still parse after substitution)")
 	Register("k_0d9a61a4", "规则模板过长（机器人通道 ≤2000 字节，邮件 ≤4000 字节）", "The rule template is too long (≤2000 bytes for bots, ≤4000 bytes for email)")
+	// 任务监控：畸形 cert-job ID 的 400（此前硬编码英文 "Invalid job ID"，
+	// message_key 缺失导致双语界面切换对该提示无效）。
+	Register("k_688f8e91", "无效的任务 ID", "Invalid job ID")
 	// 任务监控：不可取消任务的取消拒绝（409）。与「任务未在运行中或不支持取消」
 	// 拆分——运行中的不可取消任务不得报「未在运行」（与监控页显示自相矛盾）。
 	Register("k_44b8c98f", "该任务不支持手动取消", "This task cannot be cancelled manually")

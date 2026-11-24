@@ -383,8 +383,8 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 		}
 		// 落库前把域名归一为规范形式（小写/punycode/去重/逗号无空格）：v1 导入
 		// 是唯一未走 db.CanonicalDomains 的规则写入口，大小写/IDN 变体入库后
-		// 在下次重启执行 migrateCanonicalDomains 前破坏库内域名不变量
-		//（回归）。非法形态（含通配）与既有软跳过同口径。
+		// 在下次重启执行 migrateCanonicalDomains 前破坏库内域名不变量。
+		// 非法形态（含通配）与既有软跳过同口径。
 		if rule.Protocol == "http" {
 			canonicalDomain, err := db.CanonicalDomains(rule.Domain)
 			if err != nil {

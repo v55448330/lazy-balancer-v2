@@ -152,5 +152,11 @@ test('规则更新成功后展示后端 data.warnings（可用性变更不能只
   // 距离窗口只证明「两段文字在同页且相距 ≤220 字符」——文案换到别的元素/别处
   // 的 `submitWarnings.map` 仍会绿。
   const disclosure = member(wizard, 'if (submitWarnings.length > 0) {')
-  assert.match(disclosure, /ElMessageBox\.alert\(\s*h\('div', submitWarnings\.map\(/, '披露必须逐条展示（alert 消息由 warnings 逐条生成）')
+  // DESIGN_SPEC §20：披露清单统一 .confirm-scope-list（ul/li），创建与更新同口径。
+  assert.match(disclosure, /ElMessageBox\.alert\(\s*h\('ul', \{ class: 'confirm-scope-list' \}, submitWarnings\.map\(/, '披露必须逐条成行（alert 消息由 warnings 逐条生成）')
+  // 钉三元形态本身：只要求键出现过的话，把「更新走 created、创建走 updated」写反也绿。
+  assert.match(disclosure, /t\(wasEditing \? '[^']*ruleUpdatedNotice' : '[^']*ruleCreatedNotice'\)/, '披露标题：更新走 ruleUpdatedNotice、创建走 ruleCreatedNotice（三元不得写反）')
+  // 创建同样携带证书材料：握手失败类警告必须走同一弹框，不能只 toast。
+  assert.match(wizard, /request\.post<APIResponse<\{ caddy_id: string; warnings\?: string\[\] \}>>\('\/rules'/, '创建必须声明 warnings 载荷')
+  assert.match(wizard, /submitWarnings = createRes\.data\?\.warnings \?\? \[\]/, '创建必须读取后端 warnings')
 })

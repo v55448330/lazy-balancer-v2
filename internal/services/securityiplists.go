@@ -364,26 +364,6 @@ func (s threatTextScan) logDiscarded(path string) {
 	}
 }
 
-// readThreatIplistPath 按代际读取威胁名单文件：文本与
-// .fast 同时存在时以 mtime 较新者为准——从节点只同步 .fast（零编译裁定），
-// 降级前遗留的文本可能是旧代；旧「文本优先」会让集群新同步的 .fast 被陈旧
-// 文本静默遮蔽（新威胁漏拦/已移除误拦）。同代（mtime 相等）保持文本优先
-// （两侧内容等价，文本形态更易读）。
-//
-// 代际方向的事实依据（**禁止调整写侧 rename 顺序**）：主节点写相位是
-// 先 replace `.fast`、后 replace 文本（threatupdate.go 的
-// writeThreatIplistCompiled），rename 不改 mtime——稳态下 live `.fast` 的
-// mtime 恒不早于文本，故主节点实际读 `.fast`。若把顺序改回「先文本后 fast」
-// （与早前注释描述相反），陈旧文本会恒定更新而遮蔽新 fast，正是本判据当初要
-// 消灭的缺陷形态。
-// 本判据真正覆盖的形态：从节点遗留的旧文本 / 带外 touch 文本 / `.fast` 缺失
-// （此时文本代际更可靠）。
-// readThreatIplistPath 装载威胁名单条目（文本/.fast 双代际， PreferFast 判向）。
-// 两个文件都缺失返回文本侧错误（os.ErrNotExist 语义由调用方判定）。
-// .fast 较新但损坏/不可读时回退文本（在场时）
-// 并告警——旧实现直接失败，引用名单的 ACL/信任策略被渲染层整体跳过
-// （安全面静默缺失），且更新器哈希快路径按 stat 判定永不修复。
-
 // iplistTextMaxBytes 是 services 侧 .iplist 文本读的体积门（var：测试收窄），
 // 与 wafiplist 引擎侧 .fast 体积门同口径（64MB）——同一份跨进程输入文件，
 // 任何读者同一套门；病态大文件的内存峰值在分配前被拒。
@@ -427,7 +407,24 @@ func readIplistEntriesBounded(path string) ([]string, error) {
 
 // 三个生产读路径共用 bounded 单源（禁止新增裸 os.ReadFile 读 .iplist）。
 
-// readThreatIplistPath 装载威胁名单条目（文本/.fast 双代际， PreferFast 判向）。
+// readThreatIplistPath 装载威胁名单条目（文本/.fast 双代际，PreferFast 判向）：
+// 文本与 .fast 同时存在时以 mtime 较新者为准——从节点只同步 .fast（零编译裁定），
+// 降级前遗留的文本可能是旧代；旧「文本优先」会让集群新同步的 .fast 被陈旧
+// 文本静默遮蔽（新威胁漏拦/已移除误拦）。同代（mtime 相等）保持文本优先
+// （两侧内容等价，文本形态更易读）。
+//
+// 代际方向的事实依据（**禁止调整写侧 rename 顺序**）：主节点写相位是
+// 先 replace `.fast`、后 replace 文本（threatupdate.go 的
+// writeThreatIplistCompiled），rename 不改 mtime——稳态下 live `.fast` 的
+// mtime 恒不早于文本，故主节点实际读 `.fast`。若把顺序改回「先文本后 fast」
+// （与早前注释描述相反），陈旧文本会恒定更新而遮蔽新 fast，正是本判据当初要
+// 消灭的缺陷形态。
+// 本判据真正覆盖的形态：从节点遗留的旧文本 / 带外 touch 文本 / `.fast` 缺失
+// （此时文本代际更可靠）。
+// 两个文件都缺失返回文本侧错误（os.ErrNotExist 语义由调用方判定）。
+// .fast 较新但损坏/不可读时回退文本（在场时）
+// 并告警——旧实现直接失败，引用名单的 ACL/信任策略被渲染层整体跳过
+// （安全面静默缺失），且更新器哈希快路径按 stat 判定永不修复。
 func readThreatIplistPath(iplistPath string) ([]string, error) {
 	textInfo, textErr := os.Stat(iplistPath)
 	fastPath := wafiplist.FastPath(iplistPath)
@@ -585,17 +582,29 @@ func IsThreatSystemListName(listName string) bool {
 	return threatSourceByListName(listName) != ""
 }
 
+// beforeIPListEntriesByIDLoad 保留引用名单装载前注入缝，供关停交错回归测试使用。
+var beforeIPListEntriesByIDLoad = func() {}
+
 // LoadIPListEntriesByID 以一次查询批量加载 IP 地址列表条目值（仅 value）。
 // ids 为空或数据库未初始化时返回空映射；缺失的 id 不出现在结果中。
 // loadIPListEntriesVia：唯一装载实现（渲染与严格校验统一走 Via 错误通道），
 // 本函数只是 store=db.DB 的薄包装。
 func LoadIPListEntriesByID(ids []int64) (map[int64][]string, error) {
-	if len(ids) == 0 || db.DB == nil {
+	if len(ids) == 0 {
+		return map[int64][]string{}, nil
+	}
+	// 关停竞态守卫：单次句柄快照后只用局部变量。判空与传参之间若被
+	// db.Close 置 nil，二次读包级变量会让 loadIPListEntriesVia(nil,…) 递归
+	// 回落到本函数并返回「空映射 + nil 错误」——引用名单静默按 inline-only
+	// 渲染（fail-open），而不是得到可留痕的装载失败。
+	store := db.GetDB()
+	if store == nil {
 		return map[int64][]string{}, nil
 	}
 	// db 分支错误上抛(对齐 store 分支契约)
 	// ——委托 loadIPListEntriesVia(分块+错误通道),不再吞错返回恒 nil error。
-	entries, _, err := loadIPListEntriesVia(db.DB, ids)
+	beforeIPListEntriesByIDLoad()
+	entries, _, err := loadIPListEntriesVia(store, ids)
 	return entries, err
 }
 
@@ -694,6 +703,12 @@ func ResolvePolicyIPListRefsForSummary(policies []*models.SecurityPolicy) {
 		for _, id := range wlIDs {
 			if presence[id] {
 				p.IPWhitelistRefsNonEmpty = true
+				break
+			}
+		}
+		for _, id := range aclIDs {
+			if presence[id] {
+				p.IPACLRefsNonEmpty = true
 				break
 			}
 		}
@@ -882,6 +897,20 @@ func resolvePolicyIPListRefs(policies []*models.SecurityPolicy, store caddyConfi
 		p.MergedACLList = exp.ACLList
 		p.MergedWhitelist = exp.Whitelist
 	}
+}
+
+// PolicyACLEmptyAllow 报告策略是否为「空白名单」：ACL 开启、模式 allow、生效
+// 条目（inline ∪ 引用名单的有效条目）为零。allow 空集=否定空集恒拒——这种
+// 策略一旦绑定到规则，该规则拒绝所有请求。
+// 判定只用摘要侧事实：inline 条目 + IPACLRefsNonEmpty（由
+// ResolvePolicyIPListRefsForSummary 的轻量存在性装载置位；引用名单为空或条目
+// 全部到期时为 false）。渲染装载失败（IPRefMissing）时返回 false——那类策略
+// 在渲染端整条跳过，不产生全拒。
+func PolicyACLEmptyAllow(p *models.SecurityPolicy) bool {
+	if p == nil || !p.IPACLEnabled || p.IPACLMode != "allow" || p.IPRefMissing || p.IPACLRefsNonEmpty {
+		return false
+	}
+	return len(mergedACLList(p)) == 0
 }
 
 // mergedACLList 返回策略生效的 ACL 条目集：加载路径已附加合并集时直接使用，

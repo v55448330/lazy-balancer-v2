@@ -345,8 +345,8 @@ func TestBindWritePaths_rejectMixedPolicies(t *testing.T) {
 		t.Fatalf("bind mixed status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
 	}
 	recorder = postJSON(t, router, "/security/policies/2/bind", map[string]any{"rule_caddy_id": "lb_mb"})
-	if recorder.Code != http.StatusOK && recorder.Code != http.StatusCreated {
-		t.Fatalf("bind typed status=%d body=%s, want 2xx", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("bind typed status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 
 	// 非规范数字 ID（SQLite 亲和会命中行 1）不得绕过 mixed 门。
@@ -622,8 +622,8 @@ func TestBindWritePaths_rateLimitUniqueness(t *testing.T) {
 
 	// 绑第一条限流 → 2xx
 	recorder := postJSON(t, router, "/security/policies/1/bind", map[string]any{"rule_caddy_id": "lb_rl"})
-	if recorder.Code != http.StatusOK && recorder.Code != http.StatusCreated {
-		t.Fatalf("bind first rate-limit status=%d body=%s, want 2xx", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("bind first rate-limit status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 	// 再绑第二条限流 → 400
 	recorder = postJSON(t, router, "/security/policies/2/bind", map[string]any{"rule_caddy_id": "lb_rl"})
@@ -632,8 +632,8 @@ func TestBindWritePaths_rateLimitUniqueness(t *testing.T) {
 	}
 	// 幂等重绑同一条限流 → 仍 2xx
 	recorder = postJSON(t, router, "/security/policies/1/bind", map[string]any{"rule_caddy_id": "lb_rl"})
-	if recorder.Code != http.StatusOK && recorder.Code != http.StatusCreated {
-		t.Fatalf("re-bind same rate-limit status=%d body=%s, want 2xx", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("re-bind same rate-limit status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 	// SetRuleSecurityPolicies：提交集含 2 条 stage2 → 400
 	request := httptest.NewRequest(http.MethodPut, "/security/rules/lb_rl/policies", strings.NewReader(`{"policy_ids":[1,2]}`))

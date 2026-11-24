@@ -33,8 +33,8 @@ func mustLoadLoc(t *testing.T, name string) *time.Location {
 	return loc
 }
 
-// TestNotificationDeliveryRestartsOnPromote 钉 （回归）
-// 是 RoleAny 常驻且 Run 体按角色分流（从=spool 重传节拍 / 主=投递主循环），
+// TestNotificationDeliveryRestartsOnPromote 钉住端到端回归：引擎注册为
+// RoleAny 常驻且 Run 体按角色分流（从=spool 重传节拍 / 主=投递主循环），
 // 角色真实翻转必须换代重启——否则 promote 后旧代仍跑从分支，投递主循环
 // 永不启动。
 func TestNotificationDeliveryRestartsOnPromote(t *testing.T) {
@@ -127,7 +127,7 @@ func TestDailyReportSlotSemantics(t *testing.T) {
 				t.Fatalf("slot(%s, %v) = %s, want %s", c.now.Format("2006-01-02 15:04:05"), c.times, got, c.want)
 			}
 			if got.Location() != sh {
-				t.Fatalf("槽时区=%v, want 配置时区 %v（NOTIF153-04 同源）", got.Location(), sh)
+				t.Fatalf("槽时区=%v, want 配置时区 %v（与投递侧 dailySlotDue 同源）", got.Location(), sh)
 			}
 		})
 	}
@@ -158,8 +158,8 @@ func TestNextDailyReportSlotUsesConfiguredTimezone(t *testing.T) {
 	}
 }
 
-// TestNotificationDailyReportEngineFiresScheduledSlot 真实引擎驱动
-// 的端到端钉）：Scheduled 任务经 tick 在到期槽触发一次，同一槽不重复投递。
+// TestNotificationDailyReportEngineFiresScheduledSlot 真实引擎驱动的端到端钉：
+// Scheduled 任务经 tick 在到期槽触发一次，同一槽不重复投递。
 func TestNotificationDailyReportEngineFiresScheduledSlot(t *testing.T) {
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {

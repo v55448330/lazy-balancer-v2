@@ -103,7 +103,6 @@ func TestValidateCRSExcludedRulesPayload_matrix(t *testing.T) {
 		{"group in index", `[{"target":"42","scope":"all"}]`, ""},
 		{"6-digit in index all", `[{"target":"942100"}]`, ""},
 		{"scope=ip with ips", `[{"target":"942100","scope":"ip","ips":"1.1.1.1,10.0.0.0/8"}]`, ""},
-		{"scope=ip with ips+refs", `[{"target":"42","scope":"ip","ips":"1.1.1.1","listRefs":[3]}]`, ""},
 		{"scope=list with refs", `[{"target":"942550","scope":"list","listRefs":[3,4]}]`, ""},
 		{"duplicate entries pass (读侧去重)", `[{"target":"942100"},{"target":"942100"}]`, ""},
 		// 新格式：非法形态
@@ -113,6 +112,7 @@ func TestValidateCRSExcludedRulesPayload_matrix(t *testing.T) {
 		{"scope=ip empty ips", `[{"target":"942100","scope":"ip"}]`, "必须填写 ips"},
 		{"scope=ip bad ip", `[{"target":"942100","scope":"ip","ips":"1.1.1.1,abc"}]`, "无效的 IP/CIDR"},
 		{"scope=list empty refs", `[{"target":"942100","scope":"list"}]`, "必须填写 listRefs"},
+		{"scope=ip with ips+refs", `[{"target":"42","scope":"ip","ips":"1.1.1.1","listRefs":[3]}]`, "不允许携带 listRefs"},
 		{"scope=all with ips", `[{"target":"942100","ips":"1.1.1.1"}]`, "不允许携带 ips/listRefs"},
 		{"legacy target scoped", `[{"target":"REQUEST-942-APPLICATION-ATTACK-SQLI.conf","scope":"ip","ips":"1.1.1.1"}]`, "仅支持 scope=all"},
 		{"empty target", `[{"target":"  ","scope":"all"}]`, "target 不能为空"},
@@ -144,11 +144,12 @@ func TestSecurityPolicyCRSExcludedNewFormatEndToEnd(t *testing.T) {
 
 	listID := seedHandlerIPList(t, "crs-scoped", `[{"value":"192.0.2.0/24","remark":""}]`)
 
-	// 创建：新格式（含 listRefs 引用真实列表）→ 200 且列内容原样落库
+	// 创建：新格式（scope=ip 带 ips；scope=list 带 listRefs 引用真实列表）→ 200 且原样落库
+	// 两个作用域互斥字段不得混在一条里（scope=ip 携带 listRefs 属非法组合，写侧 400）。
 	payload := map[string]any{
 		"name":               "作用域排除策略",
 		"mode":               "blocking",
-		"crs_excluded_rules": fmt.Sprintf(`[{"target":"42","scope":"ip","ips":"1.1.1.1","listRefs":[%d]}]`, listID),
+		"crs_excluded_rules": fmt.Sprintf(`[{"target":"42","scope":"ip","ips":"1.1.1.1"},{"target":"42","scope":"list","listRefs":[%d]}]`, listID),
 	}
 	id := createTestPolicy(t, router, payload)
 	var stored string

@@ -63,8 +63,8 @@ func TestCreateRule_disabled_create_skips_conflict_gates(t *testing.T) {
 	t.Run("disabled copy with same domain and port passes conflict gates", func(t *testing.T) {
 		seedEnabledHTTP("lb_cp_src1", "copy-a.test", 18080)
 		response := create(httpBody("copy-a-disabled", "copy-a.test", 18080, "false"))
-		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s, want 2xx（禁用态共存允许，启用时把关）", response.Code, response.Body.String())
+		if response.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want 201（禁用态共存允许，启用时把关）", response.Code, response.Body.String())
 		}
 	})
 
@@ -86,8 +86,8 @@ func TestCreateRule_disabled_create_skips_conflict_gates(t *testing.T) {
 	t.Run("disabled copy of TCP rule passes port gate", func(t *testing.T) {
 		seedEnabledTCP("lb_cp_tcpsrc", 19001)
 		response := create(tcpBody("copy-tcp-disabled", 19001, "false"))
-		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s, want 2xx（禁用 TCP 副本不占端口）", response.Code, response.Body.String())
+		if response.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want 201（禁用 TCP 副本不占端口）", response.Code, response.Body.String())
 		}
 	})
 

@@ -12,8 +12,9 @@
         <div class="readout">TGT <b>{{ tgtReadout }}</b></div>
         <div class="readout">FLOW <b>{{ flowSampleLabel }}</b></div>
       </div>
-      <!-- 主时钟:左下角大号 HUD,大屏视觉锚点 -->
-      <div class="main-clock" role="status">
+      <!-- 主时钟:左下角大号 HUD,大屏视觉锚点。装饰性时钟按秒刷新——不得标
+           role=status/aria-live（等价每秒一条读屏播报，会挤掉真实告警）。 -->
+      <div class="main-clock">
         <time class="main-clock-time">{{ clockText }}</time>
         <span class="main-clock-date">{{ clockDate }}</span>
       </div>

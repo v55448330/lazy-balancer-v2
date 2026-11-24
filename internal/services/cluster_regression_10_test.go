@@ -395,9 +395,6 @@ func TestNearestSnapshotCertificateExpiry_returnsNearestFutureExpiry(t *testing.
 	}
 }
 
-// captureApplicationLogs 把应用日志（Logf → log.Printf）重定向到缓冲区，供
-// 断言 warn 输出；返回恢复函数由 t.Cleanup 挂接。
-
 func writeDNSOwnershipFile(t *testing.T, database *sql.DB, content []byte) {
 	t.Helper()
 	dataDir, err := clusterSnapshotDataDir(context.Background(), database)

@@ -164,8 +164,8 @@ func TestCreateRule_succeeds_when_domain_owned_by_disabled_rule(t *testing.T) {
 	router.ServeHTTP(response, request)
 
 	// Then the new rule is created despite the disabled owner
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s, want success", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 }
 

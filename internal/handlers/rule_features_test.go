@@ -476,8 +476,8 @@ func TestCreateRule_accepts_API_key_user_ID_and_succeeds_with_all_feature_column
 	router.ServeHTTP(response, request)
 
 	// Then
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 	var name string
 	var proxyProtocol bool
@@ -525,8 +525,8 @@ func TestDuplicateRule_accepts_API_key_user_ID_and_copies_rule_upstreams_and_pat
 	router.ServeHTTP(response, request)
 
 	// Then
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("duplicate status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("duplicate status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 	var newID string
 	var upstreamCount, pathCount, customRoutes int
@@ -1182,8 +1182,8 @@ func TestCreateRule_canonicalizesForwardAuthCopyHeaders(t *testing.T) {
 
 	t.Run("非规范名保存后读回规范形", func(t *testing.T) {
 		response := create("fa-canonical", "fa-canonical.example.test", 13011, "remote-user,REMOTE-GROUPS,remote-email")
-		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-			t.Fatalf("create status=%d body=%s, want 2xx（小写形态本就该放行保存）", response.Code, response.Body.String())
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create status=%d body=%s, want 201（小写形态本就该放行保存）", response.Code, response.Body.String())
 		}
 		var stored string
 		if err := db.DB.QueryRow(`SELECT forward_auth_copy_headers FROM lb_rules WHERE listen_port=13011`).Scan(&stored); err != nil {
@@ -1214,8 +1214,8 @@ func TestCreateRule_canonicalizesForwardAuthCopyHeaders(t *testing.T) {
 	// 键恒 miss（认证照常放行、身份头静默失注入、无报错）。
 	t.Run("带空格形态保存后读回规范形", func(t *testing.T) {
 		response := create("fa-space", "fa-space.example.test", 13014, " remote-user , remote-email ")
-		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-			t.Fatalf("create status=%d body=%s, want 2xx（分隔空格形态本就该放行保存）", response.Code, response.Body.String())
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create status=%d body=%s, want 201（分隔空格形态本就该放行保存）", response.Code, response.Body.String())
 		}
 		var stored string
 		if err := db.DB.QueryRow(`SELECT forward_auth_copy_headers FROM lb_rules WHERE listen_port=13014`).Scan(&stored); err != nil {

@@ -13,14 +13,7 @@ import (
 )
 
 func TestNotificationDeliveryRetentionCleanup_cancelBetweenBatchesReportsError(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-	})
+	initRetentionCleanupDB(t)
 
 	ancient := time.Now().AddDate(0, 0, -60).UTC().Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO notification_deliveries (user_id,event_type,level,title,status,created_at) VALUES (1,'task','info','old','sent',?)`, ancient); err != nil {

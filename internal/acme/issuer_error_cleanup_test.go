@@ -90,7 +90,7 @@ func TestIssue_errorPathCleanupLogFileOnly(t *testing.T) {
 
 	_, _, err := issuer.Issue(context.Background(), []string{"cleanup-fail.example.com"})
 	if err == nil {
-		t.Fatal("Issue 应在订单创建阶段失败")
+		t.Fatal("Issue 应在授权读取阶段失败（订单创建成功、defer 清理块已登记后 GetAuthorization 400），实际返回 nil")
 	}
 
 	for _, entry := range logger.lifeCycle {

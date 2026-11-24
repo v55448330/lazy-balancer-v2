@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +48,14 @@ func TestCertIssuer_Issue_fastPathReissuesWhenCertificateFromOtherCA(t *testing.
 	// Then：必须走完整签发（预检对不可达目录失败），不得重部署旧厂商证书
 	if err == nil {
 		t.Fatal("CA 厂商不匹配时必须重签（快速路径会重部署旧厂商证书并返回 nil）")
+	}
+	// 同步可观测：部署失败重试登记的唯一入口是 deploymentFailedFrom，其全部返回
+	// 都是 *certificateDeploymentError（登记本身经独立 goroutine）。预检失败走 raw
+	// 签发错误 → 下方 errors.As 为假即已排除该链，非阻塞核查缓冲通道即可；
+	// 固定观测窗在负载下反而会把「goroutine 尚未被调度」当成通过。
+	var deployErr *certificateDeploymentError
+	if errors.As(err, &deployErr) {
+		t.Fatalf("CA 厂商不匹配应走预检失败（raw 签发错误），实际进入部署重试链: %v", err)
 	}
 	select {
 	case <-redeployed:

@@ -93,9 +93,11 @@ func caddyAdminGet(ctx context.Context, adminURL, path string, timeout time.Dura
 		cancel()
 		return resp, err
 	}
+	// 成功响应必须带非 nil Body：三个调用方（caddyAdminReady/GetCaddyStatus/
+	// GetCaddyConfig）无条件 Close，非标准 Transport 的 200+nil Body 会 nil
+	// 解引用 panic。统一收敛为 http.NoBody，契约单侧成立。
 	if resp.Body == nil {
-		cancel()
-		return resp, nil
+		resp.Body = http.NoBody
 	}
 	resp.Body = &caddyAdminCancelBody{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil

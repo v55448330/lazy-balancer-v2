@@ -37,9 +37,11 @@ import (
 //     文件兜底可用。
 //
 // 风暴自防（契约 C1）：2048 容量环形缓冲（满环覆写最旧，newest-wins）+
-// 64KiB 单行上限——内存精确上界=容量×槽字节（槽按需增长，单行上限把守），
-// 入队零阻塞恒定纳秒级（无入队超时、无独立驻留字节预算——满环即覆写），
-// 覆写/超限丢弃并计数（dropped），不无界驻留、不阻塞连接路径。
+// 64KiB 单行上限——内存上界=容量×64KiB（≈128MiB，每槽都扩容到单行上限的
+// 最坏形态），常驻量≈容量×槽预分配 8KiB（≈16MiB；实际行 ~300B）。单行上限
+// 由 enqueueEvent 把守（环本身不限制槽长）；入队零阻塞恒定纳秒级（无入队
+// 超时、无独立驻留字节预算——满环即覆写），覆写/超限丢弃并计数（dropped），
+// 不无界驻留、不阻塞连接路径。
 
 const (
 	l4IPCSocketEnv        = "LB_SECURITY_EVENTS_IPC_SOCKET"
@@ -859,8 +861,8 @@ func (s *l4Shipper) counters() (sent, failed, spooled, spoolErrs uint64) {
 // 同一裁决：drain 与 shipper 活到进程退出（Caddy 重载不回收——回收语义只在
 // 计数层，见 stats.go beginLoad），杜绝 teardown 竞态丢事件。
 type l4Pipeline struct {
-	// ring=覆写环形缓冲（方案③）：入队永不阻塞（满环覆写最旧），内存精确
-	// 上界=容量×槽字节。
+	// ring=覆写环形缓冲（方案③）：入队永不阻塞（满环覆写最旧），内存上界=
+	// 容量×单行上限（l4LineMaxBytes 由 enqueueEvent 把守）。
 	ring   *l4Ring
 	notify chan struct{} // cap 1 非阻塞唤启 drain（满时静默，drain 轮询兜底）
 	// pending 是「已准入但尚未处理完」的行数：准入时递增（先于入队）、

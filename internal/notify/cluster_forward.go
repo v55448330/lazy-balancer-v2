@@ -128,7 +128,7 @@ func shouldForwardClusterEvent(evt Event) (bool, clusterForwardRoleInfo) {
 const clusterForwardQueueSize = 256 // 有界队列（溢出落盘，非丢弃）
 
 // clusterForwardRoleInfo 角色探测快照（入队时取一次，worker 复用——此前
-// shouldForward 与 forwardEventToMaster 各探测一次，每事件 2 次 SELECT）。
+// 入队路径与转发 worker 各探测一次，每事件 2 次 SELECT）。
 type clusterForwardRoleInfo struct {
 	masterURL string
 	token     string
@@ -246,16 +246,6 @@ func enqueueClusterForward(evt Event, role clusterForwardRoleInfo) {
 		// 队列满：交给异步有界落盘队列（调用方绝不触盘/fsync/spool 扫描）。
 		enqueueClusterForwardSpool(evt)
 	}
-}
-
-// forwardEventToMaster 即时推送主路径（由转发 worker 调用，非事件源 goroutine）。
-// 失败返回 error 由 worker 落 spool。
-func forwardEventToMaster(evt Event) error {
-	isMaster, masterURL, token, nodeName, _ := clusterForwardRole()
-	if isMaster || masterURL == "" || token == "" {
-		return fmt.Errorf("转发条件不成立（master=%v url=%q）", isMaster, masterURL)
-	}
-	return forwardEventToMasterWithRole(evt, clusterForwardRoleInfo{masterURL: masterURL, token: token, nodeName: nodeName})
 }
 
 // forwardEventToMasterWithRole 用入队时角色快照转发（队列 worker 路径：不再

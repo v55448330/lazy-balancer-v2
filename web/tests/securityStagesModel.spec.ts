@@ -409,7 +409,9 @@ test('地址冲突语义：阶段 0 信任跨策略优先，ACL 与存量信任�
 
   const page = code('src/views/security/SecurityPolicies.vue')
   const realtime = section(page, 'const aclSectionAlert = computed', 'const whitelistSectionAlert = computed')
-  const trust = section(source('src/views/security/SecurityPolicies.vue'), 'const whitelistSectionAlert = computed', '// 本策略拦截页「按阶段实际生效」判定')
+  // 代码存在性断言必须跑在剥注释视图 + 花括号配对切片上：raw 视图下把调用
+  // 注释掉仍绿（假绿），定长/注释终点切片会在注释被改写时切错位置。
+  const trust = member(page, 'const whitelistSectionAlert = computed')
   for (const body of [realtime, trust]) {
     assert.match(body, /addressAllowDenyConflictText\(/, '冲突告警必须按 ACL/信任及阶段类型选择真实语义')
   }

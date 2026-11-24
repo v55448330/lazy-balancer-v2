@@ -294,16 +294,6 @@ func TestInsertDeliveryPending_persistsNode(t *testing.T) {
 		t.Fatalf("node=%q，want slave-a（集群事件来源节点须落行可见）", node)
 	}
 	// 投递扫描回读同一列（模板 {{node}} 数据源）
-	rows := []struct {
-		ID        int64
-		UserID    int64
-		EventType string
-		Level     string
-		Title     string
-		Body      string
-		Node      string
-	}{}
-	_ = rows
 	got, err := pendingDeliveries(10)
 	if err != nil {
 		t.Fatal(err)

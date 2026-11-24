@@ -4235,12 +4235,10 @@ func blockPageJSONBody(content, custom string) string {
 // 返回顺序即匹配顺序——调用方按序追加，JSON 路由必须在前。
 // responseMode 是策略级响应选择（auto|html|json）：auto=按请求头自动分流，
 // html=只发 HTML 主档，json=只发 JSON 变体（API 客户端可强制拿到 JSON）。
-func buildDualBlockPageRoutes(baseMatcher map[string]interface{}, content, jsonContent, contentType string, statusCode int, extraHeaders map[string][]string, responseMode string) []map[string]interface{} {
-	newRoute := func(matcher map[string]interface{}, body, ct string, headers map[string][]string) map[string]interface{} {
-		h := map[string]interface{}{"Content-Type": []string{ct}}
-		for k, v := range headers {
-			h[k] = v
-		}
+func buildDualBlockPageRoutes(baseMatcher map[string]interface{}, content, jsonContent, contentType string, statusCode int, responseMode string) []map[string]interface{} {
+	// 响应头只有 Content-Type：按策略追加额外响应头的透传通道（429 限流的
+	// Retry-After）已随配额限流退役，不再保留形参。
+	newRoute := func(matcher map[string]interface{}, body, ct string) map[string]interface{} {
 		return map[string]interface{}{
 			"match": []interface{}{matcher},
 			"handle": []interface{}{
@@ -4248,7 +4246,7 @@ func buildDualBlockPageRoutes(baseMatcher map[string]interface{}, content, jsonC
 					"handler":     "static_response",
 					"body":        body,
 					"status_code": statusCode,
-					"headers":     h,
+					"headers":     map[string]interface{}{"Content-Type": []string{ct}},
 				},
 			},
 			"terminal": true,
@@ -4257,20 +4255,20 @@ func buildDualBlockPageRoutes(baseMatcher map[string]interface{}, content, jsonC
 	pageType := blockPageContentType(contentType)
 	mode := strings.ToLower(strings.TrimSpace(responseMode))
 	if mode == "json" {
-		return []map[string]interface{}{newRoute(baseMatcher, blockPageJSONBody(content, jsonContent), "application/json; charset=utf-8", extraHeaders)}
+		return []map[string]interface{}{newRoute(baseMatcher, blockPageJSONBody(content, jsonContent), "application/json; charset=utf-8")}
 	}
 	if mode == "html" {
-		return []map[string]interface{}{newRoute(baseMatcher, content, "text/html; charset=utf-8", extraHeaders)}
+		return []map[string]interface{}{newRoute(baseMatcher, content, "text/html; charset=utf-8")}
 	}
 	if pageType != "text/html; charset=utf-8" {
-		return []map[string]interface{}{newRoute(baseMatcher, content, pageType, extraHeaders)}
+		return []map[string]interface{}{newRoute(baseMatcher, content, pageType)}
 	}
 	routes := make([]map[string]interface{}, 0, 4)
 	for _, matcher := range jsonRequestMatchers(baseMatcher) {
 		routes = append(routes,
-			newRoute(matcher, blockPageJSONBody(content, jsonContent), "application/json; charset=utf-8", extraHeaders))
+			newRoute(matcher, blockPageJSONBody(content, jsonContent), "application/json; charset=utf-8"))
 	}
-	routes = append(routes, newRoute(baseMatcher, content, pageType, extraHeaders))
+	routes = append(routes, newRoute(baseMatcher, content, pageType))
 	return routes
 }
 
@@ -4285,7 +4283,7 @@ func buildBlockPageAttributionRoute(synthetic int, content, jsonContent string, 
 	matcher := map[string]interface{}{
 		"expression": fmt.Sprintf("({http.error.status_code} == %d && {http.error.message} == 'interruption triggered')", synthetic),
 	}
-	return buildDualBlockPageRoutes(matcher, content, jsonContent, contentType, statusCode, nil, responseMode)
+	return buildDualBlockPageRoutes(matcher, content, jsonContent, contentType, statusCode, responseMode)
 }
 
 func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
@@ -4352,7 +4350,7 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 	return buildDualBlockPageRoutes(map[string]interface{}{
 		"host":       domainHosts,
 		"expression": expression,
-	}, content, securityCtx.blockPageJSONByID[pagePolicy.BlockPageID], securityCtx.blockPageTypeByID[pagePolicy.BlockPageID], statusCode, nil, pagePolicy.BlockResponseMode)
+	}, content, securityCtx.blockPageJSONByID[pagePolicy.BlockPageID], securityCtx.blockPageTypeByID[pagePolicy.BlockPageID], statusCode, pagePolicy.BlockResponseMode)
 }
 
 // buildGeoipHandler returns the geoip2region handler, or nil when geoip is disabled.

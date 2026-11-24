@@ -705,7 +705,7 @@ func isSynchronizedWrite(method, path string) bool {
 	}
 	// MCP 会话断开只删本地 mcp_sessions 行（非同步表，无集群触发器）——
 	// 按 /security 前缀误判为同步写会在触发器不可用的从节点降级态让主节点
-	// 返回 500，而该操作本就不需要 bump/同步（回归）。
+	// 返回 500，而该操作本就不需要 bump/同步。
 	if method == http.MethodPost && strings.HasPrefix(path, "/api/v1/security/mcp-sessions/") {
 		return false
 	}

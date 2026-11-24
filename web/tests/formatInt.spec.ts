@@ -44,15 +44,19 @@ test('crsRuleCountLabel 与 formatInt 共用内核（分组正则不得第二份
 test('守卫：站内不再有裸 .toLocaleString( 调用（白名单：SecurityOverview 的 fmtStatNum）', () => {
   // 断言口径：`.toLocaleString(`（带点调用形态）。注释里不带点的
   // 「`toLocaleString()`」字样不误伤；显式 locale 的调用只剩
-  // SecurityOverview.vue 的 fmtStatNum（'en-US' 实参，归并行代理维护，
-  // 按任务书白名单豁免）。
+  // SecurityOverview.vue 的 fmtStatNum（'en-US' 实参）。
   const whitelisted: Record<string, true> = {
     'src/views/security/SecurityOverview.vue': true,
-    // 通道最后测试时间本地化（formatDate 内联；非统计数字千分位场景）
-    'src/views/notifications/ChannelCards.vue': true,
   }
   // 剥注释视图（code）：守卫断言对象是真实调用，注释里的形态字样不误伤
   // （如 Rules.vue 头部「不再用浏览器本地时区的 toLocaleString」文档注释）。
+  // 双检（与 designGuard 的 SHADOW_NEVER_EXEMPT 同族）：
+  //   (a) 登记项必须仍然命中——豁免项对应代码删掉后条目即死豁免，会静默把
+  //       该文件永久移出守卫面（未来重新引入裸调用也不会红）；
+  //   (b) 未登记的文件命中即红（下方 offenders 扫描）。
+  for (const file of Object.keys(whitelisted)) {
+    assert.match(code(file), /\.toLocaleString\(/, `白名单条目已失效（死豁免必须删除）：${file}`)
+  }
   const offenders: string[] = []
   for (const file of webFiles('src', ['.ts', '.vue'])) {
     if (whitelisted[file]) continue

@@ -479,6 +479,7 @@ export default {
         resendConfirm: '将向全部通道重新投递该条通知，是否继续？',
         resendPartialConfirm: '该投递部分通道失败，将仅重发失败通道，是否继续？',
         expandNoError: '无错误',
+        expandErrorMissing: '未记录失败原因',
         expandEmpty: '该记录无分通道投递结果',
         loadFailed: '投递记录加载失败',
         emptyText: '暂无投递记录',

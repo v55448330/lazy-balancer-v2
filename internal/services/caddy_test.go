@@ -1714,7 +1714,7 @@ func TestGenerateCaddyConfig_omitsErrorRoutes_whenRuleHasNoPolicyBinding(t *test
 // policy's page under v2.2.0 multi-policy binding — the fallback serves
 // unattributable interruptions (merged IP precheck / page-less policies), while
 // each page-bearing policy additionally gets its own synthetic-code attribution
-// route (481/482) rendering its own page.
+// route (483 起，481/482 阶段页覆盖层已退役) rendering its own page.
 func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing.T) {
 	// Given
 	useTemporaryCertDir(t)
@@ -2094,14 +2094,12 @@ func TestGenerateCaddyConfig_autoHTTPSFullyDisabled(t *testing.T) {
 		}
 	}
 	for name, sv := range servers {
-		server, ok := sv.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		ah, ok := server["automatic_https"].(map[string]interface{})
-		if !ok {
-			continue
-		}
+		server := mustMap(t, sv, name)
+		// Caddy 省略 automatic_https 键 = 默认**启用**自动 HTTPS（引擎 autohttps
+		// 默认即托管证书），正是本测试要防的死路由形态——缺键必须失败，不得
+		// continue 放过（同族口径见 TestGenerateCaddyConfig_defaultSiteDisablesAutomaticHTTPS
+		// 与 caddy_render_surface_test 的 mustMap）。
+		ah := mustMap(t, server["automatic_https"], name+" automatic_https")
 		if ah["disable"] != true {
 			t.Errorf("server %s automatic_https=%v, want disable:true (历史问题: 死路由消除)", name, ah)
 		}
@@ -2149,6 +2147,17 @@ func TestGenerateCaddyConfig_wafNamespaceExcludedFromServerLog(t *testing.T) {
 func TestCaddyOpLockSharedBetweenForceAndHandlers(t *testing.T) {
 	acquired := make(chan struct{})
 	released := make(chan struct{})
+	releasedOnce := false
+	// 失败路径（含 waitGoroutineBlockedOn 的 Fatal）必须释放：残留持锁会让
+	// 同包后续用例永久阻塞在 CaddyOpLock 上（全局锁污染跨用例传播）。
+	releaseLock := func() {
+		if releasedOnce {
+			return
+		}
+		releasedOnce = true
+		close(released)
+	}
+	t.Cleanup(releaseLock)
 	go func() {
 		CaddyOpLock.Lock()
 		close(acquired)
@@ -2156,7 +2165,9 @@ func TestCaddyOpLockSharedBetweenForceAndHandlers(t *testing.T) {
 		CaddyOpLock.Unlock()
 	}()
 	<-acquired
-	// handler 侧尝试取锁（带超时证阻塞）
+	// handler 侧尝试取锁。阻塞证据取协程栈（阻塞在 (*CaddyWriteLock).Lock
+	// 的等待帧）而非固定观测窗——「睡 150ms 没拿到」在 handler 侧尚未被调度
+	// 时同样成立（负载下假绿），栈帧则直接证明它已推进到等待点。
 	locked := make(chan struct{})
 	go func() {
 		CaddyOpLock.Lock()
@@ -2165,14 +2176,14 @@ func TestCaddyOpLockSharedBetweenForceAndHandlers(t *testing.T) {
 	}()
 	select {
 	case <-locked:
-		close(released)
 		t.Fatal("Force 持锁期间 handler 侧不应获得锁（跨层互斥失效）")
-	case <-time.After(150 * time.Millisecond):
+	default:
 	}
-	close(released)
+	waitGoroutineBlockedOn(t, "TestCaddyOpLockSharedBetweenForceAndHandlers", "(*CaddyWriteLock).Lock")
+	releaseLock()
 	select {
 	case <-locked:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("释放后 handler 侧应获得锁")
 	}
 }

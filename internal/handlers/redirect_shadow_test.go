@@ -79,8 +79,8 @@ func TestRuleDomainConflict_redirectShadow(t *testing.T) {
 	t.Run("different domains allowed", func(t *testing.T) {
 		seedShadowRule("lb_shd_tls2", "shadow-c1.test", 443, true, 1)
 		response := create(port80Body("shadow-victim-c", "shadow-c2.test"))
-		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s, want 2xx", response.Code, response.Body.String())
+		if response.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want 201", response.Code, response.Body.String())
 		}
 	})
 
@@ -95,8 +95,8 @@ func TestRuleDomainConflict_redirectShadow(t *testing.T) {
 	t.Run("disabled TLS redirect rule does not block", func(t *testing.T) {
 		seedShadowRule("lb_shd_tls4", "shadow-e.test", 443, true, 0)
 		response := create(port80Body("shadow-victim-e", "shadow-e.test"))
-		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s, want 2xx (disabled redirect rule occupies nothing)", response.Code, response.Body.String())
+		if response.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want 201 (disabled redirect rule occupies nothing)", response.Code, response.Body.String())
 		}
 	})
 

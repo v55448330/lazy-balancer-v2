@@ -231,3 +231,19 @@
    （原型链键不得渲染为函数）；只读操作（IP 名单查询）成功提示走 `ElMessage.success`，
    不消费 MFA 宽限提示；按分页映射删除前必须拒绝负下标（`splice(-1)` 误删末条）。守卫：
    `tests/frontendEdgeGuards.spec.ts`。
+
+## 20. 增补裁定（2026-11-24 第九轮，保存/删除的后果清单与证书告警分流）
+1. **删除确认必须列级联清单**：删除类操作（负载规则/安全策略/用户/证书任务等）的
+   `ElMessageBox.confirm` 必须列出「一并移除的关联对象」（名称或数量），不得只有一句
+   「确定删除吗」——用户必须能看见这次删除会带走什么。清单形态固定为
+   `h('ul', { class: 'confirm-scope-list' }, items.map(...))`，首行保留既有确认文案；
+   `.confirm-scope-list` / `.confirm-scope-lead` 为全局单源类（main.css，紧邻
+   `.el-message-box` 样式块），组件内禁止另写列表样式。清单条目必须对应后端真实级联
+   （如规则删除：上游/路径规则/策略绑定/证书任务/历史指标），不得凭猜测新增条目。
+2. **保存响应 warnings 以同一清单形态披露**：保存接口返回的 `data.warnings`（握手失败
+   类证书问题、可用性变化）必须在 `ElMessageBox.alert` 中以 `.confirm-scope-list` 逐条
+   展示，用户确认后才消失；创建与更新同口径（创建同样携带证书材料）。
+3. **证书警告响应面分流**：域名不匹配/链不完整 → 保存响应 `warnings`（面板弹框披露）；
+   过期/未生效 → 只进审计与证书列表标记（可轮换状态），不得在每次保存时重复弹框。
+   守卫：`internal/handlers/rules_cert_warning_response_test.go`、
+   `tests/designGuard.spec.ts`（.confirm-scope-list 单源 + 规则删除确认含清单）。

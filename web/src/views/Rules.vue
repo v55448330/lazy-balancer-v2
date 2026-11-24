@@ -1236,7 +1236,7 @@
             </div>
             <div class="stats-grid">
               <section class="dialog-panel stats-card">
-                <DialogSectionHeader title="IP TOP" />
+                <DialogSectionHeader :title="t('common.app.rules.cfg.ipTop')" />
                 <el-table :data="ruleLogStats.top_ips" size="small" :show-header="false">
                   <el-table-column prop="value" show-overflow-tooltip />
                   <el-table-column prop="count" width="70" align="right">
@@ -1256,7 +1256,7 @@
                 </el-table>
               </section>
               <section class="dialog-panel stats-card">
-                <DialogSectionHeader title="URI TOP" />
+                <DialogSectionHeader :title="t('common.app.rules.cfg.uriTop')" />
                 <el-table :data="ruleLogStats.top_uris" size="small" :show-header="false">
                   <el-table-column prop="value" show-overflow-tooltip />
                   <el-table-column prop="count" width="70" align="right">
@@ -3663,6 +3663,7 @@ const submitWizard = async () => {
     }
 
     let submitWarnings: string[] = []
+    const wasEditing = Boolean(editingRule.value)
     if (editingRule.value) {
       const updateRes = await request.put<APIResponse<{ warnings?: string[] }>>(`/rules/${editingRule.value.caddy_id}`, data)
       mfaAwareSuccess(t('common.app.rules.msgs.updateSuccess'))
@@ -3672,7 +3673,11 @@ const submitWizard = async () => {
       submitWarnings = updateRes.data?.warnings ?? []
 
     } else {
-      const createRes = await request.post<APIResponse<{ caddy_id: string }>>('/rules', data)
+      const createRes = await request.post<APIResponse<{ caddy_id: string; warnings?: string[] }>>('/rules', data)
+      // 创建同样携带证书材料：「域名不匹配/链不完整」这类握手失败警告由后端放在
+      // data.warnings（过期/未生效只进审计），与更新同口径弹框披露——否则用户
+      // 只看到「创建成功」，站点 TLS 实际不可用。
+      submitWarnings = createRes.data?.warnings ?? []
       // 复制路径（openCopyWizard 带入的源规则）：POST /rules 不经 /duplicate、不携带绑定——
       // 源绑定从 bindings 快照取经 PUT 复制到新规则；绑定失败不回滚副本（口径同策略绑定失败）
       let createMessage = createRes.message || t('common.app.rules.msgs.createSuccess')
@@ -3704,11 +3709,11 @@ const submitWizard = async () => {
     wizardVisible.value = false
     fetchRules()
     if (submitWarnings.length > 0) {
-      // 与设置页导入/还原同口径：披露逐条独立成行，用户必须确认后才消失
-      // （可用性变化不是可忽略的提示条）。
+      // DESIGN_SPEC §20：披露清单统一 .confirm-scope-list 逐条独立成行，用户必须
+      // 确认后才消失（可用性变化/握手失败不是可忽略的提示条）；创建与更新同口径。
       await ElMessageBox.alert(
-        h('div', submitWarnings.map((warning) => h('div', warning))),
-        t('common.app.rules.msgs.ruleUpdatedNotice'),
+        h('ul', { class: 'confirm-scope-list' }, submitWarnings.map((warning) => h('li', warning))),
+        t(wasEditing ? 'common.app.rules.msgs.ruleUpdatedNotice' : 'common.app.rules.msgs.ruleCreatedNotice'),
         { confirmButtonText: t('common.app.rules.common.gotIt'), type: 'warning' },
       ).catch(() => undefined)
     }
@@ -3833,7 +3838,19 @@ const toggleRule = async (rule: Rule) => {
   const action = rule.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable')
   ruleTogglePending.value[rule.caddy_id] = true
   try {
-    await ElMessageBox.confirm(t('common.app.rules.msgs.ruleActionConfirm', { action, name: rule.name }), t('common.app.rules.msgs.actionConfirmTitle', { action: action }), { type: 'warning' })
+    // DESIGN_SPEC §20：禁用同样是对外可用性的不可逆变更（流量立即中断），
+    // 确认框必须披露影响面，不得只问「确定要禁用吗」。
+    const toggleBody = rule.enabled
+      ? h('div', [
+          h('div', t('common.app.rules.msgs.ruleActionConfirm', { action, name: rule.name })),
+          h('p', { class: 'confirm-scope-lead' }, t('common.app.rules.msgs.ruleDisableScopeLead')),
+          h('ul', { class: 'confirm-scope-list' }, [
+            h('li', t('common.app.rules.msgs.ruleDisableScopeTraffic')),
+            h('li', t('common.app.rules.msgs.ruleDisableScopeProtection')),
+          ]),
+        ])
+      : t('common.app.rules.msgs.ruleActionConfirm', { action, name: rule.name })
+    await ElMessageBox.confirm(toggleBody, t('common.app.rules.msgs.actionConfirmTitle', { action: action }), { type: 'warning' })
     if (rule.enabled) {
       await request.post<APIResponse>(`/rules/${rule.caddy_id}/enable`)
     } else {
@@ -3863,7 +3880,31 @@ const deleteRule = async (rule: Rule) => {
   if (deletingRuleId.value !== null) return
   deletingRuleId.value = rule.caddy_id
   try {
-    await ElMessageBox.confirm(t('common.app.rules.msgs.ruleDeleteConfirm', { name: rule.name }), t('common.app.rules.msgs.deleteConfirmTitle'), { type: 'warning' })
+    // DESIGN_SPEC §20：删除确认必须列出后端真实级联删除的对象（DELETE FROM
+    // cert_jobs / security_policy_bindings / upstreams / path_rules / lb_rules +
+    // metrics_history），用户必须看见这次删除会带走什么。
+    const deleteScopeItems: string[] = []
+    const upstreamCount = rule.upstreams?.length ?? 0
+    if (upstreamCount > 0) deleteScopeItems.push(t('common.app.rules.msgs.ruleDeleteScopeUpstreams', { n: upstreamCount }))
+    const pathRuleCount = rule.path_rules?.length ?? 0
+    if (pathRuleCount > 0) deleteScopeItems.push(t('common.app.rules.msgs.ruleDeleteScopePathRules', { n: pathRuleCount }))
+    const bindingCount = (securityBindings.value[rule.caddy_id] || []).length
+    if (bindingCount > 0) deleteScopeItems.push(t('common.app.rules.msgs.ruleDeleteScopeBindings', { n: bindingCount }))
+    if (rule.tls_source === 'acme_dns') deleteScopeItems.push(t('common.app.rules.msgs.ruleDeleteScopeCertJobs'))
+    // 证书文件与日志文件同样被删除（removeRuleCertFiles / RemoveRuleLogFiles /
+    // RemoveCertJobLogFiles），历史日志与已上传的 crt/key 事后不可恢复。
+    if (rule.enable_tls) deleteScopeItems.push(t('common.app.rules.msgs.ruleDeleteScopeCertFiles'))
+    deleteScopeItems.push(t('common.app.rules.msgs.ruleDeleteScopeLogFiles'))
+    deleteScopeItems.push(t('common.app.rules.msgs.ruleDeleteScopeMetrics'))
+    await ElMessageBox.confirm(
+      h('div', [
+        h('div', t('common.app.rules.msgs.ruleDeleteConfirm', { name: rule.name })),
+        h('p', { class: 'confirm-scope-lead' }, t('common.app.rules.msgs.ruleDeleteScopeLead')),
+        h('ul', { class: 'confirm-scope-list' }, deleteScopeItems.map((item) => h('li', item))),
+      ]),
+      t('common.app.rules.msgs.deleteConfirmTitle'),
+      { type: 'warning' },
+    )
     await request.delete<APIResponse>(`/rules/${rule.caddy_id}`)
     mfaAwareSuccess(t('common.app.rules.msgs.deleteSuccess'))
     fetchRules()

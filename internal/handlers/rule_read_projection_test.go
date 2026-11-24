@@ -122,8 +122,8 @@ func TestDuplicateRule_carriesForwardAuthColumns(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusOK && response.Code != http.StatusCreated {
-		t.Fatalf("duplicate status=%d body=%s, want 2xx", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("duplicate status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 	var enabled int
 	var upstream, uri, headers string

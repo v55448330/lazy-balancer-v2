@@ -8,7 +8,10 @@ package services
 // 或条件整体丢失，都会让「升主后在途从端写覆盖主端节点本地状态」这类 TOCTOU
 // 重新打开。两层钉法：
 //  1. AST 守卫：三处 UPDATE 的 SQL 实参树必须引用 slaveRoleConditionSQL 标识符；
-//     任何 UPDATE global_config 的 SQL 文本出现 is_master 却未经单源标识符，即红；
+//     任何 UPDATE global_config 的 SQL 文本出现 is_master 却未经单源标识符，即红。
+//     SET 列由 strings.Join(<var>, …) 动态拼装的站点，先把 <var> 的列清单
+//     （追加闭包 addBase/addSetting 的字面量实参 + 闭包外直接 append 的字面量）
+//     解析出来并入判别文本；解析不到即红（守卫对动态拼装 fail-closed）；
 //  2. 行为测：is_master=0 三处写入全部落库；升主（is_master=1）后同一写入
 //     路径必须 0 行生效（列值保持不变）。
 
@@ -20,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -54,7 +58,168 @@ func TestClusterApplySlaveRoleCondition_singleSourceOnNodeLocalUpdates(t *testin
 		line       int
 		sqlText    string
 		identNames map[string]bool
+		joinedVars []string // SET 列清单经 strings.Join(<var>, …) 动态拼装的变量名
 	}
+	// dynamicClauses 解析动态拼装的 SET 列清单。`name := func(column string, …) {
+	// v = append(v, column+"=?"); … }` 形态的追加闭包 name → 被追加的切片 v；
+	// 再收集 name 全部调用点的首个字符串字面量（列名），按 v 聚合。只累加
+	// BasicLit 的旧守卫对这两处 UPDATE 只能看到 "UPDATE global_config SET "
+	// 前缀——把 is_master=? 藏进 addBase("is_master", …) 即静默放行。
+	// 追加闭包缺失或列名非字面量一律记入 unresolved：守卫对动态拼装必须
+	// fail-closed，不得因「看不见」而当作无角色谓词。
+	dynamicClauses := map[string][]string{}
+	unresolvedClauses := map[string]bool{}
+	feeders := map[string]string{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		name, nameOK := assign.Lhs[0].(*ast.Ident)
+		closure, litOK := assign.Rhs[0].(*ast.FuncLit)
+		if !nameOK || !litOK || len(closure.Type.Params.List) == 0 || len(closure.Type.Params.List[0].Names) == 0 {
+			return true
+		}
+		columnParam := closure.Type.Params.List[0].Names[0].Name
+		ast.Inspect(closure.Body, func(inner ast.Node) bool {
+			innerAssign, ok := inner.(*ast.AssignStmt)
+			if !ok || len(innerAssign.Lhs) != 1 {
+				return true
+			}
+			target, ok := innerAssign.Lhs[0].(*ast.Ident)
+			if !ok {
+				return true
+			}
+			for _, rhs := range innerAssign.Rhs {
+				call, ok := rhs.(*ast.CallExpr)
+				if !ok || len(call.Args) < 2 {
+					continue
+				}
+				fn, ok := call.Fun.(*ast.Ident)
+				if !ok || fn.Name != "append" {
+					continue
+				}
+				// 只认「向 target 追加、且追加元素引用列名形参」的那一条——
+				// 同闭包内 `args = append(args, value)` 不携带列名，不是喂入点。
+				first, firstOK := call.Args[0].(*ast.Ident)
+				if !firstOK || first.Name != target.Name {
+					continue
+				}
+				carriesColumn := false
+				ast.Inspect(call.Args[1], func(n ast.Node) bool {
+					if id, ok := n.(*ast.Ident); ok && id.Name == columnParam {
+						carriesColumn = true
+					}
+					return true
+				})
+				if carriesColumn {
+					if _, exists := feeders[name.Name]; !exists {
+						feeders[name.Name] = target.Name
+					}
+				}
+			}
+			return true
+		})
+		return true
+	})
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		fn, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		target, isFeeder := feeders[fn.Name]
+		if !isFeeder {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			unresolvedClauses[target] = true
+			return true
+		}
+		column, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			unresolvedClauses[target] = true
+			return true
+		}
+		dynamicClauses[target] = append(dynamicClauses[target], column)
+		return true
+	})
+	// 闭包外的直接追加：v = append(v, "col=?")（settingClauses 形态，无追加
+	// 闭包）。只认纯字符串字面量元素——元素里出现任何标识符/调用即记入
+	// unresolved（列名由变量拼出，守卫看不见）。
+	pureStringLiterals := func(expr ast.Expr) (string, bool) {
+		var text strings.Builder
+		pure := true
+		ast.Inspect(expr, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.BasicLit:
+				if v.Kind != token.STRING {
+					pure = false
+					return true
+				}
+				s, err := strconv.Unquote(v.Value)
+				if err != nil {
+					pure = false
+					return true
+				}
+				text.WriteString(s)
+			case *ast.Ident, *ast.CallExpr, *ast.SelectorExpr:
+				pure = false
+			}
+			return true
+		})
+		return text.String(), pure
+	}
+	var closureStack []bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			if len(closureStack) > 0 {
+				closureStack = closureStack[:len(closureStack)-1]
+			}
+			return false
+		}
+		inClosure := false
+		for _, isClosure := range closureStack {
+			if isClosure {
+				inClosure = true
+				break
+			}
+		}
+		_, isClosure := n.(*ast.FuncLit)
+		closureStack = append(closureStack, isClosure)
+		if inClosure {
+			return true // 闭包体内的追加由上面的追加闭包解析承担
+		}
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		target, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		if fn, ok := call.Fun.(*ast.Ident); !ok || fn.Name != "append" {
+			return true
+		}
+		if first, ok := call.Args[0].(*ast.Ident); !ok || first.Name != target.Name {
+			return true
+		}
+		if text, pure := pureStringLiterals(call.Args[1]); pure {
+			dynamicClauses[target.Name] = append(dynamicClauses[target.Name], text)
+		} else {
+			unresolvedClauses[target.Name] = true
+		}
+		return true
+	})
+
 	var sites []updateSite
 	ast.Inspect(file, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
@@ -80,6 +245,13 @@ func TestClusterApplySlaveRoleCondition_singleSourceOnNodeLocalUpdates(t *testin
 				site.sqlText += v.Value
 			case *ast.Ident:
 				site.identNames[v.Name] = true
+			case *ast.CallExpr:
+				// strings.Join(<var>, …)：<var> 即动态拼装的 SET 列清单。
+				if sel, ok := v.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Join" && len(v.Args) > 0 {
+					if id, ok := v.Args[0].(*ast.Ident); ok {
+						site.joinedVars = append(site.joinedVars, id.Name)
+					}
+				}
 			}
 			return true
 		})
@@ -90,6 +262,28 @@ func TestClusterApplySlaveRoleCondition_singleSourceOnNodeLocalUpdates(t *testin
 	})
 	if len(sites) == 0 {
 		t.Fatal("cluster_apply.go 中未找到任何 UPDATE global_config 写入——守卫对象漂移")
+	}
+
+	// 动态拼装的 SET 列清单并入判别文本（写回 sites，供下方两段判定共用）；
+	// 解析不到即红——不得把「看不见列清单」当作「列清单里没有角色谓词」。
+	dynamicSites := 0
+	for i := range sites {
+		for _, joined := range sites[i].joinedVars {
+			dynamicSites++
+			if unresolvedClauses[joined] {
+				t.Errorf("cluster_apply.go:%d 的 UPDATE global_config SET 列由 %s 动态拼装，存在非字面量列名——守卫无法解析其列清单", sites[i].line, joined)
+				continue
+			}
+			columns, resolved := dynamicClauses[joined]
+			if !resolved {
+				t.Errorf("cluster_apply.go:%d 的 UPDATE global_config SET 列由 %s 动态拼装，守卫解析不到追加闭包（拼装形态漂移）——请随重构更新本守卫", sites[i].line, joined)
+				continue
+			}
+			sites[i].sqlText += strings.Join(columns, ",")
+		}
+	}
+	if dynamicSites == 0 {
+		t.Error("cluster_apply.go 中未解析到任何动态拼装的 UPDATE global_config——守卫对象漂移，请随重构更新本守卫")
 	}
 
 	for _, required := range nodeLocalUpdateClauses {

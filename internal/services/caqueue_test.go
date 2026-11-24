@@ -103,10 +103,14 @@ func TestRequeueCanceledJobKeepsDeploymentLifecycleWithMaterial(t *testing.T) {
 // 本轮重排对其不可见（可被连点绕过 + 行序失真）。
 func TestDeploymentWindowWritesAdvanceUpdatedAt(t *testing.T) {
 	installCAQueueTestFixture(t)
-	const staleUpdatedAt = "2020-01-01 00:00:00"
+	// 种子与断言都归一为 time.Time 再比较：驱动把 DATETIME 列投影成 RFC3339
+	// （2026-…T…Z），与 SQL 墙钟串（2020-01-01 00:00:00）做字典序只在「年份
+	// 不同」时碰巧成立。
+	staleUpdatedAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	staleLiteral := staleUpdatedAt.Format("2006-01-02 15:04:05")
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,updated_at) VALUES
 		('lb_timeout','timeout.example.com','downloaded','CERT','KEY',?),
-		('lb_cancel','cancel.example.com','cleanup_dns','CERT','KEY',?)`, staleUpdatedAt, staleUpdatedAt); err != nil {
+		('lb_cancel','cancel.example.com','cleanup_dns','CERT','KEY',?)`, staleLiteral, staleLiteral); err != nil {
 		t.Fatalf("seed cert jobs: %v", err)
 	}
 	ids := map[string]int{}
@@ -131,12 +135,12 @@ func TestDeploymentWindowWritesAdvanceUpdatedAt(t *testing.T) {
 
 	// Then：冷却门读值（updated_at）随写推进
 	for ruleID, id := range ids {
-		var updatedAt, after sql.NullString
+		var updatedAt, after sql.NullTime
 		if err := db.DB.QueryRow(`SELECT updated_at, deployment_available_after FROM cert_jobs WHERE id=?`, id).Scan(&updatedAt, &after); err != nil {
 			t.Fatalf("read %s: %v", ruleID, err)
 		}
-		if !updatedAt.Valid || updatedAt.String <= staleUpdatedAt {
-			t.Fatalf("%s updated_at=%q, want 推进到当前时刻（冷却门基准）", ruleID, updatedAt.String)
+		if !updatedAt.Valid || !updatedAt.Time.After(staleUpdatedAt) {
+			t.Fatalf("%s updated_at=%v, want 推进到当前时刻（冷却门基准，种子 %v）", ruleID, updatedAt, staleUpdatedAt)
 		}
 		if !after.Valid {
 			t.Fatalf("%s deployment_available_after 未推进", ruleID)
@@ -217,6 +221,10 @@ func TestCAQueueManager_CancelJob_cancels_enqueue_admitted_during_cancel(t *test
 		t.Fatal("cancel passed an enqueue inside the admission critical section")
 	default:
 	}
+	// 确定性证据：准入临界区仍持全局 m.mu（钩子阻塞在 <-release），取消协程
+	// 必须阻塞在该互斥量的等待点——此前仅凭「此刻 cancelDone 未关闭」判定，
+	// 取消协程尚未被调度时同样成立（负载下假绿）。
+	waitGoroutineBlockedOn(t, "TestCAQueueManager_CancelJob_cancels_enqueue_admitted_during_cancel", "(*CAQueueManager).CancelJob", "sync.(*Mutex)")
 	close(release)
 	if err := <-enqueueDone; err != nil {
 		t.Fatalf("enqueue: %v", err)
@@ -867,11 +875,23 @@ func TestCAQueueManager_CancelJobsForRule_blocks_retry_created_during_worker_exi
 	}
 	manager.UnblockJobsForRule("lb_deleted", blockToken)
 
-	// Then
+	// Then：同步可观测——CancelJobsForRule 返回即代表 worker 执行已退出
+	// （executionDone 关闭），worker 内的 scheduleCertificateDeploymentRetry 早已
+	// 返回；随后 UnblockJobsForRule 的补扫也是同步调用。故直接查登记表（timer /
+	// 在途回调）与非阻塞回调通道即可：回调只能由已登记的 timer 启动，三者皆空
+	// =不可能再复活。此前用 50ms 固定观测窗，负载下（worker 尚未收尾）会把
+	// 「没走到」当成「不会发生」。
+	service.timerMu.Lock()
+	_, hasRetryTimer := service.deploymentTimers[42]
+	inFlightCallbacks := len(service.deploymentCallbacks[42]) > 0
+	service.timerMu.Unlock()
 	select {
 	case <-retryRan:
 		t.Fatal("deployment retry revived after rule cancellation")
-	case <-time.After(50 * time.Millisecond):
+	default:
+	}
+	if hasRetryTimer || inFlightCallbacks {
+		t.Fatalf("rule 取消后仍登记了部署重试（timer=%v inFlight=%v）", hasRetryTimer, inFlightCallbacks)
 	}
 	service.pauseDeploymentRetries()
 }
@@ -1073,7 +1093,27 @@ func TestCAQueueManager_PauseAndDrain_timeout_straggler_not_double_executed(t *t
 	if status != "creating_order" {
 		t.Fatalf("job status=%q after Resume, want creating_order（stranded 扫描应跳过在途任务）", status)
 	}
-	time.Sleep(300 * time.Millisecond) // 留给错误实现启动第二执行的调度窗口
+	// Then：Resume 不得把滞行任务重新入队。自建泵已退役（派发只由守护
+	// DispatchOnce 驱动），错误重入队的可观测面就是队列里的 pending/active
+	// 登记——此前用 300ms 裸睡充当「第二执行的调度窗口」，既拖慢包测试又在
+	// 慢机上假红，且机器空闲时自证成立。
+	manager.mu.Lock()
+	for providerID, q := range manager.queues {
+		q.mu.Lock()
+		pendingHit := false
+		for _, item := range q.pending {
+			if item.jobID == 42 {
+				pendingHit = true
+			}
+		}
+		_, activeHit := q.active[42]
+		q.mu.Unlock()
+		if pendingHit || activeHit {
+			manager.mu.Unlock()
+			t.Fatalf("Resume 后滞行任务 42 被重新登记进 provider %d 队列（pending=%v active=%v）", providerID, pendingHit, activeHit)
+		}
+	}
+	manager.mu.Unlock()
 	if got := executionCount.Load(); got != 1 {
 		t.Fatalf("executions=%d, want 1（滞行期间不得双执行）", got)
 	}
@@ -2338,12 +2378,15 @@ func TestCancelJob_waits_for_retired_and_zombie_executions(t *testing.T) {
 		manager.CancelJob(42)
 		close(returned)
 	}()
-	// Then 1：在途执行未退出前 CancelJob 不得返回
+	// Then 1：在途执行未退出前 CancelJob 不得返回。确定性证据=协程栈：取消
+	// 协程阻塞在 CancelJob 的 select（等待 executionDone/共享截止）——此前
+	// 50ms 固定观测窗在取消协程尚未被调度时同样成立（负载下假绿）。
 	select {
 	case <-returned:
 		t.Fatal("CancelJob returned before retired execution finished")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
+	waitGoroutineBlockedOn(t, "TestCancelJob_waits_for_retired_and_zombie_executions", "(*CAQueueManager).CancelJob", "[select")
 	close(done)
 	select {
 	case <-returned:
@@ -2364,8 +2407,9 @@ func TestCancelJob_waits_for_retired_and_zombie_executions(t *testing.T) {
 	select {
 	case <-zombieReturned:
 		t.Fatal("CancelJob returned before zombie execution finished")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
+	waitGoroutineBlockedOn(t, "TestCancelJob_waits_for_retired_and_zombie_executions", "(*CAQueueManager).CancelJob", "[select")
 	close(zombieDone)
 	select {
 	case <-zombieReturned:

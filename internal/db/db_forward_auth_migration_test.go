@@ -76,7 +76,7 @@ func TestInitialize_normalizesForwardAuthRows(t *testing.T) {
 	}
 	// 纯空白列 → 只回填该列默认（渲染对两者都有非空校验：uri 须 / 开头、
 	// 身份头清单禁空白项，穿透即配置生成期显性失败）；另一列的非空自定义值
-	// 必须原样保留——一空一自定义行不得被双列覆盖（回归）。
+	// 必须原样保留——一空一自定义行不得被双列覆盖。
 	if _, _, uri, headers := readRow("lb_fawsuri"); uri != DefaultForwardAuthURI || headers != "/api/verify" {
 		t.Fatalf("ws-uri row=(%q,%q), want uri 回填默认且自定义身份头保留 /api/verify", uri, headers)
 	}

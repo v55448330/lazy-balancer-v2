@@ -43,6 +43,7 @@
         >
           <el-option v-for="policy in section.options" :key="policy.id" :value="policy.id" :label="policy.name" :disabled="section.tcpLocked === true">
             <span>{{ policy.name }}</span>
+            <el-tag v-if="policy.acl_empty_allow" size="small" type="warning" effect="light" class="bind-state-tag">{{ t('common.app.views.secBinding.emptyAllowTag') }}</el-tag>
             <el-tag size="small" effect="plain" :type="policy.enabled ? 'success' : 'info'" class="bind-state-tag">{{ policy.enabled ? t('common.app.views.secBinding.enabledTag') : t('common.app.views.secBinding.disabledTag') }}</el-tag>
           </el-option>
         </el-select>
@@ -67,6 +68,8 @@
 
     <!-- 策略侧：规则选择器（复用 rule picker 交互；每行显示当前绑定集合） -->
     <template v-else>
+      <!-- 空白名单策略：绑定入口与保存入口同口径警示 -->
+      <div v-if="currentPolicyEmptyAllow" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.secBinding.emptyAllowPolicyNote', { policy: policyName ?? '' }) }}</span></div>
       <div class="picker-toolbar">
         <el-input v-model="pickerSearch" :placeholder="t('common.app.views.secBinding.searchPlaceholder')" clearable :prefix-icon="Search" class="picker-search" :disabled="saving" />
         <!-- 协议筛选（默认 HTTP）：TCP（阶段 0/1）放开后候选混排，默认档保持既有 HTTP 选择视野 -->
@@ -165,9 +168,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock, Search, WarningFilled } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
@@ -200,6 +203,8 @@ interface BindingEditorPolicy extends SecurityPolicyTypeInput {
   id: number
   name: string
   enabled: boolean
+  /** ACL 开启、模式 allow、生效条目为零——绑定到规则即全拒（后端摘要单源判定） */
+  acl_empty_allow?: boolean
 }
 
 interface BindingEditorRule {
@@ -430,6 +435,34 @@ const onOpen = (): void => {
 //   同时改同一规则绑定时，后写覆盖前写且无冲突提示。
 // - 单管理员主节点语境下可接受；若未来需要并发护栏，必须先在绑定端点引入
 //   版本前置条件（409），前端再随请求携带打开时的版本，不能只在前端比对。
+// 空白名单策略（ACL 开启、allow、生效条目为零）：allow 空集=恒拒，绑定到规则后
+// 该规则拒绝所有请求。策略保存入口已有「会拒绝所有请求」确认，绑定入口此前零
+// 提示——行内警示 + 提交确认，判定取后端摘要单源。
+const emptyAllowSelected = computed(() => {
+  // 只建成员集合（判「是否选中」），不参与提交序——提交序仍是 flattenBindingOrder 单源。
+  const ids = new Set<number>()
+  for (const selection of [bindStage0, bindStage1, bindStage2, bindStage3]) {
+    for (const id of selection.value) ids.add(id)
+  }
+  return props.policies.filter((policy) => policy.acl_empty_allow === true && ids.has(policy.id))
+})
+const currentPolicyEmptyAllow = computed(() =>
+  props.mode === 'policy' && (props.policies.find((policy) => policy.id === props.policyId)?.acl_empty_allow === true))
+const confirmEmptyAllow = async (lead: string, names: string[]): Promise<boolean> => {
+  try {
+    await ElMessageBox.confirm(
+      h('div', [
+        h('div', lead),
+        h('ul', { class: 'confirm-scope-list' }, names.map((name) => h('li', name))),
+      ]),
+      t('common.app.views.secBinding.emptyAllowTitle'),
+      { confirmButtonText: t('common.app.views.secBinding.emptyAllowOk'), cancelButtonText: t('common.app.views.secBinding.cancel'), type: 'warning' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
 const submit = async (): Promise<void> => {
   if (props.mode === 'rule') {
     const rule = props.rule
@@ -437,6 +470,10 @@ const submit = async (): Promise<void> => {
     if (ruleModeTotal.value > MAX_POLICIES_PER_RULE) {
       ElMessage.warning(t('common.app.views.secBinding.ruleTotalExceeded', { max: MAX_POLICIES_PER_RULE, count: ruleModeTotal.value }))
       return
+    }
+    if (emptyAllowSelected.value.length > 0) {
+      const lead = t('common.app.views.secBinding.emptyAllowRuleLead', { rule: rule.name })
+      if (!(await confirmEmptyAllow(lead, emptyAllowSelected.value.map((policy) => policy.name)))) return
     }
     saving.value = true
     try {
@@ -492,6 +529,11 @@ const submit = async (): Promise<void> => {
     ElMessage.info(t('common.app.views.secBinding.noChanges'))
     emit('update:modelValue', false)
     return
+  }
+  if (currentPolicyEmptyAllow.value && toBind.length > 0) {
+    const lead = t('common.app.views.secBinding.emptyAllowPolicyLead', { policy: props.policyName ?? '' })
+    const names = toBind.map((id) => pickerCandidateRules.value.find((rule) => rule.caddy_id === id)?.name ?? id)
+    if (!(await confirmEmptyAllow(lead, names))) return
   }
   saving.value = true
   try {

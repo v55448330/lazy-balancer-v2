@@ -741,7 +741,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 }
 
 // securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
-// 41 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
+// 列投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
 // （canonical 副本：internal/services/security.go scanSecurityPolicyByID、
 // internal/services/caddy.go loadSecurityPolicyContext 批量预载）。services/ 归
 // 并行任务持有且两侧列集本就不同，此处按既定回退方案保持 handlers 本地副本——
@@ -882,6 +882,9 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// HasIPControl 摘要与发射面同源需要引用名单的实际条目（引用的
 	// 列表为空/缺失时不再虚报「IP 访问控制已启用」）——批次内一次批量查询。
 	services.ResolvePolicyIPListRefsForSummary(policyPointers)
+	// 「空白名单」判定（ACL 开启 + allow + 生效条目为零 → 绑定即全拒）只用上方
+	// 摘要侧的存在性与 inline 条目，不调用渲染装载函数：读端点不得写审计副作用，
+	// 也不为摘要全量展开引用名单（PolicyACLEmptyAllow 自带判据）。
 	customRuleCounts := services.CountEnabledCustomRulesBatch(policyPointers)
 	// CRS 陈旧选择检测复用同一份索引（缓存命中零重建；索引键含目录+版本+
 	// 聚合 stat，CRS 更替后自动重判）。
@@ -897,6 +900,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			AnomalyThreshold: p.AnomalyThreshold,
 			IPACLMode:        p.IPACLMode,
 			IPACLEnabled:     p.IPACLEnabled,
+			ACLEmptyAllow:    services.PolicyACLEmptyAllow(&p),
 			TrustDetection:   p.TrustDetection,
 			HumanVerifyMode:  p.HumanVerifyMode, HumanVerifyType: p.HumanVerifyType,
 			HumanVerifyTTL: p.HumanVerifyTTL, HumanExemptPaths: string(p.HumanExemptPaths),
@@ -1832,14 +1836,27 @@ func validateCRSExcludedRulesPayload(val *string, checkIndices bool) error {
 			return fmt.Errorf("crs_excluded_rules 条目 #%d 命中基础设施规则组（901 初始化 / 949 请求评估 / 959 响应评估）：这些规则为系统强制加载，不能排除", i+1)
 		}
 		ips := strings.TrimSpace(entry.IPs)
+		// 作用域互斥矩阵闭合：每个 scope 只消费自己的目标字段，携带互补字段会
+		// 原样落库但渲染端按 scope 不消费——保存成功、意图不生效的静默死配置。
+		// scope=all/path 的既有拒绝保留原文案（测试/文档已钉），补齐 ip/list
+		// 的互补字段与非 path 的 path。
+		if scope != "path" && entry.Path != "" {
+			return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=%s 不允许携带 path（渲染端按 scope 不消费）", i+1, scope)
+		}
 		switch scope {
 		case "ip":
 			if ips == "" {
 				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=ip 必须填写 ips（逗号分隔的 IP/CIDR）", i+1)
 			}
+			if len(entry.ListRefs) > 0 {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=ip 不允许携带 listRefs（渲染端按 scope 不消费）", i+1)
+			}
 		case "list":
 			if len(entry.ListRefs) == 0 {
 				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=list 必须填写 listRefs（IP 地址列表 id）", i+1)
+			}
+			if ips != "" {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=list 不允许携带 ips（渲染端按 scope 不消费）", i+1)
 			}
 		case "all":
 			if ips != "" || len(entry.ListRefs) > 0 {
@@ -2077,7 +2094,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 存量行单次读取：本端点在写锁内要拿同一策略行的六组字段（CC 防护 / ACL /
 	// GeoIP / 引用 / 类型 / 审计 delta 基准），此前按门逐列各读一遍——同一行
 	// 读 10 次（含 3 次全列扫描），整段都在 BEGIN IMMEDIATE 写锁内。收敛为
-	// 事务开头一次 41 列投影，写后只保留必需的终态读（重推断 / 状态码归一 /
+	// 事务开头一次全列投影，写后只保留必需的终态读（重推断 / 状态码归一 /
 	// 审计名）。写锁已持，单次读与后续校验、审计基准零竞态。
 	var stored models.SecurityPolicy
 	if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
@@ -4527,7 +4544,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	policies := make([]models.SecurityPolicy, 0, len(policyIDs))
 	for _, policyID := range policyIDs {
 		var p models.SecurityPolicy
-		// 与 securityPolicySelectColumns 同 41 列同序投影（COALESCE 默认值），
+		// 与 securityPolicySelectColumns 逐列同序投影（COALESCE 默认值），
 		// 任一可空列 NULL 不再使整接口 500；WHERE enabled=1 语义不变（NULL-enabled
 		// 仍被 SQL 过滤）。
 		if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicySelectColumns+`
@@ -4604,7 +4621,7 @@ func formatIP2RegionLocation(region string) string {
 // regionLocationParts 从 ip2region 原始 region 结构化产出 (国家, 省简称)，
 // 供威胁大屏省级聚合使用。**不得**解析 formatIP2RegionLocation 的展示串：
 // ISP-only 行（中国|0|0|阿里|CN）展示为「中国·阿里」，二次按「·」拆分会把
-// ISP 当成省名污染省级统计（回归）。海外返回中文化国家名
+// ISP 当成省名污染省级统计。海外返回中文化国家名
 // （与展示口径一致），不产出省份；Reserved/畸形返回空。
 func regionLocationParts(region string) (country, province string) {
 	fields := strings.Split(region, "|")
@@ -6700,14 +6717,9 @@ func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 	return nil
 }
 
-// normalizeBlockStatusCode 写侧拦截状态码归一口径（Create/Update 单一事实源）：
-// 状态码只在「已绑定自定义拦截页」时被渲染消费——无页策略的 deny 恒 403
-// （blockStatusForPolicy 仅对有有效页的策略分配合成码）。无页形态落零，
-// 避免详情/列表宣称一个不生效的值。
 // normalizeBlockResponseMode 把策略级拦截响应方式归一到
 // auto|html|json 三值：auto=按请求头自动选择（浏览器 HTML / API JSON）。
 // 空值与非法值一律 auto（fail-safe：保持历史自动行为）。
-
 func normalizeBlockResponseMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "html":
@@ -6719,6 +6731,10 @@ func normalizeBlockResponseMode(mode string) string {
 	}
 }
 
+// normalizeBlockStatusCode 写侧拦截状态码归一口径（Create/Update 单一事实源）：
+// 状态码只在「已绑定自定义拦截页」时被渲染消费——无页策略的 deny 恒 403
+// （blockStatusForPolicy 仅对有有效页的策略分配合成码）。无页形态落零，
+// 避免详情/列表宣称一个不生效的值。
 func normalizeBlockStatusCode(statusCode int, blockPageID int) int {
 	if blockPageID == 0 {
 		return 0

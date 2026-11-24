@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code } from './_helpers.ts'
+import { code, member } from './_helpers.ts'
 
 const RULES = 'src/views/security/SecurityRules.vue'
 
@@ -36,12 +36,15 @@ test('只读门单源：isReadOnly ∨ isSlaveNode', () => {
 test('每个写函数首部有函数级只读早退', () => {
   const text = code(RULES)
   for (const marker of WRITE_FUNCTIONS) {
-    const at = text.indexOf(marker)
-    assert.ok(at >= 0, `缺少写函数：${marker}`)
-    const head = text.slice(at, at + 320)
+    assert.ok(text.includes(marker), `缺少写函数：${marker}`)
+    // 花括号配对取函数体（不再用「起点+320 字符」定长窗口）：定长窗口在函数
+    // 头注释/参数展开变长时假红，窗口内混入另一处早退时假绿；early return 只
+    // 允许出现在函数体的**首条语句**位置。
+    const body = member(text, marker)
+    const firstStatement = body.slice(body.indexOf('{\n') + 2).trimStart()
     assert.match(
-      head,
-      /if \(writeBlocked\(\)(?:\s*\|\|\s*[^)]+)?\) return/,
+      firstStatement,
+      /^if \(writeBlocked\(\)(?:\s*\|\|\s*[^)]+)?\) return/,
       `${marker} 缺少函数级只读早退（仅靠按钮 disabled 不够）`,
     )
   }

@@ -172,7 +172,11 @@ func bump() {
 	}
 }
 
-func TestHandlerGlobalSeamRegistryCoversAllAssignableVars(t *testing.T) {
+// productionAssignableSeams 从生产源码的类型信息派生「测试可直接赋值的 seam」
+// 名单（函数缝/客户端缝 + 有测试写点的标量旋钮），独立于任何手写/派生登记表。
+// 返回值 name → file:line（诊断用）。登记表漏登即由调用方对账暴露。
+func productionAssignableSeams(t *testing.T) map[string]string {
+	t.Helper()
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -187,12 +191,8 @@ func TestHandlerGlobalSeamRegistryCoversAllAssignableVars(t *testing.T) {
 	if err != nil {
 		t.Fatalf("packages.Load: %v", err)
 	}
-	registered := make(map[string]bool)
-	for name := range captureHandlerGlobalSeams() {
-		registered[name] = true
-	}
 	testWriters := scalarSeamTestWritersAt(t, ".")
-	var missing []string
+	assignable := make(map[string]string)
 	scanned := 0
 	for _, pkg := range pkgs {
 		if len(pkg.Errors) > 0 {
@@ -222,7 +222,7 @@ func TestHandlerGlobalSeamRegistryCoversAllAssignableVars(t *testing.T) {
 							continue
 						}
 						scanned++
-						if registered[ident.Name] || !isSeamVarType(obj.Type()) {
+						if !isSeamVarType(obj.Type()) {
 							continue
 						}
 						if _, isBasic := obj.Type().Underlying().(*types.Basic); isBasic && !testWriters[ident.Name] {
@@ -230,7 +230,7 @@ func TestHandlerGlobalSeamRegistryCoversAllAssignableVars(t *testing.T) {
 							continue
 						}
 						pos := pkg.Fset.Position(ident.Pos())
-						missing = append(missing, pos.Filename+":"+ident.Name)
+						assignable[ident.Name] = pos.Filename + ":" + ident.Name
 					}
 				}
 			}
@@ -238,6 +238,20 @@ func TestHandlerGlobalSeamRegistryCoversAllAssignableVars(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("未扫描到任何包级 var——门禁扫描面为空（加载模式/目录漂移）")
+	}
+	return assignable
+}
+
+func TestHandlerGlobalSeamRegistryCoversAllAssignableVars(t *testing.T) {
+	registered := make(map[string]bool)
+	for name := range captureHandlerGlobalSeams() {
+		registered[name] = true
+	}
+	var missing []string
+	for name, pos := range productionAssignableSeams(t) {
+		if !registered[name] {
+			missing = append(missing, pos)
+		}
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {

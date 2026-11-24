@@ -3505,7 +3505,9 @@ func TestAPIDocs_portSemanticGateThreeFaceParity(t *testing.T) {
 		"REST POST /rules":          routesEntry(t, "POST /rules").Description,
 		"REST PUT /rules/:caddy_id": routesEntry(t, "PUT /rules/:caddy_id").Description,
 		"MCP schema":                readFace(filepath.Join("..", "mcpserver", "server.go")),
-		"后端实现":                      readFace(filepath.Join("..", "handlers", "handlers.go")),
+		// 80/443 端口-TLS 语义的单源实现是 portTLSSemanticsError（rule_features.go）；
+		// handlers.go 的同义分支已删除（三入口均先过单源门，重复实现永远命不中）。
+		"后端实现": readFace(filepath.Join("..", "handlers", "rule_features.go")),
 	}
 	for name, text := range faces {
 		// 披露片段：REST/MCP/实现三面共用（实现面 400 文案与披露句同一事实源措辞）。

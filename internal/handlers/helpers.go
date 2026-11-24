@@ -177,6 +177,29 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 // (与 systemMetricsReadFile 同款测试隔离约定)。
 var tlsCertSystemRoots = x509.SystemCertPool
 
+// 证书警告文案的单源（分类依赖前缀，故集中定义）。
+const (
+	certWarningIncompleteChain   = "证书链可能不完整，部分客户端将握手失败"
+	certWarningDomainMismatch    = "证书域名与规则域名不匹配"
+	certWarningExpiredPrefix     = "证书已过期"
+	certWarningNotYetValidPrefix = "证书尚未生效"
+)
+
+// certWarningsForResponse 从证书警告中筛出必须随保存响应返回面板的部分。
+// 域名不匹配/链不完整会让站点直接握手失败，用户保存后必须立刻看到；过期/
+// 未生效属可轮换状态（手动证书允许先落库后轮换），由证书列表与到期巡检
+// 持续提示，不重复弹框。
+func certWarningsForResponse(warnings []string) []string {
+	var out []string
+	for _, warning := range warnings {
+		if strings.HasPrefix(warning, certWarningExpiredPrefix) || strings.HasPrefix(warning, certWarningNotYetValidPrefix) {
+			continue
+		}
+		out = append(out, warning)
+	}
+	return out
+}
+
 // tlsCertificateWarnings对手动 TLS 证书做「不阻断」质量检查
 //  1. 链完整性——系统根 + PEM 内中间证书 x509.Verify,unknown authority 类
 //     失败说明链可能不完整(浏览器/严格客户端将握手失败);
@@ -211,7 +234,7 @@ func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
 		}); verr != nil {
 			var unknownAuthority x509.UnknownAuthorityError
 			if errors.As(verr, &unknownAuthority) {
-				warnings = append(warnings, "证书链可能不完整，部分客户端将握手失败")
+				warnings = append(warnings, certWarningIncompleteChain)
 			}
 		}
 	}
@@ -221,9 +244,9 @@ func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
 	// 规则保存路径却丢弃未用。
 	now := time.Now()
 	if now.After(leaf.NotAfter) {
-		warnings = append(warnings, "证书已过期 (过期时间: "+leaf.NotAfter.In(services.CurrentLocation()).Format("2006-01-02")+")")
+		warnings = append(warnings, certWarningExpiredPrefix+" (过期时间: "+leaf.NotAfter.In(services.CurrentLocation()).Format("2006-01-02")+")")
 	} else if now.Before(leaf.NotBefore) {
-		warnings = append(warnings, "证书尚未生效 (生效时间: "+leaf.NotBefore.In(services.CurrentLocation()).Format("2006-01-02")+")")
+		warnings = append(warnings, certWarningNotYetValidPrefix+" (生效时间: "+leaf.NotBefore.In(services.CurrentLocation()).Format("2006-01-02")+")")
 	}
 	for _, name := range strings.Split(domain, ",") {
 		name = strings.TrimSpace(name)
@@ -231,7 +254,7 @@ func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
 			continue
 		}
 		if !tlsCertCoversDomain(leaf, name) {
-			warnings = append(warnings, "证书域名与规则域名不匹配")
+			warnings = append(warnings, certWarningDomainMismatch)
 			break
 		}
 	}

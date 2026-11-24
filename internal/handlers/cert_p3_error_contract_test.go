@@ -405,7 +405,7 @@ func TestEnableRule_rejectsNonIssuableACMEDomain(t *testing.T) {
 // 允许固定文案，但不允许「服务端也无痕」。
 func TestCertificateDomain_5xxExitsRouteThroughWriteInternalError(t *testing.T) {
 	const rawLiteral = "c.JSON(http.StatusInternalServerError"
-	for _, file := range []string{"certificates.go", "certinfo.go", "certjobs.go"} {
+	for _, file := range []string{"certificates.go", "certinfo.go", "certjobs.go", "caproviders.go"} {
 		source, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatalf("read %s: %v", file, err)

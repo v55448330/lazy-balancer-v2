@@ -72,7 +72,7 @@ func TestRegionLocationParts_doesNotTreatISPAsProvince(t *testing.T) {
 		{name: "china full", region: "中国|广东省|深圳市|电信|CN", wantCountry: "中国", wantProvince: "广东"},
 		{name: "china province only", region: "中国|山东省|0|0|CN", wantCountry: "中国", wantProvince: "山东"},
 		// ISP-only（省/市段为 0）：展示串是「中国·阿里」，但阿里是 ISP 不是省，
-		// 省级聚合必须留空（回归）。
+		// 省级聚合必须留空。
 		{name: "china isp only", region: "中国|0|0|阿里|CN", wantCountry: "中国", wantProvince: ""},
 		{name: "overseas", region: "United States|California|0|Google LLC|US", wantCountry: "美国", wantProvince: ""},
 		{name: "reserved", region: "Reserved|Reserved|Reserved|0|0", wantCountry: "", wantProvince: ""},

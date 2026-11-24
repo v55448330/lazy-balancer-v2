@@ -819,6 +819,35 @@ for name in "${expected_scan_names[@]}"; do
   fi
 done
 
+# 14e) Go 字符串字面量通道：非注释/非声明行上的批次号 + 同行审计动作词必须命中
+#      ——t.Fatalf/错误信息会把批次号原样输出给使用者，注释行通道覆盖不到。
+reset_fixture
+mkdir_in internal/services/tz_slot_test.go
+cat >"$tmp_root/internal/services/tz_slot_test.go" <<'EOF'
+package services
+
+func TestSlotTimezone(t *testing.T) {
+	if got.Location() != want {
+		t.Fatalf("槽时区=%v, want 配置时区 %v（NOTIF153-04 同源）", got.Location(), want)
+	}
+}
+EOF
+git -C "$tmp_root" add -f internal/services/tz_slot_test.go
+assert_bad "go string literal batch id" "tz_slot_test.go"
+
+# 14f) 空格分隔序数形态（批次号被空格拆开书写）：短横线家族不命中，注释行
+#      也必须由序数形态兜住。
+reset_fixture
+mkdir_in internal/notify/peak_bucket.go
+cat >"$tmp_root/internal/notify/peak_bucket.go" <<'EOF'
+package notify
+
+// 峰值差分首样本基线（NOTIF153 P3 峰值差分首样本基线；生产已按此实现）。
+func peakQPS() {}
+EOF
+git -C "$tmp_root" add -f internal/notify/peak_bucket.go
+assert_bad "space separated ordinal" "peak_bucket.go"
+
 
 # 1) 百分位
 reset_fixture
@@ -965,6 +994,38 @@ cat >"$tmp_root/docs/charset.md" <<'EOF'
 Charset Windows-1252 与 UA 片段 Chrome-120 均按字节处理，不做转码。
 EOF
 assert_good "Windows-1252 and Chrome-120"
+
+# 10b) Go 字符串字面量通道的误报面：产品 token、夹具数据与「无审计动作词的
+#      强形态」都不得判罚——该通道有意收窄（见守卫头部说明），按字面量一律
+#      判罚会让闸门在产品/夹具字符串上不可用。
+reset_fixture
+mkdir_in internal/services/string_tokens_test.go
+cat >"$tmp_root/internal/services/string_tokens_test.go" <<'EOF'
+package services
+
+func TestStringTokens(t *testing.T) {
+	want := []string{"CF-Connecting-IP", "A86.example.com", "caddy-20260921T120000-1048576-size.log"}
+	if got := strings.Join(want, ","); got == "" {
+		t.Fatalf("修复后仍为空: %v", got)
+	}
+}
+EOF
+git -C "$tmp_root" add -f internal/services/string_tokens_test.go
+assert_good "go string literal product tokens"
+
+reset_fixture
+mkdir_in internal/services/gen_label_test.go
+cat >"$tmp_root/internal/services/gen_label_test.go" <<'EOF'
+package services
+
+func TestLogGenerationLabel(t *testing.T) {
+	if got != "GEN-7-" {
+		t.Fatal(got)
+	}
+}
+EOF
+git -C "$tmp_root" add -f internal/services/gen_label_test.go
+assert_good "go string literal strong form without audit context"
 
 # 11) PATH 中无 perl：内容扫描依赖 perl，缺失必须 fail-closed（非零退出、
 #     原因含 perl、且不得宣告通过）——该分支是守卫的安全底线，此前零覆盖。

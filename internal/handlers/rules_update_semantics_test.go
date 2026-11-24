@@ -110,8 +110,8 @@ func TestDuplicateRule_clearsCAProviderIDForTCP(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_tcpcap/duplicate", nil))
 
 	// Then:副本 ca_provider_id=0(修复前原样携带 7)
-	if response.Code != http.StatusOK && response.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%.200s, want 200/201", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%.200s, want 201", response.Code, response.Body.String())
 	}
 	var count int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE name LIKE 'tcp-ca%' AND ca_provider_id<>0 AND caddy_id<>'lb_tcpcap'").Scan(&count); err != nil {
@@ -147,8 +147,8 @@ func TestDuplicateRule_copiesSecurityPolicyBindings(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_dupbind/duplicate", nil))
 
 	// Then：201 + 副本（name LIKE 'dup-bind（副本）%'）携带同样两条绑定
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("duplicate status=%d body=%.200s, want 2xx", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("duplicate status=%d body=%.200s, want 201", response.Code, response.Body.String())
 	}
 	var newID string
 	if err := db.DB.QueryRow(`SELECT caddy_id FROM lb_rules WHERE name LIKE 'dup-bind（副本）%' AND caddy_id<>'lb_dupbind'`).Scan(&newID); err != nil {
@@ -203,8 +203,8 @@ func TestDuplicateRule_preservesSecurityPolicyBindingRankOrder(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_duprank/duplicate", nil))
 
 	// Then：201 + 副本的读路径顺序与源逐位一致
-	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
-		t.Fatalf("duplicate status=%d body=%.200s, want 2xx", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("duplicate status=%d body=%.200s, want 201", response.Code, response.Body.String())
 	}
 	var newID string
 	if err := db.DB.QueryRow(`SELECT caddy_id FROM lb_rules WHERE name LIKE 'dup-rank（副本）%' AND caddy_id<>'lb_duprank'`).Scan(&newID); err != nil {
@@ -326,8 +326,8 @@ func TestRuleWrites_emptyTLSSourceClearsACMEReference(t *testing.T) {
 
 		router.ServeHTTP(recorder, request)
 
-		if recorder.Code != http.StatusOK && recorder.Code != http.StatusCreated {
-			t.Fatalf("status=%d body=%s, want 2xx", recorder.Code, recorder.Body.String())
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want 201", recorder.Code, recorder.Body.String())
 		}
 		var source string
 		var acmeID int

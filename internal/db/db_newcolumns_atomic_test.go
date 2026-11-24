@@ -146,7 +146,7 @@ func TestOrderNewColumnKeys_rejectsBackfillKeyWithoutColumn(t *testing.T) {
 
 // 同表依赖回填只对「本次新增」的列执行：列已存在时回填视为已完成。此前第二趟
 // 不区分新增/存量，无条件重跑——api_keys.api_read_only/mcp_read_only 的回填
-// （=read_only）会在每次启动把用户设置的非对称只读压平（回归）。
+// （=read_only）会在每次启动把用户设置的非对称只读压平。
 func TestEnsureNewColumns_deferredBackfillRunsOnlyForNewlyAddedColumns(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE probe (id INTEGER PRIMARY KEY, base INTEGER DEFAULT 0, derived INTEGER DEFAULT 0)`); err != nil {
@@ -183,7 +183,7 @@ func TestEnsureNewColumns_deferredBackfillRunsOnlyForNewlyAddedColumns(t *testin
 }
 
 // 第二趟裸 DB.Exec 回填必须计入零写口径：否则「二次启动零写」测试看不见重跑
-// 回填，（回归） 这类每启动重写用户值的回归会被静默放过（回归）。
+// 回填，这类每启动重写用户值的回归会被静默放过。
 func TestEnsureNewColumns_deferredBackfillCountsWriteStatement(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE probe (id INTEGER PRIMARY KEY)`); err != nil {
@@ -219,7 +219,7 @@ func TestEnsureNewColumns_deferredBackfillCountsWriteStatement(t *testing.T) {
 	}
 }
 
-// 端到端回归（回归）：升级后重启不得把非对称只读配置压平为 read_only。
+// 端到端回归：升级后重启不得把非对称只读配置压平为 read_only。
 func TestInitialize_restartPreservesAsymmetricAPIReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)

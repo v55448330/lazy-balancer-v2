@@ -1552,10 +1552,10 @@ func portTLSSemanticsError(protocol string, listenPort int, enableTLS, tlsHTTPRe
 		return "80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转"
 	}
 	if listenPort == 80 && enableTLS {
-		return "80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS"
+		return "80 端口是 HTTP 端口，TLS 规则不可监听 80（Caddy 不会在此端口终止 TLS，规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS"
 	}
 	if listenPort == 443 && !enableTLS {
-		return "443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口"
+		return "443 端口是 HTTPS 默认端口，明文 HTTP 规则不可监听 443（https://域名:443 握手必败），请开启 HTTPS 或改用其他端口；443 不适用同端口跳转（走 80→443 既有通道）"
 	}
 	return ""
 }
