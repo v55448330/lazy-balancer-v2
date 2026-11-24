@@ -815,7 +815,6 @@ export default {
           "serverBackup": "Server backup",
           "formatsHint": "Supports V2 full backups and V1 (nginx-era) backups",
           "validating": "Validating backup file...",
-          "validateFail": "Backup file validation failed",
           "sectionsLabel": "Sections to import (unselected sections stay as-is)",
           "v1OnlyHint": "V1 backups support load-balancing rule import only",
           "revalidateHint": "Validation failed — unchecking sections with problematic data revalidates automatically",

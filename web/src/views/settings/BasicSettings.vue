@@ -343,12 +343,13 @@
       <div v-if="importValidating" v-loading="true" class="import-validating">{{ t('app.settings.basic.import.validating') }}</div>
 
       <template v-if="importValidation && !importValidating">
-        <div v-if="!importValidation.valid && (importPreviewSelected || importBackupId !== null)" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error || t('app.settings.basic.import.validateFail') }}</span></div>
-        <!-- 预览无效时分类 chip 保持可见可用——取消勾选坏行分类后
-             revalidateImport 自动重校验恢复 valid 即解锁确认；0 分类时保留
-             校验对象与 chip，仅隐藏预览并禁用确认，用户可直接重新勾选。
-             服务器备份（还原）例外：可导入分类要等预览成功才知道，预览失败时
-             分类为空，错误原因必须照常显示。 -->
+        <div v-if="!importValidation.valid && importValidation.error" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error }}</span></div>
+        <!-- 预览无效且带有具体原因就显示原因，与已选分类数、数据源无关：服务器备份的
+             可导入分类要等预览成功才知道；本地文件超过大小上限被拒时分类同样为空。
+             预览无效时分类 chip 保持可见可用——取消勾选坏行分类后 revalidateImport
+             自动重校验恢复 valid 即解锁确认；0 分类时保留校验对象与 chip，仅隐藏
+             预览并禁用确认，用户可直接重新勾选，并由「未选择导入分类」替代上一轮
+             预览留下的旧错误（toggleImportSection 清掉）。 -->
         <div class="import-result">
           <div class="import-sections">
             <div class="import-sections-label">{{ t('app.settings.basic.import.sectionsLabel') }}</div>
@@ -396,7 +397,7 @@
             <div v-if="importValidation.type !== 'v1'" class="info-note-bar import-alert"><span class="info-note-desc">{{ importSections.length === BACKUP_SECTIONS.length ? t('app.settings.basic.import.coverAll') : t('app.settings.basic.import.coverSelected', { list: listJoin(importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)) }) }}</span></div>
             <div v-else class="info-note-bar" style="margin-top: 4px"><span class="info-note-desc">{{ t('app.settings.basic.import.v1Scope') }}</span></div>
           </template>
-          <div v-else-if="!importPreviewSelected && (importValidation.valid || importBackupId === null)" class="info-note-bar import-alert"><span class="info-note-desc">{{ t('app.settings.basic.import.noneSelected') }}</span></div>
+          <div v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ t('app.settings.basic.import.noneSelected') }}</span></div>
         </div>
       </template>
 
@@ -716,6 +717,9 @@ const toggleImportSection = (key: string): void => {
   importSections.value = importSections.value.includes(key)
     ? importSections.value.filter((k) => k !== key)
     : [...importSections.value, key]
+  // 取消到 0 个分类：上一轮预览的错误原因随之作废，改由「未选择导入分类」提示
+  // 接管。没有预览会话的失败态（如文件超过大小上限被拒）不经此路径，原因继续显示。
+  if (importSections.value.length === 0 && importPreviewSession) importValidation.value = { ...validation, error: '' }
   void revalidateImport()
 }
 
@@ -1275,14 +1279,11 @@ const handleImportFile = async (event: Event): Promise<void> => {
   }
 }
 
-// 预览请求失败的弹框文案：服务器备份模式的失败原因来自服务器（备份文件已不存在 /
-// 超过上限…），必须留在弹框内——全局提示几秒即逝，而此时分类全禁用、没有重试入口
-// （被替换掉的旧还原确认框同样显示原因）。拦截器已把各类失败统一成带本地化文案的
-// ApiRequestError。本地文件模式沿用通用文案（历史行为，未改）。
-const importValidateFailureText = (error: unknown): string => {
-  if (importBackupId.value !== null && error instanceof Error && error.message) return error.message
-  return t('app.settings.basic.import.validateRequestFail')
-}
+// 预览请求失败的弹框文案：两种数据源都在弹框内显示失败原因——全局提示几秒即逝，
+// 而失败态下没有重试入口（服务器备份的分类还全禁用）。拦截器已把各类失败统一成带
+// 本地化文案的 ApiRequestError；没有可用原因时回落通用文案。
+const importValidateFailureText = (error: unknown): string =>
+  error instanceof Error && error.message ? error.message : t('app.settings.basic.import.validateRequestFail')
 
 // 为当前数据源建立预览会话并发起首轮校验（请求全部分类，后端按备份范围取交集）
 // ——文件导入与服务器备份共用。响应回来时序号已推进（关闭/换源）则丢弃。

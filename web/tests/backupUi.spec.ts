@@ -122,19 +122,23 @@ test('立即备份轮询在组件卸载后终止且不再弹结果', () => {
 
 // 取消到 0 个分类时，chip 必须保留以便重新勾选；摘要/冲突与确认按钮同门隐藏，
 // 空选择提示替代校验错误，避免继续展示上一次分类集合的预览。
-// 例外——服务器备份（还原）模式：可导入分类要等预览成功才知道，预览失败（请求出错
-// 或备份本身校验不过）时分类为空，必须显示错误原因，「未选择导入分类」不得盖住它。
+// 显示规则（2026-11-25 用户裁定本地文件模式同样处理）：预览无效且带有具体原因
+// 就显示原因，与已选分类数、数据源无关——服务器备份的预览要等成功才知道可导入
+// 分类，本地文件超过大小上限被拒时分类也是空的；此前这两种情形都被「未选择
+// 导入分类」盖住。取消到 0 个分类时清掉**上一轮预览**留下的旧错误（没有预览
+// 会话的失败态如超大文件不在此列，原因继续显示）。
 test('0 分类选择保留 chip、隐藏陈旧预览并禁用确认', () => {
   assert.match(page, /const importPreviewSelected = computed<boolean>\(\(\) => importSections\.value\.length > 0\)/)
   assert.match(page, /<template v-if="importValidation && !importValidating">/)
   assert.match(page, /@click="toggleImportSection\(sec\.key\)"/)
-  assert.match(page, /v-if="!importValidation\.valid && \(importPreviewSelected \|\| importBackupId !== null\)"/, '服务器备份模式下预览无效时必须显示错误原因')
+  assert.match(page, /v-if="!importValidation\.valid && importValidation\.error" class="info-note-bar import-alert"/, '预览无效且有具体原因即显示原因')
   assert.match(page, /v-else-if="!importValidation\.valid && importPreviewSelected"/)
   assert.match(page, /<template v-if="importValidation\.valid && importPreviewSelected">/)
-  assert.match(page, /v-else-if="!importPreviewSelected && \(importValidation\.valid \|\| importBackupId === null\)" class="info-note-bar import-alert"><span class="info-note-desc">\{\{ t\('app\.settings\.basic\.import\.noneSelected'\) \}\}/, '「未选择导入分类」不得盖住服务器备份的预览失败原因')
+  assert.match(page, /v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">\{\{ t\('app\.settings\.basic\.import\.noneSelected'\) \}\}/, '「未选择导入分类」只在没有待显示原因时出现')
   assert.ok(code('src/locales/zh/settings.ts').includes('"noneSelected": "未选择导入分类'), 'zh 母本须保留「未选择导入分类」原文')
   const toggle = section(page, 'const toggleImportSection', 'const toggleExportSection')
   assert.match(toggle, /if \(!importSelectableSections\.value\.includes\(key\)\) return/, '不可选分类（V1 的非规则分类、服务器备份未包含的分类）不可点；V1 取消唯一分类后仍必须允许重新勾选规则')
+  assert.match(toggle, /if \(importSections\.value\.length === 0 && importPreviewSession\) importValidation\.value = \{ \.\.\.validation, error: '' \}/, '取消到 0 个分类时清掉上一轮预览的错误原因')
   const button = section(page, ':disabled="!importValidation?.valid', ':loading="importing"')
   assert.match(button, /!importPreviewSelected/)
   // 与同卡其余写入口同门：只读 ∪ 非主节点（从节点导入必然 403）
@@ -247,9 +251,8 @@ test('服务器备份复用导入弹框：预览带 backup_id 空请求体，确
   // 预览请求失败（备份文件已不存在 / 超过上限…）：服务器备份模式下失败原因必须留在
   // 弹框内——全局提示几秒即逝，而此时分类全禁用、没有重试入口。
   const failure = section(page, 'const importValidateFailureText', 'const startImportValidation')
-  assert.match(failure, /importBackupId\.value !== null && error instanceof Error && error\.message/, '服务器备份模式取失败原因')
-  assert.match(failure, /return error\.message/, '服务器备份模式在弹框内显示失败原因')
-  assert.match(failure, /return t\('app\.settings\.basic\.import\.validateRequestFail'\)/, '本地文件模式沿用通用文案')
+  assert.match(failure, /error instanceof Error && error\.message \? error\.message : t\('app\.settings\.basic\.import\.validateRequestFail'\)/, '预览请求失败：两种数据源都在弹框内显示失败原因，没有可用原因时回落通用文案')
+  assert.doesNotMatch(failure, /importBackupId/, '本地文件模式不再区别对待')
   assert.equal((page.match(/error: importValidateFailureText\(error\)/g) ?? []).length, 2, '首轮预览与分类重校验两处都经同一取词')
   // 关闭弹框必须清掉服务器备份的数据源状态：否则「还原 → 关闭 → 本地文件导入」
   // 会带着旧的 backup_id 去校验，确认时走 submitRestore(旧 ID)。

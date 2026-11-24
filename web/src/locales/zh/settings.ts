@@ -815,7 +815,6 @@ export default {
           "serverBackup": "服务器备份",
           "formatsHint": "支持 V2 完整备份与 V1（nginx 版）备份",
           "validating": "正在校验备份文件...",
-          "validateFail": "备份文件校验失败",
           "sectionsLabel": "导入分类（未选分类保持现状）",
           "v1OnlyHint": "V1 备份仅支持负载均衡规则导入",
           "revalidateHint": "校验未通过——取消勾选包含异常数据的分类后将自动重新校验",
