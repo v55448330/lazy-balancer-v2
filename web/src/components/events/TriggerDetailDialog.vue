@@ -68,7 +68,7 @@
         <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.currentConfig') }}</span><span>{{ relevantSummary }}</span></div>
 
         <!-- 命中的地址列表与内联名单（只读信息） -->
-        <template v-if="kind === 'acl' || kind === 'geo' || kind === 'threat'">
+        <template v-if="kind === 'acl' || kind === 'geo'">
           <div v-for="m in allHitLists" :key="m.id" class="trg-kv">
             <span class="k">{{ t('common.app.views.trigDetail.hitLists') }}</span>
             <span>{{ m.name }}<el-tag v-if="m.system" size="small" effect="plain" style="margin-left: 6px">{{ t('common.app.views.trigDetail.builtinReadonly') }}</el-tag></span>
@@ -231,11 +231,11 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 // 词条键 common.app.views.trigDetail.*（母本由批次 D 集成落 locales views.ts）
 const { t } = useI18n()
 
-type Kind = 'acl' | 'geo' | 'crawler' | 'threat' | 'trust' | 'waf-crs' | 'waf-custom' | 'body' | 'human' | 'other'
+type Kind = 'acl' | 'geo' | 'crawler' | 'trust' | 'waf-crs' | 'waf-custom' | 'body' | 'human' | 'other'
 
 // kind 改由共享 triggerStageFamily 投影（securityStages 唯一实现，原
 // 双实现并存欠账）——细粒度族映射到本弹框展示 Kind（geoip→geo、
-// threat→threat、wafCrs→waf-crs、wafCustom→waf-custom，其余同名）。
+// wafCrs→waf-crs、wafCustom→waf-custom，其余同名）。
 // 空 id 恒 other；存量 id 8 单独标为「地域拦截（旧 id）」，其余未匹配非空值兜底 acl。
 const legacyGeo = computed(() => (props.row?.rule_triggered ?? '') === '8')
 
@@ -249,7 +249,6 @@ const kind = computed<Kind>(() => {
     case 'ipAcl': return 'acl'
     case 'geoip': return 'geo'
     case 'crawler': return 'crawler'
-    case 'threat': return 'threat'
     case 'wafCrs': return 'waf-crs'
     case 'wafCustom': return 'waf-custom'
     case 'body': return 'body'
@@ -258,8 +257,8 @@ const kind = computed<Kind>(() => {
   }
 })
 
-// （2026-10-03）：加和式仅 WAF 族——预检族（IP ACL/信任/
-// GeoIP/威胁）duration_us≡precheck_us 同值（securityevents.go:202），加和
+// （2026-10-03）：加和式仅 WAF 族——预检族（IP ACL/信任/GeoIP）
+// duration_us≡precheck_us 同值（securityevents.go:202），加和
 // 会翻倍并误标 WAF 段。族谓词单源 securityStages.isWafDurationFamily
 //（与事件列表请求上下文弹框同一实现）。
 const isWafFamily = computed(() => isWafDurationFamily(triggerStageFamily(props.row?.rule_triggered ?? '')))
@@ -269,7 +268,6 @@ const categoryLabel = computed(() => {
   switch (kind.value) {
     case 'geo': return t('common.app.views.trigDetail.categoryGeo')
     case 'crawler': return t('common.app.views.trigDetail.categoryCrawler')
-    case 'threat': return t('common.app.views.trigDetail.categoryThreat')
     case 'trust': return t('common.app.views.trigDetail.categoryTrust')
     case 'waf-crs': return t('common.app.views.trigDetail.categoryWafCrs')
     case 'waf-custom': return t('common.app.views.trigDetail.categoryWafCustom')
@@ -288,7 +286,7 @@ const categoryLabel = computed(() => {
 const sourceTagType = computed(() =>
   kind.value === 'geo' ? 'warning'
     : kind.value === 'crawler' ? 'info'
-      : kind.value === 'threat' || kind.value === 'waf-crs' ? 'danger'
+      : kind.value === 'waf-crs' ? 'danger'
         : kind.value === 'trust' ? 'success'
           : kind.value === 'waf-custom' || kind.value === 'acl' ? 'danger' : 'info')
 
@@ -303,7 +301,7 @@ const detectionNote = computed<string>(() => {
   if (!props.row || props.row.action === 'blocked') return ''
   if (kind.value === 'trust') return ''
   // 检测模式的 DetectionOnly 切换只覆盖 WAF 段（CRS/自定义含 body
-  // 目标）——阶段 1 族（IP ACL/地域/威胁/爬虫）的 logged 与模式无关，成因是
+  // 目标）——阶段 1 族（IP ACL/地域/爬虫）的 logged 与模式无关，成因是
   // 信任保留检测，不能归因「检测模式」。
   if (detectionModeExplains(kind.value) && policy.value?.mode === 'detection') return t('common.app.views.trigDetail.detectionModeNote')
   if (exemptingTrustPolicy.value) return t('common.app.views.trigDetail.trustExemptNote', { policy: exemptingTrustPolicy.value })
@@ -317,7 +315,6 @@ const heroStage = computed(() => {
     case 'acl': return t('common.app.views.trigDetail.stageAcl')
     case 'geo': return t('common.app.views.trigDetail.stageGeo')
     case 'crawler': return t('common.app.views.trigDetail.stageCrawler')
-    case 'threat': return t('common.app.views.trigDetail.stageThreat')
     case 'waf-crs': case 'waf-custom': return t('common.app.views.trigDetail.stageWaf')
     // 人机挑战属阶段 2 · CC 防护（2026-11-12 四阶段）
     case 'human': return t('common.app.views.trigDetail.stageHuman')
@@ -332,7 +329,6 @@ const dimensionTitle = computed(() => {
     case 'acl': return t('common.app.views.trigDetail.categoryAcl')
     case 'geo': return t('common.app.views.trigDetail.categoryGeo')
     case 'crawler': return t('common.app.views.trigDetail.dimCrawler')
-    case 'threat': return t('common.app.views.trigDetail.categoryThreat')
     case 'waf-crs': case 'waf-custom': return t('common.app.views.trigDetail.dimWaf')
     case 'human': return t('common.app.views.trigDetail.dimHuman')
     case 'body': return t('common.app.views.trigDetail.dimBody')
@@ -345,7 +341,6 @@ const relevantSummary = computed(() => {
     case 'trust': return trustSummary.value
     case 'geo': return geoSummary.value
     case 'crawler': return crawlerSummary.value
-    case 'threat': return t('common.app.views.trigDetail.threatRefSummary', { summary: aclSummary.value })
     case 'waf-crs': case 'waf-custom': return wafSummary.value
     case 'human': return t('common.app.views.trigDetail.humanSummary', { mode: ccModeText.value, type: ccTypeText.value })
     case 'body': return '—'
@@ -391,12 +386,6 @@ const heroHitSource = computed(() => {
       const n = Number(ev.rule_triggered)
       if (n >= 850000) return t('common.app.views.trigDetail.heroCrawlerSpoof', { id: ev.rule_triggered })
       return t('common.app.views.trigDetail.heroCrawlerVerified', { id: ev.rule_triggered })
-    }
-    case 'threat': {
-      const names = allHitLists.value.filter((l) => l.system).map((l) => `「${l.name}」`)
-      return names.length > 0
-        ? t('common.app.views.trigDetail.heroThreatLists', { lists: names.join('、') })
-        : t('common.app.views.trigDetail.heroThreatPrecheck', { id: ev.rule_triggered })
     }
     case 'trust': {
       // 局部名避开 i18n composer t
@@ -595,10 +584,10 @@ const loadAll = async (): Promise<void> => {
     // 跨策略信任成员判定——历史追加修复）
     // 预取面按事件类别/动作收敛（详见 eventDetailRefIds 注释）：
     //  - 豁免归因只在未拦截事件需要（blocked 事件不会由信任放行）；
-    //  - ACL 条目只被 kind∈{acl,geo,threat} 消费，WAF/请求体/爬虫事件引用
+    //  - ACL 条目只被 kind∈{acl,geo} 消费，WAF/请求体/爬虫事件引用
     //    威胁库时曾每次无谓下载数百 KB~数 MB。
     const needExemption = row.action !== 'blocked'
-    const needAclEntries = kind.value === 'acl' || kind.value === 'geo' || kind.value === 'threat'
+    const needAclEntries = kind.value === 'acl' || kind.value === 'geo'
     const needOwnerTrust = needAclEntries || kind.value === 'trust' || needExemption
     const [polRes, listRes] = await Promise.allSettled([
       needExemption

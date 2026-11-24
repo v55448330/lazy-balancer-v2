@@ -1388,7 +1388,7 @@ if (typeof document !== 'undefined') {
  * 省略 scope = 全集（既有调用/测试口径不变）。
  */
 interface EventDetailRefScope {
-  /** 属主策略 ACL 引用（命中列表与内联判定，仅 kind∈{acl,geo,threat} 消费） */
+  /** 属主策略 ACL 引用（命中列表与内联判定，仅 kind∈{acl,geo} 消费） */
   ownerAcl?: boolean
   /** 属主策略信任引用（信任命中展示 + 豁免归因） */
   ownerTrust?: boolean
@@ -1635,16 +1635,17 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 //      独立于地域 [800000,810000)；原实现把整段 800000-899999 归 geoip，
 //      爬虫事件详情显示「地域拦截规则（区域：…）」。
 //   ③ 固定 SecRule id 的族归属单一事实源 = handlers 的 legacyRuleFamilies 表
-//      （id:2/4/7 IP 访问控制、3/5/12 信任名单、8 地域拦截、11 请求体异常、
-//      14 威胁情报库、429 CC 防护存量）。id:5 是「IP ACL 绕过模式占用 id:3 时的信任
+//      （id:2/4/7/14 IP 访问控制——14 是 v2.3.x 威胁情报库预检拦截的历史段，
+//      2026-11-25 起并入 IP 访问控制、3/5/12 信任名单、8 地域拦截、11 请求体异常、
+//      429 CC 防护存量）。id:5 是「IP ACL 绕过模式占用 id:3 时的信任
 //      名单并集」（services/security.go trustID 分支，pass,nolog）——归信任族；
 //      曾按白名单外拒绝记账，与本表及发射侧语义分叉。
 // 返回（细粒度，消费方各自投影）:
-//   'trust'|'ipAcl'|'geoip'|'crawler'|'threat'|'wafCustom'|'wafCrs'|'body'|'other'
+//   'trust'|'ipAcl'|'geoip'|'crawler'|'wafCustom'|'wafCrs'|'body'|'other'
 // 视图投影：SecurityEvents —— trust→trust，crawler→crawler（独立阶段标签「爬虫
-// 校验」），ipAcl/geoip/threat→acl（阶段 1 合并口径：黑白名单、地域、威胁情报
-// 同列），wafCrs/wafCustom→waf，body→body；TriggerDetailDialog —— geoip→geo、
-// crawler→crawler、threat→threat、wafCrs→waf-crs、wafCustom→waf-custom。
+// 校验」），ipAcl/geoip→acl（阶段 1 合并口径：黑白名单、地域同列），wafCrs/
+// wafCustom→waf，body→body；TriggerDetailDialog —— geoip→geo、
+// crawler→crawler、wafCrs→waf-crs、wafCustom→waf-custom。
 //   合成自定义 id 上界段 [900000,1000000)（DB 规则 id
 //   ≥90000 → 触发 id ≥910000，会与 9\d{5} CRS 段重叠）——自定义规则 id 达 9 万
 //   不现实（不可达），边界不修，仅登记留痕。
@@ -1655,7 +1656,7 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 // （attackFamilyClassOf）把 8 归 GeoIP。这是 历史共享 id 口径，现代引擎
 // 地域事件已改发 800xxx、不再走 id 8，无现实影响；triggerFamily.spec.ts 与
 // TriggerDetailDialog 注释已显式钉住该例外，不得按「与后端同步」改回 geoip。
-export type TriggerStageFamily = 'trust' | 'ipAcl' | 'geoip' | 'crawler' | 'threat' | 'wafCustom' | 'wafCrs' | 'body' | 'human' | 'other'
+export type TriggerStageFamily = 'trust' | 'ipAcl' | 'geoip' | 'crawler' | 'wafCustom' | 'wafCrs' | 'body' | 'human' | 'other'
 
 const CUSTOM_RULE_OR_CONDITION_ID_BASE = 3000000
 // OR 条件分支 emit id 的除数与写侧条件数上限同源（customRuleLimits 单源，
@@ -1707,11 +1708,10 @@ export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily =>
   if (n >= CUSTOM_RULE_OR_CONDITION_ID_BASE) return 'wafCustom'
   // ② 固定 id 族（后端 legacyRuleFamilies 表派生口径）
   if (n === 3 || n === 5 || n === 12) return 'trust'
-  if (n === 14) return 'threat'
   // ③ 数值段：爬虫两族与地域段互斥（后端口径）
   if (n >= 810000 && n < 900000) return 'crawler'
   if (n >= 800000 && n < 810000) return 'geoip'
-  if (n === 2 || n === 4 || n === 7 || n === 8) return 'ipAcl'
+  if (n === 2 || n === 4 || n === 7 || n === 8 || n === 14) return 'ipAcl'
   return 'other'
 }
 

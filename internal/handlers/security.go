@@ -4733,7 +4733,7 @@ var ruleTriggeredFamilyPrefixes = buildRuleTriggeredFamilyPrefixes()
 
 func buildRuleTriggeredFamilyPrefixes() map[string][]string {
 	// 形态条件族与多字符 CRS 前缀族保持手写；单 ID 族（信任名单/IP 访问
-	// 控制/地域拦截/威胁情报库/请求体异常/CC 防护 429 存量）由 id→家族表派生。
+	// 控制/地域拦截/请求体异常/CC 防护 429 存量）由 id→家族表派生。
 	families := map[string][]string{
 		// v2.3.8 触发类型扩展：爬虫Bot（810000-899999 全段）形态条件由
 		// crawlerFamilyCondition 承载（互斥 6 位 GLOB）。旧两位前缀
@@ -4770,8 +4770,8 @@ func buildRuleTriggeredFamilyPrefixes() map[string][]string {
 // 为精确匹配——LIKE 前缀会让自定义规则 5 位 ID(24567 等)交叉命中 IP/地域族;
 // 多字符前缀(949/959/920/921)对应 6 位 CRS ID,保持前缀语义。
 func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
-	// 单数字族（2/3/4/5/7/8）与两位完整 id 族（14=威胁情报库）为精确匹配——
-	// LIKE 前缀会让自定义规则 5 位 ID（24567/14xxxx 等）交叉命中 IP/威胁族。
+	// 单数字族（2/3/4/5/7/8）与两位完整 id 族（14，历史威胁情报库段）为精确匹配——
+	// LIKE 前缀会让自定义规则 5 位 ID（24567/14xxxx 等）交叉命中 IP 访问控制族。
 	// 3 字符前缀不全是 CRS 族——CC 防护的 429 存量是精确 ID，
 	// 旧实现无条件 prefix+"___" 生成 LIKE '429___'，永不命中。CRS 六位 ID
 	// 恒以 9 开头（920/921/949/959 族），据此区分：9 开头仍长度锚定，其余
@@ -5503,7 +5503,6 @@ const (
 	attackFamilyOther       attackFamilyClass = iota
 	attackFamilyCustomRule                    // 自定义规则：5 位任意数字 / ≥7 位 1 开头合成
 	attackFamilyBodyAnomaly                   // id 11 请求体异常
-	attackFamilyThreatIntel                   // id 14 / msg「威胁情报库拦截」
 	attackFamilyGeoIP                         // id 8 / 6 位 80xxxx / msg「GeoIP 区域拦截」
 	attackFamilyCrawler                       // 6 位 8[1-9]xxxx（爬虫豁免/伪装）
 	attackFamilyIPACL                         // msg「IP 黑/白名单/访问控制」/ id 2/4/7
@@ -5526,15 +5525,18 @@ type legacyRuleFamily struct {
 // 复写 id 字面量，id:5（绕过模式占位的信任名单 DetectionOnly 规则，发射
 // 动作恒 pass,nolog）在三处被记成 IP 访问控制。
 var legacyRuleFamilies = map[int]legacyRuleFamily{
-	2:   {key: "IP 访问控制", class: attackFamilyIPACL},
-	3:   {key: "信任名单", class: attackFamilyTrust},
-	4:   {key: "IP 访问控制", class: attackFamilyIPACL},
-	5:   {key: "信任名单", class: attackFamilyTrust},
-	7:   {key: "IP 访问控制", class: attackFamilyIPACL},
-	8:   {key: "地域拦截", class: attackFamilyGeoIP},
-	11:  {key: "请求体异常", class: attackFamilyBodyAnomaly},
-	12:  {key: "信任名单", class: attackFamilyTrust},
-	14:  {key: "威胁情报库", class: attackFamilyThreatIntel},
+	2:  {key: "IP 访问控制", class: attackFamilyIPACL},
+	3:  {key: "信任名单", class: attackFamilyTrust},
+	4:  {key: "IP 访问控制", class: attackFamilyIPACL},
+	5:  {key: "信任名单", class: attackFamilyTrust},
+	7:  {key: "IP 访问控制", class: attackFamilyIPACL},
+	8:  {key: "地域拦截", class: attackFamilyGeoIP},
+	11: {key: "请求体异常", class: attackFamilyBodyAnomaly},
+	12: {key: "信任名单", class: attackFamilyTrust},
+	// 14 = v2.3.x 威胁情报库预检拦截的历史段。2026-11-25 用户裁定：威胁库不做
+	// 独立归因，「威胁情报库」不再是触发类型——存量行并入「IP 访问控制」（与
+	// 逐策略 ACL deny 链同族），用户通过策略名识别威胁库策略。
+	14:  {key: "IP 访问控制", class: attackFamilyIPACL},
 	429: {key: "CC防护", class: attackFamilyRateLimit},
 }
 
@@ -5621,10 +5623,6 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 		return attackFamilyRateLimit
 	case legacyFamily.class == attackFamilyBodyAnomaly:
 		return attackFamilyBodyAnomaly
-	case legacyFamily.class == attackFamilyThreatIntel || strings.Contains(ruleMsg, "威胁情报库拦截"):
-		// 14 = 威胁情报库预检拦截（阶段 1，v2.3.x）。精确匹配——LIKE 前缀
-		// 会误并自定义规则发射 id 14xxxx（emit=DB id+10000）。
-		return attackFamilyThreatIntel
 	case precheckFamily == services.PrecheckRuleFamilyCrawlerExempt || precheckFamily == services.PrecheckRuleFamilyCrawlerSpoof:
 		// 爬虫两族 [810000,900000) 与地域段 [800000,810000) 互斥（段界由
 		// services 单一事实源保证）。
@@ -5634,7 +5632,9 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 		// 精确段 800000+policyID（阶段化模型，buildIPPrecheckDirectives 逐策略链）。
 		return attackFamilyGeoIP
 	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
-		legacyFamily.class == attackFamilyIPACL:
+		strings.Contains(ruleMsg, "威胁情报库拦截") || legacyFamily.class == attackFamilyIPACL:
+		// 末项「威胁情报库拦截」是 v2.3.x 预检拦截的历史消息：只带消息、编号
+		// 已不可解析的存量行同样并入 IP 访问控制（与编号 14 同族）。
 		return attackFamilyIPACL
 	case legacyFamily.class == attackFamilyTrust:
 		// 信任预检 id:3/5/12（id→家族单一事实源）——置于 msg 门之后：带
@@ -5742,8 +5742,6 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 		return "自定义规则"
 	case attackFamilyBodyAnomaly:
 		return "请求体异常"
-	case attackFamilyThreatIntel:
-		return "威胁情报库"
 	case attackFamilyGeoIP:
 		return "地域拦截"
 	case attackFamilyCrawler:
@@ -5788,7 +5786,7 @@ func stageCategorizeAttack(ruleTriggered, ruleMsg string) string {
 		return "CC防护"
 	case attackFamilyBodyAnomaly:
 		return "请求体异常"
-	case attackFamilyThreatIntel, attackFamilyGeoIP, attackFamilyCrawler, attackFamilyIPACL:
+	case attackFamilyGeoIP, attackFamilyCrawler, attackFamilyIPACL:
 		return "IP 访问控制"
 	case attackFamilyTrust:
 		return "信任名单"

@@ -624,7 +624,7 @@ test('两引擎共享国家点阵空间网格', () => {
 test('触发详情按类别/动作收敛预取面（WAF 拦截不下载 ACL 条目）', () => {
   const text = code('src/components/events/TriggerDetailDialog.vue')
   assert.match(text, /const needExemption = row\.action !== 'blocked'/)
-  assert.match(text, /const needAclEntries = kind\.value === 'acl' \|\| kind\.value === 'geo' \|\| kind\.value === 'threat'/)
+  assert.match(text, /const needAclEntries = kind\.value === 'acl' \|\| kind\.value === 'geo'/)
   assert.match(text, /needExemption\s*\n?\s*\? request\.get<APIResponse<PolicyRow\[\]>>\('\/security\/policies\?enabled=true'/)
   assert.match(text, /eventDetailRefIds\(policy\.value, enabledPolicies\.value, \{/)
   assert.match(text, /ownerAcl: needAclEntries/)

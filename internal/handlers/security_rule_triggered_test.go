@@ -395,14 +395,16 @@ func TestRuleTriggeredFilterSQL_legacyTrustBypassIdFive(t *testing.T) {
 	}
 
 	acl := matchSet(t, "IP 访问控制")
-	for _, id := range []string{"2", "4", "7"} {
+	// 14 = v2.3.x 威胁情报库预检拦截的历史段，2026-11-25 起并入 IP 访问控制族
+	//（用户裁定：威胁库不做独立归因，「威胁情报库」不再是触发类型）。
+	for _, id := range []string{"2", "4", "7", "14"} {
 		if !acl[id] {
 			t.Errorf("IP 访问控制 family 必须命中 %s: %v", id, acl)
 		}
 	}
-	for _, id := range []string{"3", "5", "12", "8", "14"} {
+	for _, id := range []string{"3", "5", "12", "8"} {
 		if acl[id] {
-			t.Errorf("IP 访问控制 family 不得命中信任名单 id:%s: %v", id, acl)
+			t.Errorf("IP 访问控制 family 不得命中信任名单/地域拦截 id:%s: %v", id, acl)
 		}
 	}
 }

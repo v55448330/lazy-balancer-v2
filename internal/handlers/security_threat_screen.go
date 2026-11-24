@@ -69,8 +69,10 @@ func describeThreatRuleNameWithNames(key string, customNames map[int]string) str
 		return key
 	}
 	switch n {
-	case 2:
-		return "IP 访问控制拦截（#2）"
+	case 2, 14:
+		// 14 = v2.3.x 威胁情报库预检拦截的历史段，2026-11-25 起并入 IP 访问控制
+		// （与事件列表触发类型、总览攻击族同源；见 legacyRuleFamilies）。
+		return "IP 访问控制拦截（#" + key + "）"
 	case 4:
 		return "IP 黑名单（#4）"
 	case 7:
@@ -80,15 +82,12 @@ func describeThreatRuleNameWithNames(key string, customNames map[int]string) str
 	}
 	// 其余固定 id 的族标签由 legacyRuleFamilies 派生（与 triggerTypeForRule/
 	// attackFamilyClassOf/筛选表同源）：id:5 是「绕过模式占位」的信任名单
-	// DetectionOnly 规则（id:3 的同族变体）；威胁情报库的历史段是 id:14，
-	// 二者不得共用一个标签。IP 族三个 id 的细标签差异较大（拦截/黑名单/白名单），
-	// 已在上面单独给出。id:11（请求体解析失败）必须与事件列表
+	// DetectionOnly 规则（id:3 的同族变体）。IP 族各 id 的细标签在上面单独
+	// 给出。id:11（请求体解析失败）必须与事件列表
 	// triggerTypeForRule 的「请求体异常」同词——漏掉该类会让大屏显示裸数字。
 	switch legacyRuleFamilyOf(n).class {
 	case attackFamilyTrust:
 		return "信任名单检测（#" + key + "）"
-	case attackFamilyThreatIntel:
-		return "威胁情报库（#" + key + "）"
 	case attackFamilyGeoIP:
 		return "地域拦截（#" + key + "）"
 	case attackFamilyBodyAnomaly:

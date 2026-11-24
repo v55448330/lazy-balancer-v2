@@ -203,7 +203,6 @@
                后端双筛选键同归 humanFamilyCondition）。 -->
           <el-option :label="t('app.security.events.ipAcl')" value="IP 访问控制" :title="t('app.security.events.ipAclHint')" />
           <el-option :label="t('app.security.events.trustList')" value="信任名单" :title="t('app.security.events.trustListHint')" />
-          <el-option :label="t('app.security.events.threatIntel')" value="威胁情报库" :title="t('app.security.events.threatIntelHint')" />
           <el-option :label="t('app.security.events.bodyAnomaly')" value="请求体异常" :title="t('app.security.events.bodyAnomalyHint')" />
           <el-option label="WAF·CRS" value="WAF·CRS" :title="t('app.security.events.wafCrsHint')" />
           <el-option :label="t('app.security.events.wafCustom')" value="WAF·自定义" :title="t('app.security.events.wafCustomHint')" />
@@ -1144,7 +1143,7 @@ const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' 
   switch (triggerStageFamily(trig)) {
     case 'trust': return 'trust'
     case 'crawler': return 'crawler'
-    case 'ipAcl': case 'geoip': case 'threat': return 'acl'
+    case 'ipAcl': case 'geoip': return 'acl'
     case 'wafCrs': case 'wafCustom': return 'waf'
     case 'body': return 'body'
     case 'human': return 'human'
@@ -1164,7 +1163,6 @@ const TRIGGER_TYPE_KEYS: Record<string, string> = {
   '手动黑名单': 'manualBlacklist',
   'CC防护': 'ccProtection',
   '爬虫Bot': 'crawlerBot',
-  '威胁情报库': 'threatIntel',
   '请求体异常': 'bodyAnomaly',
   'WAF·CRS': 'wafCrs',
   'WAF·自定义': 'wafCustom',

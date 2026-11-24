@@ -2906,8 +2906,8 @@ func TestAPIDocsAndMCPSchemaTriggeredCategoriesMatchFrontendSingleSource(t *test
 			t.Fatalf("前端 TRIGGERED_CATEGORIES 出现未解析项 %q（需同步扩充本钉的标识符解析）", item[2])
 		}
 	}
-	if len(categories) != 9 {
-		t.Fatalf("前端触发阶段预置类数=%d，固定预置九类契约被改动", len(categories))
+	if len(categories) != 8 {
+		t.Fatalf("前端触发阶段预置类数=%d，固定预置八类契约被改动", len(categories))
 	}
 
 	var restDescription string

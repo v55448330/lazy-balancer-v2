@@ -910,7 +910,7 @@ func TestTriggerTypeForRule_fullTaxonomy(t *testing.T) {
 		"7":              "IP 访问控制",
 		"8":              "地域拦截",
 		"12":             "信任名单",
-		"14":             "威胁情报库",
+		"14":             "IP 访问控制",
 		"11":             "请求体异常",
 		"10001":          "WAF·自定义",
 		"799999":         "WAF·自定义",

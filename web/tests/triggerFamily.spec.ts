@@ -12,10 +12,11 @@ import { detectionModeExplains, triggerStageFamily, type TriggerStageFamily } fr
 import { code, repoCode, section } from './_helpers.ts'
 
 const cases: ReadonlyArray<readonly [string, TriggerStageFamily]> = [
-  // 空 / 请求体异常 / 威胁情报 / 信任（id:5 = 绕过模式占用 id:3 时的信任名单并集）
+  // 空 / 请求体异常 / IP 访问控制（14 = 历史威胁情报库段，2026-11-25 起并入）/
+  // 信任（id:5 = 绕过模式占用 id:3 时的信任名单并集）
   ['', 'other'],
   ['11', 'body'],
-  ['14', 'threat'],
+  ['14', 'ipAcl'],
   ['3', 'trust'],
   ['5', 'trust'],
   ['12', 'trust'],
@@ -103,7 +104,7 @@ test('首尾空白归一（事件字段可能带导入残留空白）', () => {
 // 归因「检测模式」会掩盖真正的豁免策略。
 test('检测模式归因：仅 WAF 族（CRS/自定义含 body 目标）', () => {
   for (const kind of ['waf-crs', 'waf-custom']) assert.equal(detectionModeExplains(kind), true, kind)
-  for (const kind of ['acl', 'geo', 'crawler', 'threat', 'trust', 'body', 'other', '']) {
+  for (const kind of ['acl', 'geo', 'crawler', 'trust', 'body', 'other', '']) {
     assert.equal(detectionModeExplains(kind), false, kind)
   }
 })
@@ -148,9 +149,8 @@ const GO_KEY_TO_FAMILY: Readonly<Record<string, TriggerStageFamily>> = {
   'IP 访问控制': 'ipAcl',
   '信任名单': 'trust',
   '地域拦截': 'geoip',
-  '威胁情报库': 'threat',
   '请求体异常': 'body',
-  // CC 防护：后端族键已由「限流」更名为「CC防护」；列表层筛选为固定预置九类
+  // CC 防护：后端族键已由「限流」更名为「CC防护」；列表层筛选为固定预置八类
   // （含 CC 防护，见 triggeredFilter），阶段族归 other。
   'CC防护': 'other',
 }

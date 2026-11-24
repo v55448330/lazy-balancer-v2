@@ -8,10 +8,12 @@
 // 参数按英文逗号逐段解析，段间 OR；段可以是 family 键、前缀式 token 或纯数字规则 ID；
 // 含逗号的消息关键词会整串回退为消息搜索（前端只管连接，不判断语义）。
 
-// 触发阶段筛选为固定预置九类（用户裁定：固定预置值，不接受任意值）。
+// 触发阶段筛选为固定预置八类（用户裁定：固定预置值，不接受任意值）。
 // 退役配额限流的 429 存量行不设独立筛选项（新 CC 防护事件为 human_*）。
 // CC 防护（2026-11-13 用户裁定新增）：人机挑战事件族（human_*），后端
 // humanFamilyCondition 承载。
+// 「威胁情报库」不设筛选项（2026-11-25 用户裁定）：威胁库经 IP 访问控制策略
+// 生效，事件归「IP 访问控制」，用户通过策略名识别。
 
 // crawler 族筛选类别词：后端 family 键/trigger_type 权威词为「爬虫Bot」
 //（internal/handlers/security_threat_screen.go triggerTypeForRule）。
@@ -19,7 +21,7 @@
 //（阶段列/触发类型列）——本常量仅为本模块 TRIGGERED_CATEGORIES 的序列化键。
 const CRAWLER_FAMILY_LABEL = '爬虫Bot'
 
-export const TRIGGERED_CATEGORIES = [CRAWLER_FAMILY_LABEL, '地域拦截', 'IP 访问控制', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义', 'CC 防护'] as const
+export const TRIGGERED_CATEGORIES = [CRAWLER_FAMILY_LABEL, '地域拦截', 'IP 访问控制', '信任名单', '请求体异常', 'WAF·CRS', 'WAF·自定义', 'CC 防护'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
 
 // 每类对应的 ruleTriggeredFamilyPrefixes 映射键（值=后端 family 键，与新
@@ -29,7 +31,6 @@ export const TRIGGERED_FAMILY_SEGMENTS: Record<TriggeredCategory, string[]> = {
   '地域拦截': ['地域拦截'],
   'IP 访问控制': ['IP 访问控制'],
   '信任名单': ['信任名单'],
-  '威胁情报库': ['威胁情报库'],
   '请求体异常': ['请求体异常'],
   'WAF·CRS': ['WAF·CRS'],
   // 后端两个 token 落到同一 customRuleFamilyCondition（SQL 等价重复 OR）；
@@ -46,7 +47,7 @@ const isTriggeredCategory = (value: string): value is TriggeredCategory =>
  *
  * 规则（与视图注释同口径）：
  *  - 空选 = 不过滤 → null；
- *  - 九类全中且无自定义 tag = 全选 → null（不发参数）；
+ *  - 八类全中且无自定义 tag = 全选 → null（不发参数）；
  *  - 其余（类别子集、含自定义 tag）= 选中类别展开为族段 + 自定义 tag 原样并入，
  *    英文逗号连接（后端逐段 OR）。
  */
