@@ -18,6 +18,27 @@ import (
 // 握手失败路径）——非白名单 Host / 解析失败沿用同一文案，避免两套口径。
 const plainHTTPOnTLSPortMessage = "Client sent an HTTP request to an HTTPS server."
 
+// 请求到达时已经是 HTTPS（前置代理终止 TLS 后以明文回源到本端口）时不得再 301
+// ——同一 https 地址上的 301 就是浏览器里的无限跳转；改为 400 + 诊断正文。
+// 两个常量与渲染层（internal/services/caddy.go）同字面量，改动必须成对
+// （守卫：services 侧 caddy_https_redirect_loop_test.go）。
+const forwardedHTTPSHeaderPattern = "(?i)^\\s*https\\s*(,|$)"
+
+const httpsRedirectLoopBody = "HTTP to HTTPS redirect skipped: this request already arrived over HTTPS (X-Forwarded-Proto: https), so redirecting to the same https:// address again would loop.\nThe HTTPS site for this host is served on this instance's TLS port. Forward requests to that port over HTTPS from the proxy or CDN in front (\"Full\" SSL mode), or turn off \"HTTP to HTTPS redirect\" on the rule.\n"
+
+// ForwardedProtoIsHTTPS 报告 X-Forwarded-Proto 是否表明客户端已在 HTTPS 上。
+// 该头逐跳追加，首个 token 是客户端实际使用的协议；多行取值任一命中即成立
+// （与路由匹配器 header_regexp 的「任一取值匹配」同口径）。
+func ForwardedProtoIsHTTPS(values ...string) bool {
+	for _, value := range values {
+		first := strings.TrimSpace(strings.SplitN(value, ",", 2)[0])
+		if strings.EqualFold(first, "https") {
+			return true
+		}
+	}
+	return false
+}
+
 func init() {
 	caddy.RegisterModule(HTTPSRedirectSplitWrapper{})
 }
@@ -181,6 +202,12 @@ func (l *httpsRedirectListener) servePlain(pc *peekedConn) {
 		l.respond(pc, 400, plainHTTPOnTLSPortMessage)
 		return
 	}
+	// 请求到达时已经是 HTTPS（前置代理终止 TLS 后以明文回源）：再 301 到同一
+	// https 地址即无限跳转，改答诊断 400。
+	if ForwardedProtoIsHTTPS(req.Header.Values("X-Forwarded-Proto")...) {
+		l.respondLoopDiagnostic(pc)
+		return
+	}
 	// Location 目标：客户端 Host 原样保留（含其自带端口）；Host 未带端口
 	// 且 https 端口非 443 时补端口——避免 666 端口规则漏写端口跳到 443。
 	host := req.Host
@@ -193,10 +220,17 @@ func (l *httpsRedirectListener) servePlain(pc *peekedConn) {
 func (l *httpsRedirectListener) respond(conn net.Conn, status int, body string, location ...string) {
 	switch status {
 	case 301:
-		fmt.Fprintf(conn, "HTTP/1.1 301 Moved Permanently\r\nLocation: %s\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", location[0])
+		// no-store：跳转受规则开关控制——可缓存的 301 会被浏览器永久缓存，开关
+		// 关闭后仍沿用旧跳转。
+		fmt.Fprintf(conn, "HTTP/1.1 301 Moved Permanently\r\nLocation: %s\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", location[0])
 	default:
 		fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	}
+}
+
+// respondLoopDiagnostic 应答「已是 HTTPS 不再跳转」诊断：400 + 说明正文，不可缓存。
+func (l *httpsRedirectListener) respondLoopDiagnostic(conn net.Conn) {
+	fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", len(httpsRedirectLoopBody), httpsRedirectLoopBody)
 }
 
 // normalizeRedirectHost 归一小写（域名匹配与白名单同一口径）。

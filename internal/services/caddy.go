@@ -2874,6 +2874,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 
 	// Collect HTTP->HTTPS redirect routes from all TLS-enabled rules and place them on the HTTP (port 80) server.
 	var redirectRoutes []interface{}
+	// 实际发射了跳转路由的域名并集（遮蔽过滤之后的终态）：诊断路由据此限定域名。
+	redirectDiagnosticDomains := make(map[string]struct{})
 	// 判定提为闭包，供 r 自身与下方 other 遮蔽复核共用同款口径。
 	// 提出循环外——闭包捕获空、无状态，每迭代重建纯属浪费。
 	hasEnabledUpstream := func(ups []upstream) bool {
@@ -2966,12 +2968,19 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 					Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，已从跳转中移除（其余域名仍生成跳转）", r.Name, r.CaddyID, shadowedBy)
 					domainHosts = filtered
 				}
+				for _, host := range domainHosts {
+					redirectDiagnosticDomains[host] = struct{}{}
+				}
 				redirectRoutes = append(redirectRoutes, map[string]interface{}{
 					"@id":      r.CaddyID + "_redirect",
 					"terminal": true,
 					"match": []interface{}{
 						map[string]interface{}{
 							"host": domainHosts,
+							// 请求到达时已经是 HTTPS（前置代理终止 TLS 后以明文回源到 :80）
+							// 不再跳转：同一 https 地址上的 301 即浏览器无限跳转。这类
+							// 请求落到紧随其后的诊断路由。
+							"not": []interface{}{forwardedHTTPSMatcher()},
 						},
 					},
 					"handle": []interface{}{
@@ -2980,12 +2989,21 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 							"status_code": 301,
 							"headers": map[string]interface{}{
 								"Location": []string{httpsRedirectLocation(r.ListenPort)},
+								// 跳转受规则开关控制：可缓存的 301 会被浏览器永久缓存，
+								// 开关关闭后仍沿用旧跳转（「关了也没用」）。
+								"Cache-Control": []string{"no-store"},
 							},
 						},
 					},
 				})
 			}
 		}
+	}
+	// 诊断路由排在全部跳转路由之后、落地页之前：跳转路由已用 not 排除「已是
+	// HTTPS」的请求，这类请求落到这里得到 400 + 说明，而不是在同一 https 地址上
+	// 无限打转。域名并集限定，未开跳转的域名不受影响。
+	if len(redirectDiagnosticDomains) > 0 {
+		redirectRoutes = append(redirectRoutes, httpsRedirectLoopDiagnosticRoute(redirectDiagnosticDomains))
 	}
 
 	// Collect TLS certificate file paths for all rules (manual + ACME from cert_jobs)
@@ -3490,6 +3508,60 @@ func buildPort80DomainOwners(candidates []port80RuleCandidate) map[string][]stri
 		}
 	}
 	return owners
+}
+
+// forwardedHTTPSHeaderPattern 判定「请求到达本实例时已经是 HTTPS」。X-Forwarded-Proto
+// 逐跳追加，首个 token 是客户端实际使用的协议：前置代理终止 TLS 后以明文回源
+// 监听包装器（caddygeoip/https_redirect_wrapper.go）持同一字面量，改动必须成对
+// （守卫：caddy_https_redirect_loop_test.go）。
+const forwardedHTTPSHeaderPattern = "(?i)^\\s*https\\s*(,|$)"
+
+// httpsRedirectLoopDiagnosticRouteID 是 :80 上「已是 HTTPS 不再跳转」诊断路由的
+// @id：紧跟全部跳转路由、位于落地页之前，域名并集限定在开跳转的域名内。
+const httpsRedirectLoopDiagnosticRouteID = "lb_https_redirect_loop_diagnostic"
+
+// httpsRedirectLoopBody 是诊断响应正文（明文，与监听包装器同一字面量）。
+const httpsRedirectLoopBody = "HTTP to HTTPS redirect skipped: this request already arrived over HTTPS (X-Forwarded-Proto: https), so redirecting to the same https:// address again would loop.\nThe HTTPS site for this host is served on this instance's TLS port. Forward requests to that port over HTTPS from the proxy or CDN in front (\"Full\" SSL mode), or turn off \"HTTP to HTTPS redirect\" on the rule.\n"
+
+// forwardedHTTPSMatcher 返回「X-Forwarded-Proto 表明请求已是 HTTPS」的路由匹配器
+// （Caddy header_regexp，RE2）。可出现在 not 内（排除）或直接作为匹配条件。
+func forwardedHTTPSMatcher() map[string]interface{} {
+	return map[string]interface{}{
+		"header_regexp": map[string]interface{}{
+			"X-Forwarded-Proto": map[string]interface{}{"pattern": forwardedHTTPSHeaderPattern},
+		},
+	}
+}
+
+// httpsRedirectLoopDiagnosticRoute 构造 :80 上的「已是 HTTPS 不再跳转」诊断路由：
+// terminal、400、no-store；域名并集经排序保证渲染确定（同一份配置逐字节稳定）。
+func httpsRedirectLoopDiagnosticRoute(domains map[string]struct{}) map[string]interface{} {
+	hosts := make([]string, 0, len(domains))
+	for domain := range domains {
+		hosts = append(hosts, domain)
+	}
+	sort.Strings(hosts)
+	return map[string]interface{}{
+		"@id":      httpsRedirectLoopDiagnosticRouteID,
+		"terminal": true,
+		"match": []interface{}{
+			map[string]interface{}{
+				"host":          hosts,
+				"header_regexp": forwardedHTTPSMatcher()["header_regexp"],
+			},
+		},
+		"handle": []interface{}{
+			map[string]interface{}{
+				"handler":     "static_response",
+				"status_code": 400,
+				"headers": map[string]interface{}{
+					"Content-Type":  []string{"text/plain; charset=utf-8"},
+					"Cache-Control": []string{"no-store"},
+				},
+				"body": httpsRedirectLoopBody,
+			},
+		},
+	}
 }
 
 // httpsRedirectLocation 构造 HTTP→HTTPS 跳转的 Location 头。
@@ -4057,7 +4129,11 @@ func buildStaticResponseHandler(pathRule PathRuleConfig) map[string]interface{} 
 		return map[string]interface{}{
 			"handler":     "static_response",
 			"status_code": 301,
-			"headers":     map[string]interface{}{"Location": []string{pathRule.RedirectTo}},
+			"headers": map[string]interface{}{
+				"Location": []string{pathRule.RedirectTo},
+				// 跳转由规则配置控制：可缓存的 301 会在修改/撤销后仍被浏览器沿用
+				"Cache-Control": []string{"no-store"},
+			},
 		}
 	}
 	status := pathRule.ResponseStatus
