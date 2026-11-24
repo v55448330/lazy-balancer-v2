@@ -239,3 +239,22 @@ test('设计守卫：规则列表的刷新轮询与日志直达入口已按用�
   assert.doesNotMatch(rules, /logEnableEntry|openWizardForAccessLog|unpublishedRecoverHint/, '日志未开启时不给「去开启」入口、「未发布」不给恢复指引（用户裁定过度设计）')
   assert.doesNotMatch(rules, /protocolSwitchImpact|ElMessageBox\.confirm\(\s*h\('div', \[\s*h\('p', \{ class: 'confirm-scope-lead' \}, t\('common\.app\.rules\.msgs\.switchTcpClearsLead/, '向导切协议前不弹确认框（用户裁定过度设计）')
 })
+
+test('设计守卫：全站直角——登录卡片 / SSO 按钮 / 侧栏菜单项 / 节点标签 / 导入面板标签与分组框（DESIGN_SPEC §1）', () => {
+  // 基线钉测：这些选择器已按用户裁定归零（此前登录卡片 12px、SSO 按钮 10px、
+  // 侧栏菜单项 6px、节点标签 8px、导入面板标签胶囊形），守卫防止回潮。
+  const ruleBody = (file: string, selector: RegExp): string => {
+    const match = new RegExp(`${selector.source}\\s*\\{([^}]*)\\}`).exec(code(file))
+    assert.ok(match, `${file} 必须有 ${selector.source} 规则`)
+    return match[1]
+  }
+  assert.match(ruleBody('src/views/Login.vue', /\.login-card/), /border-radius:\s*0;/, '登录卡片必须直角')
+  assert.match(ruleBody('src/views/Login.vue', /\.oidc-sso-btn/), /border-radius:\s*0;/, 'SSO 登录按钮必须直角')
+  assert.match(ruleBody('src/components/layout/AppLayout.vue', /\.layout-menu :deep\(\.el-menu-item\),\s*\.layout-menu :deep\(\.el-sub-menu__title\)/), /border-radius:\s*0;/, '侧栏菜单项必须直角')
+  assert.match(ruleBody('src/components/layout/AppLayout.vue', /\.layout-menu :deep\(\.el-sub-menu \.el-menu-item\)/), /border-radius:\s*0;/, '侧栏子菜单项必须直角')
+  assert.match(ruleBody('src/components/layout/AppLayout.vue', /\.node-tag/), /border-radius:\s*0;/, '节点标签必须直角')
+  assert.match(ruleBody('src/views/settings/BasicSettings.vue', /\.section-chip/), /border-radius:\s*0;/, '备份分类标签必须直角')
+  assert.match(ruleBody('src/views/settings/BasicSettings.vue', /\.import-summary-chip/), /border-radius:\s*0;/, '导入摘要标签必须直角')
+  assert.match(ruleBody('src/views/settings/BasicSettings.vue', /\.import-sections/), /border-radius:\s*0;/, '导入分组框必须直角')
+  assert.match(ruleBody('src/views/Dashboard.vue', /\.status-code/), /border-radius:\s*0;/, '仪表盘状态码标签必须直角')
+})
