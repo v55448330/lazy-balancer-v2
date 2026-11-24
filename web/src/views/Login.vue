@@ -1,5 +1,10 @@
 <template>
   <div class="login-container">
+    <!-- 语言切换放在卡片之外：卡片整体处于初始化探测的加载态，内部再分
+         首次初始化 / MFA / 登录三形态——同级节点在探测期与三种形态下都可用。 -->
+    <div class="login-locale">
+      <LanguageSwitcher />
+    </div>
     <el-card class="login-card" v-loading="checkingSetup" :element-loading-text="t('common.app.login.checkingStatus')">
       <div class="login-header">
         <div class="logo-wrapper">
@@ -152,6 +157,7 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError, normalizeMfaCodeInput, request } from '@/utils/api'
 import { User, Lock, Postcard, Key, ArrowLeft } from '@element-plus/icons-vue'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import AppLogo from '@/components/AppLogo.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { appName, appVersion } from '@/utils/branding'
@@ -471,11 +477,22 @@ onMounted(async () => {
 <style scoped>
 .login-container {
   min-height: 100vh;
+  /* border-box：min-height: 100vh 连上下内边距一起算，页面不多出一截滚动 */
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
-  padding: 20px;
+  position: relative;
+  /* 上下对称留出右上角语言切换所在的一行：卡片仍在页面居中，矮视口下入口不压卡片 */
+  padding: 56px 20px;
+}
+
+/* 页面右上角的语言切换（与主界面顶栏共用 LanguageSwitcher） */
+.login-locale {
+  position: absolute;
+  top: 16px;
+  right: 16px;
 }
 
 .login-card {

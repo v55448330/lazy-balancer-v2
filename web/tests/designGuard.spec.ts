@@ -187,7 +187,9 @@ test('设计守卫：说明块内的行内链接随正文字号（DESIGN_SPEC §
 
 test('设计守卫：证书有效期文案单源，负数天数不上屏（DESIGN_SPEC §21-2）', () => {
   const rules = code('src/views/Rules.vue')
-  assert.match(rules, /const certExpiryText = computed\(\(\) => \{[\s\S]*?expiredDaysAgo[\s\S]*?expiresToday[\s\S]*?expiresInDays/, '有效期文案必须由 certExpiryText 单源给出')
+  assert.match(code('src/utils/certExpiry.ts'), /daysUntilExpiry < 0[\s\S]*?expiredDaysAgo[\s\S]*?expiresToday[\s\S]*?expiresInDays/, '有效期结论必须由 utils/certExpiry 的 certExpiryConclusion 单源给出')
+  assert.match(rules, /certExpiryConclusion\(certInfo\.daysUntilExpiry\)\.text/, '向导预览行与 TLS 步提示框必须消费单源')
+  assert.match(code('src/components/RuleFlowDialog.vue'), /certExpiryConclusion\(certInfo\.days_remaining\)\.text/, '处理流程弹框的剩余天数行必须消费单源')
   // 模板与计算属性之外不得再把带符号的剩余天数直接喂给词条
   assert.doesNotMatch(rules, /\{ n: certInfo\.daysUntilExpiry \}/, '不得直接渲染 certInfo.daysUntilExpiry')
   assert.match(rules, /class="cert-preview-row"/, '预览行必须同一行对齐')

@@ -15,6 +15,22 @@ interface AutobanEffectivenessView {
 export const isAutobanIneffective = (status: AutobanEffectivenessView): boolean =>
   status.enabled && status.ban_effective === false
 
+interface AutobanMissingLinkView {
+  readonly ban_missing?: string
+  readonly policy_id?: number | null
+}
+
+/**
+ * 「前往绑定规则」入口的定位目标：仅 binding 环节且后端给出正整数 policy_id 时
+ * 返回该策略 id（深链到策略页聚焦它）；其余环节、旧后端缺省、非法值一律 null
+ * ——不给入口。落空的深链在策略页只会换来「策略已被删除」警告。
+ */
+export const autobanMissingPolicyId = (status: AutobanMissingLinkView): number | null => {
+  if (status.ban_missing !== 'binding') return null
+  const id = status.policy_id
+  return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : null
+}
+
 export type SuggestionBand = 'high' | 'mid' | 'low'
 
 /**

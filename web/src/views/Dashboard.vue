@@ -85,13 +85,13 @@
                   <el-tag type="danger" size="small" effect="plain">{{ t('common.app.dashboard.configBad') }}</el-tag>
                 </el-tooltip>
                 <div v-if="authStore.readOnlyReason === null && !caddyStatusUnavailable" class="caddy-actions">
-                  <el-button v-if="caddyStatus === 'running'" type="warning" size="small" @click="controlCaddy('restart')" :loading="caddyLoading">
+                  <el-button v-if="caddyStatus === 'running'" type="warning" size="small" :title="t('common.app.dashboard.restartScopeNote')" @click="controlCaddy('restart')" :loading="caddyLoading">
                     {{ t('common.app.dashboard.restartBtn') }}
                   </el-button>
-                  <el-button v-if="caddyStatus === 'running'" type="danger" size="small" @click="controlCaddy('stop')" :loading="caddyLoading">
+                  <el-button v-if="caddyStatus === 'running'" type="danger" size="small" :title="t('common.app.dashboard.stopScopeNote')" @click="controlCaddy('stop')" :loading="caddyLoading">
                     {{ t('common.app.dashboard.stopBtn') }}
                   </el-button>
-                  <el-button v-if="caddyStatus === 'stopped'" type="success" size="small" @click="controlCaddy('start')" :loading="caddyLoading">
+                  <el-button v-if="caddyStatus === 'stopped'" type="success" size="small" :title="t('common.app.dashboard.startScopeNote')" @click="controlCaddy('start')" :loading="caddyLoading">
                     {{ t('common.app.dashboard.startBtn') }}
                   </el-button>
                 </div>
@@ -107,6 +107,7 @@
                 <div class="stat-content">
                   <div class="stat-value">{{ caddyMetricsUnavailable ? t('common.app.dashboard.loadFailed') : caddyMetrics ? formatInt(caddyMetrics.requests_total) : '-' }}</div>
                   <div class="stat-label" :title="METRIC_RELOAD_RESET_NOTE">{{ t('common.app.dashboard.totalRequests') }}</div>
+                  <div class="stat-scope">{{ t('common.app.dashboard.totalRequestsScope') }}</div>
                 </div>
               </div>
             </el-col>
@@ -118,6 +119,7 @@
                 <div class="stat-content">
                   <div class="stat-value">{{ caddyMetricsUnavailable ? t('common.app.dashboard.loadFailed') : caddyMetrics ? caddyMetrics.requests_in_flight : '-' }}</div>
                   <div class="stat-label">{{ t('common.app.dashboard.inFlightRequests') }}</div>
+                  <div class="stat-scope">{{ t('common.app.dashboard.inFlightScope') }}</div>
                 </div>
               </div>
             </el-col>
@@ -129,6 +131,7 @@
                 <div class="stat-content">
                   <div class="stat-value">{{ hostMetricsUnavailable ? t('common.app.dashboard.loadFailed') : hostMetrics ? hostMetrics.length : '-' }}</div>
                   <div class="stat-label">{{ t('common.app.dashboard.domainCount') }}</div>
+                  <div class="stat-scope">{{ t('common.app.dashboard.domainCountScope') }}</div>
                 </div>
               </div>
             </el-col>
@@ -142,6 +145,7 @@
                 <div class="stat-content">
                   <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? overview.requests_per_sec.toFixed(2) : '-' }}</div>
                   <div class="stat-label">{{ t('common.app.dashboard.reqRate') }}</div>
+                  <div class="stat-scope">{{ t('common.app.dashboard.reqRateScope') }}</div>
                 </div>
               </div>
             </el-col>
@@ -153,6 +157,7 @@
                 <div class="stat-content">
                   <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? `${overview.latency_p50}ms` : '-' }}</div>
                   <div class="stat-label">{{ t('common.app.dashboard.latencyP50') }}</div>
+                  <div class="stat-scope">{{ t('common.app.dashboard.latencyScope') }}</div>
                 </div>
               </div>
             </el-col>
@@ -164,6 +169,7 @@
                 <div class="stat-content">
                   <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? `${overview.latency_p95}ms` : '-' }}</div>
                   <div class="stat-label">{{ t('common.app.dashboard.latencyP95') }}</div>
+                  <div class="stat-scope">{{ t('common.app.dashboard.latencyScope') }}</div>
                 </div>
               </div>
             </el-col>
@@ -175,6 +181,7 @@
                 <div class="stat-content">
                   <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? `${overview.latency_p99}ms` : '-' }}</div>
                   <div class="stat-label">{{ t('common.app.dashboard.latencyP99') }}</div>
+                  <div class="stat-scope">{{ t('common.app.dashboard.latencyScope') }}</div>
                 </div>
               </div>
             </el-col>
@@ -277,6 +284,7 @@
             <div v-if="trafficUnavailable" class="chart-stale-hint">{{ t('common.app.dashboard.staleHint') }}</div>
             <v-chart :option="trafficChartOption" autoresize />
           </div>
+          <div class="chart-scope-note form-tip-line">{{ t('common.app.dashboard.trafficScopeNote') }}</div>
         </el-card>
       </el-col>
       <el-col :span="12">
@@ -302,6 +310,7 @@
             <div v-if="connectionsUnavailable" class="chart-stale-hint">{{ t('common.app.dashboard.staleHint') }}</div>
             <v-chart :option="connChartOption" autoresize />
           </div>
+          <div class="chart-scope-note form-tip-line">{{ t('common.app.dashboard.connectionsScopeNote') }}</div>
         </el-card>
       </el-col>
     </el-row>
@@ -429,6 +438,7 @@
               <el-empty :description="rulesEmptyText" :image-size="80" />
             </template>
           </el-table>
+          <div v-if="ruleCardOverflow" class="rules-card-footer form-tip-line"><span>{{ t('common.app.dashboard.rulesOverflowHint', { shown: ruleCardOverflow.shown, total: ruleCardOverflow.total }) }}</span><AccessibleLink type="primary" @click="openAllRules">{{ t('common.app.dashboard.viewAllRules') }}</AccessibleLink></div>
         </el-card>
       </el-col>
     </el-row>
@@ -483,6 +493,7 @@ import ConnectionsDialog from '@/components/ConnectionsDialog.vue'
 import { formatDate, formatChartTimeInConfigTz, formatEpochStatLabel } from '@/utils/date'
 import { getStrategyLabel } from '@/utils/strategyLabels'
 import { hostPortKey } from '@/utils/upstreamKeys'
+import { ruleHealthLevelOfUpstreams, type RuleHealthLevel } from '@/utils/ruleHealth'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import type { EChartsOption, LineSeriesOption, TooltipComponentFormatterCallbackParams } from 'echarts'
 import VChart from 'vue-echarts'
@@ -499,6 +510,8 @@ import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
 import { resolveNodeRole } from '@/utils/nodeRole'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
+import { ruleCardOverflowHint } from '@/utils/dashboardHints'
+import { pageUrl } from '@/utils/deepLink'
 import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsUsageLabel, pidsValueTone } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
@@ -563,7 +576,7 @@ const ruleRequestsTotalText = (caddyId: string): string => {
   return typeof total === 'number' ? formatInt(total) : '-'
 }
 const rankBy = ref<'requests' | 'bytes'>('requests')
-type RuleHealth = 'unknown' | 'unhealthy' | 'degraded' | 'healthy'
+type RuleHealth = Exclude<RuleHealthLevel, 'not_applicable'>
 const ruleHealth = ref<Record<string, RuleHealth>>({})
 const ruleHealthUnavailable = ref(false)
 const hostMetrics = ref<HostMetrics[] | null>(null)
@@ -820,6 +833,11 @@ const sortedRules = computed(() => {
   const failed = rankableRules.value.filter((rule) => ruleMetricsUnavailable.value[rule.caddy_id] === true)
   return [...ranked.slice(0, 10), ...failed]
 })
+
+// 规则有未展示行（排行榜截断 / 零流量未进榜）时在卡片底部披露条数并给出全部规则入口。
+const ruleCardOverflow = computed(() => ruleCardOverflowHint(rules.value.length, sortedRules.value.length))
+
+const openAllRules = () => { window.open(pageUrl('rules'), '_blank', 'noopener') }
 
 const rulesEmptyText = computed(() => {
   if (rulesUnavailable.value) return t('common.app.dashboard.loadFailed')
@@ -1110,28 +1128,11 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number, roundSigna
       const enabledUpstreams = rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
       let status: RuleHealth = 'unknown'
       if (rule.enabled && enabledUpstreams.length) {
-        let hasUnknown = false
-        let hasUnhealthy = false
-        let hasDegraded = false
-
-        enabledUpstreams.forEach((u) => {
-          const key = hostPortKey(u.host, u.port)
-          const upHealth = healthByHostPort.get(key)
-          if (!upHealth) {
-            hasUnknown = true
-          } else if (upHealth.unknown) {
-            hasUnknown = true
-          } else if (!upHealth.healthy) {
-            hasUnhealthy = true
-          } else if (upHealth.degraded) {
-            hasDegraded = true
-          }
-        })
-
-        if (hasUnhealthy) status = 'unhealthy'
-        else if (hasDegraded) status = 'degraded'
-        else if (hasUnknown) status = 'unknown'
-        else status = 'healthy'
+        // 级别经单源（utils/ruleHealth）判定：与规则页列表、处理流程弹框同一口径。
+        const level = ruleHealthLevelOfUpstreams(
+          enabledUpstreams.map((u) => healthByHostPort.get(hostPortKey(u.host, u.port))),
+        )
+        status = level === 'not_applicable' ? 'unknown' : level
       }
       nextRuleHealth[rule.caddy_id] = status
     })
@@ -1341,6 +1342,7 @@ onUnmounted(() => {
 
 .stat-value { font-size: 20px; font-weight: 600; color: #111827; line-height: 1.2; }
 .stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.stat-scope { font-size: 11px; color: #9ca3af; margin-top: 1px; line-height: 1.3; }
 
 .resource-grid {
   display: grid;
@@ -1370,9 +1372,10 @@ onUnmounted(() => {
   .resource-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-.chart-card :deep(.el-card__body) { height: 240px; padding: 16px; box-sizing: border-box; }
+.chart-card :deep(.el-card__body) { height: 264px; padding: 16px; box-sizing: border-box; }
 .chart-container { height: 200px; }
 .chart-skeleton { height: 200px; }
+.rules-card-footer { margin-top: 8px; }
 .collection-state { display: flex; align-items: center; justify-content: center; min-height: 80px; color: #909399; }
 
 .text-primary { color: #111827; }

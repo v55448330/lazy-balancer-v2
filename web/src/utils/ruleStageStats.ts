@@ -89,3 +89,12 @@ export const stageCountSummary = (
   // 阶段 3 = 内容防护（WAF）：本阶段拦截数 + WAF 段耗时 + 未归因桶披露。
   return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage3_blocked_24h }) + timingDetailText(3, counts) + unattributedCountText(counts)
 }
+
+/**
+ * 阶段面板的「策略计数」行：只对阶段 2（CC 防护）出文案。该阶段没有规则级拦截
+ * 计数（挑战统计是全局口径，见 stageCountSummary 的同名分支），面板若与阶段 1/3
+ * 一样只留空行，读者会把「没有数字」读成「零拦截」——改为点名本规则绑定的策略数。
+ * groupCount = 该规则在本阶段绑定的策略组数（流程弹框 displayModel 的 groups）。
+ */
+export const stagePolicyCountText = (stage: 0 | 1 | 2 | 3, groupCount: number): string =>
+  stage === 2 ? t('common.app.rules.flow.stage2PolicyCount', { n: groupCount }) : ''

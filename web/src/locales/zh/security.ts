@@ -211,6 +211,7 @@ export default {
     "actionEnable": "启用",
     "ineffectiveNotice": "「自动封禁名单」尚未被启用中的 IP 访问控制（deny）策略引用；可经安全策略页「默认策略」创建「自动封禁联动」，或到「安全规则 → IP 地址列表」手动引用",
     "ineffectiveBindingNotice": "「自动封禁联动」策略已就绪并引用了名单，但尚未关联转发规则——在策略编辑的「关联规则」步骤绑定规则后生效",
+    "goToBindingRules": "前往绑定规则",
     "feedDegradedPrefix": "数据源降级：",
     "feedDegradedDefault": "安全事件补采/日志轮转已暂停，实时 IPC 入库仍在运行（自动封禁计数仍会随实时事件增长）",
     "suggestionSummary": "观察模式：以下 IP 在 {minutes} 分钟窗口内达到 {times} 次阈值（仅记录建议，不执行封禁）",

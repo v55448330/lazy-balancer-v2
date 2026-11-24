@@ -89,8 +89,8 @@
                   <div class="flow-kv"><span class="flow-kv-label">{{ t('common.app.rules.flow.expireTimeLabel') }}</span><span class="flow-kv-value">{{ formatDate(certInfo.not_after) || '-' }}</span></div>
                   <div class="flow-kv">
                     <span class="flow-kv-label">{{ t('common.app.rules.wizard.daysRemaining') }}</span>
-                    <span class="flow-kv-value" :class="{ 'is-expired': certInfo.status === 'expired' }">
-                      {{ certInfo.status === 'expired' ? t('common.app.rules.flow.certExpiredDays', { days: Math.abs(certInfo.days_remaining) }) : t('common.app.rules.wizard.certDays', { n: certInfo.days_remaining }) }}
+                    <span class="flow-kv-value" :class="certExpiryConclusion(certInfo.days_remaining).tone">
+                      {{ certExpiryConclusion(certInfo.days_remaining).text }}
                     </span>
                   </div>
                   <div v-if="certInfo.source === 'acme_dns' && target.acmeConfigName" class="flow-kv">
@@ -189,6 +189,9 @@
                 <el-button link type="warning" size="small" @click="retryStageStats">{{ t('common.app.rules.common.retry') }}</el-button>
               </div>
               <div v-if="stageStatsText(typedStageByKey(node.key)!.stage)" class="flow-panel-stats">{{ stageStatsText(typedStageByKey(node.key)!.stage) }}</div>
+              <!-- 阶段 2（CC 防护）没有规则级拦截计数（挑战统计为全局口径，见阶段脚注）：
+                   点名本规则绑定的策略数，不让「没有数字」被读成「零拦截」 -->
+              <div v-else-if="typedStageByKey(node.key)!.stage === 2" class="flow-panel-stats">{{ stagePolicyCountText(typedStageByKey(node.key)!.stage, typedStageByKey(node.key)!.groups.length) }}</div>
               <template v-if="typedStageByKey(node.key)!.enabled">
                 <div
                   v-for="group in typedStageByKey(node.key)!.groups"
@@ -286,7 +289,7 @@
           <div v-if="activeNode === 'upstream'" class="flow-panel dialog-panel tl-panel">
             <div class="flow-panel-head">
               <DialogSectionHeader :title="t('common.app.rules.flow.upstreamTarget')" />
-              <el-tag v-if="target.health" size="small" effect="plain" :type="target.health.unhealthy + target.health.degraded > 0 ? 'warning' : 'success'" class="flow-panel-meta">
+              <el-tag v-if="target.health" size="small" effect="plain" :type="RULE_HEALTH_TAG_TYPE[ruleHealthLevel(target.health)]" class="flow-panel-meta">
                 {{ t('common.app.rules.flow.healthRatio', { a: target.health.healthy, b: target.health.total }) }}
               </el-tag>
             </div>
@@ -390,9 +393,11 @@ import { formatDate } from '@/utils/date'
 import type { APIResponse } from '@/types'
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hostPortKey } from '@/utils/upstreamKeys'
+import { RULE_HEALTH_TAG_TYPE, ruleHealthLevel } from '@/utils/ruleHealth'
+import { certExpiryConclusion } from '@/utils/certExpiry'
 import { weightPercent } from '@/utils/upstreamWeights'
 import { STAGE_TITLES, attachStageDetails, hasTrustDetectionBinding, inferPolicyType, mergeIpEntries, parseIPList, parseRefIds, stage1FootnoteText, stageSubLabel, trustHitMode } from '@/utils/securityStages'
-import { stageCountChip, stageCountSummary, stageTimingChip, type RuleStageCounts } from '@/utils/ruleStageStats'
+import { stageCountChip, stageCountSummary, stagePolicyCountText, stageTimingChip, type RuleStageCounts } from '@/utils/ruleStageStats'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { useCountryNamesCn, countryLabel } from '@/composables/useCountryNamesCn'
 import type {
@@ -956,6 +961,8 @@ const retryCertInfo = (): void => {
 .flow-kv-label { color: #6b7280; flex: 0 0 72px; }
 .flow-kv-value { color: #1f2937; overflow: hidden; text-overflow: ellipsis; }
 .flow-kv-value.is-expired { color: var(--el-color-danger); }
+.flow-kv-value.is-danger { color: var(--el-color-danger); }
+.flow-kv-value.is-warning { color: var(--el-color-warning); }
 .flow-domain-chip { margin: 0 6px 4px 0; }
 .flow-cert-section { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
 .flow-cert-loading { margin-top: 12px; }

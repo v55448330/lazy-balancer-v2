@@ -6,6 +6,7 @@ package handlers
 // 「立即执行」端点已废除（2026-10-14 裁定：调度唯一前提=业务启用）。
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -113,7 +114,8 @@ func autobanCountingModeText(cfg services.AutobanConfig) string {
 // 未引用时前端黄条提示「名单未生效」；suggestions=上一轮观察建议（dry-run）。
 // is_master/role=调度面节点角色（从端卡片按角色门控写按钮，
 // 引擎未装配时保守判从）；list_entries 与渲染生效面同口径（剔除已到期
-// 未清理条目）。
+// 未清理条目）；policy_id=binding 环节的定位目标（就绪未绑定的那条 deny 策略
+// id，黄条「前往绑定规则」入口的深链参数；其余环节与无法定位为 null）。
 func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 	cfg, err := services.GetAutobanConfig()
 	if err != nil {
@@ -138,8 +140,10 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 	// 2026-11-21：binding 缺失时提示关联规则，不得引导去创建策略）。
 	ipEffective := h.autobanBanEffectiveIP(preset)
 	banMissing := ""
+	// binding 环节的定位目标（就绪未绑定的那条 deny 策略 id）；其余环节为 0。
+	var banMissingPolicyID int64
 	if !ipEffective {
-		banMissing = h.autobanMissingLink(preset)
+		banMissing, banMissingPolicyID = h.autobanMissingLink(preset)
 	}
 	resp := gin.H{
 		"enabled":              cfg.Enabled,
@@ -163,6 +167,7 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		// 「拦截生效」，曾抑制唯一的不生效告警。
 		"ban_effective":    ipEffective,
 		"ban_missing":      banMissing,
+		"policy_id":        autobanNullablePolicyID(banMissingPolicyID),
 		"ban_effective_ip": ipEffective,
 		"tracked_ips":      services.AutobanTrackedIPs(),
 		"suggestions":      suggestions,
@@ -363,24 +368,39 @@ func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 // 策略引用名单（提示创建/引用）；binding=策略就绪但未关联到启用 HTTP 规则+
 // 启用上游（提示关联规则）。查询失败返回空（fail-closed，黄条侧已有
 // ban_effective 兜底）。
-func (h *Handlers) autobanMissingLink(preset autobanPresetListState) string {
+// 第二返回值=binding 环节的定位目标（就绪未绑定的那条 deny 策略 id）：与环节
+// 判定取自同一条查询，不另起查询链；其余环节与查询失败为 0（响应侧映射为
+// null）。多条就绪策略时取 id 最小的一条——能走到 binding 即全部未生效绑定
+// （任一条已生效则 ban_effective 为 true），任一条都是有效目标，固定排序
+// 保证轮询间不跳变。
+func (h *Handlers) autobanMissingLink(preset autobanPresetListState) (string, int64) {
 	if preset.id <= 0 {
-		return ""
+		return "", 0
 	}
 	// 库缺失是最上游的缺失环节：修策略/绑定都不解决「安全链根本没渲染」。
 	if crsOK, ip2regionOK := autobanSecurityLibsReady(); !crsOK || !ip2regionOK {
-		return "libs"
+		return "libs", 0
 	}
-	var policyReady int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies p
+	var readyPolicyID int64
+	switch err := db.DB.QueryRow(`SELECT p.id FROM security_policies p
 		WHERE COALESCE(p.enabled,0)=1 AND COALESCE(p.ip_acl_enabled,0)=1 AND COALESCE(p.ip_acl_mode,'')='deny'
 		  AND json_valid(COALESCE(p.ip_acl_list_refs,'[]'))
-		  AND EXISTS (SELECT 1 FROM json_each(COALESCE(p.ip_acl_list_refs,'[]')) je WHERE je.value=?)`,
-		preset.id).Scan(&policyReady); err != nil {
-		return ""
+		  AND EXISTS (SELECT 1 FROM json_each(COALESCE(p.ip_acl_list_refs,'[]')) je WHERE je.value=?)
+		ORDER BY p.id LIMIT 1`,
+		preset.id).Scan(&readyPolicyID); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "policy", 0
+	case err != nil:
+		return "", 0
 	}
-	if policyReady == 0 {
-		return "policy"
+	return "binding", readyPolicyID
+}
+
+// autobanNullablePolicyID 策略 id 的响应形态：可定位时为数值，0（未定位/环节
+// 不适用）为 null。
+func autobanNullablePolicyID(id int64) any {
+	if id <= 0 {
+		return nil
 	}
-	return "binding"
+	return id
 }

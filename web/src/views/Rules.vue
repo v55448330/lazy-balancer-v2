@@ -8,10 +8,14 @@
         </h2>
         <p class="page-desc">{{ t('common.app.rules.list.pageDescription') }}</p>
       </div>
-      <el-button type="primary" :disabled="isReadOnly || saving" @click="openWizard()">
-        <el-icon><Plus /></el-icon>
-        {{ t('common.app.rules.wizard.newRule') }}
-      </el-button>
+      <div class="header-actions">
+        <!-- 刷新=前台取数（表格 loading 遮罩 + 安全目录全量）；列表另有 30s 可见性轮询承接他端变更 -->
+        <el-button :icon="Refresh" @click="refreshRuleList">{{ t('common.app.rules.common.refresh') }}</el-button>
+        <el-button type="primary" :disabled="isReadOnly || saving" @click="openWizard()">
+          <el-icon><Plus /></el-icon>
+          {{ t('common.app.rules.wizard.newRule') }}
+        </el-button>
+      </div>
     </div>
 
     <el-alert v-if="certPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
@@ -108,6 +112,7 @@
                     role="button"
                     tabindex="0"
                     :aria-label="t('common.app.rules.list.viewFlowAria', { ruleName: row.name })"
+                    @click="openFlowFromLock(row as Rule)"
                     @keydown.enter.prevent="activateOnce($event, () => openFlowFromLock(row as Rule))"
                     @keydown.space.prevent="activateOnce($event, () => openFlowFromLock(row as Rule))"
                   ><Lock /></el-icon>
@@ -180,7 +185,7 @@
             <span class="port">{{ row.listen_port }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.upstream')" min-width="88" align="center">
+        <el-table-column :label="t('common.app.rules.common.upstreamType')" min-width="88" align="center">
           <template #default="{ row }">
             <el-tag :type="row.dynamic_dns ? 'primary' : 'success'" size="small" effect="plain">
               {{ row.dynamic_dns ? t('common.app.rules.list.dnsDynamic') : t('common.app.rules.list.dnsStatic') }}
@@ -228,11 +233,9 @@
                 </div>
                 <div class="cert-row">
                   <span class="cert-label">{{ t('common.app.rules.wizard.daysRemaining') }}</span>
-                  <!-- 过期证书不渲染裸负数（「-1 天」易误读为已过期一整天）-->
-                  <span :class="['cert-days', certInfoMap[row.caddy_id]?.status]">
-                    {{ certInfoMap[row.caddy_id]?.status === 'expired'
-                      ? t('common.app.rules.list.expiredDays', { days: Math.abs(certInfoMap[row.caddy_id]?.days_remaining ?? 0) })
-                      : t('common.app.rules.wizard.tableCertDays', { n: certInfoMap[row.caddy_id]?.days_remaining }) }}
+                  <!-- 有效期结论与色阶经单源（与向导、流程弹框同一口径）；天数不可得时显示「-」 -->
+                  <span :class="['cert-days', certDaysConclusion(certInfoMap[row.caddy_id])?.tone ?? 'is-unknown']">
+                    {{ certDaysConclusion(certInfoMap[row.caddy_id])?.text ?? '-' }}
                   </span>
                 </div>
                 <div class="cert-row" v-if="certInfoMap[row.caddy_id]?.error">
@@ -254,9 +257,11 @@
                  与「已禁用」的「-」同形会让用户无法从列表区分「未发布」。 -->
             <el-tooltip
               v-if="row.enabled && Array.isArray(row.upstreams) && getEnabledUpstreams(row as Rule).length === 0"
-              :content="t('common.app.rules.list.unpublishedHint')"
               placement="top"
             >
+              <template #content>
+                {{ t('common.app.rules.list.unpublishedHint') }}<br />{{ t('common.app.rules.list.unpublishedRecoverHint') }}
+              </template>
               <el-tag type="warning" size="small" effect="plain">{{ t('common.app.rules.list.statusUnpublished') }}</el-tag>
             </el-tooltip>
             <el-popover v-else-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240" :popper-options="popperViewportSafe">
@@ -270,7 +275,7 @@
                 <template v-if="row.dynamic_dns">
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
-                    <el-tooltip v-if="status.unknown && status.dynamic" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                    <el-tooltip v-if="status.unknown && status.dynamic" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">{{ t('common.app.rules.common.notApplicable') }}</span></el-tooltip>
                     <el-tag v-else-if="status.unknown" size="small" effect="plain" type="info">{{ t('common.app.rules.list.enabledPending') }}</el-tag>
                     <el-icon v-else-if="status.degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                     <el-icon v-else-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
@@ -282,7 +287,7 @@
                     <div class="upstream-item-row">
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
-                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && (getUpstreamHealthStatus(row.caddy_id, upstream).dynamic || (row.protocol === 'tcp' && !row.enable_active_health_check))" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && (getUpstreamHealthStatus(row.caddy_id, upstream).dynamic || (row.protocol === 'tcp' && !row.enable_active_health_check))" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">{{ t('common.app.rules.common.notApplicable') }}</span></el-tooltip>
                         <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" size="small" effect="plain" type="info">{{ t('common.app.rules.list.enabledPending') }}</el-tag>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
@@ -301,7 +306,7 @@
                       <div class="upstream-item-row">
                         <span class="upstream-address">{{ pu.address }}:{{ pu.port }}</span>
                         <span class="upstream-status">
-                          <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown && getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).dynamic" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                          <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown && getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).dynamic" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">{{ t('common.app.rules.common.notApplicable') }}</span></el-tooltip>
                           <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown" size="small" effect="plain" type="info">{{ t('common.app.rules.list.enabledPending') }}</el-tag>
                           <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                           <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
@@ -368,9 +373,22 @@
                 </el-button>
                 </div>
               </el-tooltip>
-              <el-tooltip :disabled="!isReadOnly && row.log_enabled" :content="isReadOnly ? readOnlyMessage : t('common.app.rules.list.logDisabledTooltip')">
+              <!-- 访问日志入口三态（utils/ruleAccessLog 单源）：已开启=查看，只读用户同样可看
+                   （后端对全部登录用户开放读）；未开启且可编辑=「去开启」，打开编辑向导并定位到
+                   访问日志开关；其余未开启（只读/从节点/证书任务锁定/TCP 不支持）=禁用 + 原因 -->
+              <el-button v-if="row.log_enabled" type="primary" link size="small" @click="openRuleLogDialog(row as Rule)">
+                {{ t('common.app.rules.common.log') }}
+              </el-button>
+              <el-tooltip v-else-if="ruleLogEntryState(row as Rule, canEditRule(row as Rule)) === 'enable'" :content="t('common.app.rules.list.logEnableEntryTip')" placement="top">
                 <div>
-                <el-button type="primary" link size="small" :disabled="isReadOnly || !row.log_enabled" @click="openRuleLogDialog(row as Rule)">
+                <el-button type="primary" link size="small" @click="openWizardForAccessLog(row as Rule)">
+                  {{ t('common.app.rules.list.logEnableEntry') }}
+                </el-button>
+                </div>
+              </el-tooltip>
+              <el-tooltip v-else :content="row.protocol === 'tcp' ? t('common.app.rules.list.logUnsupportedTcp') : t('common.app.rules.list.logDisabledTooltip')" placement="top">
+                <div>
+                <el-button type="primary" link size="small" disabled>
                   {{ t('common.app.rules.common.log') }}
                 </el-button>
                 </div>
@@ -475,7 +493,7 @@
             </el-form-item>
 
             <el-form-item :label="t('common.app.rules.common.accessLog')" v-if="wizardForm.protocol === 'http'">
-              <el-switch v-model="wizardForm.log_enabled" />
+              <el-switch v-model="wizardForm.log_enabled" ref="accessLogSwitchRef" />
               <span class="form-tip-inline">{{ t('common.app.rules.wizard.accessLogHint') }}</span>
             </el-form-item>
           </el-form>
@@ -1402,7 +1420,7 @@ import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isRuleVersionConflict } from '@/utils/ruleConflict'
 import { isCaddyApplyDegraded } from '@/utils/bulkApplyResult'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Refresh, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { generalizeUA } from '@/utils/uaGeneralize'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -1410,6 +1428,7 @@ import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import TakeoverBadge from '@/components/common/TakeoverBadge.vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
+import type { SwitchInstance } from 'element-plus'
 import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
@@ -1456,6 +1475,8 @@ import { getStrategyLabel, strategyCardsForProtocol, strategyValuesForProtocol }
 import { selectableReferencedOptions, referencedOptionLabel } from '@/utils/caProviderOptions'
 import { popperViewportSafe } from '@/utils/popper'
 import { hostPortKey, upstreamDedupeKey } from '@/utils/upstreamKeys'
+import { RULE_HEALTH_LABEL_KEY, RULE_HEALTH_TAG_TYPE, ruleHealthLevel, type RuleHealthSummary, type RuleHealthTagType } from '@/utils/ruleHealth'
+import { certExpiryConclusion, type CertExpiryConclusion } from '@/utils/certExpiry'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, payloadWeight, redistributeWeight, weightPercent } from '@/utils/upstreamWeights'
 import { projectRuleFlowPath } from '@/utils/ruleFlow'
 import {
@@ -1479,6 +1500,9 @@ import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
+import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
+import { RULE_LIST_POLL_MS, ruleListPollPaused, type RuleListEditActivity } from '@/utils/ruleListRefresh'
+import { ruleLogEntryState } from '@/utils/ruleAccessLog'
 import { useI18n } from 'vue-i18n'
 
 const { t, locale } = useI18n()
@@ -1687,14 +1711,16 @@ const securityBindingsError = ref(false)
 // 绑定数据未就绪时禁止打开编辑器：组件预选空集 + 全量替换语义会把
 // 「加载失败/未完成」保存成「解除全部绑定」。
 const securityBindingsLoading = ref(true)
-const fetchSecurityBindings = async (includeSecurityCatalog = false) => {
+const fetchSecurityBindings = async (includeSecurityCatalog = false, options: { silent?: boolean } = {}) => {
   securityBindingsLoading.value = true
+  // silent=后台轮询轮次：失败只置下方横幅（可重试），不每轮弹 toast。
+  const config = { silent: options.silent === true }
   try {
     const [bindingsRes, policiesRes, ipListRes, blockPagesRes] = await Promise.all([
-      request.get<APIResponse<typeof securityBindings.value>>('/security/bindings'),
-      includeSecurityCatalog ? request.get<APIResponse<SecurityStagePolicy[]>>('/security/policies') : Promise.resolve(null),
-      includeSecurityCatalog ? request.get<APIResponse<SecurityStageIPList[]>>('/security/ip-lists') : Promise.resolve(null),
-      includeSecurityCatalog ? request.get<APIResponse<SecurityStageBlockPage[]>>('/security/block-pages') : Promise.resolve(null),
+      request.get<APIResponse<typeof securityBindings.value>>('/security/bindings', config),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStagePolicy[]>>('/security/policies', config) : Promise.resolve(null),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStageIPList[]>>('/security/ip-lists', config) : Promise.resolve(null),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStageBlockPage[]>>('/security/block-pages', config) : Promise.resolve(null),
     ])
     if (bindingsRes.data) securityBindings.value = bindingsRes.data
     if (policiesRes?.data) securityPolicies.value = policiesRes.data
@@ -1799,15 +1825,27 @@ let rulesRequestSeq = 0
 // 更新者显示名走 utils/updaterName 单源
 const getUpdaterName = (userId?: number) => updaterName(users.value, userId)
 
-const fetchRules = async (includeSecurityCatalog = false) => {
+// 列表取数在途标记：后台轮询轮次据此让位（在途的那次落地即是最新，不叠加请求）。
+let rulesRequestInFlight = false
+
+const fetchRules = async (includeSecurityCatalog = false, options: { background?: boolean } = {}) => {
   if (disposed) return
+  if (options.background && rulesRequestInFlight) return
   const requestSeq = ++rulesRequestSeq
-  loading.value = true
+  rulesRequestInFlight = true
+  if (!options.background) loading.value = true
   try {
-    const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: healthPolling.signal })
+    const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: healthPolling.signal, silent: options.background === true })
     if (disposed || requestSeq !== rulesRequestSeq) return
     rules.value = res.data || []
     rulesLoadError.value = false
+    if (options.background) {
+      // 后台轮询轮次：只跟进列表与绑定快照（锁摘要随列表一起到达），且全部静默——
+      // 失败只置各自横幅，不每轮弹 toast。健康与证书任务各有独立轮询；证书详情
+      // 请求非静默，只在首屏/写后回读/手动刷新时联动。
+      void fetchSecurityBindings(includeSecurityCatalog, { silent: true })
+      return
+    }
     void fetchSecurityBindings(includeSecurityCatalog)
     // Fetch health status after rules are loaded
     void healthPolling.run()
@@ -1817,12 +1855,15 @@ const fetchRules = async (includeSecurityCatalog = false) => {
     void certJobsPolling.run()
   } catch (error: unknown) {
     if (axios.isCancel(error) || disposed || requestSeq !== rulesRequestSeq) return
-    // Error toast is already shown by the global axios interceptor; swallow here
-    // so fire-and-forget refresh calls don't surface as unhandled rejections.
+    // 前台轮次的错误 toast 已由全局 axios 拦截器弹出；后台轮次静默，只置横幅。
+    // 在此吞掉异常，fire-and-forget 的刷新调用不会变成 unhandled rejection。
     console.error('Failed to fetch rules:', error)
     rulesLoadError.value = true
   } finally {
-    if (!disposed && requestSeq === rulesRequestSeq) loading.value = false
+    if (!disposed && requestSeq === rulesRequestSeq) {
+      rulesRequestInFlight = false
+      loading.value = false
+    }
   }
 }
 
@@ -2117,7 +2158,7 @@ const mixedOriginActiveCheckWarn = computed(() => {
     .some(u => (u.origin_domain || '').trim() !== '')
 })
 
-interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; na: number; total: number }
+type HealthSummary = RuleHealthSummary
 
 const getEnabledUpstreams = (rule: Rule): Upstream[] =>
   rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
@@ -2128,24 +2169,9 @@ const healthPathRules = (rule: Rule): PathRule[] => (rule.custom_routes_enabled 
 // PathRuleUpstream.address 即主机（该类型无 enabled 标志，列出即生效上游），适配既有健康/指标查询入参
 const pathUpstreamRef = (upstream: PathRuleUpstream): { host: string; port: number } => ({ host: upstream.address, port: upstream.port })
 
-const getHealthTagType = (status: HealthSummary) => {
-  if (status.unhealthy + status.degraded === status.total) return 'danger'
-  if (status.unhealthy + status.degraded > 0) return 'warning'
-  if (status.unknown === status.total) return 'info'
-  if (status.unknown > 0) return 'warning'
-  // 动态 DNS 上游结构性 N/A(引擎按解析 IP 跟踪,域名级不可观测)
-  if (status.na === status.total) return 'info'
-  return 'success'
-}
+const getHealthTagType = (status: HealthSummary): RuleHealthTagType => RULE_HEALTH_TAG_TYPE[ruleHealthLevel(status)]
 
-const getHealthLabel = (status: HealthSummary) => {
-  if (status.unhealthy + status.degraded === status.total) return t('common.app.rules.common.unhealthy')
-  if (status.unhealthy + status.degraded > 0) return t('common.app.rules.common.degraded')
-  if (status.unknown === status.total) return t('common.app.rules.common.unknown')
-  if (status.unknown > 0) return t('common.app.rules.common.degraded')
-  if (status.na === status.total) return 'N/A'
-  return t('common.app.rules.list.healthNormal')
-}
+const getHealthLabel = (status: HealthSummary): string => t(RULE_HEALTH_LABEL_KEY[ruleHealthLevel(status)])
 
 // hostPortKey 提取至 utils/upstreamKeys（Dashboard 共用）。
 
@@ -2373,18 +2399,11 @@ const resetCertInfo = (): void => {
   })
 }
 
-// 证书有效期文案——预览行与 TLS 步骤提示框共用同一个来源。带符号的剩余天数不再
-// 直接上屏：过期显示「已过期 N 天」，当天到期显示「今天到期」，否则「N 天后」。
-const certExpiryText = computed(() => {
-  const days = certInfo.daysUntilExpiry
-  if (days < 0) return t('common.app.rules.wizard.expiredDaysAgo', { n: Math.abs(days) })
-  if (days === 0) return t('common.app.rules.wizard.expiresToday')
-  return t('common.app.rules.wizard.expiresInDays', { n: days })
-})
-const certExpiryTone = computed(() => {
-  if (certInfo.daysUntilExpiry < 0) return 'is-danger'
-  return certInfo.daysUntilExpiry <= 30 ? 'is-warning' : 'is-success'
-})
+// 证书有效期结论——预览行、TLS 步骤提示框与列表 TLS 列证书提示共用单源
+// （utils/certExpiry）：过期「已过期 N 天」、当天「今天到期」、否则「N 天后」；
+// 带符号的剩余天数不直接上屏。
+const certExpiryText = computed(() => certExpiryConclusion(certInfo.daysUntilExpiry).text)
+const certExpiryTone = computed(() => certExpiryConclusion(certInfo.daysUntilExpiry).tone)
 const certTagType = computed(() => (certInfo.daysUntilExpiry < 0 ? 'danger' : certInfo.warning ? 'warning' : 'success'))
 // 后端警告按「；」拆成条目逐行列出；过期类警告尾部的「(过期时间: …)」与上方已展示的
 // 过期时间重复，上屏前去掉。
@@ -2392,6 +2411,10 @@ const certWarnings = computed(() => certInfo.warning
   .split(/[;；]/)
   .map((item) => item.replace(/\s*[（(]\s*(过期时间|expired(?:\s+at)?|expiry(?:\s+date)?)\s*[:：]\s*[^()（）]*[)）]\s*$/i, '').trim())
   .filter(Boolean))
+
+/** 列表 TLS 列证书提示的有效期结论；天数不可得（解析失败）时返回 null。 */
+const certDaysConclusion = (cert: CertInfo | null): CertExpiryConclusion | null =>
+  Number.isFinite(cert?.days_remaining) ? certExpiryConclusion(cert?.days_remaining ?? 0) : null
 
 const wizardForm = reactive<RuleForm>({
   name: '',
@@ -3838,6 +3861,23 @@ const submitWizard = async () => {
   }
 }
 
+// ── 访问日志「去开启」落点：编辑向导 + 定位访问日志开关 ──
+const accessLogSwitchRef = ref<SwitchInstance | null>(null)
+const openWizardForAccessLog = async (rule: Rule): Promise<void> => {
+  await openWizard(rule)
+  // openWizard 的只读/保存在途/过期序号守卫触发时，向导不属于这条规则——不定位。
+  if (!wizardVisible.value || editingRule.value?.caddy_id !== rule.caddy_id) return
+  // 开关在基本配置步末项：定位=滚到向导可视区中部并移入焦点，键盘与读屏用户同位到达。
+  // el-dialog 的焦点陷阱在打开后的下一拍把焦点落到对话框容器（晚于 nextTick），
+  // 同步或 nextTick 里 focus 会被夺回——排在其后的宏任务里再定位。滚动取居中：
+  // 打开动画期间对话框带位移，贴边滚动会差出十几个像素，把开关裁掉一截。
+  setTimeout(() => {
+    const switchEl = accessLogSwitchRef.value?.$el as HTMLElement | undefined
+    switchEl?.scrollIntoView?.({ block: 'center' })
+    accessLogSwitchRef.value?.focus()
+  }, 0)
+}
+
 // ── 规则处理流程弹框：唯一入口 = 锁图标点击（已绑策略时显示） ──
 const flowDialogVisible = ref(false)
 const flowDialogTarget = ref<RuleFlowTarget | null>(null)
@@ -4434,6 +4474,28 @@ const certJobsPolling = usePollingTask(async (task) => {
   },
 })
 
+// 页头「刷新」：前台取数——表格 loading 遮罩、失败 toast，并联动安全目录/健康/证书。
+const refreshRuleList = (): void => { void fetchRules(true) }
+
+// 轮询让位判定的状态收集（判定单源在 utils/ruleListRefresh）。
+const ruleListEditActivity = (): RuleListEditActivity => ({
+  wizardOpen: wizardVisible.value,
+  flowOpen: flowDialogVisible.value,
+  bindOpen: bindDialogVisible.value || bindDialogOpening.value,
+  toggling: Object.values(ruleTogglePending.value).some(Boolean),
+  deleting: deletingRuleId.value !== null,
+})
+
+// 列表可见性轮询：后台标签页停表，恢复可见/挂载时立即补一轮。轮询只刷新列表数据，
+// 编辑面打开或写操作在途时让位——不得换掉正在编辑的表单所依赖的行与在途快照。
+const ruleListRefresh = createVisibilityIntervals({
+  intervals: [{
+    tick: () => { if (!ruleListPollPaused(ruleListEditActivity())) void fetchRules(false, { background: true }) },
+    ms: RULE_LIST_POLL_MS,
+    immediate: true,
+  }],
+})
+
 const certRetryLoading = ref(false)
 const retryCertPolling = async (): Promise<void> => {
   if (certRetryLoading.value) return
@@ -4466,6 +4528,7 @@ onMounted(() => {
   void healthPolling.run()
   healthPolling.start()
   certJobsPolling.start()
+  ruleListRefresh.start()
 })
 
 onUnmounted(() => {
@@ -4474,6 +4537,7 @@ onUnmounted(() => {
   configRequestSeq++
   ruleLogRequestSeq++
   certInfoGeneration++
+  ruleListRefresh.stop()
   // 弹框 OPEN 时 SPA 切页不会触发 @close——必须在此显式停 tail，
   // 否则 5s 定时器与整份组件闭包永久存活（isActive 已 false，轮次空转）。
   stopRuleLogPolling()
@@ -5027,21 +5091,22 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-.cert-days.valid {
+/* 有效期色阶与向导证书事实框同一套修饰类（结论单源 utils/certExpiry） */
+.cert-days.is-success {
   color: #10b981;
 }
 
-.cert-days.expiring {
+.cert-days.is-warning {
   color: #f59e0b;
   font-weight: 600;
 }
 
-.cert-days.expired {
+.cert-days.is-danger {
   color: #ef4444;
   font-weight: 600;
 }
 
-.cert-days.unknown {
+.cert-days.is-unknown {
   color: #9ca3af;
 }
 

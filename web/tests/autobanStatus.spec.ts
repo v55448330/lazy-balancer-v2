@@ -516,3 +516,59 @@ test('自动封禁状态加载中不得渲染「仅主节点可修改」黄条',
     '加载中黄条必须被 autobanStatusLoading 门控',
   )
 })
+
+// ── 黄条「前往绑定规则」入口：定位目标判据单源 + 事件页接线 + 词条 ──
+
+import { autobanMissingPolicyId } from '../src/utils/autobanStatus.ts'
+
+// 入口显隐判据的行为断言：仅 binding 环节且后端给出正整数 policy_id 时可定位。
+// 落空的深链（策略页查无此 id）只会换来「策略已被删除」警告——旧后端缺省、
+// null、非正整数、非数字一律不给入口；非 binding 环节各有自己的处置路径。
+test('「前往绑定规则」定位目标：仅 binding 环节且 policy_id 为正整数', () => {
+  const located = (ban_missing?: string, policy_id?: number | null): number | null =>
+    autobanMissingPolicyId({ ban_missing, policy_id })
+  assert.equal(located('binding', 12), 12)
+  assert.equal(located('binding', 1), 1, 'id 从 1 起')
+  const malformed: Array<number | null | undefined> = [undefined, null, 0, -3, 1.5, Number.NaN, Number.POSITIVE_INFINITY]
+  for (const policy_id of malformed) {
+    assert.equal(located('binding', policy_id), null, `policy_id=${String(policy_id)} 不得定位`)
+  }
+  assert.equal(located('binding', '12' as unknown as number), null, '字符串形态的 id（带外数据）不得定位')
+  for (const ban_missing of ['policy', 'libs', '', undefined]) {
+    assert.equal(located(ban_missing, 12), null, `ban_missing=${ban_missing} 环节不得出现「前往绑定规则」`)
+  }
+  assert.equal(located(), null)
+})
+
+// 消费侧接线：纯函数用例拦不住「入口没挂到黄条上」或「深链参数写了字面量」。
+test('事件页黄条「前往绑定规则」入口：判据走单源，深链复用已登记的策略聚焦参数', () => {
+  const page = code('src/views/security/SecurityEvents.vue')
+  // 定位键进状态类型（旧后端缺省/null → 不给入口，防御式消费）
+  assert.match(page, /policy_id\?: number \| null/)
+  // 显隐判据单源（与 isAutobanIneffective 同文件）
+  assert.match(page, /const autobanBindingPolicyId = computed\(\(\) => autobanMissingPolicyId\(autobanStatus\.value\)\)/)
+  const barAt = page.indexOf('<div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">')
+  assert.ok(barAt > 0, '前置：未生效黄条必须存在（否则本断言空转）')
+  const bar = elementSlice(page, barAt, 'div')
+  assert.match(bar, /ineffectiveBindingNotice/, '切片必须是未生效黄条本体')
+  const linkAt = bar.indexOf('<AccessibleLink')
+  assert.ok(linkAt > 0, '未生效黄条内必须有「前往绑定规则」入口')
+  const entry = elementSlice(bar, linkAt, 'AccessibleLink')
+  assert.match(entry, /v-if="autobanBindingPolicyId !== null"/, '入口必须由定位判据守卫（不可定位时不渲染）')
+  assert.match(entry, /@click="goToBindingPolicy"/, '入口必须绑定导航处理函数')
+  assert.match(entry, /\{\{ t\('app\.security\.events\.goToBindingRules'\) \}\}/, '入口文案必须走词条')
+  // 深链：与事件行「查看策略」同形态（新标签 + noopener），参数走已登记常量
+  assert.match(
+    page,
+    /const goToBindingPolicy = \(\) => \{\s*if \(autobanBindingPolicyId\.value === null\) return\s*window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policyId\]: autobanBindingPolicyId\.value \}\), '_blank', 'noopener'\)\s*\}/,
+    '导航必须复用 pageUrl + DEEP_LINK_PARAMS.policyId（sp）新标签打开',
+  )
+  assert.doesNotMatch(page, /pageUrl\('security-policies', \{ sp:/, '参数键不得写字面量（走 DEEP_LINK_PARAMS）')
+})
+
+test('「前往绑定规则」词条 zh/en 成对', () => {
+  const zhSec = code('src/locales/zh/security.ts')
+  const enSec = code('src/locales/en/security.ts')
+  assert.ok(zhSec.includes('"goToBindingRules": "前往绑定规则"'), 'zh 母本缺「前往绑定规则」')
+  assert.ok(enSec.includes('"goToBindingRules": "Go to rule binding"'), 'en 侧缺 goToBindingRules')
+})

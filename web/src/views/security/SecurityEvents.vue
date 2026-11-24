@@ -75,9 +75,11 @@
         </div>
       </div>
       <!-- 未生效黄条：判据单源 utils/autobanStatus（enabled ∧ ban_effective===false，
-           IP 名单通道：名单为空或未被启用中的 deny 策略引用） -->
+           IP 名单通道：名单为空或未被启用中的 deny 策略引用）。binding 环节且后端
+           给出可定位的策略 id 时追加入口「前往绑定规则」（深链到该策略，与事件行
+           「查看策略」同形态；显隐判据单源 autobanMissingPolicyId）。 -->
       <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">{{ t(autobanStatus?.ban_missing === 'binding' ? 'app.security.events.ineffectiveBindingNotice' : 'app.security.events.ineffectiveNotice') }}</span>
+        <span class="info-note-desc">{{ t(autobanStatus?.ban_missing === 'binding' ? 'app.security.events.ineffectiveBindingNotice' : 'app.security.events.ineffectiveNotice') }} <AccessibleLink v-if="autobanBindingPolicyId !== null" type="primary" @click="goToBindingPolicy">{{ t('app.security.events.goToBindingRules') }}</AccessibleLink></span>
       </div>
       <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
            运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
@@ -610,7 +612,7 @@ import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/uti
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl, parseSecurityEventsDeepLink } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, autobanIdentityDisplay, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanMissingPolicyId, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, autobanIdentityDisplay, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
 import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, AUTOBAN_SUSPICION_MULTIPLIER_MAX, AUTOBAN_CONFIRM_FLOOR_RATIOS, matchAutobanPreset, type AutobanPresetId } from '@/utils/autobanPresets'
 import { autobanEntryExpired, autobanEntryRemaining, isAutomaticBanEntry } from '@/utils/autobanEntry'
 import { useIpListAdd } from '@/composables/useIpListAdd'
@@ -643,6 +645,9 @@ interface AutobanStatus {
   // 缺失环节细分：policy=无 deny 策略引用名单（引导创建）；binding=策略就绪
   // 但未关联规则（引导关联规则——不得引导去创建策略）。旧后端缺省 → 走 policy 文案。
   ban_missing?: string
+  // binding 环节的定位目标（就绪未绑定的那条 deny 策略 id）；其余环节与旧后端
+  // 缺省为 null——不给「前往绑定规则」入口。
+  policy_id?: number | null
   // 累犯披露键（旧后端缺省 → 档位按 off、升级数按 0，防御式消费）。
   escalation?: string; escalated_count?: number
   // 证据分层计数键（旧后端缺省 → classic/4/0.4，防御式消费）。
@@ -700,6 +705,9 @@ const autobanToggling = ref(false)
 const autobanStatusError = ref(false)
 // 黄条判据单源（utils/autobanStatus，行为钉测）：仅 enabled ∧ ban_effective===false。
 const autobanIneffective = computed(() => isAutobanIneffective(autobanStatus.value))
+// 「前往绑定规则」入口的定位目标（判据单源 autobanMissingPolicyId）：仅 binding
+// 环节且后端给出可定位的策略 id 时非空。
+const autobanBindingPolicyId = computed(() => autobanMissingPolicyId(autobanStatus.value))
 // 喂入源降级：仅在启用时提示（未启用时「不计数」无需解释）
 const autobanFeedDegraded = computed(() => autobanStatus.value.enabled && autobanStatus.value.feed_degraded === true)
 const authStore = useAuthStore()
@@ -1364,6 +1372,12 @@ const goToPolicy = (row: SecurityEvent) => {
   } else if (row.policy_name) {
     window.open(pageUrl('security-policies', { [DEEP_LINK_PARAMS.policySearch]: row.policy_name }), '_blank', 'noopener')
   }
+}
+// 未生效黄条「前往绑定规则」：深链到定位策略（与 goToPolicy 的 id 分支同形态），
+// 策略页聚焦后打开该策略编辑，在「关联规则」步骤绑定。
+const goToBindingPolicy = () => {
+  if (autobanBindingPolicyId.value === null) return
+  window.open(pageUrl('security-policies', { [DEEP_LINK_PARAMS.policyId]: autobanBindingPolicyId.value }), '_blank', 'noopener')
 }
 
 let fetchEventsSeq = 0

@@ -211,6 +211,7 @@ export default {
     "actionEnable": "Enable",
     "ineffectiveNotice": "The \"Auto-ban list\" is not referenced by an enabled IP access control (deny) policy; create \"Auto-ban linkage\" via Default Policies on the security policies page, or reference it manually in \"Security Rules → IP address lists\".",
     "ineffectiveBindingNotice": "The \"Auto-ban linkage\" policy is ready and references the list, but is not bound to any forwarding rule yet — bind rules in the policy editor's rule binding step to take effect",
+    "goToBindingRules": "Go to rule binding",
     "feedDegradedPrefix": "Data source degraded: ",
     "feedDegradedDefault": "Security event backfill/log rotation is paused; real-time IPC ingestion is still running (auto-ban counters still grow with live events).",
     "suggestionSummary": "Observation mode: the following IPs reached the threshold of {times} hits within a {minutes}-minute window (suggestions only, no bans enforced).",

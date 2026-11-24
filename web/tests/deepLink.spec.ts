@@ -57,14 +57,14 @@ test('参数键常量与消费侧解析一致', () => {
   assert.equal(EVENTS_AUTOBAN_CONFIG, 'config')
 })
 
-test('深链交接入口：9 个 window.open 调用点全部走 pageUrl，视图内无 /?page= 字面量', () => {
+test('深链交接入口：10 个 window.open 调用点全部走 pageUrl，视图内无 /?page= 字面量', () => {
   // 调用点名册（逐个正向断言）：仅断言「无字面量」时，整行 window.open 被删
-  // （入口消失）仍全绿。pageUrl 生产调用点共 9 处（总览自动封禁配置入口已随
+  // （入口消失）仍全绿。pageUrl 生产调用点共 10 处（总览自动封禁配置入口已随
   // NAT 移除批退役；事件页一键启用拦截深链随 2026-11-21 裁定退役——默认策略
   // 流程取代；默认策略弹框的「返回策略列表」改为关闭弹框、不再新开标签；
-  // 事件 3 + 总览 1 + 策略 5（含默认策略弹框完成指引 1 处））。
+  // 事件 4 + 总览 1 + 策略 5（含默认策略弹框完成指引 1 处））。
   const callSites: Array<{ path: string; expected: number }> = [
-    { path: 'src/views/security/SecurityEvents.vue', expected: 3 },
+    { path: 'src/views/security/SecurityEvents.vue', expected: 4 },
     { path: 'src/views/security/SecurityOverview.vue', expected: 1 },
     { path: 'src/views/security/SecurityPolicies.vue', expected: 5 },
   ]
@@ -81,6 +81,8 @@ test('深链交接入口：9 个 window.open 调用点全部走 pageUrl，视图
   assert.match(events, /window\.open\(pageUrl\('rules', \{ \[DEEP_LINK_PARAMS\.ruleSearch\]: row\.rule_caddy_id \}\)/)
   assert.match(events, /window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policyId\]: row\.policy_id \}\)/)
   assert.match(events, /window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policySearch\]: row\.policy_name \}\)/)
+  // 未生效黄条「前往绑定规则」：定位到 binding 环节那条就绪未绑定的策略
+  assert.match(events, /window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policyId\]: autobanBindingPolicyId\.value \}\)/)
   // 总览「查看全部」=「最近拦截事件」卡的下钻，必须带拦截筛选
   assert.match(code('src/views/security/SecurityOverview.vue'), /window\.open\(pageUrl\('security-events', \{ \[DEEP_LINK_PARAMS\.eventsAction\]: 'blocked' \}\)/)
   const policies = code('src/views/security/SecurityPolicies.vue')
