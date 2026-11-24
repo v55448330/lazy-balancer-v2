@@ -498,7 +498,7 @@ onMounted(async () => {
 .login-card {
   width: 100%;
   max-width: 400px;
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
 }
 
@@ -558,7 +558,7 @@ onMounted(async () => {
   gap: 4px;
   padding: 14px 18px;
   border: none;
-  border-radius: 10px;
+  border-radius: 0;
   cursor: pointer;
   background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28);

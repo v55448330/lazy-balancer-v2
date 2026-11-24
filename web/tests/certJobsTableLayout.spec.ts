@@ -105,9 +105,12 @@ test('证书有效期合并单列：日期 + 剩余/已过期天数，精确时�
   const body = columnBody('app\.settings\.certJobs\.colValidity')
   assert.match(body, new RegExp(`\\bmin-width="${CERT_JOB_COLUMN_WIDTHS.validity}"`))
   assert.match(body, /formatDateShort\(effectiveNotAfter\(row(?: as [A-Za-z]+)?\)\)/)
-  assert.ok(body.includes("t('app.settings.certJobs.remainDays', { days: row.days_remaining })"), '缺少「剩 N 天」分支')
-  assert.ok(body.includes("t('app.settings.certJobs.expiredDays'"), '缺少「已过期 N 天」分支')
-  assert.match(body, /row\.certificate_status === 'expired'/, '过期判据必须读后端 certificate_status 字段（无第二份派生）')
+  // 剩余天数经 utils/certExpiry 单源（与规则页同一口径：N 天后 / 今天到期 / 已过期 N 天），
+  // 色阶取单源的 tone——不再自写「剩 N 天」或按后端 status 上色；certificate_status
+  // 只作为「已过期」状态位传给单源（后端天数按整天截断，刚过期时天数也是 0）
+  assert.match(body, /\['cert-days', certExpiryConclusion\(row\.days_remaining, row\.certificate_status === 'expired'\)\.tone\]/, '色阶必须取单源的 tone')
+  assert.match(body, /· \{\{ certExpiryConclusion\(row\.days_remaining, row\.certificate_status === 'expired'\)\.text \}\}/, '剩余天数结论必须取单源')
+  assert.doesNotMatch(body, /remainDays|expiredDays/, '不得再自写一套天数文案')
   assert.match(body, /<el-tooltip[^>]*:content="formatDate\(effectiveNotAfter\(row(?: as [A-Za-z]+)?\)\)"/, '精确过期时间必须进 tooltip')
   assert.match(body, /class="cell-empty"/, '非 issued/缺失必须沿用 cell-empty 占位')
 })

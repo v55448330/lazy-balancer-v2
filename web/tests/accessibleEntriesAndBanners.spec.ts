@@ -140,6 +140,14 @@ test('规则列表锁图标：Enter/Space 打开流程弹框，不依赖 telepor
   const popover = section(rules, '<el-popover', 'popper-class="rule-lock-popper"')
   assert.match(popover, /:trigger-keys="\[\]"/)
   assert.match(code('src/views/Rules.vue'), /\.acl-lock-icon:focus-visible \{ outline:/)
+  // 点击区 24×24：图标仍 14px，靠 ::after 外扩 5px（不占位）。单元格 overflow:hidden 会裁掉
+  // 行盒外的部分，名称行因此不得矮于 24px（状态列的开关更高，行高不变）
+  assert.match(reference, /:size="14"/, '图标大小不变')
+  const hit = cssDeclarations(rules, '.acl-lock-icon::after')
+  assert.equal(hit.get('position'), 'absolute', '外扩层必须绝对定位，不占位')
+  assert.equal(hit.get('inset'), '-5px', '点击区 = 图标 14px + 两侧各 5px = 24px')
+  assert.ok(parseFloat(cssDeclarations(rules, '.rule-name-cell').get('min-height') ?? '0') >= 24, '名称行不得矮于 24px，否则单元格会裁掉点击区')
+  assert.ok(Number(cssDeclarations(rules, '.acl-lock-icon').get('z-index')) > 0, '外扩区与名称链接左扩的内边距重叠，锁图标必须在上层')
 })
 
 // ── ④ 动效无障碍 ──────────────────────────────────────────────

@@ -66,7 +66,7 @@ export default {
      "trustDesc": "用于信任策略的 IP 名单"
     },
     "verbs": {
-     "block": "拦截",
+     "block": "封禁",
      "allow": "放行",
      "trust": "信任"
     },
@@ -209,8 +209,9 @@ export default {
     "actionDisable": "禁用",
     "actionEdit": "编辑",
     "actionEnable": "启用",
-    "ineffectiveNotice": "「自动封禁名单」尚未被启用中的 IP 访问控制（deny）策略引用；可经安全策略页「默认策略」创建「自动封禁联动」，或到「安全规则 → IP 地址列表」手动引用",
+    "ineffectiveNotice": "「自动封禁名单」尚未被启用中的 IP 访问控制（黑名单）策略引用；可经安全策略页「默认策略」创建「自动封禁联动」，或到「安全规则 → IP 地址列表」手动引用",
     "ineffectiveBindingNotice": "「自动封禁联动」策略已就绪并引用了名单，但尚未关联转发规则——在策略编辑的「关联规则」步骤绑定规则后生效",
+    "ineffectiveBoundNotice": "「自动封禁联动」策略已关联 {n} 条规则，但这些规则当前没有转发流量（TLS 类、已禁用或没有启用的上游），自动封禁暂不生效",
     "goToBindingRules": "前往绑定规则",
     "feedDegradedPrefix": "数据源降级：",
     "feedDegradedDefault": "安全事件补采/日志轮转已暂停，实时 IPC 入库仍在运行（自动封禁计数仍会随实时事件增长）",
@@ -233,19 +234,19 @@ export default {
     "triggeredPlaceholder": "触发阶段 / 规则 ID",
     "selectAll": "全选",
     "crawlerBot": "爬虫Bot",
-    "crawlerBotHint": "已验证爬虫放行/伪装（id 810000-899999）",
+    "crawlerBotHint": "已验证爬虫放行/伪装",
     "geoBlock": "地域拦截",
-    "geoBlockHint": "GeoIP 地域拦截（id 8/800xxx）",
+    "geoBlockHint": "GeoIP 地域拦截",
     "ipAcl": "IP 访问控制",
-    "ipAclHint": "IP ACL 黑白名单与自维护黑名单（id 2/4/7）",
+    "ipAclHint": "黑白名单与自维护黑名单",
     "trustList": "信任名单",
-    "trustListHint": "信任名单/保留检测（id 3/12）",
+    "trustListHint": "信任名单/保留检测",
     "threatIntel": "威胁情报库",
-    "threatIntelHint": "威胁情报库命中（id 14）",
+    "threatIntelHint": "威胁情报库命中",
     "bodyAnomaly": "请求体异常",
     "stageHuman": "CC 防护",
-    "bodyAnomalyHint": "请求体解析失败（id 11）",
-    "wafCrsHint": "OWASP CRS 规则全集（9xxxxx）",
+    "bodyAnomalyHint": "请求体解析失败",
+    "wafCrsHint": "OWASP CRS 规则全集",
     "wafCustom": "WAF·自定义",
     "wafCustomHint": "自定义规则库（含 AND 链式规则、OR 条件分支与旧版合成规则）",
     "ccProtectionHint": "CC 防护人机挑战事件（挑战发放/挑战失败；挑战成功不计入安全事件）",
@@ -405,14 +406,13 @@ export default {
     "scopeLogged": "检测",
     "scopeChallengeIssued": "挑战发放",
     "scopeChallengeFailed": "挑战失败",
-    "stageLegacyGeo": "地域拦截（旧 id）"
+    "stageLegacyGeo": "地域拦截（旧版规则）"
    },
    "overview": {
     "page": {
      "title": "安全总览",
      "desc": "安全防护统计概览",
      "threatScreen": "威胁大屏",
-     "refresh": "刷新",
      "loadFailed": "安全总览数据加载失败",
      "retryNow": "立即重试"
     },
@@ -523,7 +523,7 @@ export default {
      "escalationOffShort": "关闭",
      "escalationStandardShort": "标准",
      "escalationAggressiveShort": "激进",
-     "ineffective": "「自动封禁名单」未被启用中的 IP 访问控制（deny）策略引用；可经「默认策略」创建「自动封禁联动」",
+     "ineffective": "「自动封禁名单」未被启用中的 IP 访问控制（黑名单）策略引用；可经「默认策略」创建「自动封禁联动」",
      "ineffectiveBinding": "「自动封禁联动」策略已就绪，但尚未关联转发规则——绑定规则后生效",
      "feedDegraded": "计数喂入源降级，自动封禁计数可能偏少",
      "durationEscalatesTip": "累犯升级已开启：实际封禁时长按该身份的累计封禁次数升档（首次=配置时长）",
@@ -668,8 +668,11 @@ export default {
    "policies": {
     "action": {
      "bindRules": "绑定规则",
+     "disable": "禁用",
      "edit": "编辑",
+     "enable": "启用",
      "migrate": "更新迁移",
+     "toggleAria": "{name} 的启用状态",
      "view": "查看"
     },
     "bind": {
@@ -745,7 +748,6 @@ export default {
     "status": {
      "disabled": "禁用",
      "enabled": "启用",
-     "enabledUnbound": "启用 · 未关联规则",
      "off": "关闭"
     },
     "table": {
@@ -772,7 +774,7 @@ export default {
      "subtitle": "混合策略「{name}」将按阶段迁移为单职子策略（兼容组不再支持新建）",
      "title": "更新迁移预演",
      "willCreate": "将创建 {n} 条子策略",
-     "willSkip": "将跳过（已有 stage2）"
+     "willSkip": "将跳过（已有阶段 2 策略）"
     },
     "view": {
      "noRules": "未关联规则",
@@ -809,11 +811,11 @@ export default {
     },
     "stage0": {
      "detectOff": "关闭（默认）：信任 IP 直通上游，不产生任何安全事件",
-     "detectOn": "开启：信任 IP 跳过全部安全阶段，仅由独立轻量检测事务记录（事件动作=检测）、不拦截（限「类型=信任名单（stage0）」策略；mixed 等其他类型信任命中为引擎内检测降级）",
+     "detectOn": "开启：信任 IP 跳过全部安全阶段，仅由独立轻量检测事务记录（事件动作=检测）、不拦截（限「阶段 0 · 信任名单」类型策略；混合等其他类型的信任命中为引擎内检测降级）",
      "keepDetectLabel": "保留检测记录",
-     "projection": "本策略将在关联规则的信任名单阶段生效——「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）；mixed 等其他类型策略信任命中为引擎内检测降级（仅记录不拦截、不跳段）",
+     "projection": "本策略将在关联规则的信任名单阶段生效——「阶段 0 · 信任名单」类型策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）；混合等其他类型策略的信任命中为引擎内检测降级（仅记录不拦截、不跳段）",
      "trustIpLabel": "信任 IP",
-     "trustTip": "「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / CC 防护 / WAF；直通=零安全事件，保留检测=仅由独立轻量检测事务记录，动作=检测）；mixed 等其他类型策略信任命中为引擎内检测降级（仅记录不拦截、不跳段）；内联与引用列表合并生效",
+     "trustTip": "「阶段 0 · 信任名单」类型策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / CC 防护 / WAF；直通=零安全事件，保留检测=仅由独立轻量检测事务记录，动作=检测）；混合等其他类型策略的信任命中为引擎内检测降级（仅记录不拦截、不跳段）；内联与引用列表合并生效",
      "modeDetection": "保留检测记录",
      "modePass": "直通上游",
      "detectDetail": "保留检测记录（事件动作=检测）",
@@ -822,13 +824,13 @@ export default {
     },
     "waf": {
      "addExclusion": "添加排除规则",
-     "blockingEvalWarn": "排除评估规则（949/959）将使拦截模式的评分阈值拦截失效",
+     "blockingEvalWarn": "排除评估规则将使拦截模式的评分阈值拦截失效",
      "checkResponseBody": "检查响应体",
      "checkResponseBodyTip": "开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求",
      "crsGroupsLabel": "CRS 规则组",
      "crsPlaceholder": "留空加载全部 CRS 规则",
      "crsTip": "选择后仅加载所选规则组，留空加载全部 CRS 规则",
-     "crsTip2": "初始化（901）与拦截评估（949/959）为系统基础规则，随策略自动加载；通用误报豁免（999）在选择全部规则时自动包含",
+     "crsTip2": "初始化与拦截评估为系统基础规则，随策略自动加载；通用误报豁免在选择全部规则时自动包含",
      "customOnlyHint": "仅自定义模式：CRS 不生效，以下 CRS 配置不可用",
      "customRulesLabel": "自定义规则",
      "customRulesPlaceholder": "选择要包含的自定义规则",
@@ -1082,9 +1084,7 @@ export default {
      "createdPolicyNoId": "创建策略响应缺少 id",
      "deleteConfirm": "将删除策略「{name}」。删除后无法恢复，规则上原有的其它策略不受影响。",
      "deleteConfirmBtn": "确认删除",
-     "deleteScopeCountOnly": "同时解除与 {n} 条规则的绑定（规则本身保留；规则名称暂未加载）。",
-     "deleteScopeLead": "同时解除与 {n} 条规则的绑定（规则本身保留）：",
-     "deleteScopeMore": "其余 {n} 条（名称未加载）",
+     "deleteScopeLead": "同时解除与 {n} 条规则的绑定（规则本身保留）。",
      "deleteTitle": "删除安全策略",
      "detailNoData": "策略详情响应缺少数据",
      "discard": "放弃修改",
@@ -1110,6 +1110,8 @@ export default {
      "saveFailed": "保存失败",
      "stage0NeedsIp": "阶段 0 · 信任名单策略必须配置至少一个信任 IP（内联或引用列表）",
      "stage2Conflict": "以下规则已绑定其它 CC 防护策略（每规则仅一条），请先解绑后再关联：{names}",
+     "toggleConfirm": "确定{action}策略「{name}」？",
+     "toggleConfirmTitle": "{action}策略",
      "unsavedConfirm": "有未保存的修改，关闭将丢弃本次编辑。是否继续？"
     },
     "summary": {

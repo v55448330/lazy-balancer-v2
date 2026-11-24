@@ -1,5 +1,5 @@
 <template>
-  <el-dropdown trigger="click" @command="onPick">
+  <el-dropdown trigger="click" popper-class="lang-switcher-menu" @command="onPick">
     <button class="lang-switch" type="button" :title="t('common.app.language')">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
         <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm7.9 9h-3a15.6 15.6 0 0 0-1.1-5.2A8 8 0 0 1 19.9 11zM12 4c.9 1.2 1.8 3.6 2 7h-4c.2-3.4 1.1-5.8 2-7zM4.1 13h3c.2 1.9.6 3.7 1.1 5.2A8 8 0 0 1 4.1 13zm3-2h-3a8 8 0 0 1 4.1-5.2A15.6 15.6 0 0 0 7.1 11zm2 2h5.8c-.2 3.4-1.1 5.8-2 7H12c-.9-1.2-1.8-3.6-2-7h-1zm7 0h3a8 8 0 0 1-4.1 5.2c.5-1.5.9-3.3 1.1-5.2z"/>
@@ -8,8 +8,8 @@
     </button>
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item command="zh-CN" :class="{ active: current === 'zh-CN' }">中文</el-dropdown-item>
-        <el-dropdown-item command="en" :class="{ active: current === 'en' }">English</el-dropdown-item>
+        <el-dropdown-item command="zh-CN" :class="{ active: current === 'zh-CN' }" :aria-current="current === 'zh-CN' ? 'true' : undefined">中文</el-dropdown-item>
+        <el-dropdown-item command="en" :class="{ active: current === 'en' }" :aria-current="current === 'en' ? 'true' : undefined">English</el-dropdown-item>
       </el-dropdown-menu>
     </template>
   </el-dropdown>
@@ -40,4 +40,10 @@ const onPick = (l: Locale) => {
   font-size: 13px;
 }
 .lang-switch:hover { opacity: 0.8; }
+</style>
+
+<style>
+/* 当前语言项的选中态：下拉菜单 teleport 到 body，scoped 够不到——按 popper-class
+   限定作用域，样式沿用全站菜单选中态（主色 + 加粗）。 */
+.lang-switcher-menu .el-dropdown-menu__item.active { color: var(--el-color-primary); font-weight: 600; }
 </style>

@@ -315,10 +315,12 @@ const pageTitle = computed<Record<string, string>>(() => ({
 }))
 
 // 离开「设置」逻辑页面时若有未保存改动：确认后放弃（刷新/切页都会丢弃草稿）。
-// 设置分页之间互切不拦——任务口径是「离开设置域」才提醒，页内分页切换本就
-// 保留共享模型里的编辑。全站非路由驱动，因此只能在此入口拦截。
+// 判据只看脏态登记与「目标是否设置分页」，不看当前停在哪个分页——登记随卡片
+// 卸载保留（草稿在父级共享模型/设置域单例里），切到 API 接入、任务监控等任一
+// 分页后再离开同样要拦。设置分页之间互切不拦：草稿不随分页切换丢失。
+// 全站非路由驱动，侧栏切页是唯一页面切换入口，因此只能在此拦截。
 const leavingSettingsDraft = (page: PageId): boolean =>
-  settingsTabOfPage(authStore.currentPage) !== null && settingsTabOfPage(page) === null && hasDirtySettingsForm()
+  settingsTabOfPage(page) === null && hasDirtySettingsForm()
 
 const goPage = async (page: PageId): Promise<void> => {
   if (leavingSettingsDraft(page)) {
@@ -505,7 +507,7 @@ onUnmounted(() => {
   height: 44px;
   line-height: 44px;
   margin: 4px 8px;
-  border-radius: 6px;
+  border-radius: 0;
   padding-right: 16px !important;
 }
 
@@ -554,7 +556,7 @@ onUnmounted(() => {
   height: 40px;
   line-height: 40px;
   margin: 4px 8px;
-  border-radius: 6px;
+  border-radius: 0;
   min-width: 0;
 }
 
@@ -675,7 +677,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 6px;
   padding: 6px 14px;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 13px;
   font-weight: 500;
   border: 1px solid transparent;

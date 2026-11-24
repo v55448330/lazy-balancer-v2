@@ -473,7 +473,19 @@
         </div>
         <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.permHint') }}</span></div>
         <div v-if="!isAdmin" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
-        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.sourceRestrictSection') }}</el-divider>
+        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.expirySourceSection') }}</el-divider>
+        <el-form-item :label="t('common.app.views.keys.expiresAt')" :error="featureExpiresError">
+          <el-date-picker
+            v-model="featureForm.expiresAt"
+            type="datetime"
+            clearable
+            format="YYYY-MM-DD HH:mm:ss"
+            :disabled-date="disablePastDate"
+            :placeholder="t('common.app.views.keys.expiresPlaceholder')"
+            style="width: 100%"
+            @change="featureExpiresError = ''"
+          />
+        </el-form-item>
         <el-form-item :label="t('common.app.views.keys.ipWhitelist')" :error="featureWhitelistError">
           <el-input
             v-model="featureForm.whitelistText"
@@ -641,7 +653,8 @@ const keyDetailVisible = ref(false)
 const keyDetailTarget = ref<APIKey | null>(null)
 const openKeyDetail = (key: APIKey): void => { keyDetailTarget.value = key; keyDetailVisible.value = true }
 const featureWhitelistError = ref('')
-const featureForm = ref({ mcp_enabled: false, api_enabled: true, api_read_only: false, mcp_read_only: false, whitelistText: '' })
+const featureExpiresError = ref('')
+const featureForm = ref({ mcp_enabled: false, api_enabled: true, api_read_only: false, mcp_read_only: false, whitelistText: '', expiresAt: null as Date | null })
 const keysMineOnly = ref(true) // 管理员默认看自己；关闭=全平台（可操作他人 key，明文不可见）
 const togglePendingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
@@ -834,6 +847,13 @@ const disablePastDate = (date: Date): boolean => {
   return date.getTime() < today.getTime()
 }
 
+// 列表里的过期时间转为日期控件初值；无值或坏值（带外写入，Invalid Date）按未设置。
+const toPickerDate = (value: string | null | undefined): Date | null => {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 async function createKey() {
   if (nodeWriteBlocked.value || creating.value) return
   const name = createForm.value.name.trim()
@@ -900,15 +920,18 @@ const openFeatureDialog = (key: APIKey): void => {
     api_read_only: isAdmin.value ? key.api_read_only : true,
     mcp_read_only: isAdmin.value ? key.mcp_read_only : true,
     whitelistText: parseWhitelist(key.mcp_ip_whitelist),
+    expiresAt: toPickerDate(key.expires_at),
   }
   featureWhitelistError.value = ''
+  featureExpiresError.value = ''
   featureDialogVisible.value = true
 }
 
 const resetFeatureForm = (): void => {
   featureTarget.value = null
-  featureForm.value = { mcp_enabled: false, api_enabled: true, api_read_only: false, mcp_read_only: false, whitelistText: '' }
+  featureForm.value = { mcp_enabled: false, api_enabled: true, api_read_only: false, mcp_read_only: false, whitelistText: '', expiresAt: null }
   featureWhitelistError.value = ''
+  featureExpiresError.value = ''
 }
 
 // 管理端点选择：管理员全平台视角下操作他人 key 走 /api-keys/:id（PATCH/DELETE）；
@@ -921,6 +944,14 @@ const saveFeatures = async (): Promise<void> => {
   const whitelist = serializeWhitelist(featureForm.value.whitelistText)
   if (whitelist.error) {
     featureWhitelistError.value = whitelist.error
+    return
+  }
+  // 过期时间只在改动时提交（PATCH 语义）：已过期的密钥改其它设置不必先续期。
+  const expiresAt = featureForm.value.expiresAt
+  const expiryChanged = (expiresAt?.getTime() ?? null) !== (toPickerDate(featureTarget.value.expires_at)?.getTime() ?? null)
+  // 与创建同口径：面板只按天禁用过去日期，当天早于现在的时刻提交前拦截。
+  if (expiryChanged && expiresAt && expiresAt.getTime() < Date.now()) {
+    featureExpiresError.value = t('common.app.views.keys.expiresPastError')
     return
   }
   featureSaving.value = true
@@ -936,6 +967,7 @@ const saveFeatures = async (): Promise<void> => {
       api_read_only: isAdmin.value ? featureForm.value.api_read_only : true,
       mcp_read_only: isAdmin.value ? featureForm.value.mcp_read_only : true,
       mcp_ip_whitelist: whitelist.value,
+      ...(expiryChanged ? { expires_at: expiresAt ? expiresAt.toISOString() : null } : {}),
     }
     const url = keyAdminEndpoint(featureTarget.value)
       ? `/api-keys/${featureTarget.value.id}/status`

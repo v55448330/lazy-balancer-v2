@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -237,6 +238,55 @@ func TestUpdateAPIKeyStatus_enablingPrivilegedKeyRequiresStepUp(t *testing.T) {
 	}
 	if rec := serveAPIKeyStatusUpdate(h, "12", `{"is_enabled":true}`); rec.Code == http.StatusPreconditionRequired {
 		t.Fatalf("启用只读 Key 不构成特权变更（不得 428）: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// 已过期的特权 Key 被「延期到未来 / 改为永不过期」= 恢复可写/MCP 可达性
+// （鉴权侧对过期 Key 恒拒绝），与禁用→启用对称，同走 step-up。未过期的 Key
+// 延期、以及只读 Key 的延期都不是授予动作，不得 428。
+func TestUpdateAPIKeyStatus_revivingExpiredPrivilegedKeyRequiresStepUp(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'admin','x','admin',1)"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	// 21=可写已过期（延期=授予）；22=只读已过期；23=可写未过期。
+	for _, row := range []struct {
+		id       int
+		readOnly int
+	}{{21, 0}, {22, 1}, {23, 0}} {
+		if _, err := db.DB.Exec("INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,is_enabled,read_only,api_read_only,mcp_read_only,mcp_enabled) VALUES (?,'k','h','p',1,1,?,?,?,0)", row.id, row.readOnly, row.readOnly, row.readOnly); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-time.Hour)
+	stillValid := time.Now().Add(time.Hour)
+	seedAPIKeyExpiry(t, 21, &past)
+	seedAPIKeyExpiry(t, 22, &past)
+	seedAPIKeyExpiry(t, 23, &stillValid)
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret='JBSWY3DPEHPK3PXP' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET mfa_write_guard=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("UPDATE global_config SET mfa_write_guard=0 WHERE id=1") })
+
+	later := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
+	// Given 已过期的可写 Key，When 延期到未来，Then 必须要求 step-up。
+	if rec := serveAPIKeyStatusUpdate(h, "21", `{"expires_at":"`+later+`"}`); rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("延期已过期的可写 Key 必须要求 step-up: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// When 改为永不过期，Then 同样是恢复可用，必须要求 step-up。
+	if rec := serveAPIKeyStatusUpdate(h, "21", `{"expires_at":null}`); rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("已过期的可写 Key 改为永不过期必须要求 step-up: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Given 已过期的只读 Key，When 延期，Then 不构成特权变更（仍不可写），不得 428。
+	if rec := serveAPIKeyStatusUpdate(h, "22", `{"expires_at":"`+later+`"}`); rec.Code == http.StatusPreconditionRequired {
+		t.Fatalf("只读 Key 延期不构成特权变更（不得 428）: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Given 未过期的可写 Key，When 延期，Then 可用性没有变化，不得 428。
+	if rec := serveAPIKeyStatusUpdate(h, "23", `{"expires_at":"`+later+`"}`); rec.Code == http.StatusPreconditionRequired {
+		t.Fatalf("未过期 Key 延期不构成特权变更（不得 428）: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

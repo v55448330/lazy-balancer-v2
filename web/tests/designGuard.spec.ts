@@ -189,7 +189,7 @@ test('设计守卫：证书有效期文案单源，负数天数不上屏（DESIG
   const rules = code('src/views/Rules.vue')
   assert.match(code('src/utils/certExpiry.ts'), /daysUntilExpiry < 0[\s\S]*?expiredDaysAgo[\s\S]*?expiresToday[\s\S]*?expiresInDays/, '有效期结论必须由 utils/certExpiry 的 certExpiryConclusion 单源给出')
   assert.match(rules, /certExpiryConclusion\(certInfo\.daysUntilExpiry\)\.text/, '向导预览行与 TLS 步提示框必须消费单源')
-  assert.match(code('src/components/RuleFlowDialog.vue'), /certExpiryConclusion\(certInfo\.days_remaining\)\.text/, '处理流程弹框的剩余天数行必须消费单源')
+  assert.match(code('src/components/RuleFlowDialog.vue'), /certExpiryConclusion\(certInfo\.days_remaining, certInfo\.status === 'expired'\)\.text/, '处理流程弹框的剩余天数行必须消费单源并带过期状态')
   // 模板与计算属性之外不得再把带符号的剩余天数直接喂给词条
   assert.doesNotMatch(rules, /\{ n: certInfo\.daysUntilExpiry \}/, '不得直接渲染 certInfo.daysUntilExpiry')
   assert.match(rules, /class="cert-preview-row"/, '预览行必须同一行对齐')
@@ -220,14 +220,22 @@ test('设计守卫：规则选择器次行提示对齐与间距（DESIGN_SPEC §
   assert.match(editor, /class="picker-rule-detail" :class="\{ 'is-empty': \(bindings\[rule\.caddy_id\] \|\| \[\]\)\.length === 0 \}"/, '绑定规则弹框空态必须落 is-empty')
 })
 
-test('设计守卫：状态列=实际生效态 / 删除策略列绑定解除 / 深链过值域（DESIGN_SPEC §22）', () => {
+test('设计守卫：策略状态列二态 / 删除策略只报绑定数量 / 深链过值域（DESIGN_SPEC §22）', () => {
   const policies = code('src/views/security/SecurityPolicies.vue')
-  assert.match(policies, /POLICY_LIST_STATUS_TAG\[policyListStatus\(row\.enabled, row\.rule_count\)\]/, '状态列必须走单源复合判定（启用 · 未关联规则）')
-  assert.doesNotMatch(policies, /row\.enabled \? 'success' : 'info'/, '不得自写启用/禁用二态标签')
-  assert.match(policies, /policyDeleteScope\(/, '删除策略的级联清单必须经单源计算')
-  assert.match(policies, /class: 'confirm-scope-list'/, '删除策略确认必须列绑定解除清单（§20-1 延伸）')
+  assert.match(policies, /row\.enabled \? 'success' : 'info'/, '状态列是启用/禁用二态标签')
+  assert.doesNotMatch(policies, /policyListStatus|POLICY_LIST_STATUS_TAG|enabledUnbound/, '「启用 · 未关联规则」复合状态已按用户裁定回退，不得重做（列表已有关联规则数量列）')
+  assert.match(policies, /policyDeleteScope\(/, '删除策略的绑定解除数量必须经单源计算')
+  const deleteMessage = /const policyDeleteMessage = \(row: PolicySummary\) => \{[\s\S]*?\n\}/.exec(policies)?.[0] ?? ''
+  assert.match(deleteMessage, /policies\.msg\.deleteScopeLead', \{ n: count \}\)/, '删除策略确认必须写明将解除绑定的规则数量')
+  assert.doesNotMatch(deleteMessage, /confirm-scope-list|h\('li'|names/, '只报数量，不列规则名（用户裁定）')
   const overview = code('src/views/security/SecurityOverview.vue')
-  assert.match(overview, /createVisibilityIntervals\(/, '安全总览必须定时自动刷新')
-  assert.match(overview, /onBeforeUnmount\(overviewRefresh\.stop\)/, '卸载必须停表')
+  assert.doesNotMatch(overview, /createVisibilityIntervals\(|overviewRefresh|page\.refresh/, '安全总览的刷新按钮与自动刷新已按用户裁定回退，不得重做（数据量大时正在看会被刷新）')
   assert.match(code('src/views/security/SecurityEvents.vue'), /parseSecurityEventsDeepLink\(window\.location\.search\)/, '事件页必须消费深链解析单源')
+})
+
+test('设计守卫：规则列表的刷新轮询与日志直达入口已按用户裁定回退，不得重做', () => {
+  const rules = code('src/views/Rules.vue')
+  assert.doesNotMatch(rules, /refreshRuleList|ruleListRefresh|ruleListPollPaused|RULE_LIST_POLL_MS/, '规则列表不加刷新按钮、不做轮询（用户裁定过度设计）')
+  assert.doesNotMatch(rules, /logEnableEntry|openWizardForAccessLog|unpublishedRecoverHint/, '日志未开启时不给「去开启」入口、「未发布」不给恢复指引（用户裁定过度设计）')
+  assert.doesNotMatch(rules, /protocolSwitchImpact|ElMessageBox\.confirm\(\s*h\('div', \[\s*h\('p', \{ class: 'confirm-scope-lead' \}, t\('common\.app\.rules\.msgs\.switchTcpClearsLead/, '向导切协议前不弹确认框（用户裁定过度设计）')
 })

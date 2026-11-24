@@ -89,8 +89,8 @@
                   <div class="flow-kv"><span class="flow-kv-label">{{ t('common.app.rules.flow.expireTimeLabel') }}</span><span class="flow-kv-value">{{ formatDate(certInfo.not_after) || '-' }}</span></div>
                   <div class="flow-kv">
                     <span class="flow-kv-label">{{ t('common.app.rules.wizard.daysRemaining') }}</span>
-                    <span class="flow-kv-value" :class="certExpiryConclusion(certInfo.days_remaining).tone">
-                      {{ certExpiryConclusion(certInfo.days_remaining).text }}
+                    <span class="flow-kv-value" :class="certExpiryConclusion(certInfo.days_remaining, certInfo.status === 'expired').tone">
+                      {{ certExpiryConclusion(certInfo.days_remaining, certInfo.status === 'expired').text }}
                     </span>
                   </div>
                   <div v-if="certInfo.source === 'acme_dns' && target.acmeConfigName" class="flow-kv">

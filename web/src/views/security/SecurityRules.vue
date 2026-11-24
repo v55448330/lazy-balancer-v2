@@ -175,7 +175,7 @@
                   </template>
                   <span>{{ row.ref_count }}</span>
                 </el-tooltip>
-                <template v-else>{{ t('common.app.views.secRules.common.refNone') }}</template>
+                <template v-else>{{ row.ref_count }}</template>
               </template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170">
@@ -243,7 +243,7 @@
                   </template>
                   <span>{{ row.ref_count }}</span>
                 </el-tooltip>
-                <template v-else>{{ t('common.app.views.secRules.common.refNone') }}</template>
+                <template v-else>{{ row.ref_count }}</template>
               </template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170">
@@ -1625,6 +1625,15 @@ const saveIpList = async () => {
   } finally { savingIpList.value = false }
 }
 
+// 删除确认的引用披露（只写数量，不列策略名）：列表行已带引用面，其中启用中的策略与后端
+// 删除 409 门同口径——被启用策略引用时后端拒绝删除，确认框先写明条数，不等用户点完才吃 409。
+// 条数只数策略：受信代理网段的引用不是策略（由 409 文案另行说明）。确认后照常发 DELETE，
+// 以服务端裁决为准（列表可能过期）。
+const ipListDeleteMessage = (row: IPListRow) => {
+  const confirm = t('common.app.views.secRules.msgs.ipListDeleteConfirm', { name: row.name })
+  const enabledCount = row.ref_policies.filter((p) => p.enabled).length
+  return enabledCount === 0 ? confirm : h('div', [h('div', confirm), h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secRules.msgs.ipListDeleteRefLead', { n: enabledCount }))])
+}
 const deletingIpListId = ref<number | null>(null)
 const deleteIpList = (row: IPListRow) => {
   if (writeBlocked()) return
@@ -1632,7 +1641,7 @@ const deleteIpList = (row: IPListRow) => {
   // 不再叠加双确认框→双 DELETE 误报
   if (deletingIpListId.value !== null) return
   deletingIpListId.value = row.id
-  ElMessageBox.confirm(t('common.app.views.secRules.msgs.ipListDeleteConfirm', { name: row.name }), t('common.app.views.secRules.common.confirm'), { type: 'warning' })
+  ElMessageBox.confirm(ipListDeleteMessage(row), t('common.app.views.secRules.common.confirm'), { type: 'warning' })
     .then(async () => {
       // 被策略引用时后端返回 409（含引用策略名的 message 由全局拦截器 toast）
       const del = await request.delete(`/security/ip-lists/${row.id}`)
@@ -2137,23 +2146,18 @@ const saveCustomRule = async () => {
 // 被启用策略引用时后端拒绝删除（409）——确认框必须先说清「被 N 条启用策略引用、
 // 需先解除」，不得只问「确定删除」、等用户点完才吃 409。仅禁用策略引用时不阻止
 // 删除，但会在这些策略里留下失效引用（重新启用/保存前须先移除），同样写明。
-// 判定走 utils/securityRefs（纯函数）；清单形态=标准后果清单（全局
-// .confirm-scope-lead / .confirm-scope-list）。不在前端拦截请求：列表可能过期，
-// 以服务端裁决为准（确认后照常发 DELETE）。
-const refScopeList = (names: readonly string[], unnamed: number) =>
-  (names.length === 0 ? [] : [h('ul', { class: 'confirm-scope-list' }, [
-    ...names.map((name) => h('li', name)),
-    ...(unnamed > 0 ? [h('li', t('common.app.views.secRules.msgs.ruleDeleteRefMore', { n: unnamed }))] : []),
-  ])])
+// 判定走 utils/securityRefs（纯函数）：只写条数，不逐条列策略名（与安全策略
+// 删除确认同口径）。不在前端拦截请求：列表可能过期，以服务端裁决为准
+// （确认后照常发 DELETE）。
 const customRuleDeleteMessage = (row: CustomRule) => {
   const scope = refDeleteDisclosure(row)
   return h('div', [
     h('div', t('common.app.views.secRules.msgs.ruleDeleteConfirm', { name: row.name })),
     ...(scope.state === 'blocked'
-      ? [h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secRules.msgs.ruleDeleteRefBlockedLead', { n: scope.enabled.count })), ...refScopeList(scope.enabled.names, scope.enabled.unnamed)]
+      ? [h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secRules.msgs.ruleDeleteRefBlockedLead', { n: scope.enabledCount }))]
       : []),
-    ...(scope.disabled.count > 0
-      ? [h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secRules.msgs.ruleDeleteRefDisabledLead', { n: scope.disabled.count })), ...refScopeList(scope.disabled.names, scope.disabled.unnamed)]
+    ...(scope.disabledCount > 0
+      ? [h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secRules.msgs.ruleDeleteRefDisabledLead', { n: scope.disabledCount }))]
       : []),
   ])
 }

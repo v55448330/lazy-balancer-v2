@@ -750,6 +750,18 @@ const taskDisplayName = (name: string): string => {
   return name
 }
 
+/**
+ * 后端成功文案里的任务名是库内中文名（模板其余部分已按 Accept-Language 翻译），
+ * 英文界面会混入中文：把消息里出现的原始任务名替换成同一映射的显示名
+ * （taskDisplayName，与列表/确认框同源）。未命中（无任务名/证书行用 id）原样返回。
+ */
+const localizeTaskMessage = (message: string, rawName: string): string => {
+  if (!message) return ''
+  if (!rawName) return message
+  const display = taskDisplayName(rawName)
+  return display === rawName ? message : message.split(rawName).join(display)
+}
+
 const taskFamilyCount = computed(() => tasks.value.filter(t => !isCertJobRow(t.id)).length)
 // 运行中=当前在途工作项：cert-job 的 queued/pending/waiting_ca 也是在途工作
 // （后端将非终态一律映射 running），与引擎族同列可比，故不排除。
@@ -866,7 +878,7 @@ async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise
       }
     }
     const res = await options.request()
-    mfaAwareSuccess(res.message || options.successFallback)
+    mfaAwareSuccess(localizeTaskMessage(res.message ?? '', row.name) || options.successFallback)
     void refreshNow().catch(() => {})
   } catch (error: unknown) {
     // 全局拦截器已 toast；仅记录，避免 unhandled rejection

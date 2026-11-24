@@ -1390,7 +1390,7 @@ onUnmounted(() => {
 .status-code {
   font-size: 10px;
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: 0;
   font-weight: 500;
   white-space: nowrap;
   flex-shrink: 0;

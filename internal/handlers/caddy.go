@@ -1169,14 +1169,17 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	reloadNote.finalize()
 
-	message := "配置已更新并应用"
+	// 成功文案走 apimsg 词条（en 界面不得出现中文）：base 键区分「已应用」与
+	// 「仅落库」，格式清空说明以模板键接在后面。
+	messageKey := "k_60212d99"
 	if !plan.AffectsCaddy {
-		message = "配置已更新"
+		messageKey = "k_400c411d"
 	}
+	message := apimsg.T(c, messageKey)
 	if formatCleared {
-		message += "（访问日志 JSON 已关闭，自定义格式已清空：该格式不生效）"
+		message = apimsg.Tf(c, "k_4fb4b00b", message)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: plan})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, MessageKey: messageKey, Data: plan})
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {

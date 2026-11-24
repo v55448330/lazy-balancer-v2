@@ -23,10 +23,6 @@
             <el-input-number v-model="settings.task_log_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
             <span class="form-tip-inline">{{ t('app.settings.basic.log.taskLogSizeHint') }}</span>
           </el-form-item>
-          <el-form-item :label="t('app.settings.basic.log.auditLogSize')">
-          <el-input-number v-model="settings.audit_log_size_mb" :disabled="formFrozen" :min="1" :max="512" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">{{ t('app.settings.basic.log.auditLogSizeHint') }}</span>
-          </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.runLogSize')">
             <el-input-number v-model="settings.runtime_log_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
             <span class="form-tip-inline">{{ t('app.settings.basic.log.runLogSizeHint') }}</span>
@@ -1468,7 +1464,6 @@ const confirmImport = async (): Promise<void> => {
 interface BasicSettingsConfig {
   log_level: string
   task_log_size_mb: number
-  audit_log_size_mb: number
   runtime_log_size_mb: number
   audit_retention_months: number
   notification_delivery_retention_days: number
@@ -1766,7 +1761,6 @@ const adminTlsDirty = computed(() => adminTlsPendingChange({
 const BASIC_FORM_KEYS = [
   'log_level',
   'task_log_size_mb',
-  'audit_log_size_mb',
   'runtime_log_size_mb',
   'audit_retention_months',
   'notification_delivery_retention_days',
@@ -2021,7 +2015,6 @@ const handleSave = async () => {
     const payload = {
       log_level: settings.value.log_level,
       task_log_size_mb: settings.value.task_log_size_mb,
-      audit_log_size_mb: settings.value.audit_log_size_mb,
       runtime_log_size_mb: settings.value.runtime_log_size_mb,
       audit_retention_months: settings.value.audit_retention_months,
       notification_delivery_retention_days: settings.value.notification_delivery_retention_days,
@@ -2145,7 +2138,7 @@ const handleSave = async () => {
 .section-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .section-chip {
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--el-fill-color-blank);
   color: var(--el-text-color-regular);
   font-size: 12.5px;
@@ -2163,7 +2156,7 @@ const handleSave = async () => {
 .section-chip.is-disabled { cursor: not-allowed; opacity: .5; }
 .import-summary-chip {
   display: inline-flex; align-items: center;
-  border-radius: 5px; padding: 2px 8px; margin: 0 6px 6px 0;
+  border-radius: 0; padding: 2px 8px; margin: 0 6px 6px 0;
   background: var(--el-fill-color); color: var(--el-text-color-regular);
   font-size: 12px; font-variant-numeric: tabular-nums;
 }
@@ -2172,7 +2165,7 @@ const handleSave = async () => {
 /* 全选/全不选与告警条之间留出间距;chips 单行不换行(弹框 720px) */
 .backup-dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; margin-bottom: 14px; }
 .backup-dialog .section-chips, .import-sections .section-chips { flex-wrap: wrap; }
-.import-sections { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.import-sections { border: 1px solid var(--el-border-color-lighter); border-radius: 0; padding: 10px 12px; margin-bottom: 12px; }
 .import-sections-label { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 
 .basic-stack { display: flex; flex-direction: column; gap: 20px; }

@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '../src/utils/autobanStatus.ts'
-import { code, cssRule, elementSlice, repoCode, section } from './_helpers.ts'
+import { code, cssRule, elementSlice, member, repoCode, section } from './_helpers.ts'
 
 test('启用且 ban_effective === false 时展示黄条', () => {
   assert.equal(isAutobanIneffective({ enabled: true, ban_effective: false }), true)
@@ -519,7 +519,7 @@ test('自动封禁状态加载中不得渲染「仅主节点可修改」黄条',
 
 // ── 黄条「前往绑定规则」入口：定位目标判据单源 + 事件页接线 + 词条 ──
 
-import { autobanMissingPolicyId } from '../src/utils/autobanStatus.ts'
+import { autobanMissingPolicyId, isAutobanBoundWithoutTraffic } from '../src/utils/autobanStatus.ts'
 
 // 入口显隐判据的行为断言：仅 binding 环节且后端给出正整数 policy_id 时可定位。
 // 落空的深链（策略页查无此 id）只会换来「策略已被删除」警告——旧后端缺省、
@@ -550,7 +550,7 @@ test('事件页黄条「前往绑定规则」入口：判据走单源，深链�
   const barAt = page.indexOf('<div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">')
   assert.ok(barAt > 0, '前置：未生效黄条必须存在（否则本断言空转）')
   const bar = elementSlice(page, barAt, 'div')
-  assert.match(bar, /ineffectiveBindingNotice/, '切片必须是未生效黄条本体')
+  assert.match(bar, /\{\{ autobanIneffectiveText \}\}/, '切片必须是未生效黄条本体（文案经 autobanIneffectiveText 按绑定数分流）')
   const linkAt = bar.indexOf('<AccessibleLink')
   assert.ok(linkAt > 0, '未生效黄条内必须有「前往绑定规则」入口')
   const entry = elementSlice(bar, linkAt, 'AccessibleLink')
@@ -571,4 +571,49 @@ test('「前往绑定规则」词条 zh/en 成对', () => {
   const enSec = code('src/locales/en/security.ts')
   assert.ok(zhSec.includes('"goToBindingRules": "前往绑定规则"'), 'zh 母本缺「前往绑定规则」')
   assert.ok(enSec.includes('"goToBindingRules": "Go to rule binding"'), 'en 侧缺 goToBindingRules')
+})
+
+// ── binding 环节黄条文案：按就绪策略的实际绑定数区分「尚未关联」与「已关联但规则不转发」 ──
+
+test('binding 黄条文案判据：已关联规则但规则不转发时才换说法', () => {
+  const due = (ban_missing: string | undefined, bindingCount: number | null) => isAutobanBoundWithoutTraffic({ ban_missing }, bindingCount)
+  assert.equal(due('binding', 2), true, '已有绑定规则 → 不是「尚未关联」')
+  assert.equal(due('binding', 0), false, '零绑定 → 维持「尚未关联转发规则」')
+  assert.equal(due('binding', null), false, '绑定数读取失败 → 维持原文案（读不到不等于没有）')
+  for (const ban_missing of ['policy', 'libs', '', undefined]) {
+    assert.equal(due(ban_missing, 3), false, `ban_missing=${ban_missing} 环节不适用`)
+  }
+})
+
+test('binding 黄条文案：两页都先取绑定数再落状态，按判据分流三种说法', () => {
+  const pages = [
+    { file: 'src/views/security/SecurityEvents.vue', unboundKey: 'app.security.events.ineffectiveBindingNotice' },
+    { file: 'src/views/security/SecurityOverview.vue', unboundKey: 'app.security.overview.autoban.ineffectiveBinding' },
+  ] as const
+  for (const { file, unboundKey } of pages) {
+    const page = code(file)
+    const text = member(page, 'const autobanIneffectiveText = computed(')
+    assert.match(text, /isAutobanBoundWithoutTraffic\(status, count\)/, `${file}：分流判据必须走单源纯函数`)
+    assert.ok(text.includes('app.security.events.ineffectiveBoundNotice'), `${file}：已关联但规则不转发必须用独立词条`)
+    assert.ok(text.includes(unboundKey), `${file}：零绑定维持原文案`)
+    const loader = member(page, 'const loadAutobanBindingCount = async (status: AutobanStatus)')
+    assert.match(loader, /autobanMissingPolicyId\(status\)/, `${file}：仅 binding 环节且可定位时才读绑定数`)
+    assert.match(loader, /request\.get<APIResponse<\{ bindings\?: string\[\] \}>>\(`\/security\/policies\/\$\{policyId\}`, \{ silent: true \}\)/, `${file}：绑定数取策略详情的 bindings`)
+    assert.match(loader, /return res\.data\?\.bindings\?\.length \?\? 0/, `${file}：无 bindings 按 0 条`)
+    assert.match(loader, /catch \{\s*return null/, `${file}：读取失败返回 null（按原文案）`)
+    // 赋值顺序：绑定数先于状态落位——不先闪「尚未关联」再换成另一种说法
+    const fetch = member(page, 'const fetchAutobanStatus = async')
+    const countAt = fetch.indexOf('autobanBindingCount.value = bindingCount')
+    const statusAt = fetch.indexOf('autobanStatus.value = res.data')
+    assert.ok(countAt > 0 && statusAt > countAt, `${file}：必须先落绑定数再落状态`)
+  }
+})
+
+test('binding 黄条「已关联但不转发」词条 zh/en 成对且带 {n}', () => {
+  assert.ok(
+    code('src/locales/zh/security.ts').includes('"ineffectiveBoundNotice": "「自动封禁联动」策略已关联 {n} 条规则，但这些规则当前没有转发流量（TLS 类、已禁用或没有启用的上游），自动封禁暂不生效"'),
+    'zh 母本缺「已关联但不转发」文案',
+  )
+  const enLine = code('src/locales/en/security.ts').split('\n').find((l) => l.includes('"ineffectiveBoundNotice":'))
+  assert.ok(enLine && enLine.includes('{n}'), 'en 侧缺 ineffectiveBoundNotice 或缺 {n}')
 })

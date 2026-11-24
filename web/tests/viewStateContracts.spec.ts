@@ -9,27 +9,13 @@ import assert from 'node:assert/strict'
 
 import { code, cssDeclarations, member, repoCode, section, source } from './_helpers.ts'
 import { bucketTerminology } from '../src/utils/threatScreenMetrics.ts'
-import { applyTcpState } from '../src/utils/ruleWizard.ts'
 
 test('规则向导切 TCP 清空动态上游与 DNS 字段（隐藏控件不得留下恒拒残留）', () => {
   const rules = code('src/views/Rules.vue')
-  // 清理面收进 applyTcpState 纯函数（确认后切换与直接切换共用同一入口）：
-  // watch 的 TCP 分支必须经它进入，清空动作在纯函数里逐字段钉住。
   const branch = section(rules, "if (newVal === 'tcp') {", "} else if (newVal === 'http'")
-  assert.match(branch, /enterTcpState\(\)/, 'TCP 分支必须经 enterTcpState 进入清理')
-  const enter = section(rules, 'const enterTcpState = (): void => {', "if (newVal === 'tcp') {")
-  assert.match(enter, /applyTcpState\(wizardForm\)/, 'enterTcpState 必须调用 applyTcpState')
-  // 行为：直接调用纯函数验证清空结果（全形状覆盖另见 ruleWizard.spec.ts）
-  const form = {
-    listen_port: 443, enable_tls: 1, strategy: 'weighted_round_robin', ntlm_compatible: 0,
-    forward_auth_enabled: 0, forward_auth_upstream: '', upstream_force_http1: 0,
-    custom_routes_enabled: false, health_check_host: '', path_rules: [],
-    dynamic_dns: true, enable_dns_server: true, dns_server: '10.0.0.53', upstreams: [],
-  } as unknown as Parameters<typeof applyTcpState>[0]
-  applyTcpState(form)
-  assert.equal(form.dynamic_dns, false, 'TCP 下动态上游整段不渲染，必须清残留')
-  assert.equal(form.enable_dns_server, false)
-  assert.equal(form.dns_server, '')
+  assert.match(branch, /wizardForm\.dynamic_dns = false/, 'TCP 下动态上游整段不渲染，必须清残留')
+  assert.match(branch, /wizardForm\.enable_dns_server = false/)
+  assert.match(branch, /wizardForm\.dns_server = ''/)
 })
 
 test('证书详情重试按会话序号丢弃过期响应（编辑与复制态同口径）', () => {
@@ -120,12 +106,13 @@ test('自动封禁状态读取仅最新一次可写状态/错误位', () => {
   const page = code('src/views/security/SecurityEvents.vue')
   assert.match(page, /let autobanStatusSeq = 0/)
   const fetch = section(page, 'const fetchAutobanStatus = async', 'const autobanDialogVisible')
-  // 恰好两次：成功（try 尾）与失败（catch）分支各守卫一次——`assert.match`
+  // 恰好三次：成功分支两处（状态响应到达后；绑定数补读返回后——补读期间可能已被更新的
+  // 一次请求超越，此时不得写入旧绑定数）与失败（catch）分支一处——`assert.match`
   // 的 /g 只求「至少一次」，删掉其中一支的回归仍绿。
   assert.equal(
     [...fetch.matchAll(/if \(requestSeq !== autobanStatusSeq\) return/g)].length,
-    2,
-    '成功与失败分支都要守卫（缺一处即旧响应覆盖新状态）',
+    3,
+    '成功（含绑定数补读后）与失败分支都要守卫（缺一处即旧响应覆盖新状态）',
   )
 })
 

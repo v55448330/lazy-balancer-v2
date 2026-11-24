@@ -1,8 +1,9 @@
 // 安全规则页「引用策略」与拦截页预览的口径契约：
 //   · 自定义规则列表的「引用策略」列与同页 IP 名单引用列同形：计数含禁用策略、
-//     悬浮逐条标注启用态、零引用显示「未被引用」；
-//   · 删除自定义规则的确认框必须披露引用面：被启用策略引用 = 服务端拒绝删除
-//     （409），写明条数并逐条具名；仅禁用策略引用 = 不阻止删除，但留下失效引用；
+//     悬浮逐条标注启用态、零引用显示数字 0；
+//   · 删除自定义规则的确认框必须披露引用面，只写条数、不列策略名（2026-11-24 用户
+//     裁定：把数量写成一串名称属过度设计）：被启用策略引用 = 服务端拒绝删除
+//     （409）；仅禁用策略引用 = 不阻止删除，但留下失效引用；
 //   · 拦截页预览：编辑弹框内「预览」预览未保存草稿，与列表行预览走同一内容组装；
 //     JSON 回退从页面 HTML 派生、空内容占位、非法 JSON 不抛错；
 //   · 拦截页删除确认文案与删除门一致（被引用 = 不可删除，而非「策略将失去该页面」）。
@@ -36,32 +37,27 @@ const en = term('en')
 type RefRow = Parameters<typeof refDeleteDisclosure>[0]
 const refRow = (over: Partial<RefRow> = {}): RefRow => ({ ref_count: 0, ref_count_enabled: 0, ref_policies: [], ...over })
 const policy = (id: number, name: string, enabled = true) => ({ id, name, enabled })
-const emptyScope = { count: 0, names: [] as string[], unnamed: 0 }
 
-test('引用披露｜零引用：确认框只有首行确认文案', () => {
-  assert.deepEqual(refDeleteDisclosure(refRow()), { state: 'none', enabled: emptyScope, disabled: emptyScope })
+test('引用披露｜零引用：无阻止、无失效引用', () => {
+  assert.deepEqual(refDeleteDisclosure(refRow()), { state: 'none', enabledCount: 0, disabledCount: 0 })
 })
 
-test('引用披露｜被启用策略引用：阻止删除，启用/禁用分开计数并具名', () => {
+test('引用披露｜被启用策略引用：阻止删除，启用/禁用分开计数', () => {
   const scope = refDeleteDisclosure(refRow({
     ref_count: 3,
     ref_count_enabled: 2,
     ref_policies: [policy(1, '后台保护'), policy(2, '灰度策略', false), policy(3, '默认策略')],
   }))
-  assert.equal(scope.state, 'blocked')
-  assert.deepEqual(scope.enabled, { count: 2, names: ['后台保护', '默认策略'], unnamed: 0 })
-  assert.deepEqual(scope.disabled, { count: 1, names: ['灰度策略'], unnamed: 0 })
+  assert.deepEqual(scope, { state: 'blocked', enabledCount: 2, disabledCount: 1 })
 })
 
-test('引用披露｜仅禁用策略引用：不阻止删除，失效引用如实列出', () => {
+test('引用披露｜仅禁用策略引用：不阻止删除，失效引用条数如实给出', () => {
   const scope = refDeleteDisclosure(refRow({
     ref_count: 2,
     ref_count_enabled: 0,
     ref_policies: [policy(4, '停用A', false), policy(5, '停用B', false)],
   }))
-  assert.equal(scope.state, 'disabledOnly')
-  assert.deepEqual(scope.enabled, emptyScope)
-  assert.deepEqual(scope.disabled, { count: 2, names: ['停用A', '停用B'], unnamed: 0 })
+  assert.deepEqual(scope, { state: 'disabledOnly', enabledCount: 0, disabledCount: 2 })
 })
 
 test('引用披露｜回归：缺 ref_count_enabled 时按 ref_policies 启用态推导，不得当成「无引用」', () => {
@@ -70,30 +66,23 @@ test('引用披露｜回归：缺 ref_count_enabled 时按 ref_policies 启用�
     ref_count_enabled: undefined,
     ref_policies: [policy(1, 'A'), policy(2, 'B', false)],
   }))
-  assert.equal(scope.state, 'blocked', '启用策略在引用就必须按阻止删除披露')
-  assert.deepEqual(scope.enabled, { count: 1, names: ['A'], unnamed: 0 })
-  assert.deepEqual(scope.disabled, { count: 1, names: ['B'], unnamed: 0 })
+  assert.deepEqual(scope, { state: 'blocked', enabledCount: 1, disabledCount: 1 }, '启用策略在引用就必须按阻止删除披露')
 })
 
-test('引用披露｜回归：策略名拿不到时仍按计数披露（不得因无名而静默）', () => {
-  const scope = refDeleteDisclosure(refRow({ ref_count: 3, ref_count_enabled: 3 }))
-  assert.equal(scope.state, 'blocked')
-  assert.deepEqual(scope.enabled, { count: 3, names: [], unnamed: 3 })
-  assert.deepEqual(scope.disabled, emptyScope)
+test('引用披露｜回归：ref_policies 拿不到时仍按计数披露（不得因缺明细而静默）', () => {
+  assert.deepEqual(refDeleteDisclosure(refRow({ ref_count: 3, ref_count_enabled: 3 })), { state: 'blocked', enabledCount: 3, disabledCount: 0 })
+  assert.deepEqual(refDeleteDisclosure(refRow({ ref_count: 3, ref_policies: null })), { state: 'disabledOnly', enabledCount: 0, disabledCount: 3 })
 })
 
-test('引用披露｜边界：具名有上限，余量如实、总数不变', () => {
+test('引用披露｜边界：结果只含状态与两个条数，不携带策略名（确认框不逐条具名）', () => {
   const names = Array.from({ length: 30 }, (_, i) => `策略${i + 1}`)
   const scope = refDeleteDisclosure(refRow({
     ref_count: 30,
     ref_count_enabled: 30,
     ref_policies: names.map((name, i) => policy(i + 1, name)),
   }))
-  assert.equal(scope.state, 'blocked')
-  assert.equal(scope.enabled.count, 30)
-  assert.ok(scope.enabled.names.length >= 1 && scope.enabled.names.length < 30, '具名条数必须有上限（确认框不铺满整屏）')
-  assert.deepEqual(scope.enabled.names, names.slice(0, scope.enabled.names.length))
-  assert.equal(scope.enabled.unnamed, 30 - scope.enabled.names.length)
+  assert.deepEqual(scope, { state: 'blocked', enabledCount: 30, disabledCount: 0 })
+  assert.deepEqual(Object.keys(scope).sort(), ['disabledCount', 'enabledCount', 'state'])
 })
 
 // ── 自定义规则「引用策略」列与删除确认（SecurityRules 渲染点） ──
@@ -133,53 +122,72 @@ test('引用策略列｜渲染点：计数 + 悬浮逐条具名 + 零引用占�
     '逐条列出策略名，禁用策略带标注',
   )
   assert.match(column, /<span>\{\{ row\.ref_count \}\}<\/span>/, '单元格显示引用总数（含禁用策略）')
-  assert.match(column, /<template v-else>\{\{ t\('common\.app\.views\.secRules\.common\.refNone'\) \}\}<\/template>/, '零引用显示「未被引用」')
+  assert.match(column, /<template v-else>\{\{ row\.ref_count \}\}<\/template>/, '零引用显示数字 0（不再显示「未被引用」）')
   const ipTab = section(text, 'name="ip-lists"', '</el-tab-pane>')
-  assert.match(ipTab, /<template v-else>\{\{ t\('common\.app\.views\.secRules\.common\.refNone'\) \}\}<\/template>/, '同页 IP 名单引用列零值同口径')
+  assert.match(ipTab, /<template v-else>\{\{ row\.ref_count \}\}<\/template>/, '同页 IP 名单引用列零值同口径')
 })
 
-test('删除自定义规则｜渲染点：确认框消费引用披露，清单走标准后果清单类，首行保留既有确认文案', () => {
+test('删除自定义规则｜渲染点：确认框消费引用披露，只写条数、不列策略名，首行保留既有确认文案', () => {
   const text = code(RULES)
-  const message = section(text, 'const refScopeList = ', '\nconst deletingCustomRuleId')
+  const message = section(text, 'const customRuleDeleteMessage = ', '\nconst deletingCustomRuleId')
   assert.match(message, /const scope = refDeleteDisclosure\(row\)/, '披露判定必须走单源纯函数')
   assert.match(message, /h\('div', t\('common\.app\.views\.secRules\.msgs\.ruleDeleteConfirm', \{ name: row\.name \}\)\)/, '首行保留既有确认文案')
   assert.match(
     message,
-    /scope\.state === 'blocked'[\s\S]*?t\('common\.app\.views\.secRules\.msgs\.ruleDeleteRefBlockedLead', \{ n: scope\.enabled\.count \}\)/,
+    /scope\.state === 'blocked'[\s\S]*?t\('common\.app\.views\.secRules\.msgs\.ruleDeleteRefBlockedLead', \{ n: scope\.enabledCount \}\)/,
     '被启用策略引用必须写明条数',
   )
   assert.match(
     message,
-    /scope\.disabled\.count > 0[\s\S]*?t\('common\.app\.views\.secRules\.msgs\.ruleDeleteRefDisabledLead', \{ n: scope\.disabled\.count \}\)/,
+    /scope\.disabledCount > 0[\s\S]*?t\('common\.app\.views\.secRules\.msgs\.ruleDeleteRefDisabledLead', \{ n: scope\.disabledCount \}\)/,
     '仅禁用策略引用同样必须披露',
   )
   assert.equal([...message.matchAll(/class: 'confirm-scope-lead'/g)].length, 2, '两段披露各一条引导行')
-  assert.match(message, /h\('ul', \{ class: 'confirm-scope-list' \}, \[/, '清单必须走全局单源类')
-  assert.match(message, /\(names\.length === 0 \? \[\] : \[h\('ul'/, '无名字可列时不渲染清单（引导行已含数量，不出现只剩「其余 N 条」的清单）')
-  assert.match(message, /\.\.\.names\.map\(\(name\) => h\('li', name\)\)/, '逐条具名')
-  assert.match(message, /ruleDeleteRefMore', \{ n: unnamed \}\)/, '未具名余量必须显性标注')
+  assert.doesNotMatch(message, /confirm-scope-list|h\('li'|names|unnamed/, '只写条数，不得列出策略名')
   const del = member(text, 'const deleteCustomRule = (row: CustomRule)')
   assert.match(del, /ElMessageBox\.confirm\(customRuleDeleteMessage\(row\), t\('common\.app\.views\.secRules\.common\.confirm'\), \{ type: 'warning' \}\)/, '删除确认必须消费引用披露')
   assert.match(del, /request\.delete\(`\/security\/custom-rules\/\$\{row\.id\}`\)/, '确认后仍发 DELETE（列表可能过期，以服务端裁决为准）')
 })
 
-test('引用策略｜词条：列头 / 零引用 / 披露引导行 zh/en 双侧在位且可插值', () => {
+test('删除 IP 地址列表｜渲染点：被启用策略引用时确认框只追加一句数量（不列策略名），条数只数启用中的策略', () => {
+  const text = code(RULES)
+  const message = section(text, 'const ipListDeleteMessage = ', '\nconst deletingIpListId')
+  assert.match(message, /const enabledCount = row\.ref_policies\.filter\(\(p\) => p\.enabled\)\.length/, '条数取行内引用面里启用中的策略')
+  assert.match(
+    message,
+    /enabledCount === 0 \? confirm : h\('div', \[h\('div', confirm\), h\('p', \{ class: 'confirm-scope-lead' \}, t\('common\.app\.views\.secRules\.msgs\.ipListDeleteRefLead', \{ n: enabledCount \}\)\)\]\)/,
+    '零启用引用只有首行确认文案；有引用追加一句带数量的引导行',
+  )
+  assert.doesNotMatch(message, /confirm-scope-list|h\('li'|p\.name/, '不得列出策略名')
+  const del = member(text, 'const deleteIpList = (row: IPListRow)')
+  assert.match(del, /ElMessageBox\.confirm\(ipListDeleteMessage\(row\), /, '删除确认必须消费引用披露')
+  assert.match(del, /request\.delete\(`\/security\/ip-lists\/\$\{row\.id\}`\)/, '确认后仍发 DELETE（以服务端 409 裁决为准）')
+  // 跨栈对表：列表行必须带逐策略启用态，删除门只数启用策略——披露的条数由此而来
+  const handler = repoCode('internal/handlers/securityiplists.go')
+  assert.match(handler, /Enabled\s+bool\s+`json:"enabled"`/, '列表行 ref_policies 必须带启用态')
+  assert.match(section(handler, 'func (h *Handlers) DeleteIPList(', '\nfunc '), /FROM security_policies WHERE enabled=1/, '删除门只数启用策略的引用')
+})
+
+test('引用策略｜词条：列头 / 披露引导行 zh/en 双侧在位且可插值；「未被引用」词条键已移除', () => {
   assert.equal(zh('common.app.views.secRules.customTab.colPolicyRefs'), '引用策略')
-  assert.equal(zh('common.app.views.secRules.common.refNone'), '未被引用')
   assert.ok(en('common.app.views.secRules.customTab.colPolicyRefs').length > 0)
-  assert.ok(en('common.app.views.secRules.common.refNone').length > 0)
+  assert.equal(i18n.global.te('common.app.views.secRules.common.refNone', 'zh-CN'), false, 'zh 不得残留 refNone 词条键')
+  assert.equal(i18n.global.te('common.app.views.secRules.common.refNone', 'en'), false, 'en 不得残留 refNone 词条键')
+  assert.match(i18n.global.t('common.app.views.secRules.msgs.ipListDeleteRefLead', { n: 2 }, { locale: 'zh-CN' }), /^该名单正被 2 条启用中的安全策略引用/, 'IP 名单删除披露必须带条数并点明「启用」')
+  assert.match(en('common.app.views.secRules.msgs.ipListDeleteRefLead'), /\{n\}/, 'IP 名单删除披露 en 词条必须带 {n}')
   const blockedLead = i18n.global.t('common.app.views.secRules.msgs.ruleDeleteRefBlockedLead', { n: 2 }, { locale: 'zh-CN' })
   assert.match(blockedLead, /^该规则正被 2 条启用中的安全策略引用/, '引导行必须带条数并点明「启用」')
   assert.match(zh('common.app.views.secRules.msgs.ruleDeleteRefDisabledLead'), /^引用该规则的 \{n\} 条策略均已禁用，不阻止删除/)
-  assert.match(i18n.global.t('common.app.views.secRules.msgs.ruleDeleteRefMore', { n: 3 }, { locale: 'zh-CN' }), /^其余 3 条/)
   for (const key of [
     'common.app.views.secRules.msgs.ruleDeleteRefBlockedLead',
     'common.app.views.secRules.msgs.ruleDeleteRefDisabledLead',
-    'common.app.views.secRules.msgs.ruleDeleteRefMore',
   ]) {
     assert.match(en(key), /\{n\}/, `${key} 的 en 词条必须带 {n} 插值`)
     assert.doesNotMatch(`${zh(key)}${en(key)}`.replaceAll('{n}', ''), /[{}]/, `${key} 不得出现 {n} 之外的花括号（vue-i18n 会当成插值）`)
+    assert.doesNotMatch(zh(key), /[:：]$/, `${key} 是独立句子，不得以冒号结尾引出名称清单`)
   }
+  assert.equal(i18n.global.te('common.app.views.secRules.msgs.ruleDeleteRefMore', 'zh-CN'), false, 'zh 不得残留「其余 N 条」词条键（不再逐条具名）')
+  assert.equal(i18n.global.te('common.app.views.secRules.msgs.ruleDeleteRefMore', 'en'), false, 'en 不得残留 ruleDeleteRefMore 词条键')
 })
 
 // ── 拦截页预览内容组装（utils/blockPagePreview） ──

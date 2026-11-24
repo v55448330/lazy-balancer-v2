@@ -178,3 +178,17 @@ test('切换即时生效：setLocale 先写 lb_locale 再整页重载，重载�
     host.restore()
   }
 })
+
+test('语言菜单可看出当前语言：当前项带选中态样式与 aria-current', () => {
+  const switcher = code('src/components/LanguageSwitcher.vue')
+  // 选项按当前语言打 active 类（无新增文案），样式按 popper-class 限定作用域
+  assert.match(switcher, /:class="\{ active: current === 'zh-CN' \}"/, '中文项缺选中态类')
+  assert.match(switcher, /:class="\{ active: current === 'en' \}"/, '英文项缺选中态类')
+  assert.match(switcher, /popper-class="lang-switcher-menu"/, 'popper 必须带作用域类（下拉 teleport 到 body，scoped 样式够不到）')
+  assert.match(
+    switcher,
+    /\.lang-switcher-menu \.el-dropdown-menu__item\.active\s*\{[^}]*color:/,
+    '选中态必须有可见样式（此前的 active 类只有绑定、没有样式=看不出当前语言）',
+  )
+  assert.match(switcher, /:aria-current="current === 'zh-CN' \? 'true' : undefined"/, '读屏也需知道当前语言')
+})

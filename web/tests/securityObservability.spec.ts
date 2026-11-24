@@ -1,9 +1,9 @@
 // 安全防护观测面的口径契约：
-//   · 策略列表「状态」：启用 ≠ 生效（启用但零绑定 = 未关联规则，warning）；
-//   · 删除策略确认：列出将被解除绑定的规则，规则名不可得时降级为只报数量；
+//   · 策略列表「状态」：启用/禁用二态标签（关联规则数在独立列，不进状态列）；
+//   · 删除策略确认：只写明将解除的绑定数量（不列规则名）；列表行内启停只提交 {enabled}；
 //   · 策略页两处跳转与事件页深链消费（「查看全部」带动作筛选 / 「查看自动封禁配置」
 //     进页开弹框 / 「返回策略列表」关闭弹框不新开标签）；
-//   · 安全总览的可见性感知刷新与页头刷新按钮；
+//   · 安全总览：只在进入页面时取数（无页头刷新、无定时刷新），「最近拦截事件」下钻带筛选；
 //   · 文案口径：威胁名单误报提示、拦截页 0 选项、封禁弹框副标题与详情 IP 入口、
 //     累犯升级档列、CC 累计标签。
 // 判定逻辑走 utils 真实代码（行为求值）；渲染点与双语词条以「源码钉 + 运行期词表
@@ -15,8 +15,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { i18n } from '../src/i18n/index.ts'
-import { code, elementSlice, section } from './_helpers.ts'
-import { POLICY_DELETE_SCOPE_MAX_NAMES, POLICY_LIST_STATUS_TAG, policyDeleteScope, policyListStatus } from '../src/utils/securityPolicyList.ts'
+import { code, elementSlice, member, section } from './_helpers.ts'
+import { policyDeleteScope } from '../src/utils/securityPolicyList.ts'
 
 type LocaleTree = { [key: string]: unknown }
 const messages = i18n.global.messages.value as Record<string, LocaleTree>
@@ -34,87 +34,102 @@ const policies = code('src/views/security/SecurityPolicies.vue')
 const events = code('src/views/security/SecurityEvents.vue')
 const overview = code('src/views/security/SecurityOverview.vue')
 
-// ── 策略列表「状态」列：启用 ≠ 生效 ──
+// ── 策略列表「状态」列：启用/禁用二态标签 ──
 
-test('策略列表状态｜目标：启用但零绑定判为「启用未关联规则」，其余两态不变', () => {
-  assert.equal(policyListStatus(true, 0), 'enabledUnbound')
-  assert.equal(policyListStatus(true, 3), 'enabled')
-  assert.equal(policyListStatus(false, 0), 'disabled')
-  assert.equal(policyListStatus(false, 3), 'disabled')
-})
-
-test('策略列表状态｜边界：1 条绑定即算已关联；禁用态不因零绑定改判', () => {
-  assert.equal(policyListStatus(true, 1), 'enabled')
-  assert.equal(policyListStatus(false, 1), 'disabled')
-})
-
-test('策略列表状态｜回归：未关联态必须是 warning 且词条写明「未关联规则」（不得再只显示「启用」）', () => {
-  assert.equal(POLICY_LIST_STATUS_TAG.enabledUnbound.type, 'warning')
-  assert.equal(POLICY_LIST_STATUS_TAG.enabled.type, 'success')
-  assert.equal(POLICY_LIST_STATUS_TAG.disabled.type, 'info')
-  assert.equal(zh(POLICY_LIST_STATUS_TAG.enabledUnbound.labelKey), '启用 · 未关联规则')
-  assert.match(en(POLICY_LIST_STATUS_TAG.enabledUnbound.labelKey), /^Enabled · /)
-  for (const tag of Object.values(POLICY_LIST_STATUS_TAG)) {
-    assert.notEqual(zh(tag.labelKey), tag.labelKey, `zh 词条 ${tag.labelKey} 不得裸键回退`)
-  }
-})
-
-test('策略列表状态｜渲染点：状态单元格的色与词条都经 policyListStatus 单源给出', () => {
+test('策略列表状态｜状态单元格只看启用态，不按关联规则数改判', () => {
   const labelAt = policies.indexOf(`:label="t('app.security.policies.table.status')"`)
   assert.ok(labelAt > 0, '状态列必须在场')
   const column = elementSlice(policies, policies.lastIndexOf('<el-table-column', labelAt), 'el-table-column')
-  const statusOfRow = 'POLICY_LIST_STATUS_TAG\\[policyListStatus\\(row\\.enabled, row\\.rule_count\\)\\]'
-  assert.equal([...column.matchAll(new RegExp(statusOfRow, 'g'))].length, 2, '标签色与标签文案必须各取一次单源判定（enabled 与 rule_count 同时参与）')
-  assert.match(column, new RegExp(`:type="${statusOfRow}\\.type"`), '标签色必须取单源判定（不得再写 row.enabled ? success : info）')
-  assert.match(column, new RegExp(`\\{\\{ t\\(${statusOfRow}\\.labelKey\\) \\}\\}`), '标签文案必须取单源词条键')
-  assert.doesNotMatch(column, /row\.enabled \? 'success' : 'info'/, '二值标签形态不得残留')
+  assert.match(column, /:type="row\.enabled \? 'success' : 'info'"/, '标签色只看启用态')
+  assert.match(column, /\{\{ row\.enabled \? t\('app\.security\.policies\.status\.enabled'\) : t\('app\.security\.policies\.status\.disabled'\) \}\}/, '标签文案只看启用态')
+  assert.doesNotMatch(column, /rule_count/, '状态列不得按关联规则数改判（关联规则数在独立列）')
 })
 
-// ── 删除策略确认：级联披露与降级 ──
-
-test('删除披露｜目标：规则名可得时逐条具名，余量为零', () => {
-  assert.deepEqual(policyDeleteScope(3, ['A', 'B', 'C']), { count: 3, names: ['A', 'B', 'C'], unnamed: 0 })
+test('策略列表状态｜回归：复合状态判定与其词条键一并移除', () => {
+  assert.doesNotMatch(policies, /policyListStatus|POLICY_LIST_STATUS_TAG|enabledUnbound/, '页面不得残留复合状态判定')
+  for (const locale of ['zh-CN', 'en'] as const) {
+    const policiesNode = (((messages[locale] as LocaleTree).app as LocaleTree).security as LocaleTree).policies as LocaleTree
+    assert.ok(!('enabledUnbound' in (policiesNode.status as LocaleTree)), `${locale} 不得残留 enabledUnbound 词条键`)
+  }
 })
 
-test('删除披露｜回归：规则名不可得时仍披露绑定数量（不得静默成「无关联」），也不用名字数冒充绑定数', () => {
-  assert.deepEqual(policyDeleteScope(3, []), { count: 3, names: [], unnamed: 3 })
-  assert.deepEqual(policyDeleteScope(5, ['A']), { count: 5, names: ['A'], unnamed: 4 })
+// ── 删除策略确认：只披露将解除的绑定数量 ──
+
+test('删除披露｜数量取列表行 rule_count 与页内绑定快照的较大值', () => {
+  assert.equal(policyDeleteScope(3, 3), 3)
+  assert.equal(policyDeleteScope(3, 5), 5, '绑定快照新于列表时以快照为准（数量不得小于实际将解除的绑定数）')
 })
 
-test('删除披露｜边界：零绑定无级联；具名有上限且余量如实', () => {
-  assert.deepEqual(policyDeleteScope(0, []), { count: 0, names: [], unnamed: 0 })
-  const names = Array.from({ length: 30 }, (_, i) => `R${i + 1}`)
-  const capped = policyDeleteScope(30, names)
-  assert.equal(capped.names.length, POLICY_DELETE_SCOPE_MAX_NAMES)
-  assert.equal(capped.unnamed, 30 - POLICY_DELETE_SCOPE_MAX_NAMES)
-  assert.deepEqual(
-    policyDeleteScope(POLICY_DELETE_SCOPE_MAX_NAMES, names.slice(0, POLICY_DELETE_SCOPE_MAX_NAMES)),
-    { count: POLICY_DELETE_SCOPE_MAX_NAMES, names: names.slice(0, POLICY_DELETE_SCOPE_MAX_NAMES), unnamed: 0 },
-    '恰好到上限不多报余量',
-  )
+test('删除披露｜回归：绑定快照拿不到（传 0）时仍按行计数披露；零绑定不披露', () => {
+  assert.equal(policyDeleteScope(4, 0), 4, '不得因为读不到绑定就不披露')
+  assert.equal(policyDeleteScope(0, 0), 0)
 })
 
-test('删除披露｜渲染点：确认框以标准清单类列出规则名，名称取页内绑定快照、加载失败时降级', () => {
+test('删除披露｜渲染点：零绑定只有首行确认文案；有绑定追加一句数量，不列规则名', () => {
   const message = section(policies, 'const policyDeleteMessage = ', '\nfunction handleDelete')
   assert.match(
     message,
-    /policyDeleteScope\(row\.rule_count, securityBindingsFailed\.value \? \[\] : policyBoundRules\(row\.id\)\.map\(\(rule\) => rule\.name\)\)/,
-    '绑定数取列表行 rule_count；规则名取页内绑定快照，绑定加载失败传空（降级为只报数量）',
+    /policyDeleteScope\(row\.rule_count, securityBindingsFailed\.value \? 0 : policyBoundRules\(row\.id\)\.length\)/,
+    '绑定数取列表行 rule_count；页内绑定快照解析出的条数兜底，绑定加载失败传 0',
   )
-  assert.match(message, /h\('p', \{ class: 'confirm-scope-lead' \}, t\('app\.security\.policies\.msg\.deleteScopeCountOnly', \{ n: scope\.count \}\)\)/, '无名可列时只报数量')
-  assert.match(message, /h\('p', \{ class: 'confirm-scope-lead' \}, t\('app\.security\.policies\.msg\.deleteScopeLead', \{ n: scope\.count \}\)\)/, '引导行必须写明绑定数量')
-  assert.match(message, /h\('ul', \{ class: 'confirm-scope-list' \}, \[/, '规则名清单必须走全局单源类')
-  assert.match(message, /\.\.\.scope\.names\.map\(\(name\) => h\('li', name\)\)/, '逐条列出规则名')
-  assert.match(message, /scope\.unnamed > 0 \? \[h\('li', t\('app\.security\.policies\.msg\.deleteScopeMore', \{ n: scope\.unnamed \}\)\)\] : \[\]/, '未具名余量必须显性标注')
+  assert.match(
+    message,
+    /count === 0 \? confirm : h\('div', \[h\('div', confirm\), h\('p', \{ class: 'confirm-scope-lead' \}, t\('app\.security\.policies\.msg\.deleteScopeLead', \{ n: count \}\)\)\]\)/,
+    '只追加一句带数量的引导行',
+  )
+  assert.doesNotMatch(message, /confirm-scope-list|h\('li'|rule\.name|unnamed/, '不得列出规则名')
   assert.match(section(policies, 'function handleDelete(', '\nconst goToCustomRulesPage'), /ElMessageBox\.confirm\(policyDeleteMessage\(row\), /, '删除确认必须消费级联披露')
 })
 
-test('删除披露｜词条：zh/en 成对且都带数量占位符', () => {
-  for (const key of ['deleteScopeLead', 'deleteScopeCountOnly', 'deleteScopeMore']) {
-    assert.match(zh(`app.security.policies.msg.${key}`), /\{n\}/, `zh ${key} 必须带 {n}`)
-    assert.match(en(`app.security.policies.msg.${key}`), /\{n\}/, `en ${key} 必须带 {n}`)
+test('删除披露｜词条：zh/en 成对、带数量占位符、以句号收尾', () => {
+  assert.match(zh('app.security.policies.msg.deleteScopeLead'), /^同时解除与 \{n\} 条规则的绑定（规则本身保留）。$/)
+  assert.match(en('app.security.policies.msg.deleteScopeLead'), /\{n\}/)
+  for (const gone of ['deleteScopeCountOnly', 'deleteScopeMore']) {
+    const policiesNode = (((messages['zh-CN'] as LocaleTree).app as LocaleTree).security as LocaleTree).policies as LocaleTree
+    assert.ok(!(gone in (policiesNode.msg as LocaleTree)), `不得残留只服务规则名清单的词条键 ${gone}`)
   }
-  assert.match(zh('app.security.policies.msg.deleteScopeLead'), /同时解除与 \{n\} 条规则的绑定/)
+})
+
+// ── 策略列表行内启停 ──
+
+test('策略启停｜操作列开关：一行确认 → 只提交 {enabled} → 成功回读；取消/失败回滚', () => {
+  const actionsAt = policies.indexOf(`:label="t('app.security.policies.table.actions')"`)
+  assert.ok(actionsAt > 0, '操作列必须在场')
+  const actions = elementSlice(policies, policies.lastIndexOf('<el-table-column', actionsAt), 'el-table-column')
+  const switchAt = actions.indexOf('<el-switch')
+  assert.ok(switchAt > 0, '操作列必须有启停开关')
+  const toggleSwitch = elementSlice(actions, switchAt, 'el-switch')
+  assert.match(toggleSwitch, /v-model="row\.enabled"/)
+  assert.match(toggleSwitch, /:disabled="isReadOnly \|\| policyTogglingId !== null"/, '只读（从节点/非管理员）与在途时禁用')
+  assert.match(toggleSwitch, /@change="togglePolicy\(row as PolicySummary\)"/)
+  const fn = member(policies, 'const togglePolicy = async (row: PolicySummary)')
+  const confirmAt = fn.indexOf('await ElMessageBox.confirm(')
+  const putAt = fn.indexOf('await request.put(`/security/policies/${row.id}`, { enabled: nextEnabled })')
+  assert.ok(confirmAt > 0 && putAt > confirmAt, '确认必须早于请求，且只提交 {enabled}')
+  assert.match(fn, /t\('app\.security\.policies\.msg\.toggleConfirm', \{ action, name: row\.name \}\)/, '确认文案一行')
+  assert.match(fn, /if \(isCaddyApplyDegraded\(res\)\) showSaveResult\(res, ''\)/, 'DB 已提交但 Caddy 应用失败必须可见')
+  assert.match(fn, /await fetchData\(\)/, '成功后刷新列表')
+  const catchBlock = fn.slice(fn.indexOf('} catch'))
+  const rollback = catchBlock.indexOf('row.enabled = !nextEnabled')
+  const cancel = catchBlock.indexOf("if (error === 'cancel' || error === 'close') return")
+  const reread = catchBlock.indexOf('void fetchData()')
+  assert.ok(rollback > 0 && cancel > rollback && reread > cancel, '失败先回滚；取消早退不回读，真实失败再回读')
+  assert.match(fn, /policyTogglingId\.value = null/, 'finally 释放在途占位')
+})
+
+test('策略启停｜词条：zh/en 成对，确认文案一句话', () => {
+  assert.equal(zh('app.security.policies.msg.toggleConfirm'), '确定{action}策略「{name}」？')
+  // 与状态列标签「启用 / 禁用」同词：同一页面不给同一动作两个名字
+  assert.equal(zh('app.security.policies.action.disable'), zh('app.security.policies.status.disabled'))
+  assert.equal(zh('app.security.policies.action.enable'), '启用')
+  for (const key of [
+    'app.security.policies.msg.toggleConfirm',
+    'app.security.policies.msg.toggleConfirmTitle',
+    'app.security.policies.action.toggleAria',
+  ]) {
+    assert.match(en(key), /\{(action|name)\}/, `${key} 的 en 词条必须带插值`)
+    assert.doesNotMatch(`${zh(key)}${en(key)}`.replaceAll('{action}', '').replaceAll('{name}', ''), /[{}]/, `${key} 不得出现 {action}/{name} 之外的花括号`)
+  }
 })
 
 // ── 跳转与深链 ──
@@ -141,29 +156,37 @@ test('事件页深链消费｜挂载时应用动作筛选并按意图打开自�
   assert.match(land, /else ElMessage\.warning\(autobanConfigTooltip\.value\)/, '开不了弹框时必须说明原因（只读/从节点/加载失败），不得静默')
 })
 
-test('安全总览刷新｜30s 可见性感知刷新走单源，卸载停表；后台刷新不翻转重试按钮 loading', () => {
-  assert.match(overview, /import \{ createVisibilityIntervals \} from '@\/composables\/useVisibilityIntervals'/)
-  assert.match(overview, /createVisibilityIntervals\(\{ intervals: \[\{ tick: \(\) => \{ void reloadInBackground\(\) \}, ms: 30_000 \}\] \}\)/, '刷新必须交给可见性单源（隐藏页停表、恢复可见立即补一轮）')
-  assert.match(overview, /onMounted\(overviewRefresh\.start\)/)
-  assert.match(overview, /onBeforeUnmount\(overviewRefresh\.stop\)/, '离开页面必须停表')
-  const background = section(overview, 'const reloadInBackground = async', '\nconst ')
-  assert.doesNotMatch(background, /reloading\.value = true/, '后台刷新不得让重试按钮每 30s 闪一次 loading')
-  assert.match(background, /if \(reloadInFlight\) return/, '手动刷新/上一轮后台刷新在途时让路')
-  // 手动与后台共用同一组请求（六路不分叉）
-  for (const fn of ['fetchData', 'fetchBlockedEvents', 'fetchAutobanStatus', 'fetchIP2RegionInfo', 'fetchThreatLib', 'fetchCrawlerLib']) {
-    assert.equal(overview.split(`\n  ${fn}(),`).length, 2, `${fn} 必须只在请求组清单里出现一次（手动/后台共用）`)
-  }
+test('安全总览｜只在进入页面时取数：无页头刷新按钮、无定时刷新；失败态保留「立即重试」', () => {
+  const header = elementSlice(overview, overview.indexOf('<div class="page-header">'), 'div')
+  assert.doesNotMatch(header, /@click="reloadAll"/, '页头不得有刷新按钮')
+  assert.doesNotMatch(overview, /createVisibilityIntervals|reloadInBackground|overview\.page\.refresh/, '不得有定时刷新与页头刷新词条键')
+  assert.match(overview, /onMounted\(\(\) => \{ void reloadAll\(\) \}\)/, '进入页面取数必须保留')
+  assert.equal(overview.split(`@click="reloadAll">{{ t('app.security.overview.page.retryNow') }}</el-button>`).length - 1, 2, '失败态的「立即重试」保留')
 })
 
-test('安全总览刷新｜页头刷新按钮（事件页同款）；「查看全部」带拦截筛选下钻', () => {
-  const header = elementSlice(overview, overview.indexOf('<div class="page-header">'), 'div')
-  assert.match(header, /<el-button :icon="Refresh" @click="reloadAll">\{\{ t\('app\.security\.overview\.page\.refresh'\) \}\}<\/el-button>/)
-  assert.equal(zh('app.security.overview.page.refresh'), '刷新')
-  assert.equal(en('app.security.overview.page.refresh'), 'Refresh')
+test('安全总览下钻｜「查看全部」带拦截筛选', () => {
   assert.match(
     section(overview, 'const goToEvents = ', '\n'),
     /window\.open\(pageUrl\('security-events', \{ \[DEEP_LINK_PARAMS\.eventsAction\]: 'blocked' \}\), '_blank', 'noopener'\)/,
     '「最近拦截事件」卡的下钻必须带 action=blocked',
+  )
+})
+
+test('总览黄条「前往绑定规则」｜与事件页同写法：定位判据单源 + 深链复用已登记参数', () => {
+  assert.match(overview, /policy_id\?: number \| null/)
+  assert.match(overview, /const autobanBindingPolicyId = computed\(\(\) => autobanStatus\.value === null \? null : autobanMissingPolicyId\(autobanStatus\.value\)\)/)
+  const barAt = overview.indexOf('<el-alert v-if="autobanIneffective"')
+  assert.ok(barAt > 0, '前置：未生效黄条必须存在（否则本断言空转）')
+  const bar = elementSlice(overview, barAt, 'el-alert')
+  assert.match(
+    bar,
+    /\{\{ autobanIneffectiveText \}\} <AccessibleLink v-if="autobanBindingPolicyId !== null" type="primary" @click="goToBindingPolicy">\{\{ t\('app\.security\.events\.goToBindingRules'\) \}\}<\/AccessibleLink>/,
+    '黄条内必须有「前往绑定规则」入口（文案复用事件页词条）',
+  )
+  assert.match(
+    overview,
+    /const goToBindingPolicy = \(\) => \{\s*if \(autobanBindingPolicyId\.value === null\) return\s*window\.open\(pageUrl\('security-policies', \{ \[DEEP_LINK_PARAMS\.policyId\]: autobanBindingPolicyId\.value \}\), '_blank', 'noopener'\)\s*\}/,
+    '导航必须复用 pageUrl + DEEP_LINK_PARAMS.policyId 新标签打开',
   )
 })
 
@@ -207,4 +230,38 @@ test('总览列与标签｜累犯升级档列标明全局口径；CC 两个累�
   // 列宽随列名加宽（88px 容不下「累犯升级档（全局）」）
   const column = elementSlice(overview, overview.lastIndexOf('<el-table-column', overview.indexOf(`:label="t('app.security.overview.autoban.colEscalation')"`)), 'el-table-column')
   assert.match(column, /width="1[3-9]\d"/)
+})
+
+test('提示文案｜zh 母本词条值不再出现内部词（策略类型代码、评估规则 ID、规则 id 段、模式代码）', () => {
+  // 只扫词条值，不扫键名：subStage0 / stage0Title 这类键名是代码标识，不上屏。
+  const values = (text: string, quote: '"' | "'"): string[] =>
+    [...text.matchAll(new RegExp(`:\\s*${quote}((?:[^${quote}\\\\]|\\\\.)*)${quote}`, 'g'))].map((m) => m[1])
+  const internalWords: ReadonlyArray<readonly [RegExp, string]> = [
+    [/\bstage[0-9]\b/, '策略类型代码（stageN）'],
+    [/\bmixed\b/, '策略类型代码（mixed）'],
+    [/\b(901|949|959|999)\b/, '评估 / 豁免规则 ID'],
+    [/\bid [0-9]/i, '规则 id 段'],
+    [/旧 id/, '「旧 id」'],
+    [/（deny）/, '模式代码（deny）'],
+  ]
+  for (const [file, quote] of [['src/locales/zh/security.ts', '"'], ['src/locales/zh/views.ts', "'"]] as const) {
+    for (const value of values(code(file), quote)) {
+      for (const [re, label] of internalWords) {
+        assert.doesNotMatch(value, re, `${file} 词条值出现内部词「${label}」：${value}`)
+      }
+    }
+  }
+})
+
+test('IP 快捷处置｜加入黑名单的动词统一为「封禁」：两条写入路径同一动词，与永久封禁披露句同名', () => {
+  assert.equal(zh('app.security.ipLocation.verbs.block'), '封禁')
+  assert.equal(zh('common.app.views.trustAssoc.verbDeny'), '封禁')
+  assert.equal(en('app.security.ipLocation.verbs.block'), 'Ban')
+  assert.equal(en('common.app.views.trustAssoc.verbDeny'), 'Ban')
+  // 渲染点：既有名单直加走 verbs.block；无名单先建再关联走 SIDE_CONFIG.deny.verb
+  assert.match(code('src/views/security/IPLocationAction.vue'), /const verb = side === 'deny' \? t\('app\.security\.ipLocation\.verbs\.block'\)/)
+  assert.match(
+    code('src/composables/useTrustAssociation.ts'),
+    /deny: \{ refField: 'ip_acl_list_refs', suffix: t\('common\.app\.views\.trustAssoc\.suffixDeny'\), verb: t\('common\.app\.views\.trustAssoc\.verbDeny'\) \}/,
+  )
 })

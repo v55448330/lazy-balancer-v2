@@ -120,9 +120,9 @@ test('策略向导阶段 0 提示：跳段话术限 stage0，mixed 信任命中�
   // 「继续后续」分支（裸中文负钉 i18n 后空转）。
   assert.doesNotMatch(policies, /stage0\.(projection|trustTip|detectOn)[^}]*\+/, '阶段 0 话术不得本地拼装')
   assert.match(policies, /t\('app\.security\.policies\.stage0\.projection'\)/, '投影条按类型限定跳段')
-  assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）'), '投影条原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes('「阶段 0 · 信任名单」类型策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）'), '投影条原文必须在 zh 母本词条中')
   assert.match(policies, /t\('app\.security\.policies\.stage0\.trustTip'\)/, '提示线按类型限定跳段')
-  assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / CC 防护 / WAF'), '提示线原文必须在 zh 母本词条中')
-  assert.ok(zhLexicon.includes('mixed 等其他类型策略信任命中为引擎内检测降级'), 'mixed 场景如实呈现引擎内降级')
+  assert.ok(zhLexicon.includes('「阶段 0 · 信任名单」类型策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / CC 防护 / WAF'), '提示线原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes('混合等其他类型策略的信任命中为引擎内检测降级'), 'mixed 场景如实呈现引擎内降级')
   assert.doesNotMatch(policies, /trustDetectionLegacyNote|detectionOnlyText/, '旧「仅记录检测」本地话术必须退役')
 })

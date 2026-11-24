@@ -93,7 +93,10 @@ type CertificateConfig = Pick<GlobalConfigData,
   | 'cert_renewal_attempts'
   | 'default_ca_provider_id'
 >
-type SettingsConfig = Omit<GlobalConfigData, keyof CertificateConfig>
+// 设置页不渲染/不上送 audit_log_size_mb（安全事件审计文件是 IPC 兜底缓存，
+// 轮转阈值用库默认值，页面不再暴露该项）——从共享模型类型里排除，避免为
+// 一个不渲染的字段维护默认值与回填。
+type SettingsConfig = Omit<GlobalConfigData, keyof CertificateConfig | 'audit_log_size_mb'>
 
 const settings = ref<SettingsConfig>({
   log_level: 'info',
@@ -113,7 +116,6 @@ const settings = ref<SettingsConfig>({
   proxy_stream_close_delay: 0,
   server_tokens_hidden: false,
   task_log_size_mb: 10,
-  audit_log_size_mb: 10,
   runtime_log_size_mb: 100,
   access_log_json: true,
   access_log_format: DEFAULT_ACCESS_LOG_FORMAT,
@@ -161,7 +163,6 @@ type ConfigPayload = SettingsConfig & CertificateConfig
 const applyBasicKeys = (data: ConfigPayload) => {
   settings.value.log_level = data.log_level || 'info'
   settings.value.task_log_size_mb = data.task_log_size_mb ?? 10
-  settings.value.audit_log_size_mb = data.audit_log_size_mb ?? 10
   settings.value.runtime_log_size_mb = data.runtime_log_size_mb ?? 100
   settings.value.audit_retention_months = data.audit_retention_months ?? 3
   settings.value.notification_delivery_retention_days = data.notification_delivery_retention_days ?? 30

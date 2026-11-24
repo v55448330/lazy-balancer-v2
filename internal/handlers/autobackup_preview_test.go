@@ -14,8 +14,8 @@ import (
 
 // 还原确认弹框此前只能拿到「备份名 + 范围」，跨版本告警与冲突置禁用清单要到
 // 提交之后才出现（同族文件导入在预览阶段就展示）。本文件钉住只读预览端点：
-// 返回跨版本告警/版本号/预计算的冲突禁用清单，且**零写入**（不建快照、不改配置、
-// 不落成功/失败终态审计）。
+// 返回跨版本告警/版本号/预计算的冲突禁用清单，且**零写入**（不改配置、不建
+// 备份行、不落成功/失败终态审计）。
 
 type autoBackupPreviewPayload struct {
 	Code    int    `json:"code"`
@@ -57,6 +57,16 @@ func writePreviewBackupFixture(t *testing.T, h *Handlers, backup configBackup, n
 		t.Fatalf("read auto_backups id: %v", err)
 	}
 	return id
+}
+
+// countRule 统计某规则在库内的行数（预览必须零写入，按 caddy_id 直查）。
+func countRule(t *testing.T, caddyID string) int {
+	t.Helper()
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id=?`, caddyID).Scan(&n); err != nil {
+		t.Fatalf("count rule %s: %v", caddyID, err)
+	}
+	return n
 }
 
 func servePreview(t *testing.T, h *Handlers, id int64) *autoBackupPreviewPayload {
@@ -119,7 +129,7 @@ func TestPreviewAutoBackup_returnsVersionAndConflictsWithoutWriting(t *testing.T
 		t.Fatal("disabled_conflicts 条目缺少 conflicts_with 对手清单")
 	}
 
-	// 零写入：不建快照、不改配置、不落还原审计。
+	// 零写入：不建备份行、不改配置、不落还原审计。
 	if rows := autoBackupRows(t, ""); len(rows) != backupRowsBefore {
 		t.Fatalf("预览新增了备份行: before=%d after=%d", backupRowsBefore, len(rows))
 	}
@@ -133,7 +143,7 @@ func TestPreviewAutoBackup_returnsVersionAndConflictsWithoutWriting(t *testing.T
 
 // Given 备份文件不是有效备份（内容损坏）。
 // When 预览。
-// Then 400 且零写入（不建快照、不改配置）。
+// Then 400 且零写入（不建备份行、不改配置）。
 func TestPreviewAutoBackup_invalidFileReturns400WithoutWriting(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	name := "lbbak-manual-preview-bad.lbbak"

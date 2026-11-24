@@ -90,7 +90,7 @@ test('迁移预演补「已有其他阶段 2 策略 → 将跳过」风险组', 
   // 模板：两处呈现（逐行标注 + 汇总横幅）。i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(page, /t\('app\.security\.policies\.migrate\.willSkip'\)/)
   assert.match(page, /t\('app\.security\.policies\.migrate\.ccPolicyRisk'/)
-  assert.ok(code('src/locales/zh/security.ts').includes('将跳过（已有 stage2）'), '逐行标注原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('将跳过（已有阶段 2 策略）'), '逐行标注原文必须在 zh 母本词条中')
   assert.ok(code('src/locales/zh/security.ts').includes('阶段 2 唯一风险'), '汇总横幅原文必须在 zh 母本词条中')
 })
 
@@ -234,4 +234,18 @@ test('关联规则选择器落点：新建态 selfPos=现有绑定数+1（不得
   assert.match(page, /selfPos: selfIndex >= 0 \? selfIndex \+ 1 : existing\.length \+ 1/, '新建态落点=现有绑定数+1（编辑态=链内序号+1）')
   assert.match(page, /const selfIndex = chain\.findIndex\(\(e\) => e\.isSelf\)/, '编辑态落点仍按链内 isSelf 序号')
   assert.match(page, /pickerMeta\(rule\)\.selfPos/, '模板必须消费 selfPos 落点')
+})
+
+test('规则选择器落点提示独占一行：标签区与提示是兄弟块，提示与标签间留 8px，无标签时不叠加', () => {
+  // 标签占满整行时提示不再被挤到标签下方紧贴标签：标签进独立容器，提示是其后的块级兄弟。
+  assert.match(
+    page,
+    /<div v-if="pickerMeta\(rule\)\.chain\.length > 0" class="rule-binding-chips">[\s\S]*?<\/div>\s*<span v-if="editorPolicyType !== 'stage0'" class="rule-binding-landing">/,
+    '落点提示必须在标签区容器之外（独占一行），无标签时不渲染标签区容器',
+  )
+  assert.match(page, /<span\s+v-for="\(entry, idx\) in pickerMeta\(rule\)\.chain"[\s\S]{0,200}?class="binding-order-chip"/, '前置：执行序标签在标签区容器内')
+  assert.match(page, /\.rule-binding-preview \{ margin: 2px 0 4px 22px; \}/, '预览行只是块容器（不再是自动换行的 flex 容器）')
+  assert.match(page, /\.rule-binding-chips \{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; \}/, '标签区自带换行与间距')
+  assert.match(page, /\.rule-binding-landing \{ display: block; margin-top: 8px; font-size: 12px; color: #6b7280; \}/, '提示块级独占一行，与标签区留稳定 8px')
+  assert.match(page, /\.rule-binding-preview\.is-empty \.rule-binding-landing \{ margin-top: 0; \}/, '无已绑策略时不叠加间距（行距由 .is-empty 承担）')
 })

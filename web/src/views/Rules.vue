@@ -8,14 +8,10 @@
         </h2>
         <p class="page-desc">{{ t('common.app.rules.list.pageDescription') }}</p>
       </div>
-      <div class="header-actions">
-        <!-- 刷新=前台取数（表格 loading 遮罩 + 安全目录全量）；列表另有 30s 可见性轮询承接他端变更 -->
-        <el-button :icon="Refresh" @click="refreshRuleList">{{ t('common.app.rules.common.refresh') }}</el-button>
-        <el-button type="primary" :disabled="isReadOnly || saving" @click="openWizard()">
-          <el-icon><Plus /></el-icon>
-          {{ t('common.app.rules.wizard.newRule') }}
-        </el-button>
-      </div>
+      <el-button type="primary" :disabled="isReadOnly || saving" @click="openWizard()">
+        <el-icon><Plus /></el-icon>
+        {{ t('common.app.rules.wizard.newRule') }}
+      </el-button>
     </div>
 
     <el-alert v-if="certPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
@@ -257,11 +253,9 @@
                  与「已禁用」的「-」同形会让用户无法从列表区分「未发布」。 -->
             <el-tooltip
               v-if="row.enabled && Array.isArray(row.upstreams) && getEnabledUpstreams(row as Rule).length === 0"
+              :content="t('common.app.rules.list.unpublishedHint')"
               placement="top"
             >
-              <template #content>
-                {{ t('common.app.rules.list.unpublishedHint') }}<br />{{ t('common.app.rules.list.unpublishedRecoverHint') }}
-              </template>
               <el-tag type="warning" size="small" effect="plain">{{ t('common.app.rules.list.statusUnpublished') }}</el-tag>
             </el-tooltip>
             <el-popover v-else-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240" :popper-options="popperViewportSafe">
@@ -373,20 +367,12 @@
                 </el-button>
                 </div>
               </el-tooltip>
-              <!-- 访问日志入口三态（utils/ruleAccessLog 单源）：已开启=查看，只读用户同样可看
-                   （后端对全部登录用户开放读）；未开启且可编辑=「去开启」，打开编辑向导并定位到
-                   访问日志开关；其余未开启（只读/从节点/证书任务锁定/TCP 不支持）=禁用 + 原因 -->
+              <!-- 访问日志入口两态：已开启=查看，只读用户同样可看（后端对全部登录用户开放读）；
+                   未开启=禁用并说明原因 -->
               <el-button v-if="row.log_enabled" type="primary" link size="small" @click="openRuleLogDialog(row as Rule)">
                 {{ t('common.app.rules.common.log') }}
               </el-button>
-              <el-tooltip v-else-if="ruleLogEntryState(row as Rule, canEditRule(row as Rule)) === 'enable'" :content="t('common.app.rules.list.logEnableEntryTip')" placement="top">
-                <div>
-                <el-button type="primary" link size="small" @click="openWizardForAccessLog(row as Rule)">
-                  {{ t('common.app.rules.list.logEnableEntry') }}
-                </el-button>
-                </div>
-              </el-tooltip>
-              <el-tooltip v-else :content="row.protocol === 'tcp' ? t('common.app.rules.list.logUnsupportedTcp') : t('common.app.rules.list.logDisabledTooltip')" placement="top">
+              <el-tooltip v-else :content="t('common.app.rules.list.logDisabledTooltip')">
                 <div>
                 <el-button type="primary" link size="small" disabled>
                   {{ t('common.app.rules.common.log') }}
@@ -493,7 +479,7 @@
             </el-form-item>
 
             <el-form-item :label="t('common.app.rules.common.accessLog')" v-if="wizardForm.protocol === 'http'">
-              <el-switch v-model="wizardForm.log_enabled" ref="accessLogSwitchRef" />
+              <el-switch v-model="wizardForm.log_enabled" />
               <span class="form-tip-inline">{{ t('common.app.rules.wizard.accessLogHint') }}</span>
             </el-form-item>
           </el-form>
@@ -1420,7 +1406,7 @@ import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isRuleVersionConflict } from '@/utils/ruleConflict'
 import { isCaddyApplyDegraded } from '@/utils/bulkApplyResult'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Refresh, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { generalizeUA } from '@/utils/uaGeneralize'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -1428,7 +1414,6 @@ import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import TakeoverBadge from '@/components/common/TakeoverBadge.vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import type { SwitchInstance } from 'element-plus'
 import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
@@ -1481,18 +1466,13 @@ import { MAX_UPSTREAM_ROWS, normalizeWeights, payloadWeight, redistributeWeight,
 import { projectRuleFlowPath } from '@/utils/ruleFlow'
 import {
   applyDynamicUpstreamLimit,
-  applyTcpState,
   clampPassiveHealthCheckTimeout,
   copyRuleDomain,
   copyRuleHostHeader,
   createWizardDraftTracker,
   dnsServerAfterToggle,
   dynamicUpstreamSurplus,
-  protocolSwitchImpact,
   resetNtlmTakeover,
-  restoreHttpState,
-  snapshotHttpState,
-  type HttpStateSnapshot,
 } from '@/utils/ruleWizard'
 import { createLogStatBuckets, recordLogStatEntry, type LogStatBuckets } from '@/utils/logStatCap'
 import { certJobStatusLabel } from '@/utils/certJobStatus'
@@ -1500,9 +1480,6 @@ import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
-import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
-import { RULE_LIST_POLL_MS, ruleListPollPaused, type RuleListEditActivity } from '@/utils/ruleListRefresh'
-import { ruleLogEntryState } from '@/utils/ruleAccessLog'
 import { useI18n } from 'vue-i18n'
 
 const { t, locale } = useI18n()
@@ -1711,16 +1688,14 @@ const securityBindingsError = ref(false)
 // 绑定数据未就绪时禁止打开编辑器：组件预选空集 + 全量替换语义会把
 // 「加载失败/未完成」保存成「解除全部绑定」。
 const securityBindingsLoading = ref(true)
-const fetchSecurityBindings = async (includeSecurityCatalog = false, options: { silent?: boolean } = {}) => {
+const fetchSecurityBindings = async (includeSecurityCatalog = false) => {
   securityBindingsLoading.value = true
-  // silent=后台轮询轮次：失败只置下方横幅（可重试），不每轮弹 toast。
-  const config = { silent: options.silent === true }
   try {
     const [bindingsRes, policiesRes, ipListRes, blockPagesRes] = await Promise.all([
-      request.get<APIResponse<typeof securityBindings.value>>('/security/bindings', config),
-      includeSecurityCatalog ? request.get<APIResponse<SecurityStagePolicy[]>>('/security/policies', config) : Promise.resolve(null),
-      includeSecurityCatalog ? request.get<APIResponse<SecurityStageIPList[]>>('/security/ip-lists', config) : Promise.resolve(null),
-      includeSecurityCatalog ? request.get<APIResponse<SecurityStageBlockPage[]>>('/security/block-pages', config) : Promise.resolve(null),
+      request.get<APIResponse<typeof securityBindings.value>>('/security/bindings'),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStagePolicy[]>>('/security/policies') : Promise.resolve(null),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStageIPList[]>>('/security/ip-lists') : Promise.resolve(null),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStageBlockPage[]>>('/security/block-pages') : Promise.resolve(null),
     ])
     if (bindingsRes.data) securityBindings.value = bindingsRes.data
     if (policiesRes?.data) securityPolicies.value = policiesRes.data
@@ -1825,27 +1800,15 @@ let rulesRequestSeq = 0
 // 更新者显示名走 utils/updaterName 单源
 const getUpdaterName = (userId?: number) => updaterName(users.value, userId)
 
-// 列表取数在途标记：后台轮询轮次据此让位（在途的那次落地即是最新，不叠加请求）。
-let rulesRequestInFlight = false
-
-const fetchRules = async (includeSecurityCatalog = false, options: { background?: boolean } = {}) => {
+const fetchRules = async (includeSecurityCatalog = false) => {
   if (disposed) return
-  if (options.background && rulesRequestInFlight) return
   const requestSeq = ++rulesRequestSeq
-  rulesRequestInFlight = true
-  if (!options.background) loading.value = true
+  loading.value = true
   try {
-    const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: healthPolling.signal, silent: options.background === true })
+    const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: healthPolling.signal })
     if (disposed || requestSeq !== rulesRequestSeq) return
     rules.value = res.data || []
     rulesLoadError.value = false
-    if (options.background) {
-      // 后台轮询轮次：只跟进列表与绑定快照（锁摘要随列表一起到达），且全部静默——
-      // 失败只置各自横幅，不每轮弹 toast。健康与证书任务各有独立轮询；证书详情
-      // 请求非静默，只在首屏/写后回读/手动刷新时联动。
-      void fetchSecurityBindings(includeSecurityCatalog, { silent: true })
-      return
-    }
     void fetchSecurityBindings(includeSecurityCatalog)
     // Fetch health status after rules are loaded
     void healthPolling.run()
@@ -1855,15 +1818,12 @@ const fetchRules = async (includeSecurityCatalog = false, options: { background?
     void certJobsPolling.run()
   } catch (error: unknown) {
     if (axios.isCancel(error) || disposed || requestSeq !== rulesRequestSeq) return
-    // 前台轮次的错误 toast 已由全局 axios 拦截器弹出；后台轮次静默，只置横幅。
-    // 在此吞掉异常，fire-and-forget 的刷新调用不会变成 unhandled rejection。
+    // Error toast is already shown by the global axios interceptor; swallow here
+    // so fire-and-forget refresh calls don't surface as unhandled rejections.
     console.error('Failed to fetch rules:', error)
     rulesLoadError.value = true
   } finally {
-    if (!disposed && requestSeq === rulesRequestSeq) {
-      rulesRequestInFlight = false
-      loading.value = false
-    }
+    if (!disposed && requestSeq === rulesRequestSeq) loading.value = false
   }
 }
 
@@ -2414,7 +2374,7 @@ const certWarnings = computed(() => certInfo.warning
 
 /** 列表 TLS 列证书提示的有效期结论；天数不可得（解析失败）时返回 null。 */
 const certDaysConclusion = (cert: CertInfo | null): CertExpiryConclusion | null =>
-  Number.isFinite(cert?.days_remaining) ? certExpiryConclusion(cert?.days_remaining ?? 0) : null
+  Number.isFinite(cert?.days_remaining) ? certExpiryConclusion(cert?.days_remaining ?? 0, cert?.status === 'expired') : null
 
 const wizardForm = reactive<RuleForm>({
   name: '',
@@ -2485,12 +2445,8 @@ const showTlsHint = (message: string) => {
 // 用户是否显式/已提交过监听端口：置位后停止 80↔443/8080 的自动联动，避免静默改回默认端口。
 // 编辑态打开即置位（DB 中的 listen_port 就是用户已提交的显式配置）；联动仅保留 create/复制流的默认便捷。
 const userExplicitPort = ref(false)
-// http→tcp 迁移前的 HTTP 态快照：回转 http 时按快照回填（字段面与清理面同源在
-// utils/ruleWizard）。只还原「被切换清掉、且用户在 TCP 下没再改动」的字段。
-let preTcpSnapshot: HttpStateSnapshot | null = null
-// 协议回转回填期间置位：enable_tls 联动 watcher 不得再把「开启 TLS → 端口改 443」
-// 的默认迁移叠加到快照端口上。
-let restoringHttpState = false
+// http→tcp 迁移前的 HTTP 态快照：回转 http 时判断「是否实际改过端口 / 是否被强制关闭过 TLS」。
+let preTcpSnapshot: { listenPort: number; enableTls: boolean } | null = null
 
 // Watch for enable_tls toggle to adjust default listen port
 // （用户裁定）：启用 TLS 时端口直接默认 443（不仅是提示）——
@@ -2498,8 +2454,7 @@ let restoringHttpState = false
 // 生产实证：短路前置导致编辑态拨 TLS 永不改端口）。用户随后手动改端口即置
 // userExplicitPort，关闭方向的自动回 80 仍受其约束（既有语义）。
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
-  // 回填期由快照决定 TLS 与端口，联动不得插手
-  if (hydratingWizard || restoringHttpState) return
+  if (hydratingWizard) return
   if (wizardForm.protocol !== 'http') return
   if (newVal && !oldVal) {
     if (wizardForm.listen_port !== 443) {
@@ -2524,51 +2479,63 @@ watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
 watch(() => wizardForm.protocol, (newVal, oldVal) => {
   if (hydratingWizard) return
   if (newVal !== 'tcp') wizardForm.tcp_proxy_protocol = false
-  // 切 TCP 的落地动作：先拍 HTTP 态快照（须先于端口 / enable_tls 变更），再整面
-  // 清掉 HTTP 专属配置（后端 TCP 写侧门硬拒、载荷无条件上送、TCP 下没有可见控件
-  // 可关）。确认框与直接切换两条路径共用这一处。
-  const enterTcpState = (): void => {
-    preTcpSnapshot = snapshotHttpState(wizardForm)
-    if (applyTcpState(wizardForm).portRelocated) {
+  if (newVal === 'tcp') {
+    // 快照进入 TCP 前的 HTTP 态（须先于下方端口/ enable_tls 变更），供回转提示判断
+    preTcpSnapshot = { listenPort: wizardForm.listen_port, enableTls: wizardForm.enable_tls }
+    // Switching to TCP: use a neutral high port and plain TCP upstreams.
+    // 无条件迁移：DB 中不存在 TCP:80/443 存量规则（后端无条件拒绝），编辑态无需保留该值
+    if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
+      wizardForm.listen_port = 8080
       ElMessage.info(t('common.app.rules.msgs.switchedToTcpPort8080'))
     }
-  }
-  if (newVal === 'tcp') {
-    // 用户填过的内容（路径规则 / 回源域名 / 认证网关）会被静默清空：先列清单确认，
-    // 取消则回滚协议与内容。切回 HTTP 会自动恢复，但保存为 TCP 后不再保留。
-    const impact = protocolSwitchImpact(wizardForm, newVal)
-    const cleared: string[] = []
-    if (impact.pathRules > 0) cleared.push(t('common.app.rules.msgs.switchTcpClearsPathRules', { n: impact.pathRules }))
-    if (impact.originDomains.length > 0) cleared.push(t('common.app.rules.msgs.switchTcpClearsOriginDomains', { domains: impact.originDomains.join('、') }))
-    if (impact.forwardAuthUpstream !== '') cleared.push(t('common.app.rules.msgs.switchTcpClearsForwardAuth', { upstream: impact.forwardAuthUpstream }))
-    if (cleared.length > 0) {
-      // 确认期间作废上一次的快照——取消回滚触发的回转分支不得回填旧值
-      preTcpSnapshot = null
-      void ElMessageBox.confirm(
-        h('div', [
-          h('p', { class: 'confirm-scope-lead' }, t('common.app.rules.msgs.switchTcpClearsLead')),
-          h('ul', { class: 'confirm-scope-list' }, cleared.map((item) => h('li', item))),
-        ]),
-        t('common.app.rules.msgs.switchTcpConfirmTitle'),
-        { type: 'warning', confirmButtonText: t('common.app.rules.common.confirm'), cancelButtonText: t('common.app.rules.common.cancel') },
-      ).then(
-        () => enterTcpState(),
-        // 取消：协议与内容都保持原样（回滚会再进一次本 watch，此时快照为空、不回填）
-        () => { wizardForm.protocol = oldVal ?? 'http' },
-      )
-      return
+    wizardForm.enable_tls = false
+    if (wizardForm.strategy === 'cookie') wizardForm.strategy = 'weighted_round_robin'
+    // NTLM 兼容是 HTTP 语义：切 TCP 开关自动关 + 接管字段恢复默认（静默，设计定稿）
+    if (wizardForm.ntlm_compatible === 1) {
+      wizardForm.ntlm_compatible = 0
+      resetNtlmTakeover(wizardForm)
     }
-    enterTcpState()
+    // 认证网关同为 HTTP 语义：切 TCP 自动关 + 清空网关地址（路径/身份头保留
+    // 默认值，回转 HTTP 无需重填）
+    if (wizardForm.forward_auth_enabled === 1) {
+      wizardForm.forward_auth_enabled = 0
+      wizardForm.forward_auth_upstream = ''
+    }
+    // 上游强制 HTTP/1.1 同为 HTTP 传输语义——切 TCP 一并弃置
+    wizardForm.upstream_force_http1 = 0
+    wizardForm.custom_routes_enabled = false
+    wizardForm.health_check_host = ''
+    wizardForm.path_rules = []
+    // 动态上游与 DNS 服务发现同为 HTTP 语义：TCP 下这两组控件整段不渲染，
+    // 但载荷仍无条件上送——残留值会被后端「TCP 规则不支持…」门恒拒，
+    // 且用户没有可见控件可关闭（与上方 HTTP-only 字段同族清理）。
+    wizardForm.dynamic_dns = false
+    wizardForm.enable_dns_server = false
+    wizardForm.dns_server = ''
+    wizardForm.upstreams.forEach(u => {
+      // 回源域名是 HTTP-only 语义——切换即弃置，
+      // 否则隐藏残留字段被后端「回源域名仅 HTTP 规则支持」门恒拒，卡死保存
+      u.origin_domain = ''
+      if (u.protocol === 'http') u.protocol = 'tcp'
+      if (u.protocol === 'https') u.protocol = 'tls'
+    })
   } else if (newVal === 'http' && oldVal === 'tcp') {
-    if (!preTcpSnapshot) return
-    restoringHttpState = true
-    let restored = false
-    try {
-      restored = restoreHttpState(wizardForm, preTcpSnapshot)
-    } finally {
-      restoringHttpState = false
-    }
-    if (restored) showTlsHint(t('common.app.rules.msgs.switchedHttpRestored'))
+    // 回转判断基于快照而非 userExplicitPort：编辑态（userExplicitPort=true）进 TCP 同样被
+    // 无条件迁移 80/443→8080，回转不还原会保存即静默改写 DB 端口
+    const portChanged =
+      wizardForm.listen_port === 8080 &&
+      (preTcpSnapshot?.listenPort === 80 || preTcpSnapshot?.listenPort === 443)
+    const tlsWasOn = preTcpSnapshot?.enableTls === true
+    if (portChanged && preTcpSnapshot) wizardForm.listen_port = preTcpSnapshot.listenPort
+    wizardForm.upstreams.forEach(u => {
+      if (u.protocol === 'tcp') u.protocol = 'http'
+      if (u.protocol === 'tls') u.protocol = 'https'
+    })
+    // 回转提示：仅在实际改端口 / 曾强制关 TLS 时给出，走 showTlsHint 去重通道
+    const notes: string[] = []
+    if (portChanged && preTcpSnapshot) notes.push(t('common.app.rules.msgs.listenPortAdjusted', { port: preTcpSnapshot.listenPort }))
+    if (tlsWasOn) notes.push(t('common.app.rules.msgs.tlsClosedInTcp'))
+    if (notes.length > 0) showTlsHint(t('common.app.rules.msgs.switchedHttp', { notes: notes.join('；') }))
   }
 }, { flush: 'sync' })
 
@@ -3861,23 +3828,6 @@ const submitWizard = async () => {
   }
 }
 
-// ── 访问日志「去开启」落点：编辑向导 + 定位访问日志开关 ──
-const accessLogSwitchRef = ref<SwitchInstance | null>(null)
-const openWizardForAccessLog = async (rule: Rule): Promise<void> => {
-  await openWizard(rule)
-  // openWizard 的只读/保存在途/过期序号守卫触发时，向导不属于这条规则——不定位。
-  if (!wizardVisible.value || editingRule.value?.caddy_id !== rule.caddy_id) return
-  // 开关在基本配置步末项：定位=滚到向导可视区中部并移入焦点，键盘与读屏用户同位到达。
-  // el-dialog 的焦点陷阱在打开后的下一拍把焦点落到对话框容器（晚于 nextTick），
-  // 同步或 nextTick 里 focus 会被夺回——排在其后的宏任务里再定位。滚动取居中：
-  // 打开动画期间对话框带位移，贴边滚动会差出十几个像素，把开关裁掉一截。
-  setTimeout(() => {
-    const switchEl = accessLogSwitchRef.value?.$el as HTMLElement | undefined
-    switchEl?.scrollIntoView?.({ block: 'center' })
-    accessLogSwitchRef.value?.focus()
-  }, 0)
-}
-
 // ── 规则处理流程弹框：唯一入口 = 锁图标点击（已绑策略时显示） ──
 const flowDialogVisible = ref(false)
 const flowDialogTarget = ref<RuleFlowTarget | null>(null)
@@ -4474,28 +4424,6 @@ const certJobsPolling = usePollingTask(async (task) => {
   },
 })
 
-// 页头「刷新」：前台取数——表格 loading 遮罩、失败 toast，并联动安全目录/健康/证书。
-const refreshRuleList = (): void => { void fetchRules(true) }
-
-// 轮询让位判定的状态收集（判定单源在 utils/ruleListRefresh）。
-const ruleListEditActivity = (): RuleListEditActivity => ({
-  wizardOpen: wizardVisible.value,
-  flowOpen: flowDialogVisible.value,
-  bindOpen: bindDialogVisible.value || bindDialogOpening.value,
-  toggling: Object.values(ruleTogglePending.value).some(Boolean),
-  deleting: deletingRuleId.value !== null,
-})
-
-// 列表可见性轮询：后台标签页停表，恢复可见/挂载时立即补一轮。轮询只刷新列表数据，
-// 编辑面打开或写操作在途时让位——不得换掉正在编辑的表单所依赖的行与在途快照。
-const ruleListRefresh = createVisibilityIntervals({
-  intervals: [{
-    tick: () => { if (!ruleListPollPaused(ruleListEditActivity())) void fetchRules(false, { background: true }) },
-    ms: RULE_LIST_POLL_MS,
-    immediate: true,
-  }],
-})
-
 const certRetryLoading = ref(false)
 const retryCertPolling = async (): Promise<void> => {
   if (certRetryLoading.value) return
@@ -4528,7 +4456,6 @@ onMounted(() => {
   void healthPolling.run()
   healthPolling.start()
   certJobsPolling.start()
-  ruleListRefresh.start()
 })
 
 onUnmounted(() => {
@@ -4537,7 +4464,6 @@ onUnmounted(() => {
   configRequestSeq++
   ruleLogRequestSeq++
   certInfoGeneration++
-  ruleListRefresh.stop()
   // 弹框 OPEN 时 SPA 切页不会触发 @close——必须在此显式停 tail，
   // 否则 5s 定时器与整份组件闭包永久存活（isActive 已 false，轮次空转）。
   stopRuleLogPolling()
@@ -4561,8 +4487,12 @@ onUnmounted(() => {
  * styles/main.css 全局定义逐字等价(字面值=对应 CSS 变量解析值),已删除 */
 
 
-.rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
-.acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
+.rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; min-height: 24px; }
+/* 点击区 24×24：图标仍 14px，::after 向外扩 5px 且不占位。单元格 overflow:hidden 会裁掉
+   行盒外的部分，名称行因此至少 24px 高（状态列的开关更高，行高不变）；z-index 让外扩区
+   压过名称链接左扩的内边距（重叠 2px） */
+.acl-lock-icon { flex: 0 0 auto; cursor: pointer; position: relative; z-index: 1; }
+.acl-lock-icon::after { content: ''; position: absolute; inset: -5px; }
 /* 键盘焦点可见：锁图标是流程弹框的键盘入口（Enter/Space），默认 el-icon 无焦点环 */
 .acl-lock-icon:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; border-radius: 2px; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }

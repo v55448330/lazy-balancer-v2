@@ -350,102 +350,6 @@ func writeAutoBackupPayload(ctx context.Context, path string, payload []byte) er
 	return err
 }
 
-// overwriteSnapshotResult 是「覆盖前快照」的结果：Filename 非空=快照已落盘并
-// 入备份列表；Warning 非空=未生成（导入/还原照常执行，但必须并入响应 warnings
-// 与审计披露——静默失败会让管理员以为已有退路）。
-type overwriteSnapshotResult struct {
-	Filename string
-	Warning  string
-}
-
-// overwriteSnapshotFailure 组装失败披露（键化：原因与结论各一词条）。
-func overwriteSnapshotFailure(c *gin.Context, action, reason string) overwriteSnapshotResult {
-	return overwriteSnapshotResult{Warning: apimsg.Tf(c, "k_4b160774", reason, action)}
-}
-
-// snapshotBeforeOverwrite 在整体覆盖配置（导入/还原）之前落一份 manual 备份。
-// 自动备份默认关闭（db.DefaultAutoBackupEnabled=0），覆盖是本就不留退路的
-// 高危操作——此快照是默认形态下唯一的回退点，且 auto_backups 不在备份面，
-// 该行跨覆盖存活，可反过来用 RestoreAutoBackup 回到覆盖前状态。
-//
-// 不复用 RunAutoBackupOnce：后者强制 engineRunID>0（经任务引擎），而导入会先
-// 排空引擎，覆盖窗口内无法合法取得引擎 run 行；此处按同一落盘/落行/裁剪单源
-// 直接执行，失败策略也不同（备份失败=任务失败，快照失败=覆盖照常+披露）。
-//
-// 并发：TryLock 非阻塞——已有自动/手动备份在跑时跳过并披露，绝不排队（排队会
-// 把导入卡在备份之后，且导入会话锁已由调用方持有）。失败一律不阻断覆盖。
-func (h *Handlers) snapshotBeforeOverwrite(c *gin.Context, ctx context.Context, action string) overwriteSnapshotResult {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	dir, dirErr := h.autoBackupDir()
-	if dirErr != nil {
-		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_6b44007b", apimsg.ErrMsg(c, dirErr)))
-	}
-	if !autoBackupRunMu.TryLock() {
-		return overwriteSnapshotFailure(c, action, apimsg.T(c, "k_3972ec06"))
-	}
-	defer autoBackupRunMu.Unlock()
-	// 目录 0700 与备份执行器同口径（含私钥与凭证明文）；MkdirAll 的权限只对
-	// 新目录生效，既有目录的收敛交给 convergeAutoBackupDirPermissions。
-	if err := os.MkdirAll(dir, autoBackupDirPerm); err != nil {
-		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_25473d88", apimsg.ErrMsg(c, err)))
-	}
-	convergeAutoBackupDirPermissions(dir)
-	// 规则库文件相位必须与 DB 行同一稳定代（buildLbbakExport 的锁序
-	// wafFileMu→DB），而导入的既有锁序契约是「暂停/排空 → wafFileMu」。快照跑在
-	// 会话之前，若在这里阻塞取锁，导入会在暂停调度之前被在途的规则库更新/同步
-	// 挡住（违反该契约）。故只做非阻塞尝试：拿不到锁 = 规则库文件正在被改写 →
-	// 跳过快照并披露（管理员可稍后重试），绝不排队、绝不把导入卡在别的任务后。
-	wafLock := services.WafFileLock()
-	tryLocker, canTry := wafLock.(interface{ TryLock() bool })
-	if !canTry || !tryLocker.TryLock() {
-		return overwriteSnapshotFailure(c, action, apimsg.T(c, "k_504fb692"))
-	}
-	wafHeld := true
-	defer func() {
-		if wafHeld {
-			wafLock.Unlock()
-		}
-	}()
-	payload, exportedSections, countsSummary, _, err := h.buildLbbakExportWithLockState(ctx, nil, true)
-	wafLock.Unlock()
-	wafHeld = false
-	if err != nil {
-		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_b814b377", apimsg.ErrMsg(c, err)))
-	}
-	now := time.Now()
-	filename, err := nextAutoBackupFilename(ctx, dir, "manual", now)
-	if err != nil {
-		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_25e14bd7", apimsg.ErrMsg(c, err)))
-	}
-	finalPath := filepath.Join(dir, filename)
-	if err := writeAutoBackupPayload(ctx, finalPath, payload); err != nil {
-		// 写失败可能已落下最终文件（rename 成功、父目录 fsync 失败）：清理，
-		// 避免敏感备份脱离保留策略积累（与 RunAutoBackupOnce 同口径）。
-		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			services.Logf("warn", "覆盖前快照：写失败后清理 %s 失败: %v", finalPath, removeErr)
-		}
-		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_498494c0", apimsg.ErrMsg(c, err)))
-	}
-	sectionsJSON, _ := json.Marshal(exportedSections)
-	message := apimsg.Tf(c, "k_b7ea8eca", action, countsSummary)
-	// trigger_type 只能用 manual：表 CHECK 约束只允许 schedule/manual。
-	id, err := insertAutoBackupRow(ctx, filename, "success", int64(len(payload)), string(sectionsJSON), "manual", message, h.cfg.Version)
-	if err != nil {
-		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			services.Logf("warn", "覆盖前快照：落行失败后清理 %s 失败: %v", finalPath, removeErr)
-		}
-		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_e9128651", apimsg.ErrMsg(c, err)))
-	}
-	// 内务裁剪与执行器同源；保留份数读取失败时跳过（未知保留意愿下不删文件）。
-	if keep, known := loadAutoBackupKeepSetting(ctx); known {
-		pruneAutoBackups(ctx, dir, keep, autoBackupFailedRowsKeep)
-	}
-	services.Logf("info", "覆盖前自动快照完成（%s）：#%d 文件 %s（%s）", action, id, filename, countsSummary)
-	return overwriteSnapshotResult{Filename: filename}
-}
-
 // RunAutoBackupOnce 执行一次完整备份（调度/手动共用；main.go 经
 // services.SetAutoBackupExecutor 注入给调度器）。流程：MkdirAll →
 // 清理本模块残留临时文件 → buildLbbakExport → 单源原子落盘（唯一 tmp +
@@ -1390,7 +1294,7 @@ func (h *Handlers) RestoreAutoBackup(c *gin.Context) {
 // 同一条校验链（链内只读 DB、只规整内存副本），以合同形态返回版本告警、两侧
 // 版本号、预计算的冲突置禁用清单与其它软告警。
 //
-// 严格只读：不建覆盖前快照、不启导入会话、不写 auto_backups/审计。校验失败与
+// 严格只读：不启导入会话、不写 auto_backups/审计。校验失败与
 // 还原一样按 400 归因（文案与导入核心共用同一批校验错误），文件面失败与还原
 // 同族（404/413/500，审计动作「预览失败」）。5xx 不回内部错误文本（与本文件
 // 其余固定文案口径一致）。
@@ -1452,13 +1356,13 @@ func (h *Handlers) PreviewAutoBackup(c *gin.Context) {
 		warnings = append(warnings, warningCRSTreeReplaced)
 	}
 	if chain.WAFMetadataSkipped {
-		warnings = append(warnings, warningWafMetadataSkipped)
+		warnings = append(warnings, apimsg.T(c, "k_15ae2f31"))
 	}
 	if chain.WAFCRSMetadataSkipped {
-		warnings = append(warnings, warningWafCRSMetadataSkipped)
+		warnings = append(warnings, apimsg.T(c, "k_a8f33c4d"))
 	}
 	if chain.WAFXdbMetadataSkipped {
-		warnings = append(warnings, warningWafXdbMetadataSkipped)
+		warnings = append(warnings, apimsg.T(c, "k_81ef1989"))
 	}
 	if chain.ACMEDanglingImported > 0 {
 		warnings = append(warnings, fmt.Sprintf("还原后 %d 条启用规则的 DNS 提供商配置悬挂（引用未随备份导入，且现有配置中不存在或已禁用）——下一次签发/续签将失败，请及时补齐", chain.ACMEDanglingImported))

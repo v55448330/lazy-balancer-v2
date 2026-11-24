@@ -289,16 +289,34 @@ test('截断提示由前端按 truncated 渲染：任务日志与证书任务日
   assert.equal(at(en, 'views.logStorage.truncatedNotice'), 'Log too long — only the most recent 256KB is shown')
 })
 
-// ── 「审计日志大小」命名错位 ──────────────────────────────────────────
+// ── 「审计日志大小」残留配置项已从设置页删除 ─────────────────────────
 
-test('审计文件大小项改名并指向「操作审计保留」', () => {
+test('设置页不再暴露审计文件大小项（后端列保留）', () => {
   const zh = treeOf('zh-CN')
   const en = treeOf('en')
-  assert.equal(at(zh, 'settings.basic.log.auditLogSize'), '安全事件审计文件大小')
-  assert.match(String(at(zh, 'settings.basic.log.auditLogSizeHint')), /操作审计保留/)
-  assert.equal(at(en, 'settings.basic.log.auditLogSize'), 'Security event audit file size')
-  assert.match(String(at(en, 'settings.basic.log.auditLogSizeHint')), /Operation audit retention/)
-  assert.doesNotMatch(String(at(zh, 'settings.basic.log.auditLogSize')), /^审计日志大小$/)
+  assert.equal(at(zh, 'settings.basic.log.auditLogSize'), undefined)
+  assert.equal(at(zh, 'settings.basic.log.auditLogSizeHint'), undefined)
+  assert.equal(at(en, 'settings.basic.log.auditLogSize'), undefined)
+  assert.equal(at(en, 'settings.basic.log.auditLogSizeHint'), undefined)
+  const basic = code('src/views/settings/BasicSettings.vue')
+  assert.doesNotMatch(basic, /audit_log_size_mb/, '前端不得再读写该字段')
+  assert.doesNotMatch(basic, /auditLogSize/, '不得残留该表单项')
+  // 同卡片其它日志项与「操作审计保留」必须仍在
+  for (const key of ['taskLogSize', 'runLogSize', 'auditRetention']) {
+    assert.ok(basic.includes(`settings.basic.log.${key}`), `${key} 不得随之删除`)
+  }
+})
+
+test('任务操作成功提示里的任务名走显示名映射（英文界面不混入中文任务名）', () => {
+  assert.match(
+    taskMonitor,
+    /mfaAwareSuccess\(localizeTaskMessage\(res\.message \?\? '', row\.name\) \|\| options\.successFallback\)/,
+    '成功提示必须先把后端文案里的原始任务名换成显示名',
+  )
+  const helper = section(taskMonitor, 'const localizeTaskMessage', 'const taskFamilyCount')
+  assert.match(helper, /taskDisplayName\(rawName\)/, '必须复用列表/确认框的同一映射')
+  assert.match(helper, /message\.split\(rawName\)\.join\(display\)/, '按原始任务名整词替换')
+  assert.match(helper, /if \(!rawName\) return message/, '无任务名（证书行用 id）原样返回')
 })
 
 // ── 操作日志 IP 列头 ──────────────────────────────────────────────────

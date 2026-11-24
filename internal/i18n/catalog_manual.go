@@ -65,20 +65,34 @@ func init() {
 	// 拆分——运行中的不可取消任务不得报「未在运行」（与监控页显示自相矛盾）。
 	Register("k_44b8c98f", "该任务不支持手动取消", "This task cannot be cancelled manually")
 
-	// 覆盖前自动快照（导入/还原的整体覆盖前的唯一回退点）：成功行 message
-	// 与失败披露共用一组词条——快照失败不阻断覆盖，但必须显性披露原因。
-	Register("k_b7ea8eca", "覆盖前自动快照（%s）：%s", "Snapshot taken before overwrite (%s): %s")
-	Register("k_4b160774", "覆盖前自动快照未生成：%s（本次%s仍照常执行）", "No snapshot was taken before the overwrite: %s (%s continues anyway)")
-	Register("k_6b44007b", "备份目录无效（%s）", "Backup directory is invalid (%s)")
-	Register("k_3972ec06", "已有备份任务正在执行", "another backup task is already running")
-	Register("k_504fb692", "规则库文件正被更新或同步任务占用", "the rule-library files are being updated or synced right now")
-	Register("k_25473d88", "创建备份目录失败（%s）", "failed to create the backup directory (%s)")
-	Register("k_b814b377", "备份构建失败（%s）", "failed to build the backup (%s)")
-	Register("k_25e14bd7", "备份文件名分配失败（%s）", "failed to allocate a backup filename (%s)")
-	Register("k_498494c0", "备份文件写入失败（%s）", "failed to write the backup file (%s)")
-	Register("k_e9128651", "备份记录写入失败（%s）", "failed to write the backup record (%s)")
-
 	// 还原前只读预览的 400 归因（与导入核心同一批校验错误，走词条以支持 en）。
 	Register("k_b3d2459c", "备份文件格式不正确", "The backup file format is incorrect")
 	Register("k_b6aa582b", "备份文件校验未通过：%s", "The backup file failed validation: %s")
+
+	// 保存基础/Caddy 全局设置的成功响应（此前中文字面量直出，en 界面显示中文）。
+	// base 键区分「已应用」与「仅落库」，格式清空说明用模板键接在后面。
+	Register("k_60212d99", "配置已更新并应用", "Configuration updated and applied")
+	Register("k_400c411d", "配置已更新", "Configuration updated")
+	Register("k_4fb4b00b", "%s（访问日志 JSON 已关闭，自定义格式已清空：该格式不生效）", "%s (access-log JSON is off, so the custom format was cleared and has no effect)")
+
+	// 导入/还原结果的固定告警：每次导入系统数据必然出现的那几条（会话吊销、
+	// 当前账户被替换、部分完成）+ 规则库数据文件缺失的固定说明。逐条动态告警
+	// （逐规则/逐绑定的计数句）仍为中文母本，未在本批收敛。
+	Register("k_a61110d0", "系统数据已%s：全部登录会话已吊销，请重新登录", "System data %s: all login sessions were revoked, please sign in again")
+	Register("k_610d9398", "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录", "The backup does not contain the current account — system data was replaced, so sign in with an administrator account from the backup")
+	Register("k_4c105363", "配置已%s（部分完成）：证书任务恢复失败: %s", "Configuration %s (partially completed): restoring certificate tasks failed: %s")
+	Register("k_672e1587", "数据库已提交，但证书任务恢复失败: %s", "The database was committed, but restoring certificate tasks failed: %s")
+	Register("k_15ae2f31", "备份不含规则库数据文件——规则库版本记录已跳过（仅 lbbak 完整备份可导入该类）", "The backup has no rule-library data files — the rule-library version record was skipped (only a complete lbbak backup can carry it)")
+	Register("k_a8f33c4d", "备份不含 CRS 数据文件——CRS 版本记录已跳过（仅含该文件的 lbbak 备份可导入）", "The backup has no CRS data files — the CRS version record was skipped (only an lbbak backup containing it can import it)")
+	Register("k_81ef1989", "备份不含 IP2Region 数据文件——IP2Region 版本记录已跳过（仅含该文件的 lbbak 备份可导入）", "The backup has no IP2Region data files — the IP2Region version record was skipped (only an lbbak backup containing it can import it)")
+
+	// 日志存储条的治理说明（悬浮提示）：来源（config_source）与保留口径
+	// （retention_note）此前为中文直出，en 界面混入中文。
+	Register("k_1c5a5dd2", "基础设置 · 日志保留（操作/运行/安全事件）", "Basic settings · log retention (operations/runtime/security events)")
+	Register("k_a842fc6f", "基础设置 · 任务日志大小", "Basic settings · task log size")
+	Register("k_e1eefb8b", "基础设置 · 运行日志大小", "Basic settings · runtime log size")
+	Register("k_f4f4504f", "Caddy 全局配置 · 日志大小", "Caddy global settings · log size")
+	Register("k_2784868e", "统一任务日志（%s）", "Unified task log (%s)")
+	Register("k_916311e9", "每日清理 · 保留 %s 个月", "Cleaned daily · keep %s months")
+	Register("k_7a8d7d93", "时间戳轮转，按保留期清理（份数随保留期）", "Timestamp rotation, pruned by the retention period (copy count follows it)")
 }

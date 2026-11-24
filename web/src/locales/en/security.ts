@@ -66,7 +66,7 @@ export default {
      "trustDesc": "IP list for trust policies"
     },
     "verbs": {
-     "block": "Block",
+     "block": "Ban",
      "allow": "Allow",
      "trust": "Trust"
     },
@@ -209,8 +209,9 @@ export default {
     "actionDisable": "Disable",
     "actionEdit": "Edit",
     "actionEnable": "Enable",
-    "ineffectiveNotice": "The \"Auto-ban list\" is not referenced by an enabled IP access control (deny) policy; create \"Auto-ban linkage\" via Default Policies on the security policies page, or reference it manually in \"Security Rules → IP address lists\".",
+    "ineffectiveNotice": "The \"Auto-ban list\" is not referenced by an enabled IP access control (blacklist) policy; create \"Auto-ban linkage\" via Default Policies on the security policies page, or reference it manually in \"Security Rules → IP address lists\".",
     "ineffectiveBindingNotice": "The \"Auto-ban linkage\" policy is ready and references the list, but is not bound to any forwarding rule yet — bind rules in the policy editor's rule binding step to take effect",
+    "ineffectiveBoundNotice": "The \"Auto-ban linkage\" policy is bound to {n} rule(s), but none of them currently forwards traffic (TLS-only, disabled, or without an enabled upstream) — auto-ban is not in effect yet",
     "goToBindingRules": "Go to rule binding",
     "feedDegradedPrefix": "Data source degraded: ",
     "feedDegradedDefault": "Security event backfill/log rotation is paused; real-time IPC ingestion is still running (auto-ban counters still grow with live events).",
@@ -233,19 +234,19 @@ export default {
     "triggeredPlaceholder": "Stage / Rule ID",
     "selectAll": "Select all",
     "crawlerBot": "Crawler bot",
-    "crawlerBotHint": "Verified crawler allow/spoof (id 810000-899999)",
+    "crawlerBotHint": "Verified crawler allow/spoof",
     "geoBlock": "Geo blocking",
-    "geoBlockHint": "GeoIP geo blocking (id 8/800xxx)",
+    "geoBlockHint": "GeoIP geo blocking",
     "ipAcl": "IP access control",
-    "ipAclHint": "IP ACL allow/deny lists and self-maintained deny list (id 2/4/7)",
+    "ipAclHint": "Allow/deny lists and self-maintained deny list",
     "trustList": "Trust list",
-    "trustListHint": "Trust list / detection retained (id 3/12)",
+    "trustListHint": "Trust list / detection retained",
     "threatIntel": "Threat intelligence",
-    "threatIntelHint": "Threat intelligence hit (id 14)",
+    "threatIntelHint": "Threat intelligence hit",
     "bodyAnomaly": "Request body anomaly",
     "stageHuman": "CC protection",
-    "bodyAnomalyHint": "Request body parse failure (id 11)",
-    "wafCrsHint": "Full OWASP CRS rule set (9xxxxx)",
+    "bodyAnomalyHint": "Request body parse failure",
+    "wafCrsHint": "Full OWASP CRS rule set",
     "wafCustom": "WAF·Custom",
     "wafCustomHint": "Custom rule library (including AND chains, OR branches, and legacy composite rules)",
     "ccProtectionHint": "CC protection human-challenge events (issued / failed; successful challenges are not security events)",
@@ -353,7 +354,7 @@ export default {
     "enableNote3": "Run in observation mode first and confirm the suggestions are accurate before enforcing bans",
     "enableNote4": "IPv6 is banned by its /64 prefix: other addresses in the same /64 are affected too",
     "enableHowtoLabel": "How it takes effect",
-    "enableHowtoText": "Reference the \"Auto-ban list\" address list in an IP access control (deny) policy",
+    "enableHowtoText": "Reference the \"Auto-ban list\" address list in an IP access control (blacklist) policy",
     "disableConfirmTitle": "Disable auto-ban",
     "disableConfirm": "Disable auto-ban? Scheduling stops; expired ban entries are cleared immediately and take effect at once, while unexpired entries remain until they expire.",
     "disableScopePermanent": "Entries with \"permanent\" duration never expire — they keep blocking the IP after disabling; remove them from the list manually",
@@ -405,14 +406,13 @@ export default {
     "scopeLogged": "Detected",
     "scopeChallengeIssued": "Challenge issued",
     "scopeChallengeFailed": "Challenge failed",
-    "stageLegacyGeo": "Geo blocking (legacy id)"
+    "stageLegacyGeo": "Geo blocking (legacy rule)"
    },
    "overview": {
     "page": {
      "title": "Security overview",
      "desc": "Protection statistics at a glance",
      "threatScreen": "Threat screen",
-     "refresh": "Refresh",
      "loadFailed": "Security overview failed to load",
      "retryNow": "Retry now"
     },
@@ -523,7 +523,7 @@ export default {
      "escalationOffShort": "Off",
      "escalationStandardShort": "Standard",
      "escalationAggressiveShort": "Aggressive",
-     "ineffective": "The auto-ban list is not referenced by an enabled deny policy; create it via Default Policies",
+     "ineffective": "The auto-ban list is not referenced by an enabled blacklist policy; create it via Default Policies",
      "ineffectiveBinding": "The \"Auto-ban linkage\" policy is ready but not bound to any forwarding rule — bind rules to take effect",
      "feedDegraded": "Counting feed is degraded; auto-ban counts may be lower than actual",
      "durationEscalatesTip": "Recidivism escalation is on: the actual ban duration escalates with this identity's offense count (first offense = configured duration)",
@@ -668,8 +668,11 @@ export default {
    "policies": {
     "action": {
      "bindRules": "Bind Rules",
+     "disable": "Disable",
      "edit": "Edit",
+     "enable": "Enable",
      "migrate": "Migrate",
+     "toggleAria": "Enable state of {name}",
      "view": "View"
     },
     "bind": {
@@ -745,7 +748,6 @@ export default {
     "status": {
      "disabled": "Disabled",
      "enabled": "Enabled",
-     "enabledUnbound": "Enabled · unbound",
      "off": "Off"
     },
     "table": {
@@ -772,7 +774,7 @@ export default {
      "subtitle": "Mixed policy \"{name}\" will be migrated by stage into single-purpose sub-policies (the legacy combined type is no longer available for new policies)",
      "title": "Migration Preview",
      "willCreate": "{n} sub-policies will be created",
-     "willSkip": "Will be skipped (stage 2 exists)"
+     "willSkip": "Will be skipped (already has a stage 2 policy)"
     },
     "view": {
      "noRules": "No rules bound",
@@ -809,11 +811,11 @@ export default {
     },
     "stage0": {
      "detectOff": "Off (default): trusted IPs pass through to upstream with no security events",
-     "detectOn": "On: trusted IPs skip all security stages and are only recorded by a separate lightweight detection transaction (event action=detected), without blocking (only for \"trust list (stage 0)\" policies; for mixed and other types a trust hit degrades to in-engine detection)",
+     "detectOn": "On: trusted IPs skip all security stages and are only recorded by a separate lightweight detection transaction (event action=detected), without blocking (only for policies of type \"Stage 0 · Trust List\"; for mixed and other types a trust hit degrades to in-engine detection)",
      "keepDetectLabel": "Keep detection records",
-     "projection": "This policy takes effect at the trust-list stage of bound rules — \"trust list (stage 0)\" policy hits skip all later security stages (pass-through = zero security events; keep-detection = recorded only by a separate lightweight detection transaction with action=detected); for mixed and other policy types a trust hit degrades to in-engine detection (log only, no blocking, no stage skip)",
+     "projection": "This policy takes effect at the trust-list stage of bound rules — policies of type \"Stage 0 · Trust List\" skip all later security stages on a hit (pass-through = zero security events; keep-detection = recorded only by a separate lightweight detection transaction with action=detected); for mixed and other policy types a trust hit degrades to in-engine detection (log only, no blocking, no stage skip)",
      "trustIpLabel": "Trusted IPs",
-     "trustTip": "\"Trust list (stage 0)\" policy: trusted IPs skip all later security stages (IP ACL / CC protection / WAF; pass-through = zero security events, keep-detection = recorded only by a separate lightweight detection transaction with action=detected); for mixed and other types a trust hit degrades to in-engine detection (log only, no blocking, no stage skip); inline and referenced lists take effect merged",
+     "trustTip": "Policies of type \"Stage 0 · Trust List\": trusted IPs skip all later security stages (IP access control / CC protection / WAF; pass-through = zero security events, keep-detection = recorded only by a separate lightweight detection transaction with action=detected); for mixed and other types a trust hit degrades to in-engine detection (log only, no blocking, no stage skip); inline and referenced lists take effect merged",
      "modeDetection": "keep-detection",
      "modePass": "pass-through",
      "detectDetail": "keep-detection (event action=detected)",
@@ -822,13 +824,13 @@ export default {
     },
     "waf": {
      "addExclusion": "Add exclusion",
-     "blockingEvalWarn": "Excluding evaluation rules (949/959) disables threshold-based blocking in blocking mode",
+     "blockingEvalWarn": "Excluding evaluation rules disables threshold-based blocking in blocking mode",
      "checkResponseBody": "Check response body",
      "checkResponseBodyTip": "When on, WAF reads and inspects upstream response content (required by response-leak rules); turning it off significantly reduces memory and CPU cost — most deployments only need request inspection",
      "crsGroupsLabel": "CRS Rule Groups",
      "crsPlaceholder": "Leave empty to load all CRS rules",
      "crsTip": "When set, only selected rule groups load; leave empty to load all CRS rules",
-     "crsTip2": "Initialization (901) and blocking evaluation (949/959) are system base rules loaded automatically with the policy; the generic false-positive exemption (999) is included automatically when all rules are selected",
+     "crsTip2": "Initialization and blocking evaluation are system base rules loaded automatically with the policy; the generic false-positive exemption is included automatically when all rules are selected",
      "customOnlyHint": "Custom-only mode: CRS is inactive and CRS settings below are unavailable",
      "customRulesLabel": "Custom Rules",
      "customRulesPlaceholder": "Select custom rules to include",
@@ -1082,9 +1084,7 @@ export default {
      "createdPolicyNoId": "Policy creation response lacks id",
      "deleteConfirm": "Policy \"{name}\" will be deleted. This cannot be undone; other policies on the rules are unaffected.",
      "deleteConfirmBtn": "Delete",
-     "deleteScopeCountOnly": "It also unbinds {n} rule(s) — the rules themselves are kept (rule names are not loaded right now).",
-     "deleteScopeLead": "It also unbinds {n} rule(s) — the rules themselves are kept:",
-     "deleteScopeMore": "{n} more (names not loaded)",
+     "deleteScopeLead": "It also unbinds {n} rule(s) — the rules themselves are kept.",
      "deleteTitle": "Delete Security Policy",
      "detailNoData": "Policy detail response lacks data",
      "discard": "Discard changes",
@@ -1110,6 +1110,8 @@ export default {
      "saveFailed": "Save failed",
      "stage0NeedsIp": "A stage 0 · trust-list policy requires at least one trusted IP (inline or referenced list)",
      "stage2Conflict": "These rules already bind another CC protection policy (one per rule); unbind before binding: {names}",
+     "toggleConfirm": "{action} policy \"{name}\"?",
+     "toggleConfirmTitle": "{action} policy",
      "unsavedConfirm": "There are unsaved changes; closing will discard them. Continue?"
     },
     "summary": {

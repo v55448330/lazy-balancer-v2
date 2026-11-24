@@ -34,53 +34,37 @@ const assertKeyInBoth = (key: string): void => {
   }
 }
 
-// ── 协议切换：快照 / 清理 / 回填 ──
+// ── 协议切换：直接清理、不弹确认；切回 HTTP 不恢复被清内容 ──
 
-test('协议 watch：TCP 分支先拍快照再清理，回转分支按快照回填，各调用一次', () => {
+test('协议 watch：切 TCP 直接清理、不弹确认；切回 HTTP 只还原端口与上游协议', () => {
   const watchBody = section(page, 'watch(() => wizardForm.protocol,', 'watch(() => wizardForm.enable_dns_server,')
-  // 清理动作收在 enterTcpState 闭包里：确认后切换与无内容直接切换共用同一入口
-  const enterBody = section(watchBody, 'const enterTcpState = (): void => {', "if (newVal === 'tcp') {")
-  assert.equal(count(enterBody, 'snapshotHttpState(wizardForm)'), 1)
-  assert.equal(count(enterBody, 'applyTcpState(wizardForm)'), 1)
-  assert.ok(
-    enterBody.indexOf('snapshotHttpState(wizardForm)') < enterBody.indexOf('applyTcpState(wizardForm)'),
-    '快照必须先于清理（否则拍到的是已清空的 TCP 态）',
-  )
-  assert.match(
-    enterBody,
-    /if \(applyTcpState\(wizardForm\)\.portRelocated\) \{\s*ElMessage\.info\(t\('common\.app\.rules\.msgs\.switchedToTcpPort8080'\)\)/,
-  )
+  // 快照只存监听端口与 TLS 开关，供回转提示判断；不用于回填
+  assert.match(watchBody, /preTcpSnapshot = \{ listenPort: wizardForm\.listen_port, enableTls: wizardForm\.enable_tls \}/)
+  assert.doesNotMatch(watchBody, /ElMessageBox/, '切协议不弹确认框')
+  assert.doesNotMatch(watchBody, /preTcpSnapshot = null/, '没有「取消回滚」分支')
   const tcpBranch = section(watchBody, "if (newVal === 'tcp') {", "} else if (newVal === 'http' && oldVal === 'tcp') {")
-  // 两条路径各调一次进入函数：确认回调里一次、无待清内容时一次
-  assert.equal(count(tcpBranch, 'enterTcpState()'), 2)
-  assert.match(tcpBranch, /\)\.then\(\s*\(\) => enterTcpState\(\),/)
-  // 取消 = 协议回滚、内容原样（回滚触发的回转分支因快照为空不回填）
-  assert.match(tcpBranch, /wizardForm\.protocol = oldVal \?\? 'http'/)
-  // 会被静默清空的内容必须先列清单确认
-  assert.match(tcpBranch, /protocolSwitchImpact\(wizardForm, newVal\)/)
-  assert.match(tcpBranch, /class: 'confirm-scope-list'/)
+  for (const cleared of [
+    'wizardForm.path_rules = []',
+    "wizardForm.forward_auth_upstream = ''",
+    'wizardForm.dynamic_dns = false',
+    'wizardForm.enable_dns_server = false',
+    "wizardForm.dns_server = ''",
+  ]) {
+    assert.ok(tcpBranch.includes(cleared), `切 TCP 必须清掉 ${cleared}`)
+  }
+  assert.match(tcpBranch, /u\.origin_domain = ''/, '逐上游回源域名清空')
   const httpBranch = section(watchBody, "} else if (newVal === 'http' && oldVal === 'tcp') {", "}, { flush: 'sync' })")
-  assert.equal(count(httpBranch, 'restoreHttpState(wizardForm, preTcpSnapshot)'), 1)
-  assert.match(
-    httpBranch,
-    /restoringHttpState = true[\s\S]*\btry \{[\s\S]*restoreHttpState\(wizardForm, preTcpSnapshot\)[\s\S]*\} finally \{[\s\S]*restoringHttpState = false/,
-    '回填期间必须置位守卫，并在 finally 复位',
-  )
-  assert.match(httpBranch, /if \(restored\) showTlsHint\(t\('common\.app\.rules\.msgs\.switchedHttpRestored'\)\)/)
-  // 清理面与回填面都收进纯函数：视图里不再手写这些字段的赋值
-  assert.doesNotMatch(
-    watchBody,
-    /wizardForm\.(?:path_rules|dynamic_dns|enable_dns_server|dns_server|health_check_host|custom_routes_enabled|forward_auth_enabled|forward_auth_upstream|upstream_force_http1|enable_tls|ntlm_compatible|strategy|listen_port) = /,
-  )
-  // NTLM 接管「恢复默认」的字段面与切 TCP 同源
-  assert.match(member(page, 'const confirmNtlmToggle = '), /resetNtlmTakeover\(wizardForm\)/)
+  assert.match(httpBranch, /if \(portChanged && preTcpSnapshot\) wizardForm\.listen_port = preTcpSnapshot\.listenPort/)
+  assert.match(httpBranch, /if \(u\.protocol === 'tcp'\) u\.protocol = 'http'/)
+  assert.match(httpBranch, /if \(u\.protocol === 'tls'\) u\.protocol = 'https'/)
+  assert.doesNotMatch(httpBranch, /path_rules|forward_auth|dynamic_dns|origin_domain/, '切回 HTTP 不恢复被清内容')
+  assert.match(httpBranch, /showTlsHint\(t\('common\.app\.rules\.msgs\.switchedHttp', \{ notes: notes\.join\('；'\) \}\)\)/)
 })
 
-test('回填 TLS 时不触发「开启 TLS → 端口改 443」联动', () => {
-  const tlsWatch = section(page, 'watch(() => wizardForm.enable_tls,', 'watch(() => wizardForm.protocol,')
-  const guardAt = tlsWatch.indexOf('if (hydratingWizard || restoringHttpState) return')
-  assert.ok(guardAt >= 0, 'enable_tls 联动 watcher 必须识别回填期')
-  assert.ok(tlsWatch.indexOf('wizardForm.listen_port = 443') > guardAt)
+test('NTLM 接管「恢复默认」：关闭 NTLM 与切 TCP 同一个字段面', () => {
+  const watchBody = section(page, 'watch(() => wizardForm.protocol,', 'watch(() => wizardForm.enable_dns_server,')
+  assert.match(section(watchBody, "if (newVal === 'tcp') {", "} else if (newVal === 'http'"), /resetNtlmTakeover\(wizardForm\)/)
+  assert.match(member(page, 'const confirmNtlmToggle = '), /resetNtlmTakeover\(wizardForm\)/)
 })
 
 // ── 关闭向导前的未保存检查 ──
@@ -241,7 +225,6 @@ test('新增词条 zh/en 成对；随改动退役的键两侧同步删除且页�
     'unsavedConfirm',
     'dynamicUpstreamConfirmTitle',
     'dynamicUpstreamDisableLead',
-    'switchedHttpRestored',
     'copyDomainTip',
     'copyDisabledTip',
     'copyStatusTip',
@@ -251,9 +234,8 @@ test('新增词条 zh/en 成对；随改动退役的键两侧同步删除且页�
   }
   // 调用点钉键之外再钉 zh 原文：文案被改成另一句话时本断言必红
   assert.ok(zh.includes("unsavedConfirm: '有未保存的修改，关闭将丢弃本次编辑。是否继续？'"))
-  assert.ok(zh.includes("switchedHttpRestored: '已切换回 HTTP，并恢复切换前的配置'"))
   assert.ok(zh.includes("copyDomainTip: '副本默认禁用；请填写新的域名后再启用'"))
-  for (const dead of ['ruleCopyConfirm', 'switchedHttp', 'listenPortAdjusted', 'tlsClosedInTcp']) {
+  for (const dead of ['ruleCopyConfirm']) {
     assert.doesNotMatch(zh, new RegExp(`\\b${dead}: `), `zh 死键 ${dead} 必须删除`)
     assert.doesNotMatch(en, new RegExp(`\\b${dead}: `), `en 死键 ${dead} 必须删除`)
     assert.doesNotMatch(page, new RegExp(`\\b${dead}\\b`), `页面不得再引用 ${dead}`)

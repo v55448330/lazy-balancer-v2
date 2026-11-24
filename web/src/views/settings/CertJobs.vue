@@ -66,12 +66,13 @@
     <el-table-column :label="t('app.settings.certJobs.colValidity')" min-width="155">
       <template #default="{ row }">
         <!-- 过期时间与剩余天数合并一列：列内只留日期，精确时间（配置时区）进 tooltip。
-             过期证书不渲染裸负数——色弱/黑白场景下「-1 天」无文字语义。
+             剩余天数走 utils/certExpiry 单源（与规则页同一口径：N 天后 / 今天到期 /
+             已过期 N 天），带符号的天数不上屏。
              门用后端派生的 not_after（expires_at 缺失时按 PEM 解析）：只判
              expires_at 会让导入/集群回插的 NULL 有效期行显示「-」，而规则页
-             同一证书显示「剩 N 天」。 -->
+             同一证书显示「N 天后」。 -->
         <el-tooltip v-if="row.status === 'issued' && effectiveNotAfter(row as CertJobListItem)" :content="formatDate(effectiveNotAfter(row as CertJobListItem))">
-          <span :class="['cert-days', row.certificate_status]">{{ formatDateShort(effectiveNotAfter(row as CertJobListItem)) }} · {{ row.certificate_status === 'expired' ? t('app.settings.certJobs.expiredDays', { days: Math.abs(row.days_remaining) }) : t('app.settings.certJobs.remainDays', { days: row.days_remaining }) }}</span>
+          <span :class="['cert-days', certExpiryConclusion(row.days_remaining, row.certificate_status === 'expired').tone]">{{ formatDateShort(effectiveNotAfter(row as CertJobListItem)) }} · {{ certExpiryConclusion(row.days_remaining, row.certificate_status === 'expired').text }}</span>
         </el-tooltip>
         <span v-else class="cell-empty">-</span>
       </template>
@@ -188,6 +189,7 @@ import type { CertJobStatus } from '@/utils/certJobStatus'
 
 const { t } = useI18n()
 import { certJobEffectiveNotAfter, certJobRenewalAt, certRenewalWindowConverged, certRenewalWindowDays } from '@/utils/certJobExpiry'
+import { certExpiryConclusion } from '@/utils/certExpiry'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
@@ -576,13 +578,14 @@ onUnmounted(() => {
   line-height: 1;
   font-weight: 500;
 }
-.cert-days.valid {
+.cert-days.is-success {
   color: #10b981;
 }
-.cert-days.expiring {
+/* 色阶修饰类与规则列表同一套（结论单源 utils/certExpiry） */
+.cert-days.is-warning {
   color: #f59e0b;
 }
-.cert-days.expired {
+.cert-days.is-danger {
   color: #ef4444;
 }
 .cert-jobs-wrap {

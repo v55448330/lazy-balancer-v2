@@ -79,7 +79,7 @@
            给出可定位的策略 id 时追加入口「前往绑定规则」（深链到该策略，与事件行
            「查看策略」同形态；显隐判据单源 autobanMissingPolicyId）。 -->
       <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">{{ t(autobanStatus?.ban_missing === 'binding' ? 'app.security.events.ineffectiveBindingNotice' : 'app.security.events.ineffectiveNotice') }} <AccessibleLink v-if="autobanBindingPolicyId !== null" type="primary" @click="goToBindingPolicy">{{ t('app.security.events.goToBindingRules') }}</AccessibleLink></span>
+        <span class="info-note-desc">{{ autobanIneffectiveText }} <AccessibleLink v-if="autobanBindingPolicyId !== null" type="primary" @click="goToBindingPolicy">{{ t('app.security.events.goToBindingRules') }}</AccessibleLink></span>
       </div>
       <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
            运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
@@ -612,7 +612,7 @@ import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/uti
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl, parseSecurityEventsDeepLink } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanMissingPolicyId, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, autobanIdentityDisplay, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanMissingPolicyId, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, autobanIdentityDisplay, suggestionBand, autobanScopeLabel, isAutobanScopeMember, isAutobanBoundWithoutTraffic, type SuggestionBand } from '@/utils/autobanStatus'
 import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, AUTOBAN_SUSPICION_MULTIPLIER_MAX, AUTOBAN_CONFIRM_FLOOR_RATIOS, matchAutobanPreset, type AutobanPresetId } from '@/utils/autobanPresets'
 import { autobanEntryExpired, autobanEntryRemaining, isAutomaticBanEntry } from '@/utils/autobanEntry'
 import { useIpListAdd } from '@/composables/useIpListAdd'
@@ -708,6 +708,26 @@ const autobanIneffective = computed(() => isAutobanIneffective(autobanStatus.val
 // 「前往绑定规则」入口的定位目标（判据单源 autobanMissingPolicyId）：仅 binding
 // 环节且后端给出可定位的策略 id 时非空。
 const autobanBindingPolicyId = computed(() => autobanMissingPolicyId(autobanStatus.value))
+// binding 环节黄条的说法按就绪策略的实际绑定数区分（判据单源 isAutobanBoundWithoutTraffic）：
+// 后端 binding 同时覆盖「零绑定」与「只绑到 TLS 类 / 已禁用 / 无启用上游的规则」，后者
+// 不是「尚未关联」。绑定数取 GET /security/policies/:id 的 bindings（null=读取失败，按原文案）。
+const autobanBindingCount = ref<number | null>(null)
+const autobanIneffectiveText = computed(() => {
+  const status = autobanStatus.value
+  const count = autobanBindingCount.value
+  if (isAutobanBoundWithoutTraffic(status, count)) return t('app.security.events.ineffectiveBoundNotice', { n: count })
+  return t(status.ban_missing === 'binding' ? 'app.security.events.ineffectiveBindingNotice' : 'app.security.events.ineffectiveNotice')
+})
+const loadAutobanBindingCount = async (status: AutobanStatus): Promise<number | null> => {
+  const policyId = autobanMissingPolicyId(status)
+  if (policyId === null) return null
+  try {
+    const res = await request.get<APIResponse<{ bindings?: string[] }>>(`/security/policies/${policyId}`, { silent: true })
+    return res.data?.bindings?.length ?? 0
+  } catch {
+    return null
+  }
+}
 // 喂入源降级：仅在启用时提示（未启用时「不计数」无需解释）
 const autobanFeedDegraded = computed(() => autobanStatus.value.enabled && autobanStatus.value.feed_degraded === true)
 const authStore = useAuthStore()
@@ -777,7 +797,13 @@ const fetchAutobanStatus = async (): Promise<void> => {
   try {
     const res = await request.get<APIResponse<AutobanStatus>>('/security/autoban/status', { silent: true })
     if (requestSeq !== autobanStatusSeq) return
-    if (res.data) autobanStatus.value = res.data
+    if (res.data) {
+      // 先取到绑定数再落状态：文案与状态同时就位，不先闪「尚未关联」再换成另一种说法
+      const bindingCount = await loadAutobanBindingCount(res.data)
+      if (requestSeq !== autobanStatusSeq) return
+      autobanBindingCount.value = bindingCount
+      autobanStatus.value = res.data
+    }
     autobanStatusError.value = false
   } catch {
     // 显性错误态：不再退化为「未启用」默认值并放行写按钮

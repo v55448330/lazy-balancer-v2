@@ -31,6 +31,16 @@ export const autobanMissingPolicyId = (status: AutobanMissingLinkView): number |
   return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : null
 }
 
+/**
+ * binding 环节的黄条是否改用「已关联规则但这些规则不转发」的说法：后端
+ * ban_missing='binding' 同时覆盖「零绑定」与「只绑到 TLS 类 / 已禁用 / 无启用上游
+ * 的规则」两种形态——后者并非「尚未关联」，文案必须如实。
+ * bindingCount = 就绪策略的绑定规则数；null = 读取失败，按「尚未关联」原文案
+ * （读不到不等于没有）。非 binding 环节恒为 false。
+ */
+export const isAutobanBoundWithoutTraffic = (status: AutobanMissingLinkView, bindingCount: number | null): boolean =>
+  status.ban_missing === 'binding' && bindingCount !== null && bindingCount > 0
+
 export type SuggestionBand = 'high' | 'mid' | 'low'
 
 /**

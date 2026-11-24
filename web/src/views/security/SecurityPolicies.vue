@@ -103,11 +103,9 @@
             <el-tag v-else disable-transitions size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.policies.table.status')" width="160" align="center">
+        <el-table-column :label="t('app.security.policies.table.status')" width="90" align="center">
           <template #default="{ row }">
-            <!-- 启用 ≠ 生效：已启用但未关联任何规则的策略不参与任何流量（默认策略即以
-                 启用态创建、不写绑定）——复合标签显性标出，不能与「启用且已关联」同样只显示「启用」 -->
-            <el-tag :type="POLICY_LIST_STATUS_TAG[policyListStatus(row.enabled, row.rule_count)].type" disable-transitions size="small" effect="light">{{ t(POLICY_LIST_STATUS_TAG[policyListStatus(row.enabled, row.rule_count)].labelKey) }}</el-tag>
+            <el-tag :type="row.enabled ? 'success' : 'info'" disable-transitions size="small" effect="light">{{ row.enabled ? t('app.security.policies.status.enabled') : t('app.security.policies.status.disabled') }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column :label="t('app.security.policies.table.updatedAt')" width="170" align="center">
@@ -118,6 +116,14 @@
         </el-table-column>
         <el-table-column v-if="!isReadOnly" :label="t('app.security.policies.table.actions')" min-width="230" fixed="right">
           <template #default="{ row }">
+            <el-switch
+              v-model="row.enabled"
+              class="policy-toggle-switch"
+              :loading="policyTogglingId === row.id"
+              :disabled="isReadOnly || policyTogglingId !== null"
+              :aria-label="t('app.security.policies.action.toggleAria', { name: row.name })"
+              @change="togglePolicy(row as PolicySummary)"
+            />
             <el-button size="small" link type="primary" @click="openDialog(row as PolicySummary)">{{ policyTypeOf(row as PolicySummary) === 'mixed' ? t('app.security.policies.action.view') : t('app.security.policies.action.edit') }}</el-button>
             <el-button v-if="policyTypeOf(row as PolicySummary) !== 'mixed'" size="small" link type="primary" :disabled="securityBindingsLoading || securityBindingsFailed || bindRulesOpening" :title="securityBindingsLoading ? t('app.security.policies.bind.loadingTitle') : securityBindingsFailed ? t('app.security.policies.bind.failedTitle') : ''" @click="openBindRulesDialog(row as PolicySummary)">{{ t('app.security.policies.action.bindRules') }}</el-button>
             <el-button v-if="policyTypeOf(row as PolicySummary) === 'mixed'" size="small" link type="warning" @click="openMigrateDialog(row as PolicySummary)">{{ t('app.security.policies.action.migrate') }}</el-button>
@@ -982,13 +988,16 @@
               <div class="rule-binding-preview" :class="{ 'is-empty': pickerMeta(rule).blockReason === '' && pickerMeta(rule).chain.length === 0 }">
                 <span v-if="pickerMeta(rule).blockReason" class="rule-binding-limit">{{ pickerMeta(rule).blockReason }}</span>
                 <template v-else>
-                  <span
-                    v-for="(entry, idx) in pickerMeta(rule).chain"
-                    :key="entry.policyId ?? 'self'"
-                    class="binding-order-chip"
-                    :class="['stage-' + chainEntryStageKey(entry), { 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }]"
-                  >{{ chainChipText(entry, idx) }}</span>
-                  <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
+                  <div v-if="pickerMeta(rule).chain.length > 0" class="rule-binding-chips">
+                    <span
+                      v-for="(entry, idx) in pickerMeta(rule).chain"
+                      :key="entry.policyId ?? 'self'"
+                      class="binding-order-chip"
+                      :class="['stage-' + chainEntryStageKey(entry), { 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }]"
+                    >{{ chainChipText(entry, idx) }}</span>
+                  </div>
+                  <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关。
+                       落点提示独占一行、位于标签区下方（标签占满整行时不再与提示挤在一起） -->
                   <span v-if="editorPolicyType !== 'stage0'" class="rule-binding-landing">{{ t('app.security.policies.picker.selfPos', { n: pickerMeta(rule).selfPos }) }}</span>
                 </template>
               </div>
@@ -1178,7 +1187,7 @@ import { hasOwn } from '@/utils/hasOwn'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
 import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, normalizeCrsGroups } from '@/utils/crsGroups'
 import { DEEP_LINK_PARAMS, EVENTS_AUTOBAN_CONFIG, pageUrl } from '@/utils/deepLink'
-import { POLICY_LIST_STATUS_TAG, policyDeleteScope, policyListStatus } from '@/utils/securityPolicyList'
+import { policyDeleteScope } from '@/utils/securityPolicyList'
 import { buildPolicyPayload, ccDetectWithoutHumanWarning, ccEffectiveAction, ccFormFromIntervention, ccInterventionFromForm, ccStage2PageOptions, challengePageMissingWidget as challengePageNeedsWidgetCheck, crawlerExemptionNeedsEngines, trustEnabledForPolicyType, type CCIntervention } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
 
@@ -3902,22 +3911,12 @@ const handleSave = async () => {
 
 const deletingPolicyId = ref<number | null>(null)
 // 删除确认的级联披露：删策略会同事务删除其全部绑定（规则本身保留、规则上的其它
-// 策略不受影响）。确认框写明「同时解除与 N 条规则的绑定」并逐条列出规则名；数量与
-// 名称不可得时的降级判定走 utils/securityPolicyList（纯函数）。清单形态=标准后果
-// 清单（全局 .confirm-scope-lead / .confirm-scope-list）。
+// 策略不受影响）。确认框只写明将解除的绑定数量，不列规则名；数量判定走
+// utils/securityPolicyList（纯函数）。
 const policyDeleteMessage = (row: PolicySummary) => {
-  const scope = policyDeleteScope(row.rule_count, securityBindingsFailed.value ? [] : policyBoundRules(row.id).map((rule) => rule.name))
-  const scopeNodes = scope.count === 0 ? []
-    : scope.names.length === 0
-      ? [h('p', { class: 'confirm-scope-lead' }, t('app.security.policies.msg.deleteScopeCountOnly', { n: scope.count }))]
-      : [
-          h('p', { class: 'confirm-scope-lead' }, t('app.security.policies.msg.deleteScopeLead', { n: scope.count })),
-          h('ul', { class: 'confirm-scope-list' }, [
-            ...scope.names.map((name) => h('li', name)),
-            ...(scope.unnamed > 0 ? [h('li', t('app.security.policies.msg.deleteScopeMore', { n: scope.unnamed }))] : []),
-          ]),
-        ]
-  return h('div', [h('div', t('app.security.policies.msg.deleteConfirm', { name: row.name })), ...scopeNodes])
+  const confirm = t('app.security.policies.msg.deleteConfirm', { name: row.name })
+  const count = policyDeleteScope(row.rule_count, securityBindingsFailed.value ? 0 : policyBoundRules(row.id).length)
+  return count === 0 ? confirm : h('div', [h('div', confirm), h('p', { class: 'confirm-scope-lead' }, t('app.security.policies.msg.deleteScopeLead', { n: count }))])
 }
 function handleDelete(row: PolicySummary) {
   // 重入守卫(快速双击叠加双确认框→双 DELETE 误报)+
@@ -3932,6 +3931,35 @@ function handleDelete(row: PolicySummary) {
     })
     .catch(() => { /* 用户取消:不动列表;HTTP 失败已由全局拦截器 toast */ })
     .finally(() => { deletingPolicyId.value = null })
+}
+
+// 列表行内启停：与向导内「启用状态」同一写入口——PUT /security/policies/:id 只提交
+// {enabled}（权限门、重启用悬空引用门、操作审计与 Caddy 生效链路都是同一条路径）。
+// 开关 v-model 先行翻转：进入函数时 row.enabled 已是目标状态。
+const policyTogglingId = ref<number | null>(null)
+const togglePolicy = async (row: PolicySummary): Promise<void> => {
+  const nextEnabled = row.enabled
+  if (isReadOnly.value || policyTogglingId.value !== null) {
+    row.enabled = !nextEnabled
+    return
+  }
+  policyTogglingId.value = row.id
+  try {
+    const action = nextEnabled ? t('app.security.policies.action.enable') : t('app.security.policies.action.disable')
+    await ElMessageBox.confirm(t('app.security.policies.msg.toggleConfirm', { action, name: row.name }), t('app.security.policies.msg.toggleConfirmTitle', { action }), { type: 'warning' })
+    const res = await request.put(`/security/policies/${row.id}`, { enabled: nextEnabled })
+    // DB 已提交但 Caddy 应用失败的退化 200 必须可见（否则开关态与实际生效不一致）
+    if (isCaddyApplyDegraded(res)) showSaveResult(res, '')
+    await fetchData()
+  } catch (error) {
+    // 取消/失败：开关回滚。真实失败时再回读列表——写已生效但响应丢失（网关 5xx/超时）
+    // 时只拨回本地开关会让页面与服务端长期相反（规则列表启停同口径）；取消不是失败，不回读。
+    row.enabled = !nextEnabled
+    if (error === 'cancel' || error === 'close') return
+    void fetchData()
+  } finally {
+    policyTogglingId.value = null
+  }
 }
 
 const goToCustomRulesPage = () => { window.open(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'custom' }), '_blank', 'noopener') }
@@ -4170,9 +4198,13 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 /* 绑定预览行的左边缘 = 上方协议标签的左边缘（复选框 14px + 标签内边距 8px = 22px；
    原 24px 比协议标签右偏 2px）。首个 chips 的文字列（1px 边框 + 7px 内边距）与协议
    标签的文字列同列。无已绑策略时只有一行落点文字，与标题行之间留出间距。 */
-.rule-binding-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 22px; }
+.rule-binding-preview { margin: 2px 0 4px 22px; }
 .rule-binding-preview.is-empty { margin-top: 8px; }
-.rule-binding-landing { font-size: 12px; color: #6b7280; }
+.rule-binding-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* 落点提示恒独占一行、位于标签区下方，与标签之间留稳定间距（标签占满整行把提示挤到
+   第二行时不再紧贴标签）；无已绑策略时不叠加该间距（行距由 .is-empty 承担）。 */
+.rule-binding-landing { display: block; margin-top: 8px; font-size: 12px; color: #6b7280; }
+.rule-binding-preview.is-empty .rule-binding-landing { margin-top: 0; }
 .rule-binding-limit { font-size: 12px; color: #e6a23c; }
 
 .rule-picker-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
@@ -4221,6 +4253,9 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .policy-summary-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .policy-summary-text { font-size: 13px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .policy-trigger-tag { font-variant-numeric: tabular-nums; }
+/* 操作列启停开关：与规则列表状态开关同形（默认尺寸、开关核心无外边距），与后方按钮留 8px */
+.policy-toggle-switch { margin-right: 8px; vertical-align: middle; }
+.policy-toggle-switch :deep(.el-switch__core) { margin: 0; }
 
 /* 生效投影条（任务 8）：同一信息条左右两段——左=生效说明句、右=关联规则覆盖状态
    列表，同字号（12px）同基线（align-items: baseline） */

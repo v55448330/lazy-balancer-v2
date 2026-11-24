@@ -75,6 +75,7 @@ export interface UpdateAPIKeyInput {
   readonly api_read_only?: boolean
   readonly mcp_read_only?: boolean
   readonly mcp_ip_whitelist?: string[]
+  readonly expires_at?: string | null
 }
 
 export interface MCPToolSpec {

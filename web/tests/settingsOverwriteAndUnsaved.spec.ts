@@ -17,7 +17,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { isConnectionInterruption } from '../src/utils/connectionInterruption.ts'
 import { restorePreviewGroups } from '../src/utils/restorePreview.ts'
 import { hasDirtySettingsForm, resetSettingsDraft, useSettingsFormTracker } from '../src/composables/useSettingsDraft.ts'
-import { code, section } from './_helpers.ts'
+import { code, mountForLifecycle, section } from './_helpers.ts'
 
 // —— 断连判定 ——
 
@@ -251,6 +251,7 @@ test('侧栏切页在有未保存改动时拦截；设置分页互切不拦', ()
   const guard = section(layout, 'const leavingSettingsDraft', 'const goPage')
   assert.match(guard, /hasDirtySettingsForm\(\)/, '脏态来自设置域登记')
   assert.match(guard, /settingsTabOfPage/, '必须区分「离开设置域」与「设置分页互切」')
+  assert.doesNotMatch(guard, /currentPage/, '判据不得依赖当前停在哪一设置分页')
   assert.match(goPage, /leavingSettingsDraft\(page\)/)
   assert.match(goPage, /ElMessageBox\.confirm/)
   assert.match(goPage, /unsavedLeaveConfirm/)
@@ -261,4 +262,23 @@ test('侧栏切页在有未保存改动时拦截；设置分页互切不拦', ()
       assert.ok(views.includes(`'${key}'`), `${locale} 缺 layout.${key}`)
     }
   }
+})
+
+test('切走设置分页后卡片已卸载，脏态登记仍在（守卫覆盖全部分页的草稿）', async () => {
+  resetSettingsDraft()
+  // 与卡片同形态：基线来自服务端回填值，编辑后把脏态登记到设置域单例。
+  const form = ref('loaded')
+  const host = mountForLifecycle(() => {
+    const tracker = useSettingsFormTracker('basic')
+    tracker.initSaved(form.value)
+    const isDirty = computed(() => tracker.isDirty(form.value))
+    watch(isDirty, (value) => tracker.setDirty(value), { flush: 'sync' })
+    form.value = 'edited'
+  })
+  await nextTick()
+  assert.equal(hasDirtySettingsForm(), true, '编辑后即脏')
+  host.unmount()
+  assert.equal(hasDirtySettingsForm(), true, '卸载（切到别的设置分页）不得清掉脏态——否则从该分页离开时静默丢稿')
+  resetSettingsDraft()
+  assert.equal(hasDirtySettingsForm(), false, '离开设置页（草稿复位）才清')
 })

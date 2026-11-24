@@ -5883,14 +5883,6 @@ var errUnknownBackupSection = errors.New("未知的配置分类")
 // 行数摘要(与导入审计同文案)与是否包含规则库文件本体。HTTP 导出端点与
 // 自动/手动备份执行器(autobackup.go)共用。
 func (h *Handlers) buildLbbakExport(ctx context.Context, sel []string) (payload []byte, exportedSections []string, countsSummary string, includesWafFiles bool, err error) {
-	return h.buildLbbakExportWithLockState(ctx, sel, false)
-}
-
-// buildLbbakExportWithLockState 是 buildLbbakExport 的锁状态显式形态：
-// assumeWafLocked=true 表示调用方**已持有** services.WafFileLock（覆盖前快照
-// 用非阻塞取锁拿到文件相位后调用）——此时不再重复取锁（sync.Mutex 不可重入，
-// 重复 Lock 即自锁），文件相位的读取内容与锁定形态完全一致。
-func (h *Handlers) buildLbbakExportWithLockState(ctx context.Context, sel []string, assumeWafLocked bool) (payload []byte, exportedSections []string, countsSummary string, includesWafFiles bool, err error) {
 	sel = normalizeBackupSectionKeys(sel)
 	sectionTables, includeGlobal, ok := configBackupSectionTables(sel)
 	if !ok {
@@ -5911,10 +5903,8 @@ func (h *Handlers) buildLbbakExportWithLockState(ctx context.Context, sel []stri
 	}
 	// DB 快照与 WAF 文件 bundle 必须来自同一稳定代。锁序
 	// wafFileMu→DB 与 CRS/威胁库更新器一致（写者在同一锁内写文件与版本行）。
-	// assumeWafLocked 时调用方已持锁（本函数不得重入 Lock），wafLocked 只表示
-	// 「本函数负责解锁」——文件相位仍按 wafFilePhase 执行。
 	wafFilePhase := sectionTables["security_crs_version"]
-	wafLocked := wafFilePhase && !assumeWafLocked
+	wafLocked := wafFilePhase
 	if wafLocked {
 		services.WafFileLock().Lock()
 		defer func() {
@@ -6452,17 +6442,6 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 顺序导入误判为并发）；真并发会话仍在此 409 fast-fail，不再静默阻塞。
 	if rejectConcurrentConfigImport(c, action) {
 		return
-	}
-	// 覆盖前快照：导入/还原都会整体替换配置，而自动备份默认关闭——没有这一步
-	// 时默认形态下覆盖是零退路。必须落在会话/事务之前（覆盖的是「覆盖前」的
-	// 库态），失败只披露不阻断。挂 request ctx 的 WithoutCancel 语义：快照属
-	// 覆盖保护的一部分，客户端超时/关页不得让它静默缺失（覆盖照常发生）。
-	overwriteSnapshot := h.snapshotBeforeOverwrite(c, context.WithoutCancel(ctx), action)
-	if overwriteSnapshot.Warning != "" {
-		// 复用已登记的动作词条「备份失败」（快照本身就是一次备份）：审计页可按
-		// 同一动作检索全部备份失败，detail 指明它是「覆盖前自动快照」且本次覆盖
-		// 照常执行（与真实备份任务失败区分靠 detail，不靠新造动作词）。
-		recordAudit(c, "备份失败", "配置备份", overwriteSnapshot.Warning)
 	}
 	if configImportBeforeLock != nil {
 		configImportBeforeLock()
@@ -7309,11 +7288,6 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		auditSource = "服务器备份 " + filename + "（覆盖" + action + "）"
 	}
 	auditParts := []string{"来源：" + auditSource, counts}
-	if overwriteSnapshot.Filename != "" {
-		// 覆盖前退路的文件名进成功审计：事后要回滚时无需翻备份列表猜哪一份
-		// 是本次覆盖前的快照。
-		auditParts = append(auditParts, "覆盖前快照："+overwriteSnapshot.Filename)
-	}
 	auditParts = append(auditParts, configClampNotes...)
 	auditParts = append(auditParts, autobanClampNotes...)
 	if autobanRuntimeNote != "" {
@@ -7404,16 +7378,16 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("已解除 %d 条 TCP 规则的安全策略绑定（TCP 不参与策略渲染）", droppedTCPBindings))
 	}
 	if wafMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), warningWafMetadataSkipped)
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_15ae2f31"))
 	}
 	if crsTreeReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), warningCRSTreeReplaced)
 	}
 	if wafCRSMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), warningWafCRSMetadataSkipped)
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_a8f33c4d"))
 	}
 	if wafXdbMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), warningWafXdbMetadataSkipped)
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_81ef1989"))
 	}
 	// manifest 未登记的威胁库条目——不拒绝（老备份
 	// 兼容），但响应与审计必须可见「内容未经完整性校验」。
@@ -7429,7 +7403,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		responseWarnings = append(append([]string{}, responseWarnings...), wafApply.Warnings...)
 	}
 	if operatorReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), "备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_610d9398"))
 	}
 	if oidcConverged {
 		// 双通道：收敛清空会让启用中的 OIDC 登出（用户按备份替换），
@@ -7440,7 +7414,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		recordAudit(c, action+"警告", "配置备份", detail)
 	}
 	if revokedSessions && !operatorReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), "系统数据已"+action+"：全部登录会话已吊销，请重新登录")
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_a61110d0", action))
 	}
 	if acmeDanglingRules > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf(action+"后 %d 条启用规则的 DNS 提供商配置悬挂（引用不在导入数据中）——下一次签发/续签将失败，请及时补齐", acmeDanglingRules))
@@ -7509,11 +7483,6 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// api_keys 已随导入整体替换——清空白名单 CIDR
 	// 解析缓存（逐 Key 清扫无法枚举存活 Key；重建廉价）。
 	purgeAllAPIKeyWhitelistCache()
-	if overwriteSnapshot.Warning != "" {
-		// 覆盖前快照缺失是三分类都需看到的退路缺失：与其它 warnings 同通道
-		// （前端导入结果面板逐条展示），partial 分支同样携带。
-		responseWarnings = append(append([]string{}, responseWarnings...), overwriteSnapshot.Warning)
-	}
 	if queueRecoveryErr != nil {
 		// 事务已提交（DB/Caddy 已是新配置），队列恢复
 		// 失败属「部分成功」——500 会让前端按「已回滚」处理而不刷新，管理员

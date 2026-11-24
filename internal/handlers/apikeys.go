@@ -444,6 +444,18 @@ func (h *Handlers) UpdateAPIKeyStatus(c *gin.Context) {
 	updateAPIKeyStatus(c, false)
 }
 
+// updateAPIKeyRequest 是密钥更新端点的请求体：在 models.UpdateAPIKeyRequest
+// 之上多带 expires_at（改有效期只开放给 REST：MCP 的 update_api_key_status
+// 未暴露该字段，故不进 models——那边有工具 schema 与请求结构的字段对表）。
+// ExpiresAt 留原始 JSON，才能区分「未提交」（空）与「提交 null」。
+type updateAPIKeyRequest struct {
+	models.UpdateAPIKeyRequest
+	ExpiresAt json.RawMessage `json:"expires_at"`
+}
+
+// expirySubmitted 报告请求带了 expires_at（提交 null 也算）。
+func (r updateAPIKeyRequest) expirySubmitted() bool { return len(r.ExpiresAt) > 0 }
+
 func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 导入窗口 409，先于参数解析。
 	if rejectWriteDuringImport(c, "执行 API 密钥写操作") {
@@ -462,7 +474,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_b3459518"), MessageKey: "k_b3459518"})
 		return
 	}
-	var req models.UpdateAPIKeyRequest
+	var req updateAPIKeyRequest
 	if !guardConfiguredJSONBody(c) {
 		return
 	}
@@ -471,8 +483,25 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		return
 	}
 	if req.IsEnabled == nil && req.MCPEnabled == nil && req.APIEnabled == nil && req.ReadOnly == nil &&
-		req.APIReadOnly == nil && req.MCPReadOnly == nil && req.MCPIPWhitelist == nil {
+		req.APIReadOnly == nil && req.MCPReadOnly == nil && req.MCPIPWhitelist == nil && !req.expirySubmitted() {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_2e768bc2"), MessageKey: "k_2e768bc2"})
+		return
+	}
+	// expires_at 三态：未提交=不改；null=改为永不过期；时间串=新的过期时间。
+	// 校验与创建同口径：必须是 RFC3339 时间，且不得早于当前时间。
+	var expiresAfter sql.NullTime
+	if req.expirySubmitted() {
+		if raw := string(req.ExpiresAt); raw != "null" {
+			var parsed time.Time
+			if err := json.Unmarshal(req.ExpiresAt, &parsed); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+				return
+			}
+			expiresAfter = sql.NullTime{Time: parsed, Valid: true}
+		}
+	}
+	if expiresAfter.Valid && expiresAfter.Time.Before(time.Now()) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_34629623"), MessageKey: "k_34629623"})
 		return
 	}
 	// 非管理员：任何「授予写」形态拒绝（legacy read_only=false 或 per-protocol false）
@@ -540,13 +569,13 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		}
 	}()
 	// 审计 delta 需要变更前的键状态（启用态/MCP/只读/
-	// 白名单），与更新同条件取行（currentUserOnly 时限定创建者）。
+	// 白名单/过期时间），与更新同条件取行（currentUserOnly 时限定创建者）。
 	// 启用态取裸列（非 COALESCE）：鉴权侧 db.ResolveAPIKeyIdentity 对
 	// is_enabled 裸比较，NULL 恒 401 即运行期「未启用」；step-up 判据与审计
 	// delta 必须同口径，否则带外 NULL 行被 NULL→1 真正激活时既不判
 	// enablePrivileged 也不记变更（列表 COALESCE 显示「启用」为有意设计，
 	// 属展示面，不参与本判定）。
-	query := "SELECT name, is_enabled, COALESCE(mcp_enabled,0), COALESCE(api_enabled,1), COALESCE(read_only,0), COALESCE(api_read_only,0), COALESCE(mcp_read_only,0), COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id = ?"
+	query := "SELECT name, is_enabled, COALESCE(mcp_enabled,0), COALESCE(api_enabled,1), COALESCE(read_only,0), COALESCE(api_read_only,0), COALESCE(mcp_read_only,0), COALESCE(mcp_ip_whitelist,''), expires_at FROM api_keys WHERE id = ?"
 	args := []any{id}
 	if currentUserOnly {
 		query += " AND created_by = ?"
@@ -556,7 +585,8 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	var beforeEnabledRaw sql.NullInt64
 	var beforeMCPEnabled, beforeAPIEnabled, beforeReadOnly, beforeAPIReadOnly, beforeMCPReadOnly int
 	var beforeWhitelist string
-	if err := tx.QueryRowContext(c.Request.Context(), query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeAPIEnabled, &beforeReadOnly, &beforeAPIReadOnly, &beforeMCPReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
+	var beforeExpires sql.NullTime
+	if err := tx.QueryRowContext(c.Request.Context(), query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeAPIEnabled, &beforeReadOnly, &beforeAPIReadOnly, &beforeMCPReadOnly, &beforeWhitelist, &beforeExpires); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
 		return
 	}
 	beforeEnabled := 0
@@ -579,7 +609,14 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 特权变更（仍不可写）。
 	enablePrivileged := req.IsEnabled != nil && *req.IsEnabled && beforeEnabled != 1 &&
 		(beforeAPIReadOnly == 0 || beforeMCPReadOnly == 0 || afterMCPEnabled)
-	privilegeEscalation := enablePrivileged ||
+	// 已过期的特权 Key 被「延期到未来 / 改为永不过期」= 恢复可写/MCP 可达性
+	// （鉴权侧对过期 Key 恒拒绝），与禁用→启用对称，同属授予动作。Key 延期后
+	// 仍处禁用态、或本就只读时，可用性没有变化，不构成特权变更。
+	now := time.Now()
+	reviveExpired := req.expirySubmitted() && beforeEnabled == 1 && (req.IsEnabled == nil || *req.IsEnabled) &&
+		beforeExpires.Valid && beforeExpires.Time.Before(now) && (!expiresAfter.Valid || expiresAfter.Time.After(now)) &&
+		(beforeAPIReadOnly == 0 || beforeMCPReadOnly == 0 || afterMCPEnabled)
+	privilegeEscalation := enablePrivileged || reviveExpired ||
 		(req.ReadOnly != nil && !*req.ReadOnly && beforeReadOnly == 1) ||
 		(req.APIReadOnly != nil && !*req.APIReadOnly && beforeAPIReadOnly == 1) ||
 		(req.MCPReadOnly != nil && !*req.MCPReadOnly && beforeMCPReadOnly == 1) ||
@@ -617,6 +654,10 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 			}
 		}
 	}
+	if req.expirySubmitted() {
+		setClauses = append(setClauses, "expires_at = ?")
+		updateArgs = append(updateArgs, expiresAfter)
+	}
 	// 更新审计：时间+操作人（每次写更新必落）
 	setClauses = append(setClauses, "updated_at = CURRENT_TIMESTAMP", "updated_by = ?")
 	updateArgs = append(updateArgs, userID)
@@ -648,7 +689,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		return
 	}
 	committed = true
-	// 更新审计记真 delta——启用态/MCP/只读/白名单是安全
+	// 更新审计记真 delta——启用态/MCP/只读/白名单/过期时间是安全
 	// 相关变更，此前四个字段零留痕（同族先例：安全策略）。
 	auditDetail := services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name)
 	changes := make([]string, 0, 4)
@@ -678,6 +719,12 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 			changes = append(changes, fmt.Sprintf("IP 白名单（约束全部 REST 与 MCP）：%d 条→%d 条", beforeCount, whitelistCount))
 		}
 	}
+	if req.expirySubmitted() {
+		// 按审计展示精度比较：新旧值展示相同（亚秒差异）不算变更。
+		if before, after := apiKeyExpiryLabel(beforeExpires), apiKeyExpiryLabel(expiresAfter); before != after {
+			changes = append(changes, "过期："+before+"→"+after)
+		}
+	}
 	if len(changes) > 0 {
 		auditDetail = services.FormatAuditDetail(auditDetail, "变更："+strings.Join(changes, "、"))
 	}
@@ -699,6 +746,15 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		purgeAPIKeyWhitelistCache(id)
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_bf38ceaa"), MessageKey: "k_bf38ceaa"})
+}
+
+// apiKeyExpiryLabel 是审计文案里的过期值：NULL=永不过期，否则按面板时区
+// 精确到秒（只记日期时，同一天内改时刻的新旧值无法区分）。
+func apiKeyExpiryLabel(expires sql.NullTime) string {
+	if !expires.Valid {
+		return "永不过期"
+	}
+	return expires.Time.In(services.CurrentLocation()).Format("2006-01-02 15:04:05")
 }
 
 // apiKeyWhitelistCount 统计库内 IP 白名单条目数（审计 delta 用；字段名

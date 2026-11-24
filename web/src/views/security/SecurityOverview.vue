@@ -8,8 +8,6 @@
         </h2>
         <p class="page-desc">{{ t('app.security.overview.page.desc') }}</p>
       </div>
-      <!-- 手动刷新（事件页同款）：与失败横幅的「立即重试」同一路径 -->
-      <el-button :icon="Refresh" @click="reloadAll">{{ t('app.security.overview.page.refresh') }}</el-button>
       <el-button type="primary" plain @click="openThreatScreen">
         <el-icon style="margin-right: 6px"><Monitor /></el-icon>
         {{ t('app.security.overview.page.threatScreen') }}
@@ -368,8 +366,12 @@
         </div>
       </template>
       <!-- 未生效黄条：判据单源 utils/autobanStatus（enabled ∧ ban_effective===false，
-           IP 名单通道：名单为空或未被启用中的 deny 策略引用） -->
-      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="autoban-alert" :title="t(autobanStatus?.ban_missing === 'binding' ? 'app.security.overview.autoban.ineffectiveBinding' : 'app.security.overview.autoban.ineffective')" />
+           IP 名单通道：名单为空或未被启用中的 deny 策略引用）。binding 环节且后端给出
+           可定位的策略 id 时追加入口「前往绑定规则」（事件页同写法，深链到该策略）；
+           文案按就绪策略的实际绑定数区分「尚未关联」与「已关联但规则不转发」。 -->
+      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="autoban-alert">
+        <template #title>{{ autobanIneffectiveText }} <AccessibleLink v-if="autobanBindingPolicyId !== null" type="primary" @click="goToBindingPolicy">{{ t('app.security.events.goToBindingRules') }}</AccessibleLink></template>
+      </el-alert>
       <el-alert v-if="autobanStatus?.enabled && autobanStatus?.feed_degraded" type="warning" show-icon :closable="false" class="autoban-alert" :title="autobanStatus?.feed_degraded_reason || t('app.security.overview.autoban.feedDegraded')" />
       <div class="autoban-body">
         <div class="autoban-stats">
@@ -491,22 +493,22 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock, Tickets, Refresh } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock, Tickets } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
 import RecidivismDialog from '@/components/security/RecidivismDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
+import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources, type LibrarySourceRow } from '@/utils/securityLibraries'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanEscalationShortKey, suggestionBand, autobanDurationLabel, autobanScopeLabel, isAutobanScopeMember } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanEscalationShortKey, suggestionBand, autobanDurationLabel, autobanScopeLabel, isAutobanScopeMember, autobanMissingPolicyId, isAutobanBoundWithoutTraffic } from '@/utils/autobanStatus'
 
 const { t } = useI18n()
 
@@ -814,16 +816,41 @@ interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   duration: string; scope: string; banned_today: number; list_entries: number
   ban_effective: boolean; ban_missing?: string; tracked_ips: number; suggestions: AutobanSuggestion[]
+  // binding 环节的定位目标（就绪策略 id）；其余环节与旧后端缺省为 null——不给「前往绑定规则」入口。
+  policy_id?: number | null
   is_master: boolean; feed_degraded: boolean; feed_degraded_reason: string
   // 累犯披露键（旧后端缺省 → 档位按 off、升级数按 0，防御式消费）。
   escalation?: string; escalated_count?: number
 }
 const autobanStatus = ref<AutobanStatus | null>(null)
 const autobanError = ref(false)
+// binding 环节黄条的说法按就绪策略的实际绑定数区分（判据单源 isAutobanBoundWithoutTraffic）：
+// 后端 binding 同时覆盖「零绑定」与「只绑到 TLS 类 / 已禁用 / 无启用上游的规则」，后者
+// 不是「尚未关联」。绑定数取 GET /security/policies/:id 的 bindings（null=读取失败，按原文案）。
+const autobanBindingCount = ref<number | null>(null)
+const autobanIneffectiveText = computed(() => {
+  const status = autobanStatus.value
+  const count = autobanBindingCount.value
+  if (status !== null && isAutobanBoundWithoutTraffic(status, count)) return t('app.security.events.ineffectiveBoundNotice', { n: count })
+  return t(status?.ban_missing === 'binding' ? 'app.security.overview.autoban.ineffectiveBinding' : 'app.security.overview.autoban.ineffective')
+})
+const loadAutobanBindingCount = async (status: AutobanStatus): Promise<number | null> => {
+  const policyId = autobanMissingPolicyId(status)
+  if (policyId === null) return null
+  try {
+    const res = await request.get<APIResponse<{ bindings?: string[] }>>(`/security/policies/${policyId}`, { silent: true })
+    return res.data?.bindings?.length ?? 0
+  } catch {
+    return null
+  }
+}
 const fetchAutobanStatus = async (): Promise<void> => {
   try {
     const res = await request.get<APIResponse<AutobanStatus>>('/security/autoban/status', { silent: true })
     if (res.data) {
+      // 先取到绑定数再落状态：文案与状态同时就位，不先闪「尚未关联」再换成另一种说法
+      const bindingCount = await loadAutobanBindingCount(res.data)
+      autobanBindingCount.value = bindingCount
       autobanStatus.value = res.data
       autobanError.value = false
     }
@@ -838,6 +865,13 @@ const autobanStateTone = computed<'success' | 'warning' | 'info' | 'danger'>(() 
   return autobanStatus.value.dry_run ? 'warning' : 'success'
 })
 const autobanIneffective = computed(() => autobanStatus.value !== null && isAutobanIneffective(autobanStatus.value))
+// 「前往绑定规则」入口的定位目标（判据单源 autobanMissingPolicyId，事件页同写法）：仅 binding
+// 环节且后端给出可定位的策略 id 时非空。
+const autobanBindingPolicyId = computed(() => autobanStatus.value === null ? null : autobanMissingPolicyId(autobanStatus.value))
+const goToBindingPolicy = () => {
+  if (autobanBindingPolicyId.value === null) return
+  window.open(pageUrl('security-policies', { [DEEP_LINK_PARAMS.policyId]: autobanBindingPolicyId.value }), '_blank', 'noopener')
+}
 // 累犯升级开启时配置摘要时长行同口径标「首封时长」（与事件页状态卡一致）。
 const autobanStatusEscalationOn = computed(() =>
   autobanStatus.value?.escalation === 'standard' || autobanStatus.value?.escalation === 'aggressive')
@@ -929,50 +963,27 @@ const openThreatScreen = (): void => {
 }
 
 // 六路数据一次拉齐；失败后页面此前只提供整页刷新这一个恢复入口（瞬态 5xx 后
-// 面板长期不可用）。横幅的「立即重试」与页头「刷新」走同一路径，reloading 兼作
-// 按钮 loading 态——连续点击不会叠发六组请求。
+// 面板长期不可用）。横幅的「立即重试」走同一路径，reloading 兼作并发门——
+// 连续点击不会叠发六组请求。
 const reloading = ref(false)
-// 在途门：手动（重试/刷新）与后台定时刷新共用，同一时刻只允许一组六路请求在途。
-let reloadInFlight = false
-const fetchAll = (): Promise<unknown[]> => Promise.all([
-  fetchData(),
-  fetchBlockedEvents(),
-  fetchAutobanStatus(),
-  fetchIP2RegionInfo(),
-  fetchThreatLib(),
-  fetchCrawlerLib(),
-])
 const reloadAll = async (): Promise<void> => {
   if (reloading.value) return
-  if (reloadInFlight) return
-  reloadInFlight = true
   reloading.value = true
   try {
-    await fetchAll()
+    await Promise.all([
+      fetchData(),
+      fetchBlockedEvents(),
+      fetchAutobanStatus(),
+      fetchIP2RegionInfo(),
+      fetchThreatLib(),
+      fetchCrawlerLib(),
+    ])
   } finally {
-    reloadInFlight = false
     reloading.value = false
   }
 }
 
-// 后台刷新：页面常驻时六路数据不得停留在进入页面时的快照。不翻转 reloading——
-// 重试/刷新按钮的 loading 态只在用户主动触发时出现。
-const reloadInBackground = async (): Promise<void> => {
-  if (reloadInFlight) return
-  reloadInFlight = true
-  try {
-    await fetchAll()
-  } finally {
-    reloadInFlight = false
-  }
-}
-
-// 30s 可见性感知刷新：隐藏页停表、恢复可见立即补一轮（全站轮询单源）。
-const overviewRefresh = createVisibilityIntervals({ intervals: [{ tick: () => { void reloadInBackground() }, ms: 30_000 }] })
-
 onBeforeUnmount(stopChallengeTimer)
-onBeforeUnmount(overviewRefresh.stop)
-onMounted(overviewRefresh.start)
 onMounted(() => { void reloadAll() })
 </script>
 

@@ -86,7 +86,7 @@ test('API 密钥功能配置先占位再确认权限与访问范围变更', () =
   assert.ok(busyAt > 0 && confirmAt > busyAt, '功能配置保存必须先占位再确认')
   assert.ok(confirmAt < body.indexOf('request.patch('), '确认必须先于保存请求')
   assert.match(body, /t\('common\.app\.views\.keys\.featureSaveConfirmMsg'/)
-  assert.ok(code('src/locales/zh/views.ts').includes('MCP 开关、只读权限和 IP 白名单'), '权限范围警示必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('MCP 开关、只读权限、过期时间和 IP 白名单'), '权限范围警示必须在 zh 母本词条中')
   assert.match(body, /finally \{\s*featureSaving\.value = false/, '取消与请求结束都必须释放占位')
 })
 
