@@ -153,16 +153,6 @@ export const suspendSessionExpiredHandling = (): void => {
   suspendSessionExpiredGuard = true
 }
 
-// 当前界面语言(i18n 惰性引入避免模块装载哨兵拉起 vue-i18n 全家桶;main.ts
-// 已 app.use(i18n),运行期恒有实例)。
-function currentLocale(): string {
-  try {
-    return safeLocalStorageGet('lb_locale') === 'en' ? 'en' : 'zh-CN'
-  } catch {
-    return 'zh-CN' // 非 DOM 环境(测试进程)安全回落
-  }
-}
-
 // 从错误响应体解出 message_key(i18n 稳定键);无键返回 undefined。
 function messageKeyOf(responseData: unknown): string | undefined {
   if (typeof responseData !== 'object' || responseData === null) return undefined
@@ -243,7 +233,9 @@ service.interceptors.request.use(
     }
     // i18n:后端按 Accept-Language 返回已翻译的 message(message_key 恒定,
     // 供前端分类钉测与本地词表回落);curl/脚本不带该头时后端回落中文。
-    config.headers['Accept-Language'] = currentLocale() === 'en' ? 'en' : 'zh-CN'
+    // 语言取 i18n 实例的当前 locale:首访跟随浏览器时界面语言是运行期检测出来
+    // 的、不落盘,只读存储键会把英文界面判成中文,后端文案随之整批回中文。
+    config.headers['Accept-Language'] = i18n.global.locale.value === 'en' ? 'en' : 'zh-CN'
     return config
   },
   (error) => {
