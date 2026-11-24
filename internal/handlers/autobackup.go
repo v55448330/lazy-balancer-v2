@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -347,6 +348,102 @@ func writeAutoBackupPayload(ctx context.Context, path string, payload []byte) er
 		}
 	}
 	return err
+}
+
+// overwriteSnapshotResult 是「覆盖前快照」的结果：Filename 非空=快照已落盘并
+// 入备份列表；Warning 非空=未生成（导入/还原照常执行，但必须并入响应 warnings
+// 与审计披露——静默失败会让管理员以为已有退路）。
+type overwriteSnapshotResult struct {
+	Filename string
+	Warning  string
+}
+
+// overwriteSnapshotFailure 组装失败披露（键化：原因与结论各一词条）。
+func overwriteSnapshotFailure(c *gin.Context, action, reason string) overwriteSnapshotResult {
+	return overwriteSnapshotResult{Warning: apimsg.Tf(c, "k_4b160774", reason, action)}
+}
+
+// snapshotBeforeOverwrite 在整体覆盖配置（导入/还原）之前落一份 manual 备份。
+// 自动备份默认关闭（db.DefaultAutoBackupEnabled=0），覆盖是本就不留退路的
+// 高危操作——此快照是默认形态下唯一的回退点，且 auto_backups 不在备份面，
+// 该行跨覆盖存活，可反过来用 RestoreAutoBackup 回到覆盖前状态。
+//
+// 不复用 RunAutoBackupOnce：后者强制 engineRunID>0（经任务引擎），而导入会先
+// 排空引擎，覆盖窗口内无法合法取得引擎 run 行；此处按同一落盘/落行/裁剪单源
+// 直接执行，失败策略也不同（备份失败=任务失败，快照失败=覆盖照常+披露）。
+//
+// 并发：TryLock 非阻塞——已有自动/手动备份在跑时跳过并披露，绝不排队（排队会
+// 把导入卡在备份之后，且导入会话锁已由调用方持有）。失败一律不阻断覆盖。
+func (h *Handlers) snapshotBeforeOverwrite(c *gin.Context, ctx context.Context, action string) overwriteSnapshotResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dir, dirErr := h.autoBackupDir()
+	if dirErr != nil {
+		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_6b44007b", apimsg.ErrMsg(c, dirErr)))
+	}
+	if !autoBackupRunMu.TryLock() {
+		return overwriteSnapshotFailure(c, action, apimsg.T(c, "k_3972ec06"))
+	}
+	defer autoBackupRunMu.Unlock()
+	// 目录 0700 与备份执行器同口径（含私钥与凭证明文）；MkdirAll 的权限只对
+	// 新目录生效，既有目录的收敛交给 convergeAutoBackupDirPermissions。
+	if err := os.MkdirAll(dir, autoBackupDirPerm); err != nil {
+		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_25473d88", apimsg.ErrMsg(c, err)))
+	}
+	convergeAutoBackupDirPermissions(dir)
+	// 规则库文件相位必须与 DB 行同一稳定代（buildLbbakExport 的锁序
+	// wafFileMu→DB），而导入的既有锁序契约是「暂停/排空 → wafFileMu」。快照跑在
+	// 会话之前，若在这里阻塞取锁，导入会在暂停调度之前被在途的规则库更新/同步
+	// 挡住（违反该契约）。故只做非阻塞尝试：拿不到锁 = 规则库文件正在被改写 →
+	// 跳过快照并披露（管理员可稍后重试），绝不排队、绝不把导入卡在别的任务后。
+	wafLock := services.WafFileLock()
+	tryLocker, canTry := wafLock.(interface{ TryLock() bool })
+	if !canTry || !tryLocker.TryLock() {
+		return overwriteSnapshotFailure(c, action, apimsg.T(c, "k_504fb692"))
+	}
+	wafHeld := true
+	defer func() {
+		if wafHeld {
+			wafLock.Unlock()
+		}
+	}()
+	payload, exportedSections, countsSummary, _, err := h.buildLbbakExportWithLockState(ctx, nil, true)
+	wafLock.Unlock()
+	wafHeld = false
+	if err != nil {
+		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_b814b377", apimsg.ErrMsg(c, err)))
+	}
+	now := time.Now()
+	filename, err := nextAutoBackupFilename(ctx, dir, "manual", now)
+	if err != nil {
+		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_25e14bd7", apimsg.ErrMsg(c, err)))
+	}
+	finalPath := filepath.Join(dir, filename)
+	if err := writeAutoBackupPayload(ctx, finalPath, payload); err != nil {
+		// 写失败可能已落下最终文件（rename 成功、父目录 fsync 失败）：清理，
+		// 避免敏感备份脱离保留策略积累（与 RunAutoBackupOnce 同口径）。
+		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			services.Logf("warn", "覆盖前快照：写失败后清理 %s 失败: %v", finalPath, removeErr)
+		}
+		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_498494c0", apimsg.ErrMsg(c, err)))
+	}
+	sectionsJSON, _ := json.Marshal(exportedSections)
+	message := apimsg.Tf(c, "k_b7ea8eca", action, countsSummary)
+	// trigger_type 只能用 manual：表 CHECK 约束只允许 schedule/manual。
+	id, err := insertAutoBackupRow(ctx, filename, "success", int64(len(payload)), string(sectionsJSON), "manual", message, h.cfg.Version)
+	if err != nil {
+		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			services.Logf("warn", "覆盖前快照：落行失败后清理 %s 失败: %v", finalPath, removeErr)
+		}
+		return overwriteSnapshotFailure(c, action, apimsg.Tf(c, "k_e9128651", apimsg.ErrMsg(c, err)))
+	}
+	// 内务裁剪与执行器同源；保留份数读取失败时跳过（未知保留意愿下不删文件）。
+	if keep, known := loadAutoBackupKeepSetting(ctx); known {
+		pruneAutoBackups(ctx, dir, keep, autoBackupFailedRowsKeep)
+	}
+	services.Logf("info", "覆盖前自动快照完成（%s）：#%d 文件 %s（%s）", action, id, filename, countsSummary)
+	return overwriteSnapshotResult{Filename: filename}
 }
 
 // RunAutoBackupOnce 执行一次完整备份（调度/手动共用；main.go 经
@@ -1161,17 +1258,99 @@ func failAutoBackupAccess(c *gin.Context, verb, subject, message string, status 
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
 }
 
-// failRestoreFileAccess 是自动备份「还原/下载」进入导入核心之前**文件面**失败的
-// 收尾适配器（保留 download 位以维持 9 个调用点的可读性）：文件面与行面同经
-// failAutoBackupAccess 落「还原失败/下载失败」审计 + 运行日志 + 原状态码响应。
+// failRestoreFileAccess 是自动备份「还原/预览/下载」进入导入核心之前**文件面**
+// 失败的收尾适配器：文件面与行面同经 failAutoBackupAccess 落「还原失败/预览
+// 失败/下载失败」审计 + 运行日志 + 原状态码响应。verb 必须与调用方的实际动作
+// 一致（预览失败不得记成还原失败，否则审计复盘会把只读探测当成高危操作）。
 // 与 HTTP 读体超限的 413 不同（那属客户端探测面、不落审计），这里的 413 来自
 // 本地备份文件自身超限，是管理员操作的真实失败面。
-func failRestoreFileAccess(c *gin.Context, download bool, subject, message string, status int, cause error) {
-	verb := "还原"
-	if download {
-		verb = "下载"
-	}
+func failRestoreFileAccess(c *gin.Context, verb, subject, message string, status int, cause error) {
 	failAutoBackupAccess(c, verb, subject, message, status, cause)
+}
+
+// errAutoBackupFileTooLarge 备份文件自身超过导入上限（413 归因哨兵）。
+var errAutoBackupFileTooLarge = errors.New("备份文件超过导入上限")
+
+// readAutoBackupFilePayload 读取备份目录内的文件并做同族上限守卫（还原/预览
+// 共用，失败归因三分：os.ErrNotExist=文件缺失、errAutoBackupFileTooLarge=超限、
+// 其余=读取失败）。上限与 HTTP 导入体同一常量，避免「面板导出的包无法还原」。
+func readAutoBackupFilePayload(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if info.Size() > maxConfigImportBytes {
+		_ = file.Close()
+		return nil, fmt.Errorf("%w: %d 字节超过上限 %d 字节", errAutoBackupFileTooLarge, info.Size(), maxConfigImportBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigImportBytes+1))
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxConfigImportBytes {
+		return nil, fmt.Errorf("%w: 读取 %d 字节超过上限 %d 字节", errAutoBackupFileTooLarge, len(data), maxConfigImportBytes)
+	}
+	return data, nil
+}
+
+// autoBackupReadFailure 是「备份目录 → 文件」读入失败的归因类别：公开文案的
+// 细节政策留给调用方——还原端点保留权限/errno 细节（admin 排障契约），预览
+// 端点固定文案（只读探测不披露内部路径）。
+type autoBackupReadFailure struct {
+	kind  int
+	cause error
+}
+
+const (
+	autoBackupReadDirInvalid = iota
+	autoBackupReadMissing
+	autoBackupReadTooLarge
+	autoBackupReadIOError
+)
+
+// readAutoBackupRowFile 是还原/预览共用的「行 → 目录守卫 → 读文件」段：返回
+// 文件字节或归因类别；不写响应、不落审计（披露政策由调用方执行）。
+func (h *Handlers) readAutoBackupRowFile(view autoBackupRowView) ([]byte, *autoBackupReadFailure) {
+	backupDir, dirErr := h.autoBackupDir()
+	if dirErr != nil {
+		return nil, &autoBackupReadFailure{kind: autoBackupReadDirInvalid, cause: dirErr}
+	}
+	data, err := readAutoBackupFilePayload(filepath.Join(backupDir, view.Filename))
+	if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return nil, &autoBackupReadFailure{kind: autoBackupReadMissing, cause: err}
+		case errors.Is(err, errAutoBackupFileTooLarge):
+			return nil, &autoBackupReadFailure{kind: autoBackupReadTooLarge, cause: err}
+		default:
+			return nil, &autoBackupReadFailure{kind: autoBackupReadIOError, cause: err}
+		}
+	}
+	return data, nil
+}
+
+// decodeAutoBackupPayload 把备份字节归一到导入核心同序的形态（BOM → lbbak →
+// 内部 config.json 字节）。还原与预览共用，避免预览与真实还原对同一份文件
+// 给出不同结论（预览放行、还原 400 是最坏形态）。
+func decodeAutoBackupPayload(data []byte) (configJSON []byte, payload *lbbakPayload, err error) {
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	if !isLbbakBytes(data) {
+		return data, nil, nil
+	}
+	payload, perr := parseLbbak(data)
+	if perr != nil {
+		return nil, nil, perr
+	}
+	return payload.ConfigJSON, payload, nil
 }
 
 // RestoreAutoBackup POST /api/v1/auto-backup/:id/restore：按行读文件并走
@@ -1186,50 +1365,135 @@ func (h *Handlers) RestoreAutoBackup(c *gin.Context) {
 		return
 	}
 	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
-	// 目录守卫：相对/空 BackupDir 会在进程 CWD 下解析同名文件（误读非备份
-	// 目录文件），与写路径入口 fail-fast 同口径。
-	backupDir, dirErr := h.autoBackupDir()
-	if dirErr != nil {
-		failRestoreFileAccess(c, false, subject, "备份目录无效", http.StatusInternalServerError, dirErr)
-		return
-	}
-	path := filepath.Join(backupDir, view.Filename)
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			failRestoreFileAccess(c, false, subject, "备份文件已不存在", http.StatusNotFound, err)
-			return
+	data, failure := h.readAutoBackupRowFile(view)
+	if failure != nil {
+		switch failure.kind {
+		case autoBackupReadDirInvalid:
+			failRestoreFileAccess(c, "还原", subject, "备份目录无效", http.StatusInternalServerError, failure.cause)
+		case autoBackupReadMissing:
+			failRestoreFileAccess(c, "还原", subject, "备份文件已不存在", http.StatusNotFound, failure.cause)
+		case autoBackupReadTooLarge:
+			failRestoreFileAccess(c, "还原", subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge, failure.cause)
+		default:
+			// 还原面保留权限/errno 细节（admin 排障契约，登记在
+			// adminBusiness5xxDetailFunctions「备份文件读取失败需点名」）。
+			failRestoreFileAccess(c, "还原", subject, "读取备份文件失败: "+failure.cause.Error(), http.StatusInternalServerError, failure.cause)
 		}
-		failRestoreFileAccess(c, false, subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
-		return
-	}
-	info, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		failRestoreFileAccess(c, false, subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
-		return
-	}
-	if info.Size() > maxConfigImportBytes {
-		_ = file.Close()
-		failRestoreFileAccess(c, false, subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge,
-			fmt.Errorf("备份文件 %d 字节超过导入上限 %d 字节", info.Size(), maxConfigImportBytes))
-		return
-	}
-	data, err := io.ReadAll(io.LimitReader(file, maxConfigImportBytes+1))
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		failRestoreFileAccess(c, false, subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
-		return
-	}
-	if int64(len(data)) > maxConfigImportBytes {
-		failRestoreFileAccess(c, false, subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge,
-			fmt.Errorf("备份文件读取 %d 字节超过导入上限 %d 字节", len(data), maxConfigImportBytes))
 		return
 	}
 	h.importConfigBackupCore(c, data, view.Filename, "还原")
+}
+
+// PreviewAutoBackup GET /api/v1/auto-backup/:id/preview：还原前的只读预览。
+// 还原确认弹框此前只能拿到「备份名 + 范围」，跨版本告警要等提交之后才在响应
+// warnings 里出现（同族文件导入在预览阶段就给）。本端点读文件后复用导入/预览
+// 同一条校验链（链内只读 DB、只规整内存副本），以合同形态返回版本告警、两侧
+// 版本号、预计算的冲突置禁用清单与其它软告警。
+//
+// 严格只读：不建覆盖前快照、不启导入会话、不写 auto_backups/审计。校验失败与
+// 还原一样按 400 归因（文案与导入核心共用同一批校验错误），文件面失败与还原
+// 同族（404/413/500，审计动作「预览失败」）。5xx 不回内部错误文本（与本文件
+// 其余固定文案口径一致）。
+func (h *Handlers) PreviewAutoBackup(c *gin.Context) {
+	if !h.requireAutoBackupMaster(c) {
+		return
+	}
+	view, ok := h.autoBackupRowByID(c, "预览")
+	if !ok {
+		return
+	}
+	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
+	data, failure := h.readAutoBackupRowFile(view)
+	if failure != nil {
+		// 预览是只读探测：5xx 固定文案（不披露路径/errno，底层错误只进日志与
+		// 审计），与文件导入预览的只读口径一致。
+		switch failure.kind {
+		case autoBackupReadDirInvalid:
+			failRestoreFileAccess(c, "预览", subject, "备份目录无效", http.StatusInternalServerError, failure.cause)
+		case autoBackupReadMissing:
+			failRestoreFileAccess(c, "预览", subject, "备份文件已不存在", http.StatusNotFound, failure.cause)
+		case autoBackupReadTooLarge:
+			failRestoreFileAccess(c, "预览", subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge, failure.cause)
+		default:
+			failRestoreFileAccess(c, "预览", subject, "读取备份文件失败", http.StatusInternalServerError, failure.cause)
+		}
+		return
+	}
+	configJSON, payload, err := decodeAutoBackupPayload(data)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_b6aa582b", apimsg.ErrMsg(c, err)), MessageKey: "k_b6aa582b"})
+		return
+	}
+	var backup configBackup
+	if err := json.Unmarshal(configJSON, &backup); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b3d2459c"), MessageKey: "k_b3d2459c"})
+		return
+	}
+	// 与导入核心/文件导入预览同一门序（只读外，无写入），不为预览单开第二套
+	// 校验；RequestedSections 留空=还原语义（按备份体内 sections）。
+	chain, chainErr := validateImportBackupChain(c.Request.Context(), importValidationDeps{
+		DB:                     db.DB,
+		ValidateRuleListenPort: h.validateRuleListenPortForSave,
+	}, &backup, importValidationOptions{LbbakPayload: payload})
+	if chainErr != nil {
+		if writeImportChainReadFailure(c, chainErr) {
+			return
+		}
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_b6aa582b", apimsg.ErrMsg(c, chainErr)), MessageKey: "k_b6aa582b"})
+		return
+	}
+	warnings := []string{}
+	warnings = append(warnings, chain.SkipWarnings...)
+	// 内容未经摘要校验的史前备份：还原照常，但确认弹框必须看到。
+	if chain.NoIntegrityChecksum {
+		warnings = append(warnings, warningNoIntegrityChecksum)
+	}
+	if chain.CRSTreeReplaced {
+		warnings = append(warnings, warningCRSTreeReplaced)
+	}
+	if chain.WAFMetadataSkipped {
+		warnings = append(warnings, warningWafMetadataSkipped)
+	}
+	if chain.WAFCRSMetadataSkipped {
+		warnings = append(warnings, warningWafCRSMetadataSkipped)
+	}
+	if chain.WAFXdbMetadataSkipped {
+		warnings = append(warnings, warningWafXdbMetadataSkipped)
+	}
+	if chain.ACMEDanglingImported > 0 {
+		warnings = append(warnings, fmt.Sprintf("还原后 %d 条启用规则的 DNS 提供商配置悬挂（引用未随备份导入，且现有配置中不存在或已禁用）——下一次签发/续签将失败，请及时补齐", chain.ACMEDanglingImported))
+	}
+	// 操作者账户将被替换（选了系统数据时）：与文件导入预览同文案，让管理员在
+	// 确认还原前就知道要用备份内的管理员登录。
+	if username := c.GetString("username"); username != "" && chain.SectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], username) {
+		warnings = append(warnings, "备份不包含当前操作账户——若还原时包含“系统数据”，还原后请使用备份内的管理员账户登录")
+	}
+	warnings = append(warnings, chain.CertJobProviderWarnings...)
+	warnings = append(warnings, chain.CertJobDanglingWarnings...)
+	warnings = append(warnings, chain.AutobanClampNotes...)
+	warnings = append(warnings, chain.ConfigClampNotes...)
+	conflicts := chain.DisabledConflicts
+	if conflicts == nil {
+		conflicts = []disabledRuleConflict{}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "ok", Data: autoBackupPreviewData{
+		VersionWarning:    backupProductVersionWarning(backup.Meta, h.cfg.Version),
+		BackupVersion:     backup.Meta.AppVersion,
+		CurrentVersion:    h.cfg.Version,
+		DisabledConflicts: conflicts,
+		Warnings:          warnings,
+	}})
+}
+
+// autoBackupPreviewData 是预览端点的 data 载荷：disabled_conflicts 与
+// POST /config/import 的 data.disabled_conflicts 同形（同一 disabledRuleConflict
+// 类型序列化），前端可用同一渲染组件。
+type autoBackupPreviewData struct {
+	VersionWarning    string                 `json:"version_warning"`
+	BackupVersion     string                 `json:"backup_version"`
+	CurrentVersion    string                 `json:"current_version"`
+	DisabledConflicts []disabledRuleConflict `json:"disabled_conflicts"`
+	Warnings          []string               `json:"warnings"`
 }
 
 // DownloadAutoBackup GET /api/v1/auto-backup/:id/download：下载备份文件
@@ -1246,7 +1510,7 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 	// 目录守卫（同还原）：相对/空 BackupDir 不得在 CWD 下读取同名文件。
 	backupDir, dirErr := h.autoBackupDir()
 	if dirErr != nil {
-		failRestoreFileAccess(c, true, subject, "备份目录无效", http.StatusInternalServerError, dirErr)
+		failRestoreFileAccess(c, "下载", subject, "备份目录无效", http.StatusInternalServerError, dirErr)
 		return
 	}
 	path := filepath.Join(backupDir, view.Filename)
@@ -1256,16 +1520,16 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			failRestoreFileAccess(c, true, subject, "备份文件已不存在", http.StatusNotFound, err)
+			failRestoreFileAccess(c, "下载", subject, "备份文件已不存在", http.StatusNotFound, err)
 			return
 		}
-		failRestoreFileAccess(c, true, subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
+		failRestoreFileAccess(c, "下载", subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
 		return
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		failRestoreFileAccess(c, true, subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
+		failRestoreFileAccess(c, "下载", subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
 		return
 	}
 	c.Header("Cache-Control", "no-store, private")

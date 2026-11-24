@@ -91,7 +91,7 @@ test('拦截页恒为双档：无响应模式单选，JSON 页签常驻且可高
   assert.doesNotMatch(page, /bodyMode|singleContentType|modeSingle|dualModeTip/, '旧单档/响应模式选择必须移除')
   assert.match(page, /<el-tab-pane :label="t\('app.security.blockPages.dialog.labelJson'\)" name="json">/, 'JSON 页签不得再受单/双档条件控制')
   assert.match(page, /<CodeEditor[^>]*v-model="form\.json_content"[^>]*language="json"/, 'JSON 输入必须使用 json 高亮编辑器')
-  assert.match(page, /resolvedJson\(row\.json_content \|\| '', content\)/, '预览回退必须从页面 HTML 派生，不得写死文案')
+  assert.match(page, /previewFromContent\(row\.content \|\| '', row\.json_content \|\| '', row\.content_type\)/, '预览回退必须从页面 HTML 派生，不得写死文案——列表行预览把页面 HTML 交给 previewFromContent（JSON 回退由同一份 HTML 派生，行为见 securityPagesRefsAndPreview.spec）')
 })
 
 test('关联规则链条目：统一序号+阶段色类，不再出现阶段 0 特判文案', () => {

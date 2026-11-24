@@ -87,7 +87,7 @@ func TestApplyDefaultSecurityPolicies_secondRunAllExists(t *testing.T) {
 	}
 	// 策略计数不膨胀
 	var n int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM security_policies WHERE name IN ('信任名单','威胁情报拦截','手动黑名单','自动封禁联动','地域拦截','基础 CC 防护','WAF 请求防护','WAF 响应检测')`).Scan(&n); err != nil || n != 8 {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_policies WHERE name IN ('信任名单','威胁情报拦截','手动黑名单','自动封禁联动','地域拦截','基础 CC 防护','WAF 请求防护','WAF 响应防护')`).Scan(&n); err != nil || n != 8 {
 		t.Fatalf("policies=%d want 8 (err=%v)", n, err)
 	}
 }
@@ -685,7 +685,7 @@ func TestDefaultPolicySeeds_contract(t *testing.T) {
 			ccSeed = sd
 		case "WAF 请求防护":
 			reqCRS = sd
-		case "WAF 响应检测":
+		case "WAF 响应防护":
 			respCRS = sd
 		}
 	}

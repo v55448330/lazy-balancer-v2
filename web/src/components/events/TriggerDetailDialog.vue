@@ -92,7 +92,7 @@
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccMode') }}</span><span>{{ ccModeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccType') }}</span><span>{{ ccTypeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccTtl') }}</span><span>{{ policy?.human_verify_ttl ? t('common.app.views.trigDetail.ccTtlValue', { ttl: policy.human_verify_ttl }) : '—' }}</span></div>
-          <div v-if="policy?.cc_detect_enabled" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccSpike') }}</span><span>{{ t('common.app.views.trigDetail.ccSpikeValue', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0 }) }}</span></div>
+          <div v-if="policy?.cc_detect_enabled" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccSpike') }}</span><span>{{ t('common.app.views.trigDetail.ccSpikeValue', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0, total: ccWindowBudget(policy.cc_rps_limit, policy.cc_rps_window) }) }}</span></div>
           <div v-for="r in ccDetailRows" :key="r.label" class="trg-kv"><span class="k">{{ r.label }}</span><span>{{ r.detail }}</span></div>
           <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.ccNote') }}</span></div>
         </template>
@@ -192,7 +192,7 @@ import { formatDate } from '@/utils/date'
 import { hasOwn } from '@/utils/hasOwn'
 import { conditionTargetLabel } from '@/utils/customRuleLimits'
 import { eventActionFull, eventActionTone } from '@/utils/eventAction'
-import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, customRuleEventDbID, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, buildStageModel, wafModeLabel } from '@/utils/securityStages'
+import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, customRuleEventDbID, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, buildStageModel, ccWindowBudget, wafModeLabel } from '@/utils/securityStages'
 import type { SecurityStagePolicy } from '@/utils/securityStages'
 import { normalizeCrsGroups } from '@/utils/crsGroups'
 import { issueCrsIndexSession, useCrsRuleIndex } from '@/composables/useCrsRuleIndex'

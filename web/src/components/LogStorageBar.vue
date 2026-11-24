@@ -2,7 +2,7 @@
   <div v-if="info" class="log-storage-bar">
     <el-tooltip :content="tooltipContent" placement="top">
       <div class="bar-body">
-        <span class="name">{{ info.name }}</span>
+        <span class="name">{{ displayName }}</span>
         <span v-if="isEmpty" class="note">{{ t('common.app.views.logStorage.empty') }}</span>
         <template v-else>
           <span class="sizes">{{ sizeText }}</span>
@@ -32,10 +32,13 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatBytes } from '@/utils/formatBytes'
 import { formatInt } from '@/utils/formatInt'
+import { logStorageDisplayName } from '@/utils/logStorageName'
 import { useLogStorageStats } from '@/composables/useLogStorageStats'
 
 const { t } = useI18n()
-const props = defineProps<{ logKey: string; caddyId?: string; refreshKey?: number }>()
+// label：调用方已本地化的显示名（任务监控弹框的 task:<id> 动态行——名字由
+// 任务族显示名拼出，组件无法从后端中文 name 反推）。缺省按稳定 key 查词条。
+const props = defineProps<{ logKey: string; caddyId?: string; refreshKey?: number; label?: string }>()
 
 // 取数（含换行清空 / 换行重取 / 刷新号重取）在组合子内自洽：logKey 或 caddyId
 // 变化即重新取数并先清空旧行，调用方不必再靠 :key 重挂组件。
@@ -43,6 +46,8 @@ const { info, error, unavailable } = useLogStorageStats({
   target: () => ({ logKey: props.logKey, caddyId: props.caddyId }),
   refreshKey: () => props.refreshKey,
 })
+
+const displayName = computed(() => props.label || logStorageDisplayName(info.value?.key ?? '', info.value?.name ?? ''))
 
 // 复用 utils/formatBytes（站内字节格式化单一事实源，原私有 humanSize 与
 // Dashboard 精度不一致；该模块零 UI 依赖，不得改回 api.ts 上的旧位置）

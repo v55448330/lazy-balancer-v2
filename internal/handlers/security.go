@@ -52,6 +52,59 @@ func crsSetupConfPath() string {
 	return filepath.Join(services.CRSLiveDir(), "crs-setup.conf")
 }
 
+// customRuleRefPolicy 引用某条自定义规则的安全策略（展示面）。与删除 409 门
+// 同口径：只计 ID 数组引用形态——内嵌对象随策略存储，不构成悬空引用。
+type customRuleRefPolicy struct {
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+}
+
+// customRuleListRow 自定义规则列表行：规则本体 + 引用面，字段命名与 IP 名单
+// 同形（ref_count 含禁用策略的展示面引用；ref_count_enabled 与删除 409 门
+// 同口径，只有启用策略的引用会阻止删除）。
+type customRuleListRow struct {
+	models.SecurityCustomRule
+	RefCount        int                   `json:"ref_count"`
+	RefCountEnabled int                   `json:"ref_count_enabled"`
+	RefPolicies     []customRuleRefPolicy `json:"ref_policies"`
+}
+
+// loadCustomRuleRefPolicies 一次查询全部策略的 custom_rules 并在 Go 侧解析
+// 引用关系（SQL LIKE 无法精确匹配 JSON 数组元素，且策略 custom_rules 允许
+// 内嵌对象形状）。
+func loadCustomRuleRefPolicies() (map[int64][]customRuleRefPolicy, error) {
+	rows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(enabled,0), COALESCE(custom_rules,'[]') FROM security_policies ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	refs := make(map[int64][]customRuleRefPolicy)
+	for rows.Next() {
+		var policyID, enabled int
+		var policyName, customRules string
+		if err := rows.Scan(&policyID, &policyName, &enabled, &customRules); err != nil {
+			return nil, err
+		}
+		var ids []int
+		if json.Unmarshal([]byte(customRules), &ids) != nil {
+			continue // 内嵌对象形状不构成 ID 引用（与删除 409 门同口径）
+		}
+		seen := make(map[int]struct{}, len(ids))
+		for _, ruleID := range ids {
+			if _, dup := seen[ruleID]; dup {
+				continue
+			}
+			seen[ruleID] = struct{}{}
+			refs[int64(ruleID)] = append(refs[int64(ruleID)], customRuleRefPolicy{ID: policyID, Name: policyName, Enabled: enabled != 0})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(NULLIF(condition_logic,''),'and'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM security_custom_rules ORDER BY id")
 	if err != nil {
@@ -82,10 +135,28 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
-	if rules == nil {
-		rules = []models.SecurityCustomRule{}
+	refs, err := loadCustomRuleRefPolicies()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules})
+	// ref_policies 恒空数组（非 null）：前端契约声明为非可选数组，null 会在
+	// 展开引用清单时崩渲染（与 IP 名单列表同口径）。
+	out := make([]customRuleListRow, 0, len(rules))
+	for _, r := range rules {
+		row := customRuleListRow{SecurityCustomRule: r, RefPolicies: refs[int64(r.ID)]}
+		if row.RefPolicies == nil {
+			row.RefPolicies = []customRuleRefPolicy{}
+		}
+		row.RefCount = len(row.RefPolicies)
+		for _, ref := range row.RefPolicies {
+			if ref.Enabled {
+				row.RefCountEnabled++
+			}
+		}
+		out = append(out, row)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: out})
 }
 
 const (

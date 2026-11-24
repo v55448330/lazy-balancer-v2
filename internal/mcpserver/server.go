@@ -226,7 +226,7 @@ var tools = []toolSpec{
 	{"pull_sync", "手动触发从节点同步", http.MethodPost, "/cluster/sync/pull", nil, nil, emptySchema},
 	// 任务监控（v2.3.4）：聚合视图 + 三操作
 	{"list_system_tasks", "任务监控聚合视图（全部定时/后台任务族状态）", http.MethodGet, "/system/tasks", nil, nil, emptySchema},
-	{"get_system_task_logs", "任务文本日志（尾部 256KB；超预算截断时首行前置提示行[日志过长，仅显示最近 256KB]）", http.MethodGet, "/system/tasks/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
+	{"get_system_task_logs", "任务文本日志（尾部 256KB；超预算截断时正文只含最近 256KB 纯日志，响应携带 truncated=true）", http.MethodGet, "/system/tasks/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
 	{"get_system_task_history", "任务运行历史（task_runs 时间倒序）", http.MethodGet, "/system/tasks/{id}/history", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
 	{"trigger_system_task", "手动触发任务（全部非常驻任务族——以 GET /system/tasks 的 triggerable 字段为准；证书队列行用 cert-job:<job_id>）", http.MethodPost, "/system/tasks/{id}/trigger", []string{"id"}, nil, idSchema("id", "任务 ID（见 GET /system/tasks 的 triggerable 族）", "string")},
 	{"toggle_system_task", "统一调度开关（定时/循环=停止/恢复调度、常驻=启停；触发类不可调度）", http.MethodPost, "/system/tasks/{id}/toggle", []string{"id"}, nil, toggleTaskSchema},
@@ -246,7 +246,7 @@ var tools = []toolSpec{
 	{"update_ca_provider", "更新指定 CA 提供商", http.MethodPut, "/ca-providers/{id}", []string{"id"}, nil, updateCAProviderSchema},
 	{"test_ca_provider", "测试指定 CA 提供商连接", http.MethodPost, "/ca-providers/{id}/test", []string{"id"}, nil, idSchema("id", "CA ID", "integer")},
 	{"get_cert_job", "获取指定证书签发任务详情", http.MethodGet, "/certificates/jobs/{id}", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
-	{"get_cert_job_logs", "证书任务日志（尾部 256KB；超预算截断时首行前置提示行[日志过长，仅显示最近 256KB]，truncated=true 标记截断）", http.MethodGet, "/certificates/jobs/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
+	{"get_cert_job_logs", "证书任务日志（尾部 256KB；超预算截断时正文只含最近 256KB 纯日志，响应携带 truncated=true）", http.MethodGet, "/certificates/jobs/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
 	{"parse_certificate", "解析上传的证书内容", http.MethodPost, "/certificates/parse", nil, nil, parseCertificateSchema},
 	{"create_user", "创建用户", http.MethodPost, "/users", nil, nil, createUserSchema},
 	{"update_user", "更新指定用户（初始化管理员不可降级为普通用户——is_setup_admin=true 的行返回 400）", http.MethodPut, "/users/{id}", []string{"id"}, nil, updateUserSchema},

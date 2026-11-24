@@ -20,11 +20,11 @@ export default {
           "bodySize": "Request body size",
           "bodySizeHint": "MB; max request body size, default 128, must be 1-1024 (0 no longer means default)",
           "read": "Read timeout",
-          "readHint": "Seconds to read a request; ≥1 (0 = no timeout), commonly 60",
+          "readHint": "Seconds to read a request; ≥1, commonly 60",
           "write": "Write timeout",
-          "writeHint": "Seconds to write a response; ≥1 (0 = no timeout), commonly 60",
+          "writeHint": "Seconds to write a response; ≥1, commonly 60",
           "idle": "Idle timeout",
-          "idleHint": "Keep-alive idle seconds; ≥1 (0 = default), commonly 120",
+          "idleHint": "Keep-alive idle seconds; ≥1, commonly 120",
           "upstreamKeepalive": "Upstream keep-alive",
           "upstreamKeepaliveHint": "Seconds to keep idle upstream connections; 0 = default 2 minutes"
         },
@@ -98,6 +98,7 @@ export default {
           "tabProxy": "Reverse proxy",
           "autoRefresh": "Auto-refresh",
           "refreshBtn": "Refresh",
+          "loadFail": "Failed to load logs; retrying automatically (showing last content)",
           "closeBtn": "Close"
         },
         "list": {
@@ -607,6 +608,7 @@ export default {
           "triggerTitle": "Trigger manually",
           "execute": "Run",
           "daemonControlTitle": "Daemon task control",
+          "scheduleControlTitle": "Schedule control",
           "stop": "Stop",
           "cancelTitle": "Cancel manually",
           "cancelTask": "Cancel task"
@@ -619,11 +621,21 @@ export default {
         "stopTip": {
           "generic": "The engine stopped scheduling this task: fix the failure cause first, then re-enable scheduling or restart the process",
           "head": "Engine auto-scheduling stopped (consecutive automatic failures without schedule-slot progress)",
-          "businessDriven": "{head}: fix the failure cause, then re-save the \"automatic update\" switch on the business page, or restart the process",
-          "genericFix": "{head}: fix the failure cause, then turn the schedule switch back on here, or restart the process"
+          "businessDriven": "{head}: fix the failure cause, then re-save {target}, or restart the process",
+          "businessDrivenGeneric": "{head}: fix the failure cause, then re-save the corresponding switch on the business page, or restart the process",
+          "genericFix": "{head}: fix the failure cause, then turn the schedule switch back on here, or restart the process",
+          "recoveryTargets": {
+            "threat": "the \"Threat intel library · automatic update\" switch on the \"Rule sets\" page",
+            "crs": "the \"CRS rule library · automatic update\" switch on the \"Rule sets\" page",
+            "ip2region": "the \"IP geolocation library · automatic update\" switch on the \"Rule sets\" page",
+            "crawlerbotUpdate": "the \"Crawler address library · automatic update\" switch on the \"Rule sets\" page",
+            "autoBackup": "the \"Enable\" switch in the \"Automatic backup\" dialog on \"System settings › Basic settings\"",
+            "autoban": "the \"Auto-ban\" switch on the \"Event logs\" page"
+          }
         },
         "runConfirm": "Run \"{name}\" now?",
         "stopConfirm": "Stop \"{name}\"? Related functions will stop and can be restarted anytime.",
+        "scheduleStopConfirm": "Stop the schedule for \"{name}\"? The task will no longer run automatically; turn the switch back on to resume.",
         "cancelConfirm": "Cancel the running \"{name}\"? The download will be interrupted; completed parts are kept.",
         "restartConfirm": "Restart \"{name}\"? Related functions will be briefly interrupted.",
         "lastErrorWithBackoff": "Last error: {lastError}; contract response anomaly — auto-retry backed off until {retryAt}",
@@ -632,7 +644,9 @@ export default {
           "subtitle": "Unified task engine text logs (live refresh)",
           "empty": "No logs yet",
           "loadFailRetry": "Failed to load logs — retrying automatically",
-          "autoRefresh5s": "Auto-refresh every 5s"
+          "autoRefresh5s": "Auto-refresh every 5s",
+          "autoRefresh": "Auto-refresh",
+          "autoRefreshStopTip": "Turning this off stops auto-polling; turning it back on refreshes immediately"
         },
         "logDialogTitle": "Task logs · {name}",
         "history": {
@@ -670,8 +684,8 @@ export default {
           "appLogLevelHint": "Controls how verbose Lazy Balancer's own logs are",
           "taskLogSize": "Task log size",
           "taskLogSizeHint": "MB; rotation threshold for task and library-update logs",
-          "auditLogSize": "Audit log size",
-          "auditLogSizeHint": "MB; rotation threshold for WAF audit logs",
+          "auditLogSize": "Security event audit file size",
+          "auditLogSizeHint": "MB; rotation threshold for the WAF audit file (security events share this file); for operation logs use \"Operation audit retention\"",
           "runLogSize": "Runtime log size",
           "runLogSizeHint": "MB; rotation threshold",
           "auditRetention": "Operation audit retention",
@@ -774,6 +788,7 @@ export default {
           "slave": "Standby",
           "loading": "Loading",
           "backup": "Config backup",
+          "backupDisabledTip": "Includes history / download / restore; master node only",
           "export": "Export",
           "import": "Import",
           "restart": "Restart service",
@@ -825,6 +840,7 @@ export default {
           "failTitle": "Configuration import failed",
           "failShort": "Import failed",
           "done": "Import complete",
+          "interrupted": "Connection lost; the import may still be running in the background — check recent import records in \"Audit log\".",
           "unnamedRule": "Unnamed rule",
           "alreadyDisabled": "already disabled",
           "willDisable": "will be disabled",
@@ -841,7 +857,7 @@ export default {
           "done": "Configuration backup exported"
         },
         "autoBackup": {
-          "title": "Auto Backup",
+          "title": "Backup & restore",
           "mon": "Mon",
           "tue": "Tue",
           "wed": "Wed",
@@ -901,7 +917,12 @@ export default {
           "triggerScheduled": "Scheduled",
           "restoreConfirm": "Backup \"{name}\" will overwrite the sections it contains: {scope}; unincluded sections stay as-is. This cannot be undone. Restore?",
           "restoreTitle": "Restore configuration",
-          "restoreConfirmBtn": "Confirm restore",
+          "restoreConfirmBtn": "Restore anyway",
+          "restorePreview": {
+            "conflictsLead": "These rules conflict with the current configuration and will be disabled after restore:",
+            "warningsLead": "Before restoring, note:",
+            "fail": "Failed to load preview: {reason}; you can still restore — check the audit log for the outcome"
+          },
           "deleteConfirm": "Delete backup \"{name}\"? This cannot be undone.",
           "deleteTitle": "Delete backup",
           "deleted": "Backup deleted"
@@ -920,11 +941,14 @@ export default {
         },
         "restore": {
           "success": "Configuration restored",
+          "interrupted": "Connection lost; the restore may still be running in the background — check recent restore records in \"Audit log\".",
           "done": "Restore complete",
           "failTitle": "Configuration restore failed",
           "failShort": "Restore failed"
         },
         "conflictsDisabled": "Conflicts set to disabled: {count}",
+        "interruptedTitle": "Connection lost",
+        "gotoAuditLog": "Open audit log",
         "actions": {
           "save": "Save",
           "cancel": "Cancel",

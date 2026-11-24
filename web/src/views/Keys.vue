@@ -21,7 +21,10 @@
 
     <el-tabs v-model="apiActiveTab">
       <el-tab-pane :label="t('app.notification.keysAccess.overviewTab')" name="overview">
-        <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" />
+        <!-- 接入统计与会话消费 admin 专属端点（非管理员恒 403）：只对管理员渲染；
+             非管理员显示说明条——不请求、不显示 0 值与加载失败横幅 -->
+        <AccessStatsCards v-if="isAdmin" :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" />
+        <div v-else class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.statsAdminOnly') }}</span></div>
         <div class="section-label">{{ t('app.notification.keysAccess.accessMethodTitle') }}</div>
         <el-row :gutter="16" class="keys-mcp-block">
           <el-col :xs="24" :md="12">
@@ -113,8 +116,8 @@
             </el-card>
           </el-col>
         </el-row>
-        <!-- MCP 会话（与 API 最近调用对称：会话=有状态连接的在线视图） -->
-        <McpSessionsCard />
+        <!-- MCP 会话（与 API 最近调用对称：会话=有状态连接的在线视图）；同属 admin 专属端点，仅管理员渲染 -->
+        <McpSessionsCard v-if="isAdmin" />
 
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.keysTab')" name="keys">
@@ -218,8 +221,6 @@
         </template>
       </el-table-column>
     </el-table>
-
-    <el-empty v-if="!loading && keys.length === 0 && !loadError" :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -368,7 +369,7 @@
       <template #header>
         <DialogHeader :icon="Key" :title="t('common.app.views.keys.createKeyTitle')" :subtitle="t('common.app.views.keys.createKeySubtitle')" tone="warning" />
       </template>
-      <el-form :label-width="$flw('110px')" :disabled="creating">
+      <el-form :label-width="$flw('110px')" :disabled="creating || nodeWriteBlocked">
         <el-form-item :label="t('common.app.views.keys.keyName')" :error="createNameError">
           <el-input v-model="createForm.name" maxlength="100" show-word-limit :placeholder="t('common.app.views.keys.enterKeyName')" @input="createNameError = ''" />
         </el-form-item>
@@ -382,7 +383,7 @@
             </el-form-item>
             <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
               <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
-                <el-switch v-model="createForm.api_read_only" :disabled="!isAdmin" />
+                <el-switch v-model="createForm.api_read_only" :disabled="!isAdmin || nodeWriteBlocked" />
               </el-tooltip>
             </el-form-item>
           </div>
@@ -393,7 +394,7 @@
             </el-form-item>
             <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
               <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
-                <el-switch v-model="createForm.mcp_read_only" :disabled="!isAdmin" />
+                <el-switch v-model="createForm.mcp_read_only" :disabled="!isAdmin || nodeWriteBlocked" />
               </el-tooltip>
             </el-form-item>
           </div>
@@ -444,7 +445,7 @@
       <template #header>
         <DialogHeader :icon="Setting" :title="t('common.app.views.keys.featureConfig')" :subtitle="t('common.app.views.keys.featureTargetSubtitle', { name: featureTarget?.name || '' })" />
       </template>
-      <el-form :label-width="$flw('110px')" :disabled="featureSaving">
+      <el-form :label-width="$flw('110px')" :disabled="featureSaving || nodeWriteBlocked">
         <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
         <div class="perm-grid">
           <div class="perm-col">
@@ -454,7 +455,7 @@
             </el-form-item>
             <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
               <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
-                <el-switch v-model="featureForm.api_read_only" :disabled="!isAdmin" />
+                <el-switch v-model="featureForm.api_read_only" :disabled="!isAdmin || nodeWriteBlocked" />
               </el-tooltip>
             </el-form-item>
           </div>
@@ -465,7 +466,7 @@
             </el-form-item>
             <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
               <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
-                <el-switch v-model="featureForm.mcp_read_only" :disabled="!isAdmin" />
+                <el-switch v-model="featureForm.mcp_read_only" :disabled="!isAdmin || nodeWriteBlocked" />
               </el-tooltip>
             </el-form-item>
           </div>

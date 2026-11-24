@@ -120,9 +120,10 @@
           <el-table v-if="restStats?.recent_calls?.length" :data="restStats.recent_calls" size="small" max-height="260" stripe :header-cell-style="{ background: '#f9fafb' }">
             <el-table-column prop="time" :label="t('app.notification.deliveries.colTime')" width="105" />
             <el-table-column prop="key_name" :label="t('app.notification.keysSessions.colKey')" min-width="100" show-overflow-tooltip />
-            <el-table-column prop="method" label="M" width="58" />
-            <el-table-column prop="path" :label="t('app.notification.keysUsage.colTool')" min-width="180" show-overflow-tooltip />
-            <el-table-column label="⇄" width="58" align="center">
+            <el-table-column prop="method" :label="t('common.app.views.keys.colMethod')" width="76" />
+            <el-table-column prop="path" :label="t('common.app.views.keys.colPath')" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="ip" :label="t('common.app.views.keys.colSourceIp')" width="120" show-overflow-tooltip />
+            <el-table-column :label="t('common.app.views.keys.colStatusCode')" width="70" align="center">
               <template #default="scope">
                 <el-tag :type="scope.row.status < 400 ? 'success' : 'danger'" size="small" effect="dark">{{ scope.row.status }}</el-tag>
               </template>

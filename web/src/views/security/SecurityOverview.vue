@@ -8,6 +8,8 @@
         </h2>
         <p class="page-desc">{{ t('app.security.overview.page.desc') }}</p>
       </div>
+      <!-- 手动刷新（事件页同款）：与失败横幅的「立即重试」同一路径 -->
+      <el-button :icon="Refresh" @click="reloadAll">{{ t('app.security.overview.page.refresh') }}</el-button>
       <el-button type="primary" plain @click="openThreatScreen">
         <el-icon style="margin-right: 6px"><Monitor /></el-icon>
         {{ t('app.security.overview.page.threatScreen') }}
@@ -419,10 +421,11 @@
             <el-table-column width="84" align="right">
               <template #default="{ row }"><el-tag :type="autobanSuggestionTone(row.count)" size="small" effect="light">{{ row.count }} {{ t('app.security.overview.autoban.times') }}</el-tag></template>
             </el-table-column>
-            <el-table-column :label="t('app.security.overview.autoban.colEscalation')" width="88" align="center">
+            <el-table-column :label="t('app.security.overview.autoban.colEscalation')" width="136" align="center">
               <template #default>
                 <!-- 状态级累犯档（配置口径）：/status 建议行不携带逐身份
-                     offense_count，逐行档位不得虚构 -->
+                     offense_count，逐行档位不得虚构——每行都是同一份全局配置，
+                     列名据实标「（全局）」 -->
                 <span class="autoban-escalation-tier">{{ autobanStatValue(autobanError, t(autobanEscalationShortKey(autobanStatus?.escalation))) }}</span>
               </template>
             </el-table-column>
@@ -488,14 +491,15 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock, Tickets } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock, Tickets, Refresh } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
 import RecidivismDialog from '@/components/security/RecidivismDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
-import { pageUrl } from '@/utils/deepLink'
+import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
+import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources, type LibrarySourceRow } from '@/utils/securityLibraries'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import VChart from 'vue-echarts'
@@ -798,7 +802,9 @@ const fetchBlockedEvents = async () => {
   }
 }
 
-const goToEvents = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
+// 「最近拦截事件」卡的下钻：带动作筛选落到事件页（卡片本身就是拦截口径，
+// 不带参数会让用户落在一个全量列表上重新找）。
+const goToEvents = () => { window.open(pageUrl('security-events', { [DEEP_LINK_PARAMS.eventsAction]: 'blocked' }), '_blank', 'noopener') }
 
 // 自动封禁卡（独立整行）：数据源 /security/autoban/status，与事件页状态卡同源。
 // IP 名单单通道口径：四统计卡（今日封禁/生效条目/监控身份/累犯升级）+ 配置摘要；
@@ -923,27 +929,50 @@ const openThreatScreen = (): void => {
 }
 
 // 六路数据一次拉齐；失败后页面此前只提供整页刷新这一个恢复入口（瞬态 5xx 后
-// 面板长期不可用）。横幅的「立即重试」走同一路径，reloading 兼作并发门——
-// 连续点击不会叠发六组请求。
+// 面板长期不可用）。横幅的「立即重试」与页头「刷新」走同一路径，reloading 兼作
+// 按钮 loading 态——连续点击不会叠发六组请求。
 const reloading = ref(false)
+// 在途门：手动（重试/刷新）与后台定时刷新共用，同一时刻只允许一组六路请求在途。
+let reloadInFlight = false
+const fetchAll = (): Promise<unknown[]> => Promise.all([
+  fetchData(),
+  fetchBlockedEvents(),
+  fetchAutobanStatus(),
+  fetchIP2RegionInfo(),
+  fetchThreatLib(),
+  fetchCrawlerLib(),
+])
 const reloadAll = async (): Promise<void> => {
   if (reloading.value) return
+  if (reloadInFlight) return
+  reloadInFlight = true
   reloading.value = true
   try {
-    await Promise.all([
-      fetchData(),
-      fetchBlockedEvents(),
-      fetchAutobanStatus(),
-      fetchIP2RegionInfo(),
-      fetchThreatLib(),
-      fetchCrawlerLib(),
-    ])
+    await fetchAll()
   } finally {
+    reloadInFlight = false
     reloading.value = false
   }
 }
 
+// 后台刷新：页面常驻时六路数据不得停留在进入页面时的快照。不翻转 reloading——
+// 重试/刷新按钮的 loading 态只在用户主动触发时出现。
+const reloadInBackground = async (): Promise<void> => {
+  if (reloadInFlight) return
+  reloadInFlight = true
+  try {
+    await fetchAll()
+  } finally {
+    reloadInFlight = false
+  }
+}
+
+// 30s 可见性感知刷新：隐藏页停表、恢复可见立即补一轮（全站轮询单源）。
+const overviewRefresh = createVisibilityIntervals({ intervals: [{ tick: () => { void reloadInBackground() }, ms: 30_000 }] })
+
 onBeforeUnmount(stopChallengeTimer)
+onBeforeUnmount(overviewRefresh.stop)
+onMounted(overviewRefresh.start)
 onMounted(() => { void reloadAll() })
 </script>
 

@@ -225,13 +225,15 @@ import { useAuthStore } from '@/stores/auth'
 import { accountInitial, accountTriggerLabel, sidebarCollapsed, sidebarOverlay, sidebarWidth, toggleSidebarState } from '@/utils/sidebarLayout'
 import type { PageId } from '@/utils/pageIds'
 import { request } from '@/utils/api'
+import { ElMessageBox } from 'element-plus'
 import {Timer,  DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook, Bell } from '@element-plus/icons-vue'
 import ProfileDialog from '@/components/ProfileDialog.vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
 import { restartServiceWithFeedback } from '@/utils/restart'
 import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
-import { SETTINGS_TAB_IDS, settingsBreadcrumbParent, settingsTabTitle } from '@/utils/settingsPages'
+import { SETTINGS_TAB_IDS, settingsBreadcrumbParent, settingsTabOfPage, settingsTabTitle } from '@/utils/settingsPages'
+import { hasDirtySettingsForm } from '@/composables/useSettingsDraft'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { hasOwn } from '@/utils/hasOwn'
 import { useI18n } from 'vue-i18n'
@@ -312,7 +314,28 @@ const pageTitle = computed<Record<string, string>>(() => ({
   ...Object.fromEntries(SETTINGS_TAB_IDS.map((tab) => [`settings-${tab}`, `${t('common.app.views.layout.settingsBreadcrumbParent')} / ${settingsTabTitle(tab)}`])),
 }))
 
-const goPage = (page: PageId) => {
+// 离开「设置」逻辑页面时若有未保存改动：确认后放弃（刷新/切页都会丢弃草稿）。
+// 设置分页之间互切不拦——任务口径是「离开设置域」才提醒，页内分页切换本就
+// 保留共享模型里的编辑。全站非路由驱动，因此只能在此入口拦截。
+const leavingSettingsDraft = (page: PageId): boolean =>
+  settingsTabOfPage(authStore.currentPage) !== null && settingsTabOfPage(page) === null && hasDirtySettingsForm()
+
+const goPage = async (page: PageId): Promise<void> => {
+  if (leavingSettingsDraft(page)) {
+    try {
+      await ElMessageBox.confirm(
+        t('common.app.views.layout.unsavedLeaveMessage'),
+        t('common.app.views.layout.unsavedLeaveTitle'),
+        {
+          type: 'warning',
+          confirmButtonText: t('common.app.views.layout.unsavedLeaveConfirm'),
+          cancelButtonText: t('common.app.views.layout.unsavedLeaveStay'),
+        },
+      )
+    } catch {
+      return
+    }
+  }
   authStore.setCurrentPage(page)
   // 窄屏浮层选完页面即收起（否则浮层挡住新页内容）
   if (isNarrowViewport.value) narrowExpanded.value = false

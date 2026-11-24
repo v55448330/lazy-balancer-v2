@@ -756,7 +756,7 @@ export const buildStageModel = (
       // 异常触发三条件（突刺/4xx/会话）只在启用 CC 检测且挑战开启时可观测；
       // 逐条件独立行（标签对齐 UI），4xx=0（关闭）/会话未启用不虚增行。
       if (policy?.cc_detect_enabled && policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
-        s2rows.push({ label: t('common.app.views.stages.ccSpikeRowLabel'), detail: t('common.app.views.stages.ccSpikeSummary', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0 }) })
+        s2rows.push({ label: t('common.app.views.stages.ccSpikeRowLabel'), detail: t('common.app.views.stages.ccSpikeSummary', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0, total: ccWindowBudget(policy.cc_rps_limit, policy.cc_rps_window) }) })
         if ((policy.cc_4xx_ratio ?? 0) > 0) {
           s2rows.push({ label: t('common.app.views.stages.cc4xxRowLabel'), detail: t('common.app.views.stages.cc4xxSummary', { n: policy.cc_4xx_ratio ?? 0 }) })
         }
@@ -814,6 +814,14 @@ export const buildStageModel = (
     ],
   }
 }
+
+/**
+ * CC 请求速率的窗口预算 = 速率（次/秒）× 统计窗口秒数。引擎在同一规则 × 同一 IP
+ * 的窗口内累计请求**超过**该值才挑战；界面各渲染点用它给出「窗口内总数」，避免把
+ * 「N 次/秒 × W 秒」读成「W 秒内 N 次」（默认 40×10 时相差 10 倍）。缺值按 0。
+ */
+export const ccWindowBudget = (rpsLimit?: number | null, windowSec?: number | null): number =>
+  (Number(rpsLimit) || 0) * (Number(windowSec) || 0)
 
 // ── 明细拼装（流程抽屉首次展开时调用；纯函数，不持有缓存） ──
 
@@ -1461,6 +1469,18 @@ export const hasOtherStage2Binding = (
 ): boolean => bindings.some((binding) =>
   binding.policy_id !== selfPolicyId
   && (typeOf(binding.policy_id) ?? 'stage3') === 'stage2')
+
+/**
+ * 规则侧绑定保存的「清空全部安全策略」确认判据（可用性变更必须披露）。
+ * 规则模式的保存是按提交集**全量替换**：该规则原本有绑定、本次选择合计为零时，
+ * WAF / CC 防护 / 信任名单 / IP 访问控制整族对它静默失效——必须二次确认；
+ * 原本无绑定（缺省/空数组）→ 零到零不是变更（纯新增走另一方向），不弹。
+ * 死引用与 mixed 预选同样计为「原有绑定」（保存会把它们清理掉），语义仍属变更。
+ */
+export const needsUnbindAllConfirm = (
+  bindings: readonly PolicyBindingRef[] | null | undefined,
+  ruleModeTotal: number,
+): boolean => (bindings?.length ?? 0) > 0 && ruleModeTotal === 0
 
 /** 按单次上限切分待提交项（顺序保持；空数组→空切分）。 */
 export function chunkForBulk<T>(items: readonly T[], limit: number): T[][] {

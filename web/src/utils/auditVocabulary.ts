@@ -101,6 +101,7 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '备份下载': 'backupDownloaded',
   '备份删除': 'backupDeleted',
   '还原失败': 'restoreFailed',
+  '预览失败': 'previewFailed',
   '部分失败': 'partialFailure',
   '清理': 'cleanup',
   '清理失败': 'cleanupFailed',

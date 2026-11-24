@@ -247,3 +247,54 @@
    过期/未生效 → 只进审计与证书列表标记（可轮换状态），不得在每次保存时重复弹框。
    守卫：`internal/handlers/rules_cert_warning_response_test.go`、
    `tests/designGuard.spec.ts`（.confirm-scope-list 单源 + 规则删除确认含清单）。
+
+## 21. 增补裁定（2026-11-24 第十轮，用户实测追加的界面口径）
+1. **说明文字内的行内链接随正文字号**：`.info-note-bar` / `.form-tip-line` / `.form-tip-inline`
+   内的 `el-link`（含 `AccessibleLink`）`font-size: inherit` 并基线对齐，不得比所在说明
+   文字大一号（全局规则在 main.css，组件内不得另写）。
+2. **证书有效期文案单源**：带符号的剩余天数不得上屏——过期显示「已过期 N 天」（danger），
+   当天到期显示「今天到期」，否则「N 天后」（≤30 天 warning）。规则向导的预览行与 TLS
+   步骤提示框共用 `certExpiryText`；提示框固定三段（结论 / 证书事实：域名、过期时间 /
+   警告列表），过期时间只出现一次；预览行的证书类型、域名标签、过期时间同一行对齐。
+3. **从节点 / 只读页面整体只读**：含写操作的表单用 `el-form :disabled`（输入框、开关、
+   按钮一并禁用），不得只禁用保存按钮；纯筛选类控件（搜索、视图过滤）除外。
+4. **规则选择器次行提示的对齐与间距**：「未绑定策略 / 本策略排第 x 位」这类次行提示，左
+   边缘与上一行协议标签的左边缘对齐（缩进 22px = 复选框 14px + 标签内边距 8px），无已绑
+   策略时与标题行之间留出间距；首个 chips 的文字列与协议标签文字列同列。两个规则选择器
+   （策略页「选择关联规则」与「绑定规则」弹框）同口径。
+5. **请求速率口径**：CC 阈值的每个渲染点都写「N 次/秒（{sec} 秒内 > N×W 次）」，窗口内
+   总数一律经 `ccWindowBudget` 计算，不得再写成「N 次 / W 秒」；默认值不变。
+   守卫：`tests/designGuard.spec.ts`（第 1–4 条）、`tests/ccRateWording.spec.ts`（第 5 条）。
+
+## 22. 增补裁定（2026-11-24 第十二轮，状态语义 / 级联清单 / 深链值域）
+1. **列表状态列 = 实际生效态**：策略「启用」但未关联任何规则时不得只显示「启用」——必须
+   显示复合态「启用 · 未关联规则」（warning 色）。判定与标签色/文案单源
+   （`utils/securityPolicyList.ts` 的 `policyListStatus` + `POLICY_LIST_STATUS_TAG`），
+   组件内不得自写 `enabled ? 'success' : 'info'`。守卫：`tests/designGuard.spec.ts`。
+2. **删除策略的级联清单须含绑定解除**：§20-1 的延伸——除后端真实级联对象外，
+   「同时解除与 N 条规则的绑定」必须进清单（规则名可逐条列出；名称不可得时只报数量，
+   不得省略整段）。0 绑定时保持原一句确认。
+3. **跨页深链参数消费端必须过值域**：解析走单源（`utils/deepLink.ts`），枚举型参数只认
+   白名单取值（如 `eventsAction` 四值、`eventsAutoban` 仅 `config`），非法值丢弃；消费后
+   `history.replaceState` 清除 query，刷新不得重复触发。守卫：`tests/designGuard.spec.ts`。
+
+## 23. 增补裁定（2026-11-24 第十三轮，操作前预览 / 失败可见 / 未保存守卫 / 本地化）
+1. **覆盖型操作提交前必须有预览**：导入 / 还原这类整份覆盖配置的操作，确认框必须先
+   展示「跨版本告警 + 将被置为禁用的规则清单 + 其余告警」（数据来自只读预览接口，
+   如 `GET /auto-backup/:id/preview`），形态沿用 `.confirm-scope-lead` / `.confirm-scope-list`；
+   预览获取失败**不阻断**——以一行原因披露，仍允许继续。
+2. **轮询类查看器的失败必须可见**：日志 / 事件流等自动刷新面的 `onError` 必须置位
+   页面错误态（文案 + 重试入口，当前内容保留并注明），禁止只 `console.error`。
+   分钟级同步写请求（`timeout: 0`）断连时必须提示「可能仍在后台执行」并给出审计入口。
+3. **设置页未保存守卫**：改过且未保存时，离开设置域（侧栏切页）弹确认，刷新被
+   `beforeunload` 拦截；切设置内分页不触发。脏态以「当前表单 vs 最近一次保存/加载
+   快照」判定，登记走 `useSettingsDraft` 单例（非组件树内也能读到）。
+4. **后端下发的展示名不得直出模板**：任务名、日志存储项名等由后端返回的中文字段，
+   模板必须经 `utils` 词条映射（按稳定 key）渲染；日志类接口的本地化提示由前端按
+   标志（如 `truncated`）渲染，不得混进 `content` 正文。
+5. **可配置跳转不缓存**（前后端共同口径）：由用户配置控制的 301 / 302（HTTP→HTTPS
+   跳转、路径规则跳转、面板入口跳转）必须带 `Cache-Control: no-store`，否则修改或
+   关闭跳转后浏览器仍沿用缓存的旧跳转。请求已是 HTTPS（`X-Forwarded-Proto: https`）
+   时不得再跳到同一 https 地址（无限跳转），改为 400 + 说明。守卫：
+   `internal/services/caddy_https_redirect_loop_test.go`、
+   `caddygeoip/https_redirect_loop_test.go`。

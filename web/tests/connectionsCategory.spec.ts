@@ -27,8 +27,13 @@ test('请求视图行已是筛选键：映射幂等，不误改 active/closing/c
 
 test('ConnectionsDialog 筛选与徽标统一走映射单源', () => {
   const page = code('src/components/ConnectionsDialog.vue')
-  assert.match(page, /import \{ connectionFilterCategory \} from '@\/utils\/connectionCategories\.ts'/, '必须消费映射单源')
-  assert.match(page, /rows\.value\.filter\(\(e\) => connectionFilterCategory\(e\.category\) === category\.value\)/, '筛选必须按映射后的键比较')
+  assert.match(page, /from '@\/utils\/connectionsView\.ts'/, '必须消费视图口径单源')
+  assert.match(page, /computed\(\(\) => filterRows\(rows\.value, category\.value\)\)/, '筛选必须按映射后的键比较（5xx 分支同源）')
   assert.match(page, /const rowCat = \(row: unknown\): string =>/, '徽标/文案必须走同一映射')
+  assert.match(page, /return filterKeyOf\(/, '徽标映射复用视图单源')
   assert.match(page, /:class="'is-' \+ rowCat\(row\)">\{\{ catLabel\(rowCat\(row\)\) \}\}/, '行状态徽标按筛选键文案展示')
+  // 委派链路：connectionsView → connectionCategories（socket 状态族映射仍单源）
+  const view = code('src/utils/connectionsView.ts')
+  assert.match(view, /import \{ connectionFilterCategory \} from '\.\/connectionCategories\.ts'/, '视图单源必须复用既有 socket 状态映射')
+  assert.match(view, /filterKeyOf = \(category: string\): string => connectionFilterCategory\(category\)/, 'filterKeyOf 只做映射委派')
 })

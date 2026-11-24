@@ -328,7 +328,7 @@ test('autoban 词条 zh 母本钉 + en 侧齐备（NAT 键退役）', () => {
   const enSec = code('src/locales/en/security.ts')
   const zhTexts = [
     '"escalationLabel": "累犯升级"',
-    '"colIdentity": "IP 地址"', '"colEscalation": "累犯档"',
+    '"colIdentity": "IP 地址"', '"colEscalation": "累犯升级档（全局）"',
     '"recidivismDialogTitle": "累犯升级记录"',
     '"recidivismReset": "重置累犯记录"',
     '"bannedTodayTip": "今日写入自动封禁名单的 IP 数"',

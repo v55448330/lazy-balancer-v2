@@ -499,10 +499,8 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_a40704d5"), MessageKey: "k_a40704d5"})
 		return
 	}
-	if truncated {
-		// 截断提示行与证书任务日志端点同形态：窗口外确有未纳入的
-		// 更早日志时必须前置提示，排障者不会把尾窗误读为全部日志。
-		content = "[日志过长，仅显示最近 256KB]\n" + content
-	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": content}})
+	// 截断只以 truncated 布尔披露（与证书任务日志端点同形态）——提示行由消费端
+	// 渲染：内容本体是纯日志，不得混入任何语种的提示行（英文界面/机器消费方会
+	// 把提示行当日志正文；本地化只能在有语言上下文的渲染层做）。
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": content, "truncated": truncated}})
 }

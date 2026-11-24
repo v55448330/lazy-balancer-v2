@@ -997,8 +997,9 @@ func TestGetCertJobLogs_capsTotalResponseBytes(t *testing.T) {
 	if len(body.Data.Content) > certJobLogsMaxResponseBytes+256 {
 		t.Fatalf("content bytes=%d, want ≤ %d（尾窗硬上限）", len(body.Data.Content), certJobLogsMaxResponseBytes+256)
 	}
-	if !strings.Contains(body.Data.Content, "仅显示最近") {
-		t.Fatal("截断响应必须带提示行")
+	// 内容本体是纯日志：截断提示由前端按 truncated 渲染，不得写回响应内容。
+	if strings.Contains(body.Data.Content, "仅显示最近") || strings.Contains(body.Data.Content, "日志过长") {
+		t.Fatal("截断响应内容不得混入提示行（提示由消费端按 truncated 渲染）")
 	}
 }
 

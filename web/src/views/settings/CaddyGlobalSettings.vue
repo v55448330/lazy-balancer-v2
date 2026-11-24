@@ -216,6 +216,7 @@
     </el-tabs>
     <div class="log-toolbar">
       <el-switch v-model="autoRefresh" :active-text="t('app.settings.caddy.viewer.autoRefresh')" />
+      <el-text v-if="caddyLogError" type="danger" size="small">{{ t('app.settings.caddy.viewer.loadFail') }}</el-text>
       <el-button type="primary" :loading="logLoading" size="small" @click="refreshLogs">
         <el-icon><RefreshRight /></el-icon>{{ t('app.settings.caddy.viewer.refreshBtn') }}
       </el-button>
@@ -271,6 +272,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
+import { useSettingsFormTracker } from '@/composables/useSettingsDraft'
 import { ansiToHtml } from '@/utils/ansi'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { isConfigUnchanged } from '@/utils/saveResult'
@@ -350,6 +352,8 @@ const props = defineProps<{
   configLoaded: boolean
   /** 父级在保存成功后回填 /config；必须 await 完成再解冻表单。 */
   onSave: () => void | Promise<void>
+  /** 父级每成功回填一次本卡字段即自增：用于刷新「已保存」基线快照。 */
+  revision?: number
 }>()
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -406,6 +410,21 @@ const applyTrustedPreset = (label: string): void => {
   if (!preset) return
   trustedHeaders.value = [...preset.headers]
 }
+
+// —— 未保存改动判定（侧栏切页与 beforeunload 守卫共读） ——
+// 表单值全部落在父级共享 settings（受信代理数组经上方 watch 回写 JSON 文本）；
+// 基线=最近一次服务端确认值，由父级回填版本（revision）驱动，重挂载时
+// initSaved 不覆盖既有基线。本块必须放在受信代理回写 watch 之后：基线快照要在
+// 归一化落回 settings 之后取，否则存量非规范 JSON 会被误判成未保存编辑。
+const formTracker = useSettingsFormTracker('caddy')
+const formSnapshot = (): string => JSON.stringify(CADDY_CONFIG_KEYS.map((key) => settings.value[key]))
+const dirty = computed(() => formTracker.isDirty(formSnapshot()))
+watch(dirty, (value) => formTracker.setDirty(value), { immediate: true })
+watch(() => props.revision, () => formTracker.markSaved(formSnapshot()))
+onMounted(() => {
+  if (props.configLoaded) formTracker.initSaved(formSnapshot())
+})
+defineExpose({ dirty })
 
 // —— 引用地址列表选项（与策略侧引用选择器同数据源；仅非内置名单） ——
 interface TrustedIpListOption { id: number; name: string; entry_count: number; system?: boolean }
@@ -613,6 +632,9 @@ const activeLogTab = ref('runtime')
 const logHtml = computed(() => ansiToHtml(logContent.value))
 const autoRefresh = ref(true)
 const logContainerRef = ref<HTMLElement | null>(null)
+// 日志端点失败必须显性化：原实现只写 console，查看器继续渲染上一次内容/空白，
+// 排障最需要日志的时刻给出「没有日志」的错误结论（与运行日志同口径）。
+const caddyLogError = ref(false)
 
 // 日志尾轮询收敛 useLogTailPolling 单源（补上原缺的后台标签页暂停；
 // tab 切换/关闭的迟到响应守卫由 composable 序号 + fetch 内目标校验双层保证）。
@@ -624,10 +646,14 @@ const logTail = useLogTailPolling({
   fetch: async () => {
     const targetTab = activeLogTab.value
     const response = await request.get<CaddyLogsResponse>('/caddy/logs', { params: { type: targetTab }, silent: true })
+    caddyLogError.value = false
     if (!logDialogVisible.value || activeLogTab.value !== targetTab) return null
     return response.data?.content || ''
   },
-  onError: (error) => { console.error('Failed to fetch caddy logs:', error) },
+  onError: (error) => {
+    caddyLogError.value = true
+    console.error('Failed to fetch caddy logs:', error)
+  },
 })
 const logLoading = logTail.loading
 const refreshLogs = async (): Promise<void> => logTail.refresh()
@@ -707,6 +733,9 @@ const handleSave = async (): Promise<void> => {
       })
     }
     const saved = await request.put('/config', payload)
+    // 后端区分「配置已更新并应用」（Caddy 已重载）与「配置已更新」（仅落库/
+    // 无需重载）：固定「保存成功」词条会把两者说成同一件事。
+    const savedMessage = saved.message || ''
     // 诚实提示（v2.3.2 用户反馈）：无变化时不得谎报「保存成功」。
     // 判定：预览未变更（!changed）或后端语义键=k_f724d3c8（语言无关；原按
     // t(noChanges) 前缀比较，en 下与后端 en 文案虽同源但耦合译文、zh 下亦然——
@@ -714,7 +743,7 @@ const handleSave = async (): Promise<void> => {
     if (!changed || isConfigUnchanged(saved as unknown as { message?: string; messageKey?: string })) {
       ElMessage.info(t('app.settings.caddy.messages.noChanges'))
     } else {
-      mfaAwareSuccess(t('app.settings.caddy.messages.saved'))
+      mfaAwareSuccess(savedMessage || t('app.settings.caddy.messages.saved'))
     }
     // 等待父级回填后再由 finally 解冻，避免迟到的 /config 覆盖在途编辑；
     // onSave 为必填回调（Settings.vue 三卡统一接线）。
@@ -755,10 +784,11 @@ const handleReloadCaddy = async (): Promise<void> => {
 
 const openLogDialog = (): void => { logDialogVisible.value = true }
 const onLogDialogOpened = (): void => {
+  caddyLogError.value = false
   if (autoRefresh.value) logTail.start()
   else void logTail.refresh()
 }
-const onLogDialogClosed = (): void => { logTail.stop(); logContent.value = '' }
+const onLogDialogClosed = (): void => { logTail.stop(); logContent.value = ''; caddyLogError.value = false }
 const onLogTabChange = (): void => { logTail.invalidate(); logContent.value = ''; void logTail.refresh() }
 
 watch(autoRefresh, (enabled) => {

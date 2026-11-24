@@ -139,8 +139,12 @@ body {
   width: 100%;
 }
 
-.form-tip-line .el-link {
-  font-size: 12px;
+/* 说明文字内的行内操作链接随正文字号：el-link 默认比说明文字大一号，混排在
+   描述里会显得突出（用户实测：「去创建/编辑」与描述文字大小不一致）。 */
+.form-tip-line .el-link,
+.form-tip-inline .el-link,
+.info-note-bar .el-link {
+  font-size: inherit;
   vertical-align: baseline;
 }
 

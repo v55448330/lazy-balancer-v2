@@ -273,7 +273,20 @@ func (m *L4IPFileMatcher) readSet() (*ipPrefixSet, time.Time, int64, error) {
 	// 未经聚合，规范化在此单点兜住。
 	prefixes := make([]netip.Prefix, 0, len(cidrs))
 	for _, p := range cidrs {
-		prefixes = append(prefixes, netip.PrefixFrom(p.Addr().Unmap(), p.Bits()).Masked())
+		bits := p.Bits()
+		// 4in6 字面量（::ffff:a.b.c.d[/len]）：Unmap 后地址是 4 字节，位数必须同步
+		// 减 96（::ffff:10.9.0.0/120 → 10.9.0.0/24；裸地址 /128 → /32）。不减会得到
+		// 「v4 地址 + >32 位数」的非法前缀——排序后落在全部 v4 条目之后且比较恒小，
+		// 二分查找落空，使起始地址最高的 v4 条目永远不命中（v4 面静默失效）。
+		if p.Addr().Is4In6() {
+			bits -= 96
+		}
+		norm := netip.PrefixFrom(p.Addr().Unmap(), bits).Masked()
+		if !norm.IsValid() {
+			// 兜底：任何仍非法的前缀都不得进入有序集合（一条即可让整份 v4 面失效）。
+			continue
+		}
+		prefixes = append(prefixes, norm)
 	}
 	sort.Slice(prefixes, func(i, j int) bool {
 		a, b := prefixes[i], prefixes[j]

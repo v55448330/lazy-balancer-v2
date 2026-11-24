@@ -107,7 +107,7 @@
             </el-tooltip>
           </div>
           <!-- 不可选原因行内直出（与 SecurityPolicies 选择器同口径）：tooltip 对触屏/读屏不足 -->
-          <div class="picker-rule-detail">
+          <div class="picker-rule-detail" :class="{ 'is-empty': (bindings[rule.caddy_id] || []).length === 0 }">
             <span v-if="pickerWouldExceed(rule)" class="picker-bind-none picker-rule-block">{{ rowBlockReasons.get(rule.caddy_id) }}</span>
             <template v-else>
             <template v-for="stage in STAGE_ORDER" :key="stage">
@@ -187,6 +187,7 @@ import {
   SECURITY_BULK_LIMITS,
   MAX_POLICIES_PER_RULE,
   flattenBindingOrder,
+  needsUnbindAllConfirm,
 } from '@/utils/securityStages'
 import type {
   SecurityPolicyType,
@@ -463,6 +464,29 @@ const confirmEmptyAllow = async (lead: string, names: string[]): Promise<boolean
     return false
   }
 }
+// 清空全部策略的保存确认：规则模式的保存是按提交集全量替换，把四阶段分区全部
+// 取消勾选后保存 = WAF / CC 防护 / 信任名单 / IP 访问控制整族对该规则失效。
+// 披露形态同 DESIGN_SPEC §20 后果清单（.confirm-scope-lead / .confirm-scope-list
+// 全局单源，逐条独立成行）；取消 = 不提交、弹框由 ElMessageBox 自行保持。
+const confirmUnbindAll = async (rule: BindingEditorRule): Promise<boolean> => {
+  try {
+    await ElMessageBox.confirm(
+      h('div', [
+        h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secBinding.unbindAllLead', { rule: rule.name })),
+        h('ul', { class: 'confirm-scope-list' }, [
+          t('common.app.views.secBinding.unbindAllLossWaf'),
+          t('common.app.views.secBinding.unbindAllLossCc'),
+          t('common.app.views.secBinding.unbindAllLossTrust'),
+        ].map((item) => h('li', item))),
+      ]),
+      t('common.app.views.secBinding.unbindAllTitle'),
+      { confirmButtonText: t('common.app.views.secBinding.unbindAllOk'), cancelButtonText: t('common.app.views.secBinding.cancel'), type: 'warning' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
 const submit = async (): Promise<void> => {
   if (props.mode === 'rule') {
     const rule = props.rule
@@ -471,6 +495,8 @@ const submit = async (): Promise<void> => {
       ElMessage.warning(t('common.app.views.secBinding.ruleTotalExceeded', { max: MAX_POLICIES_PER_RULE, count: ruleModeTotal.value }))
       return
     }
+    // 可用性变更披露：原本有绑定、本次清空全部选择 → 保存即整族解绑，先确认。
+    if (needsUnbindAllConfirm(props.bindings[rule.caddy_id], ruleModeTotal.value) && !(await confirmUnbindAll(rule))) return
     if (emptyAllowSelected.value.length > 0) {
       const lead = t('common.app.views.secBinding.emptyAllowRuleLead', { rule: rule.name })
       if (!(await confirmEmptyAllow(lead, emptyAllowSelected.value.map((policy) => policy.name)))) return
@@ -583,7 +609,10 @@ const submit = async (): Promise<void> => {
 .picker-rule-item :deep(.el-checkbox__label) { display: inline-flex; align-items: center; gap: 8px; }
 .picker-proto-tag { margin: 0; flex-shrink: 0; }
 .picker-rule-block { color: #e6a23c; }
-.picker-rule-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 2px 0 2px 24px; }
+/* 明细行左边缘 = 上方协议标签的左边缘（复选框 14px + 标签内边距 8px = 22px；原 24px
+   右偏 2px）。无已绑策略时只有一行「未绑定策略」文字，与标题行之间留出间距。 */
+.picker-rule-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 2px 0 2px 22px; }
+.picker-rule-detail.is-empty { margin-top: 8px; }
 .picker-bind-group { display: inline-flex; align-items: center; gap: 4px; }
 .picker-bind-stage { font-style: normal; font-size: 12px; color: #6b7280; }
 .picker-bind-none { font-size: 12px; color: #c0c4cc; }

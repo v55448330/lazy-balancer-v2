@@ -26,7 +26,8 @@ test('basic save awaits the parent config refresh while the form stays frozen', 
   assert.doesNotMatch(page, /emit\('save'\)/, '事件兜底无消费方，不得回潮')
   assert.match(page, /const formFrozen = computed\(\(\) => isReadOnly\.value \|\| saving\.value\)/)
   const parent = code('src/views/Settings.vue')
-  assert.match(section(parent, 'const handleSaveBasic = async', 'const handleSaveCaddy'), /await refreshConfigSection\(applyBasicKeys\)/)
+  // 必须带本卡片的修订号（basicRevision）：只回填本卡片的键，另一张卡的未保存编辑不得被标成已保存
+  assert.match(section(parent, 'const handleSaveBasic = async', 'const handleSaveCaddy'), /await refreshConfigSection\(applyBasicKeys, basicRevision\)/)
 })
 
 test('Caddy and ACME saves await parent refreshes before unfreezing', () => {

@@ -26,7 +26,7 @@
     <el-table v-loading="loading" :data="sessions" stripe :header-cell-style="{ background: '#f9fafb' }" :empty-text="t('app.notification.keysSessions.emptyText')">
       <el-table-column prop="username" :label="t('app.notification.keysSessions.colUser')" min-width="130" show-overflow-tooltip />
       <el-table-column prop="key_name" :label="t('app.notification.keysSessions.colKey')" min-width="140" show-overflow-tooltip />
-      <el-table-column prop="ip" label="IP" width="140" show-overflow-tooltip />
+      <el-table-column prop="ip" :label="t('common.app.views.keys.colSourceIp')" width="140" show-overflow-tooltip />
       <el-table-column prop="user_agent" label="User-Agent" min-width="180" show-overflow-tooltip />
       <el-table-column :label="t('app.notification.keysSessions.colStatus')" width="100" align="center">
         <template #default="scope">

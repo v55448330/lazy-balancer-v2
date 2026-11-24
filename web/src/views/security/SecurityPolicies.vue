@@ -103,9 +103,11 @@
             <el-tag v-else disable-transitions size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.policies.table.status')" width="90" align="center">
+        <el-table-column :label="t('app.security.policies.table.status')" width="160" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" disable-transitions size="small" effect="light">{{ row.enabled ? t('app.security.policies.status.enabled') : t('app.security.policies.status.disabled') }}</el-tag>
+            <!-- 启用 ≠ 生效：已启用但未关联任何规则的策略不参与任何流量（默认策略即以
+                 启用态创建、不写绑定）——复合标签显性标出，不能与「启用且已关联」同样只显示「启用」 -->
+            <el-tag :type="POLICY_LIST_STATUS_TAG[policyListStatus(row.enabled, row.rule_count)].type" disable-transitions size="small" effect="light">{{ t(POLICY_LIST_STATUS_TAG[policyListStatus(row.enabled, row.rule_count)].labelKey) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column :label="t('app.security.policies.table.updatedAt')" width="170" align="center">
@@ -707,6 +709,8 @@
                   <el-input-number v-model="form.cc_rps_window" :min="1" :max="3600" controls-position="right" style="width: 100px; margin-left: 6px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsSec') }}</span>
                 </el-form-item>
+                <div class="form-tip-line">{{ t('app.security.policies.human.ccRpsExplain', { n: form.cc_rps_limit, sec: form.cc_rps_window, total: ccWindowBudget(form.cc_rps_limit, form.cc_rps_window) }) }}</div>
+                <div class="form-tip-line">{{ t('app.security.policies.human.ccRpsGuide') }}</div>
                 <el-form-item :label="t('app.security.policies.human.cc4xxLabel')">
                   <el-input-number v-model="form.cc_4xx_ratio" :min="0" :max="100" controls-position="right" style="width: 110px" />
                   <span class="form-tip-inline">%</span>
@@ -975,7 +979,7 @@
               <!-- 每条候选规则展示当前绑定链（rank 序=执行序，1-based）与本策略落点；
                    后端必然拒绝的形态（绑定条数上限 / 阶段 2 CC 防护唯一门）在选择阶段
                    禁用并逐条说明原因——冲突在整批提交时会让本片全部失败。 -->
-              <div class="rule-binding-preview">
+              <div class="rule-binding-preview" :class="{ 'is-empty': pickerMeta(rule).blockReason === '' && pickerMeta(rule).chain.length === 0 }">
                 <span v-if="pickerMeta(rule).blockReason" class="rule-binding-limit">{{ pickerMeta(rule).blockReason }}</span>
                 <template v-else>
                   <span
@@ -1114,7 +1118,7 @@
           <span v-else-if="defaultsApplyFailed" class="info-note-desc">{{ t('app.security.policies.defaults.statusUnknownTip') }}</span>
           <span v-else class="info-note-desc">
             {{ t('app.security.policies.defaults.doneBindTip') }}
-            <AccessibleLink type="primary" size="small" @click="goToPoliciesList">{{ t('app.security.policies.defaults.goRules') }}</AccessibleLink>
+            <AccessibleLink type="primary" size="small" @click="defaultsVisible = false">{{ t('app.security.policies.defaults.goRules') }}</AccessibleLink>
             {{ t('app.security.policies.defaults.doneListTip') }}
             <AccessibleLink type="primary" size="small" @click="goToIpLists">{{ t('app.security.policies.defaults.goLists') }}</AccessibleLink>
           </span>
@@ -1141,7 +1145,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, h } from 'vue'
 import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { cityEnName } from '@/utils/cityEnNames'
 import { useI18n } from 'vue-i18n'
@@ -1166,14 +1170,15 @@ import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { crsCategoryLabel } from '@/utils/crsCategories.ts'
 import { builtinBlockPageLabel, type BlockPageLike } from '@/utils/builtinBlockPages'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, aclProducesBlocking, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, normalizePolicyType, mergeChainOrder, mergeIpEntryCount, mergeIpEntryValues, normalizePolicyChainOrder, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, aclProducesBlocking, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, ccWindowBudget, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, normalizePolicyType, mergeChainOrder, mergeIpEntryCount, mergeIpEntryValues, normalizePolicyChainOrder, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy, SecurityStageCustomRule, CrsRuleFileOption } from '@/utils/securityStages'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { updaterName } from '@/utils/updaterName'
 import { hasOwn } from '@/utils/hasOwn'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
 import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, normalizeCrsGroups } from '@/utils/crsGroups'
-import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
+import { DEEP_LINK_PARAMS, EVENTS_AUTOBAN_CONFIG, pageUrl } from '@/utils/deepLink'
+import { POLICY_LIST_STATUS_TAG, policyDeleteScope, policyListStatus } from '@/utils/securityPolicyList'
 import { buildPolicyPayload, ccDetectWithoutHumanWarning, ccEffectiveAction, ccFormFromIntervention, ccInterventionFromForm, ccStage2PageOptions, challengePageMissingWidget as challengePageNeedsWidgetCheck, crawlerExemptionNeedsEngines, trustEnabledForPolicyType, type CCIntervention } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
 
@@ -1364,9 +1369,9 @@ const runApplyDefaults = async (): Promise<void> => {
     }
   }
 }
-// 指引链接：同款深链 window.open（goToBlockPagesPage 同范式）
+// 指引链接：同款深链 window.open（goToBlockPagesPage 同范式）。「返回策略列表」不经
+// 此处——用户就在策略列表页，关闭弹框即回到列表，不新开同页标签。
 const goToIpLists = () => { window.open(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'ip-lists' }), '_blank', 'noopener') }
-const goToPoliciesList = () => { window.open(pageUrl('security-policies'), '_blank', 'noopener') }
 
 const blockPages = ref<BlockPage[]>([])
 
@@ -1594,7 +1599,7 @@ const policySummaryLine = (row: PolicySummary): string => {
       parts.push(t('app.security.policies.summary.ccChallenge', { mode: modeLabel }))
     }
     if (row.cc_detect_enabled && row.human_verify_mode && row.human_verify_mode !== 'off') {
-      parts.push(t('app.security.policies.summary.ccSpike', { n: row.cc_rps_limit ?? 0, sec: row.cc_rps_window ?? 0 }))
+      parts.push(t('app.security.policies.summary.ccSpike', { n: row.cc_rps_limit ?? 0, sec: row.cc_rps_window ?? 0, total: ccWindowBudget(row.cc_rps_limit, row.cc_rps_window) }))
     }
     return parts.length > 0 ? parts.join(' · ') : t('app.security.policies.common.notEnabled')
   }
@@ -3896,12 +3901,30 @@ const handleSave = async () => {
 }
 
 const deletingPolicyId = ref<number | null>(null)
+// 删除确认的级联披露：删策略会同事务删除其全部绑定（规则本身保留、规则上的其它
+// 策略不受影响）。确认框写明「同时解除与 N 条规则的绑定」并逐条列出规则名；数量与
+// 名称不可得时的降级判定走 utils/securityPolicyList（纯函数）。清单形态=标准后果
+// 清单（全局 .confirm-scope-lead / .confirm-scope-list）。
+const policyDeleteMessage = (row: PolicySummary) => {
+  const scope = policyDeleteScope(row.rule_count, securityBindingsFailed.value ? [] : policyBoundRules(row.id).map((rule) => rule.name))
+  const scopeNodes = scope.count === 0 ? []
+    : scope.names.length === 0
+      ? [h('p', { class: 'confirm-scope-lead' }, t('app.security.policies.msg.deleteScopeCountOnly', { n: scope.count }))]
+      : [
+          h('p', { class: 'confirm-scope-lead' }, t('app.security.policies.msg.deleteScopeLead', { n: scope.count })),
+          h('ul', { class: 'confirm-scope-list' }, [
+            ...scope.names.map((name) => h('li', name)),
+            ...(scope.unnamed > 0 ? [h('li', t('app.security.policies.msg.deleteScopeMore', { n: scope.unnamed }))] : []),
+          ]),
+        ]
+  return h('div', [h('div', t('app.security.policies.msg.deleteConfirm', { name: row.name })), ...scopeNodes])
+}
 function handleDelete(row: PolicySummary) {
   // 重入守卫(快速双击叠加双确认框→双 DELETE 误报)+
   // 取消与失败分离(原空 catch 同时吞掉网络失败,行滞留至下轮)。
   if (deletingPolicyId.value !== null) return
   deletingPolicyId.value = row.id
-  ElMessageBox.confirm(t('app.security.policies.msg.deleteConfirm', { name: row.name }), t('app.security.policies.msg.deleteTitle'), { type: 'warning', confirmButtonText: t('app.security.policies.msg.deleteConfirmBtn'), cancelButtonText: t('app.security.policies.common.cancel') })
+  ElMessageBox.confirm(policyDeleteMessage(row), t('app.security.policies.msg.deleteTitle'), { type: 'warning', confirmButtonText: t('app.security.policies.msg.deleteConfirmBtn'), cancelButtonText: t('app.security.policies.common.cancel') })
     .then(async () => {
       const del = await request.delete(`/security/policies/${row.id}`)
       showSaveResult(del, t('app.security.policies.common.deleted'))
@@ -3913,7 +3936,8 @@ function handleDelete(row: PolicySummary) {
 
 const goToCustomRulesPage = () => { window.open(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'custom' }), '_blank', 'noopener') }
 const goToBlockPagesPage = () => { window.open(pageUrl('security-block-pages'), '_blank', 'noopener') }
-const goToAutobanConfig = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
+// 「查看自动封禁配置」：深链带配置意图，事件页进页后打开自动封禁配置弹框
+const goToAutobanConfig = () => { window.open(pageUrl('security-events', { [DEEP_LINK_PARAMS.eventsAutoban]: EVENTS_AUTOBAN_CONFIG }), '_blank', 'noopener') }
 const openRuleInNewTab = (caddyId: string): void => {
   // 交接改走 URL query（rs 参数），Rules.vue onMounted 消费后清除。
   window.open(pageUrl('rules', { [DEEP_LINK_PARAMS.ruleSearch]: caddyId }), '_blank', 'noopener')
@@ -4119,7 +4143,7 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
    统一为 el-form-item 包裹（EP label-width 自动对齐控件列，零 CSS 覆盖）
    单条缩进规则（宽度随容器自适应，无第二种弹框样式）。 */
 
-.binding-order-chip { font-size: 12px; padding: 0 6px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; display: inline-flex; align-items: center; line-height: 18px; vertical-align: middle; }
+.binding-order-chip { font-size: 12px; padding: 0 7px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; display: inline-flex; align-items: center; line-height: 18px; vertical-align: middle; }
 .binding-order-chip.is-self { font-weight: 700; box-shadow: inset 0 0 0 1px currentColor; }
 .binding-order-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
 /* 同阶段同色（阶段语义靠颜色区分，文案只保留序号）。 */
@@ -4143,7 +4167,11 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .block-page-summary-line.is-warning .block-page-summary-icon { color: var(--el-color-warning); }
 .block-page-summary-line.is-warning .info-note-desc { color: var(--el-color-warning-dark-2); }
 
-.rule-binding-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 24px; }
+/* 绑定预览行的左边缘 = 上方协议标签的左边缘（复选框 14px + 标签内边距 8px = 22px；
+   原 24px 比协议标签右偏 2px）。首个 chips 的文字列（1px 边框 + 7px 内边距）与协议
+   标签的文字列同列。无已绑策略时只有一行落点文字，与标题行之间留出间距。 */
+.rule-binding-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 22px; }
+.rule-binding-preview.is-empty { margin-top: 8px; }
 .rule-binding-landing { font-size: 12px; color: #6b7280; }
 .rule-binding-limit { font-size: 12px; color: #e6a23c; }
 

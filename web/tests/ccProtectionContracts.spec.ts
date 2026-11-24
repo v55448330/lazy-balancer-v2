@@ -92,11 +92,12 @@ test('拦截页 0 选项：stage2 全隐藏（auto 语义由显式内置页取�
   assert.match(policies, /action === 'reject' && \(form\.value\.block_page_id === 0 \|\| form\.value\.block_page_id === 1\)/, 'reject 0/通用默认页接管为 9001')
   // 只读投影：stage2 存量 0 行显示内置自动语义（不宣称「不使用自定义」）
   assert.match(policies, /d\.human_verify_mode[\s\S]{0,80}stage2BuiltinPageLegacy/, '只读查看投影 0 页走内置页口径')
-  // zh 文案：非 stage2 0 选项如实=直接返回状态码；存量 stage2 0 行=内置自动
+  // zh 文案：非 stage2 0 选项如实=兜底显示绑定链首个有页策略的页面、全链无页 403（无页时
+  // 状态码不生效，选项名不得宣称「直接返回状态码」）；存量 stage2 0 行=内置自动
   const opt = zhSec.match(/"noPageDefault": "([^"]*)"/)
   const legacy = zhSec.match(/"stage2BuiltinPageLegacy": "([^"]*)"/)
   assert.ok(opt && legacy, 'noPageDefault/stage2BuiltinPageLegacy 词条必须在场')
-  assert.match(opt![1], /不使用拦截页（直接返回状态码）/, '0 选项必须如实宣称无拦截页')
+  assert.match(opt![1], /不使用拦截页（兜底显示绑定链首个有页策略的页面；全链无页时返回 Caddy 默认 403）/, '0 选项必须如实宣称无拦截页（与兜底页 / 全链无页 403 两条提示同口径）')
   assert.match(legacy![1], /内置挑战页（按动作自动选用）/, '存量 stage2 0 行如实呈现内置自动')
   assert.ok(enSec.includes('"stage2BuiltinPageLegacy"'), 'en 侧齐备')
   // 死键不得复活：stage2 三态提示键已随 0 不可达退役

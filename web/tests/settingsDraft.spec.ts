@@ -156,7 +156,15 @@ test('换号后管理面板证书派生缓存必须重新读取', () => {
 
 test('Settings.vue 仅在离开设置页时复位草稿', () => {
   const page = code('src/views/Settings.vue')
-  assert.match(page, /import \{ resetSettingsDraft, syncSettingsDraftIdentity \} from '@\/composables\/useSettingsDraft'/)
+  // 同模块单条 import：不得拆成两条（符号集精确相等，删/增任一符号即红）。
+  const draftImport = page.match(/import \{([^}]*)\} from '@\/composables\/useSettingsDraft'/)
+  assert.ok(draftImport, 'Settings.vue 必须从 useSettingsDraft 导入草稿生命周期 API')
+  const importedSymbols = draftImport[1]
+    .split(',')
+    .map((symbol) => symbol.trim())
+    .filter((symbol) => symbol !== '')
+    .sort()
+  assert.deepEqual(importedSymbols, ['hasDirtySettingsForm', 'resetSettingsDraft', 'syncSettingsDraftIdentity'])
   const unmounted = section(page, 'onUnmounted(', '</script>')
   assert.match(unmounted, /resetSettingsDraft\(\)/)
   assert.doesNotMatch(

@@ -638,6 +638,15 @@ func TestGetSystemTaskLogs_fifoDoesNotBlock(t *testing.T) {
 	}
 }
 
+// taskLogsPayload GET /system/tasks/:id/logs 的响应载荷：content=纯日志正文，
+// truncated=是否按 256KB 响应预算截断（提示行由消费端按该标志渲染）。
+type taskLogsPayload struct {
+	Data struct {
+		Content   string `json:"content"`
+		Truncated bool   `json:"truncated"`
+	} `json:"data"`
+}
+
 // 任务日志只读尾窗；偏移起点的残段（含整窗无换行的
 // 巨型行）统一经 tailLogWindow 丢弃，小文件保持原样。
 func TestGetSystemTaskLogs_boundedTailDropsPartialFirstLine(t *testing.T) {
@@ -667,23 +676,21 @@ func TestGetSystemTaskLogs_boundedTailDropsPartialFirstLine(t *testing.T) {
 			if response.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
-			var payload struct {
-				Data map[string]string `json:"data"`
-			}
+			var payload taskLogsPayload
 			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if got := payload.Data["content"]; got != tc.want {
+			if got := payload.Data.Content; got != tc.want {
 				t.Fatalf("content length=%d value=%q, want length=%d %q", len(got), got, len(tc.want), tc.want)
 			}
 		})
 	}
 }
 
-// 预算截断的响应必须前置「日志过长」提示行（与证书任务日志
-// 端点同形态）：截断发生时窗口外确有未纳入的更早日志，不带提示
-// 会让排障者把尾窗误读为全部日志。
-func TestGetSystemTaskLogs_truncatedTailPrependsNoticeLine(t *testing.T) {
+// 预算截断只以 truncated 布尔披露（与证书任务日志端点同形态）：截断发生时
+// 窗口外确有未纳入的更早日志，缺标志会被消费端当作完整日志；内容本体必须是
+// 纯日志——提示行由渲染层按语言生成，不得回写进响应内容。
+func TestGetSystemTaskLogs_truncatedTailReportsFlag(t *testing.T) {
 	dir := t.TempDir()
 	oldLogDir := taskengine.LogDir()
 	taskengine.SetLogDir(dir)
@@ -709,17 +716,23 @@ func TestGetSystemTaskLogs_truncatedTailPrependsNoticeLine(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	var payload struct {
-		Data map[string]string `json:"data"`
+		Data struct {
+			Content   string `json:"content"`
+			Truncated bool   `json:"truncated"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	content := payload.Data["content"]
-	if !strings.HasPrefix(content, "[日志过长，仅显示最近 256KB]\n") {
-		t.Fatalf("预算截断的响应必须前置提示行，实得首 80 字符: %q", content[:min(len(content), 80)])
+	if !payload.Data.Truncated {
+		t.Fatal("truncated=false, want true（轮转副本超出 256KB 预算）")
+	}
+	content := payload.Data.Content
+	if strings.Contains(content, "仅显示最近") || strings.Contains(content, "日志过长") {
+		t.Fatalf("内容不得混入提示行，实得首 80 字符: %q", content[:min(len(content), 80)])
 	}
 	if !strings.Contains(content, activeLine) {
-		t.Fatal("提示行不得挤掉活动日志尾窗")
+		t.Fatal("截断标志不得挤掉活动日志尾窗")
 	}
 }
 
@@ -746,16 +759,11 @@ func TestGetSystemTaskLogs_rotationBudgetDropsPartialOldestLine(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	var payload struct {
-		Data map[string]string `json:"data"`
-	}
+	var payload taskLogsPayload
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	content := payload.Data["content"]
-	// 截断场景现在前置提示行（与证书任务日志端点同形态），日志内容
-	// 完整性断言针对提示行之后的正文。
-	content = strings.TrimPrefix(content, "[日志过长，仅显示最近 256KB]\n")
+	content := payload.Data.Content
 	if !utf8.ValidString(content) || strings.ContainsRune(content, utf8.RuneError) {
 		t.Fatal("响应首行切断 UTF-8 字符")
 	}
@@ -778,13 +786,11 @@ func TestGetSystemTaskLogs_rotationBudgetUsesConcatenatedTail(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 		}
-		var payload struct {
-			Data map[string]string `json:"data"`
-		}
+		var payload taskLogsPayload
 		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 			t.Fatal(err)
 		}
-		return payload.Data["content"]
+		return payload.Data.Content
 	}
 
 	t.Run("plain task rotation is included in 256KiB budget", func(t *testing.T) {
@@ -802,8 +808,6 @@ func TestGetSystemTaskLogs_rotationBudgetUsesConcatenatedTail(t *testing.T) {
 			t.Fatal(err)
 		}
 		content := fetchContent(t, &Handlers{}, "budget")
-		// 预算截断场景前置提示行（日志内容预算契约不含提示行本身）。
-		content = strings.TrimPrefix(content, "[日志过长，仅显示最近 256KB]\n")
 		if len(content) > tail {
 			t.Fatalf("content=%d bytes, want ≤%d", len(content), tail)
 		}
@@ -891,14 +895,12 @@ func TestGetSystemTaskLogs_includesOnlyLatestOrdinaryRotation(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	var payload struct {
-		Data map[string]string `json:"data"`
-	}
+	var payload taskLogsPayload
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
 	want := "archive-1\ncurrent\n"
-	if got := payload.Data["content"]; got != want {
+	if got := payload.Data.Content; got != want {
 		t.Fatalf("content=%q, want %q", got, want)
 	}
 }
@@ -935,16 +937,11 @@ func TestGetSystemTaskLogs_rotationContentStaysWithinTailBudget(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	var payload struct {
-		Data map[string]string `json:"data"`
-	}
+	var payload taskLogsPayload
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	content := payload.Data["content"]
-	// 该场景存在未纳入的轮转副本（预算耗尽跳过），响应前置提示行；
-	// 容量断言针对提示行之后的日志正文。
-	content = strings.TrimPrefix(content, "[日志过长，仅显示最近 256KB]\n")
+	content := payload.Data.Content
 	if len(content) > 256<<10 {
 		t.Fatalf("活动+轮转内容=%d bytes, want <= %d", len(content), 256<<10)
 	}

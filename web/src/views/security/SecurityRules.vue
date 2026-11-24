@@ -165,6 +165,19 @@
                 <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="light">{{ row.enabled ? t('common.app.views.secRules.common.enabled') : t('common.app.views.secRules.common.disabled') }}</el-tag>
               </template>
             </el-table-column>
+            <!-- 引用策略：计数含禁用策略（悬浮逐条标注启用态），与同页 IP 名单的引用列同形；
+                 仅启用策略的引用会阻止删除（删除确认与后端 409 同口径）。 -->
+            <el-table-column :label="t('common.app.views.secRules.customTab.colPolicyRefs')" width="120">
+              <template #default="{ row }">
+                <el-tooltip v-if="row.ref_policies.length > 0" placement="top" popper-class="ip-list-refs-popper" :popper-options="popperViewportSafe">
+                  <template #content>
+                    <div v-for="p in row.ref_policies" :key="p.id">{{ p.name }}<template v-if="!p.enabled">{{ t('common.app.views.secRules.ipTab.refDisabledNote') }}</template></div>
+                  </template>
+                  <span>{{ row.ref_count }}</span>
+                </el-tooltip>
+                <template v-else>{{ t('common.app.views.secRules.common.refNone') }}</template>
+              </template>
+            </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170">
               <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
             </el-table-column>
@@ -230,7 +243,7 @@
                   </template>
                   <span>{{ row.ref_count }}</span>
                 </el-tooltip>
-                <template v-else>{{ row.ref_count }}</template>
+                <template v-else>{{ t('common.app.views.secRules.common.refNone') }}</template>
               </template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170">
@@ -774,7 +787,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, h } from 'vue'
 import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { useI18n } from 'vue-i18n'
 import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled, Link, InfoFilled } from '@element-plus/icons-vue'
@@ -808,6 +821,7 @@ import {formatIpListEntryLine, parseIpListEntryLine} from '@/utils/ipListCsv'
 import { computeImportOutcome } from '@/utils/ipListImport'
 import { compileJSRegex } from '@/utils/regexPreview'
 import { popperViewportSafe } from '@/utils/popper'
+import { refDeleteDisclosure, type SecurityRefPolicy } from '@/utils/securityRefs'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { saveBlob } from '@/utils/download'
 import { useAuthStore } from '@/stores/auth'
@@ -1142,12 +1156,12 @@ const {
 } = crawlerDialog
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string; header_name?: string }
-interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; condition_logic: 'and' | 'or'; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
+// 引用面与 IP 名单行同形：ref_count 含禁用策略的展示面引用；ref_count_enabled 与删除
+// 409 门同口径（只计启用策略）——禁用策略的引用只作展示，不阻止删除。
+interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; condition_logic: 'and' | 'or'; action: string; score: number; enabled: boolean; ref_count: number; ref_count_enabled: number; ref_policies: SecurityRefPolicy[]; updated_at: string; updated_by: number }
 // 自动封禁名单条目携带加入时间/到期时间（UTC 墙钟串，formatDate 消费）
 interface IPListEntry { value: string; remark: string; created_at?: string; expires_at?: string }
-// enabled=引用策略的启用态：禁用策略的引用只作展示（不阻止删除，409 门只计启用）
-interface IPListRefPolicy { id: number; name: string; enabled: boolean }
-interface IPListRow { id: number; name: string; description: string; category: string; entries: IPListEntry[]; entry_count: number; ref_count: number; ref_count_enabled?: number; ref_policies: IPListRefPolicy[]; trusted_proxy_referenced?: boolean; trusted_proxy_scope?: string; created_by: number; created_at: string; updated_by: number; updated_at: string; system: boolean; preset_autoban?: boolean }
+interface IPListRow { id: number; name: string; description: string; category: string; entries: IPListEntry[]; entry_count: number; ref_count: number; ref_count_enabled?: number; ref_policies: SecurityRefPolicy[]; trusted_proxy_referenced?: boolean; trusted_proxy_scope?: string; created_by: number; created_at: string; updated_by: number; updated_at: string; system: boolean; preset_autoban?: boolean }
 interface CRSUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 interface IP2RegionUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 interface ThreatUpdateInfo { running: boolean; trigger: string; started_at: string; finished_at: string; outcome: string }
@@ -2119,6 +2133,31 @@ const saveCustomRule = async () => {
   } finally { savingRule.value = false }
 }
 
+// 删除确认的引用披露：列表行已带引用面（ref_count / ref_count_enabled / ref_policies），
+// 被启用策略引用时后端拒绝删除（409）——确认框必须先说清「被 N 条启用策略引用、
+// 需先解除」，不得只问「确定删除」、等用户点完才吃 409。仅禁用策略引用时不阻止
+// 删除，但会在这些策略里留下失效引用（重新启用/保存前须先移除），同样写明。
+// 判定走 utils/securityRefs（纯函数）；清单形态=标准后果清单（全局
+// .confirm-scope-lead / .confirm-scope-list）。不在前端拦截请求：列表可能过期，
+// 以服务端裁决为准（确认后照常发 DELETE）。
+const refScopeList = (names: readonly string[], unnamed: number) =>
+  (names.length === 0 ? [] : [h('ul', { class: 'confirm-scope-list' }, [
+    ...names.map((name) => h('li', name)),
+    ...(unnamed > 0 ? [h('li', t('common.app.views.secRules.msgs.ruleDeleteRefMore', { n: unnamed }))] : []),
+  ])])
+const customRuleDeleteMessage = (row: CustomRule) => {
+  const scope = refDeleteDisclosure(row)
+  return h('div', [
+    h('div', t('common.app.views.secRules.msgs.ruleDeleteConfirm', { name: row.name })),
+    ...(scope.state === 'blocked'
+      ? [h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secRules.msgs.ruleDeleteRefBlockedLead', { n: scope.enabled.count })), ...refScopeList(scope.enabled.names, scope.enabled.unnamed)]
+      : []),
+    ...(scope.disabled.count > 0
+      ? [h('p', { class: 'confirm-scope-lead' }, t('common.app.views.secRules.msgs.ruleDeleteRefDisabledLead', { n: scope.disabled.count })), ...refScopeList(scope.disabled.names, scope.disabled.unnamed)]
+      : []),
+  ])
+}
+
 const deletingCustomRuleId = ref<number | null>(null)
 const deleteCustomRule = (row: CustomRule) => {
   if (writeBlocked()) return
@@ -2126,7 +2165,7 @@ const deleteCustomRule = (row: CustomRule) => {
   // 不再叠加双确认框→双 DELETE 误报
   if (deletingCustomRuleId.value !== null) return
   deletingCustomRuleId.value = row.id
-  ElMessageBox.confirm(t('common.app.views.secRules.msgs.ruleDeleteConfirm', { name: row.name }), t('common.app.views.secRules.common.confirm'), { type: 'warning' })
+  ElMessageBox.confirm(customRuleDeleteMessage(row), t('common.app.views.secRules.common.confirm'), { type: 'warning' })
     .then(async () => { const del = await request.delete(`/security/custom-rules/${row.id}`); showSaveResult(del, t('common.app.views.secRules.common.deleted')); fetchCustomRules() })
     .catch((reason: unknown) => {
       // 取消与失败分离：ElMessageBox 取消/close 以字符串 reject；其余为真失败

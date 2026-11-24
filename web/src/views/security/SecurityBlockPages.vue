@@ -126,8 +126,8 @@
             </el-tab-pane>
             <el-tab-pane :label="t('app.security.blockPages.dialog.labelJson')" name="json">
               <div class="block-content-editor" style="width: 100%">
-                <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="resolvedJson(form.json_content, form.content)" language="json" height="220px" />
-                <CodeEditor v-else v-model="form.json_content" language="json" height="220px" :aria-label="t('app.security.blockPages.dialog.labelJson')" :placeholder="resolvedJson('', form.content)" :readonly="saving" />
+                <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="resolveBlockPageJson(form.json_content, form.content)" language="json" height="220px" />
+                <CodeEditor v-else v-model="form.json_content" language="json" height="220px" :aria-label="t('app.security.blockPages.dialog.labelJson')" :placeholder="resolveBlockPageJson('', form.content)" :readonly="saving" />
               </div>
               <div class="form-tip-line">{{ t('app.security.blockPages.dialog.jsonTip') }}</div>
             </el-tab-pane>
@@ -137,6 +137,7 @@
       </el-form>
       <template #footer>
         <el-button :disabled="saving" @click="dialogVisible = false">{{ t('app.security.blockPages.dialog.cancel') }}</el-button>
+        <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" :disabled="saving" @click="previewDraft">{{ t('app.security.blockPages.dialog.preview') }}</el-button>
         <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" type="primary" :loading="saving" :disabled="saving" @click="handleSave">{{ t('app.security.blockPages.dialog.save') }}</el-button>
       </template>
     </el-dialog>
@@ -145,6 +146,9 @@
       <template #header>
         <DialogHeader :icon="Document" :title="t('app.security.blockPages.preview.title')" :subtitle="t('app.security.blockPages.preview.subtitle')" />
       </template>
+      <!-- 草稿预览（编辑弹框 footer「预览」）：必须说明所见尚未保存、保存后才生效，
+           避免把预览当成已上线的拦截效果。 -->
+      <div v-if="previewIsDraft" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.blockPages.preview.draftNote') }}</span></div>
       <DialogSectionHeader :title="t('app.security.blockPages.preview.effectTitle')" />
       <el-tabs v-model="previewTab" class="block-page-preview-tabs">
         <el-tab-pane :label="t('app.security.blockPages.preview.tabHtml')" name="html">
@@ -171,7 +175,7 @@ import { request } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { showSaveResult } from '@/utils/saveResult'
-import { escapeHtml } from '@/utils/escape'
+import { blockPagePreviewHtml, resolveBlockPageJson } from '@/utils/blockPagePreview'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
 import { builtinBlockPageLabel, type BlockPageLike } from '@/utils/builtinBlockPages'
@@ -229,6 +233,8 @@ const previewContent = ref('')
 const previewJson = ref('')
 const previewTab = ref<'html' | 'json'>('html')
 const previewKey = ref(0)
+// 预览来源：true=编辑弹框内预览未保存草稿（显示「未保存」说明）；false=列表行已保存页
+const previewIsDraft = ref(false)
 const editingId = ref<number | null>(null)
 const currentPage = ref<BlockPage | null>(null)
 
@@ -357,31 +363,24 @@ const handleDelete = (row: BlockPage) => {
     .finally(() => { deletingId.value = null })
 }
 
-// 未配置 JSON 时的默认响应体：从 HTML <title> 派生消息（与后端
-// defaultBlockPageJSONMessage 同口径），且不含 code——状态码由 HTTP status 表达。
-const resolvedJson = (json: string, html: string): string => {
-  const trimmed = (json || '').trim()
-  if (trimmed) return trimmed
-  const match = (html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-  const title = (match?.[1] || '').replace(/<[^>]*>/g, '').trim()
-  return JSON.stringify({ message: title || 'Request blocked' }, null, 2)
-}
-
-const previewPage = (row: BlockPage) => {
-  // 非 HTML 类型按源码展示——srcdoc 恒按 text/html 解析，
-  // JSON/XML/纯文本直接塞入会被吞标签/压成无格式文本流，与真实响应不一致
-  const content = row.content || ''
-  const isHtml = !row.content_type || row.content_type.startsWith('text/html')
-  previewContent.value = !content
-    ? '<p style="color: #999; padding: 20px; text-align: center">' + t('app.security.blockPages.preview.emptyContent') + '</p>'
-    : isHtml
-      ? content
-      : `<pre style="white-space: pre-wrap; word-break: break-all; margin: 0; padding: 12px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace">${escapeHtml(content)}</pre>`
-  // API 变体预览：页面未配置时展示引擎将生成的最小 JSON（与真实回退一致）。
-  previewJson.value = resolvedJson(row.json_content || '', content)
+// 预览弹框内容组装——列表行预览与编辑弹框内「预览」（未保存草稿）共用：HTML/JSON
+// 两页签同源装载（utils/blockPagePreview，纯函数），回到 HTML 页签并重建 iframe。
+// 预览只读表单内容，不写库、不改保存模型：保存仍是「保存即生效」。
+const previewFromContent = (content: string, jsonContent: string, contentType?: string) => {
+  previewContent.value = blockPagePreviewHtml(content, contentType, t('app.security.blockPages.preview.emptyContent'))
+  previewJson.value = resolveBlockPageJson(jsonContent, content)
   previewTab.value = 'html'
   previewKey.value++
   previewVisible.value = true
+}
+const previewPage = (row: BlockPage) => {
+  previewIsDraft.value = false
+  previewFromContent(row.content || '', row.json_content || '', row.content_type)
+}
+// 编辑弹框 footer「预览」：读未保存的表单内容——所见即保存后客户端收到的响应。
+const previewDraft = () => {
+  previewIsDraft.value = true
+  previewFromContent(form.value.content, form.value.json_content, form.value.content_type)
 }
 
 onMounted(fetchData)

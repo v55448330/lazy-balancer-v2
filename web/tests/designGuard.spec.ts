@@ -179,3 +179,53 @@ test('设计守卫：空白名单策略绑定入口必须警示并确认', () =>
   assert.match(submit, /if \(currentPolicyEmptyAllow\.value && toBind\.length > 0\) \{[\s\S]*?if \(!\(await confirmEmptyAllow\(/, '策略侧提交前必须确认空白名单策略')
   assert.match(editor, /h\('ul', \{ class: 'confirm-scope-list' \}, names\.map/, '确认清单必须用标准清单类')
 })
+
+test('设计守卫：说明块内的行内链接随正文字号（DESIGN_SPEC §21-1）', () => {
+  const css = code('src/styles/main.css')
+  assert.match(css, /\.form-tip-line \.el-link,\n\.form-tip-inline \.el-link,\n\.info-note-bar \.el-link \{\s*font-size: inherit;\s*vertical-align: baseline;\s*\}/, '三个说明块内的 el-link 必须 font-size: inherit')
+})
+
+test('设计守卫：证书有效期文案单源，负数天数不上屏（DESIGN_SPEC §21-2）', () => {
+  const rules = code('src/views/Rules.vue')
+  assert.match(rules, /const certExpiryText = computed\(\(\) => \{[\s\S]*?expiredDaysAgo[\s\S]*?expiresToday[\s\S]*?expiresInDays/, '有效期文案必须由 certExpiryText 单源给出')
+  // 模板与计算属性之外不得再把带符号的剩余天数直接喂给词条
+  assert.doesNotMatch(rules, /\{ n: certInfo\.daysUntilExpiry \}/, '不得直接渲染 certInfo.daysUntilExpiry')
+  assert.match(rules, /class="cert-preview-row"/, '预览行必须同一行对齐')
+  assert.match(rules, /<dl class="cert-facts">[\s\S]*?<ul v-if="certWarnings\.length > 0" class="cert-warn-list">/, '提示框必须分证书事实与警告列表两段')
+  assert.match(code('src/locales/zh/rules.ts'), /expiredDaysAgo: '已过期 \{n\} 天'/, '过期文案必须是「已过期 N 天」')
+})
+
+test('设计守卫：从节点 / 只读页面的写表单整体禁用（DESIGN_SPEC §21-3）', () => {
+  const creds = code('src/views/notifications/SystemCredentials.vue')
+  assert.match(creds, /<el-form [^>]*:disabled="saving \|\| nodeWriteBlocked"/, 'SMTP 凭据表单必须在从节点整体禁用')
+  // 表单级禁用会被控件上的显式 :disabled="false" 压过（用户实测：「跳过证书校验」开关在从节点仍可拨）
+  assert.match(creds, /:disabled="nodeWriteBlocked \|\| !form\.smtpTls"/, 'SMTP 页带显式禁用的开关必须同时带只读判据')
+  const keys = code('src/views/Keys.vue')
+  assert.match(keys, /:disabled="creating \|\| nodeWriteBlocked"/, '新建密钥表单必须在从节点整体禁用')
+  assert.match(keys, /:disabled="featureSaving \|\| nodeWriteBlocked"/, '功能配置表单必须在从节点整体禁用')
+  assert.equal((keys.match(/:disabled="!isAdmin \|\| nodeWriteBlocked" \/>/g) ?? []).length, 4, '四个只读开关的显式禁用必须同时带只读判据')
+  assert.doesNotMatch(keys + creds, /:disabled="!(isAdmin|form\.smtpTls)" \/>/, '显式 :disabled 不得压过表单级只读')
+})
+
+test('设计守卫：规则选择器次行提示对齐与间距（DESIGN_SPEC §21-4）', () => {
+  const policies = code('src/views/security/SecurityPolicies.vue')
+  assert.match(policies, /\.rule-binding-preview \{[^}]*margin: 2px 0 4px 22px; \}/, '预览行左边缘必须等于协议标签左边缘（22px）')
+  assert.match(policies, /\.rule-binding-preview\.is-empty \{ margin-top: 8px; \}/, '无已绑策略时必须留出间距')
+  assert.match(policies, /class="rule-binding-preview" :class="\{ 'is-empty': pickerMeta\(rule\)\.blockReason === '' && pickerMeta\(rule\)\.chain\.length === 0 \}"/, '空态必须落 is-empty')
+  const editor = code('src/components/SecurityBindingEditor.vue')
+  assert.match(editor, /\.picker-rule-detail \{[^}]*margin: 2px 0 2px 22px; \}/, '绑定规则弹框明细行左边缘必须等于协议标签左边缘（22px）')
+  assert.match(editor, /\.picker-rule-detail\.is-empty \{ margin-top: 8px; \}/, '绑定规则弹框空态必须留出间距')
+  assert.match(editor, /class="picker-rule-detail" :class="\{ 'is-empty': \(bindings\[rule\.caddy_id\] \|\| \[\]\)\.length === 0 \}"/, '绑定规则弹框空态必须落 is-empty')
+})
+
+test('设计守卫：状态列=实际生效态 / 删除策略列绑定解除 / 深链过值域（DESIGN_SPEC §22）', () => {
+  const policies = code('src/views/security/SecurityPolicies.vue')
+  assert.match(policies, /POLICY_LIST_STATUS_TAG\[policyListStatus\(row\.enabled, row\.rule_count\)\]/, '状态列必须走单源复合判定（启用 · 未关联规则）')
+  assert.doesNotMatch(policies, /row\.enabled \? 'success' : 'info'/, '不得自写启用/禁用二态标签')
+  assert.match(policies, /policyDeleteScope\(/, '删除策略的级联清单必须经单源计算')
+  assert.match(policies, /class: 'confirm-scope-list'/, '删除策略确认必须列绑定解除清单（§20-1 延伸）')
+  const overview = code('src/views/security/SecurityOverview.vue')
+  assert.match(overview, /createVisibilityIntervals\(/, '安全总览必须定时自动刷新')
+  assert.match(overview, /onBeforeUnmount\(overviewRefresh\.stop\)/, '卸载必须停表')
+  assert.match(code('src/views/security/SecurityEvents.vue'), /parseSecurityEventsDeepLink\(window\.location\.search\)/, '事件页必须消费深链解析单源')
+})

@@ -150,6 +150,8 @@
       <DialogHeader :icon="Timer" :title="t('app.settings.certJobs.logDialogTitle', { domain: currentJob?.domain || '' })" :subtitle="t('app.settings.certJobs.logDialogSubtitle')" />
     </template>
     <div ref="logContainerRef" class="dialog-panel log-container">
+      <!-- 截断披露由前端渲染（后端只给 truncated 标志，内容不再混入中文提示行） -->
+      <div v-if="logTruncated" class="log-truncated">{{ t('common.app.views.logStorage.truncatedNotice') }}</div>
       <pre v-if="logHtml" class="log-content" v-html="logHtml" />
       <el-empty v-else :description="t('app.settings.certJobs.emptyLogs')" :image-size="60" />
     </div>
@@ -289,6 +291,8 @@ const dismissManualBanner = (): void => {
 
 const logDialogVisible = ref(false)
 const logContent = ref('')
+// 截断标志（后端 truncated）：提示行前端渲染，内容本身不含中文提示行。
+const logTruncated = ref(false)
 const currentJob = ref<CertJob | null>(null)
 let lastLogErrorToastAt = 0
 let logDialogController: AbortController | null = null
@@ -313,8 +317,9 @@ const logTail = useLogTailPolling({
   fetch: async () => {
     const job = currentJob.value
     if (!job) return null
-    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${job.id}/logs`, { signal: logDialogController?.signal, silent: true })
+    const res = await request.get<APIResponse<{ content: string; truncated?: boolean }>>(`/certificates/jobs/${job.id}/logs`, { signal: logDialogController?.signal, silent: true })
     if (disposed || currentJob.value?.id !== job.id) return null
+    logTruncated.value = res.data?.truncated === true
     return res.data?.content || ''
   },
   onError: (error) => {
@@ -469,6 +474,7 @@ const onLogDialogClosed = () => {
   logDialogController = null
   currentJob.value = null
   logContent.value = ''
+  logTruncated.value = false
 }
 
 const refreshLogs = async (): Promise<void> => logTail.refresh()
@@ -551,6 +557,12 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.7;
   white-space: pre-wrap;
+}
+.log-truncated {
+  color: #fbbf24;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 6px;
 }
 
 .cell-text {

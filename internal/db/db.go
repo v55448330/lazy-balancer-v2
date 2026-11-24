@@ -6827,6 +6827,7 @@ type DefaultSecurityCatalog struct {
 
 type defaultPolicySeed struct {
 	name, desc, ptype    string
+	legacyNames          []string // 模板曾用名：改名后按旧名匹配存量默认行并只改标签（不改行为字段），避免同名默认策略重复创建
 	content              string
 	mode                 string
 	ipWLEnabled          int
@@ -6863,21 +6864,25 @@ var defaultPolicySeeds = []defaultPolicySeed{
 		ipACLEnabled: 1, ipACLMode: "deny",
 		// sys: 引用取内置威胁名单单源（threatlists.go），禁止第二份字面量。
 		ipACLRefKeys: ThreatSystemListRefKeys(),
+		blockPageID:  1, // 内置默认拦截页；无页时被拦截请求只剩 Caddy 默认 403 空响应
 	},
 	{
 		name: "手动黑名单", content: "命中名单 IP/网段即拒绝（403）", desc: "[默认规则] 引用「手动黑名单地址列表」，手动添加需封禁的 IP/网段；地址可经安全事件页 IP 快捷弹框快速添加/移除",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{"manual_blacklist"},
+		blockPageID: 1,
 	},
 	{
 		name: "自动封禁联动", content: "命中自动封禁名单即拒绝（403）", desc: "[默认规则] 引用「自动封禁名单」，自动封禁触发的 IP 由本策略拦截；需在安全事件页手动开启自动封禁功能后生效",
 		ptype: "stage1", mode: "off",
 		ipACLEnabled: 1, ipACLMode: "deny", ipACLRefKeys: []string{SystemListRefKey(AutobanPresetListName)},
+		blockPageID: 1,
 	},
 	{
-		name: "地域拦截", content: "海外区域流量拒绝，其他放行", desc: "[默认规则] 拦截所选海外区域（其他放行）；IP 库可经规则集页面更新",
+		name: "地域拦截", content: "海外区域流量拒绝，其他放行", desc: "[默认规则] 拦截所选海外区域（其他放行）；IP 库可经规则集页面更新；地理库 IPv6 未启用时 IPv6 客户端同样按海外拦截",
 		ptype: "stage1", mode: "off",
 		geoipMode: "deny", geoipCountries: `["海外"]`,
+		blockPageID: 1,
 	},
 	{
 		name: "基础 CC 防护", content: "突刺/4xx/多 UA 任一命中触发滑块挑战，通过后放行", desc: "[默认规则] 突刺/4xx/多 UA 任一命中即触发人机验证",
@@ -6889,16 +6894,18 @@ var defaultPolicySeeds = []defaultPolicySeed{
 		blockPageID: 9005, // services.builtinHumanVerifyPageID（滑块页，包私有故字面量）
 	},
 	{
-		name: "WAF 请求防护", content: "CRS 请求方向 15 组规则阻断，记录请求体", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；开启请求体记录",
+		name: "WAF 请求防护", content: "CRS 请求方向 15 组规则阻断", desc: "[默认规则] CRS 阻断模式，全选请求方向规则组；请求体记录默认关闭（命中记录可能含敏感信息，排障期间再开启）",
 		ptype: "stage3", mode: "blocking",
 		// 基础设施组 49（请求评估）/59（响应评估）由渲染与写侧强制包含/剥离，
 		// 种子不得再宣称。
-		crsGroups: `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44"]`, logReqBody: 1,
+		crsGroups:   `["05","11","13","20","21","22","30","31","32","33","34","41","42","43","44"]`,
+		blockPageID: 1,
 	},
 	{
-		name: "WAF 响应检测", content: "CRS 响应方向 8 组规则阻断，检查响应体", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
+		name: "WAF 响应防护", legacyNames: []string{"WAF 响应检测"}, content: "CRS 响应方向 8 组规则阻断，检查响应体", desc: "[默认规则] CRS 阻断模式，全选响应方向规则组；开启响应体检查",
 		ptype: "stage3", mode: "blocking",
 		crsGroups: `["50","51","52","53","54","55","56","80"]`, wafCheckResp: 1,
+		blockPageID: 1,
 	},
 }
 
@@ -7065,14 +7072,16 @@ func countLegacyDefaultPolicyRows(q tableQuerier) (int, error) {
 	return pending, err
 }
 
-// legacyDefaultPolicyWhere 是补标谓词：种子名 + 种子描述前缀 + policy_type
-// 与种子一致（同名同前缀但阶段型不符的行不误标）。参数顺序=
-// 前缀两次（substr 长度与比较值）+ 每种子（名、阶段型）对——与
-// defaultPolicySeeds 的顺序严格同序。
+// legacyDefaultPolicyWhere 是补标谓词：种子名（含曾用名）+ 种子描述前缀 +
+// policy_type 与种子一致（同名同前缀但阶段型不符的行不误标）。参数顺序=
+// 前缀两次（substr 长度与比较值）+ 每种子（名、阶段型）对（曾用名紧跟当前
+// 名）——与 defaultPolicySeeds 的顺序严格同序。
 func legacyDefaultPolicyWhere() string {
 	conds := make([]string, 0, len(defaultPolicySeeds))
-	for range defaultPolicySeeds {
-		conds = append(conds, "(name=? AND policy_type=?)")
+	for _, sd := range defaultPolicySeeds {
+		for range append([]string{sd.name}, sd.legacyNames...) {
+			conds = append(conds, "(name=? AND policy_type=?)")
+		}
 	}
 	return `is_default_policy=0 AND substr(COALESCE(description,''),1,length(?))=? AND (` + strings.Join(conds, " OR ") + `)`
 }
@@ -7081,6 +7090,9 @@ func legacyDefaultPolicyMarkArgs() []any {
 	args := []any{defaultPolicySeedDescPrefix, defaultPolicySeedDescPrefix}
 	for _, sd := range defaultPolicySeeds {
 		args = append(args, sd.name, sd.ptype)
+		for _, name := range sd.legacyNames {
+			args = append(args, name, sd.ptype)
+		}
 	}
 	return args
 }
@@ -7095,6 +7107,24 @@ func legacyDefaultPolicyMarkSQL() string {
 func markLegacyDefaultPoliciesTx(tx *sql.Tx) error {
 	if _, err := tx.Exec(legacyDefaultPolicyMarkSQL(), legacyDefaultPolicyMarkArgs()...); err != nil {
 		return fmt.Errorf("mark legacy default policies: %w", err)
+	}
+	return nil
+}
+
+// renameLegacyDefaultPoliciesTx 把曾用名的存量默认行改名为当前模板名：只改
+// 标签（enabled/策略字段一律不动），且仅当新名尚无同名行时执行——避免 apply
+// 因模板改名重复创建一条默认策略，也不与用户自建同名行撞名。
+func renameLegacyDefaultPoliciesTx(tx *sql.Tx) error {
+	for _, sd := range defaultPolicySeeds {
+		for _, legacy := range sd.legacyNames {
+			if _, err := tx.Exec(`UPDATE security_policies SET name=?
+				WHERE name=? AND policy_type=? AND COALESCE(is_default_policy,0)=1
+				  AND substr(COALESCE(description,''),1,length(?))=?
+				  AND NOT EXISTS (SELECT 1 FROM security_policies WHERE name=?)`,
+				sd.name, legacy, sd.ptype, defaultPolicySeedDescPrefix, defaultPolicySeedDescPrefix, sd.name); err != nil {
+				return fmt.Errorf("rename legacy default policy %q: %w", legacy, err)
+			}
+		}
 	}
 	return nil
 }
@@ -7127,6 +7157,12 @@ func applyDefaultSecurityPolicies(actorID int64, reset bool) ([]DefaultApplyItem
 		// 旧备份恢复等形态：真默认行尚未带身份标记——同事务补标，避免把
 		// 它们当用户同名行重复创建。
 		if err := markLegacyDefaultPoliciesTx(tx); err != nil {
+			return err
+		}
+		// 模板改名（名称对齐行为）：存量默认行按曾用名匹配后只改标签，不改
+		// 任何行为字段，也不重复创建同名默认策略。必须在补标之后（曾用名行
+		// 需先带身份标记）。
+		if err := renameLegacyDefaultPoliciesTx(tx); err != nil {
 			return err
 		}
 		// 1) 用户地址列表：按名复用，缺失创建（空条目）。列表侧维持按名匹配

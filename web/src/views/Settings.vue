@@ -33,11 +33,13 @@
         :on-save="handleSaveBasic"
         :saved-threat-screen-mode="savedThreatScreenMode"
         :saved-threat-traffic-sample-n="savedThreatTrafficSampleN"
+        :revision="basicRevision"
       />
       <CaddyGlobalSettings
         v-model:settings="settings"
         :config-loaded="configLoaded"
         :on-save="handleSaveCaddy"
+        :revision="caddyRevision"
       />
     </div>
     <ClusterSettings
@@ -55,7 +57,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { resetSettingsDraft, syncSettingsDraftIdentity } from '@/composables/useSettingsDraft'
+import { hasDirtySettingsForm, resetSettingsDraft, syncSettingsDraftIdentity } from '@/composables/useSettingsDraft'
 import { request } from '@/utils/api'
 import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { normalizeTrafficSampleN } from '@/utils/threatFlowRules'
@@ -227,6 +229,10 @@ const applyCertKeys = (data: ConfigPayload) => {
 const configLoaded = ref(false)
 // 首屏失败显性化（模板重试入口）；任一成功 /config 读取都恢复保存门
 const configLoadFailed = ref(false)
+// 「已保存」基线版本：每成功回填一次对应卡片字段即自增，卡片据此刷新脏态快照
+// （基础卡与 Caddy 卡各取自己的键，互不吞掉对方的未保存编辑）。
+const basicRevision = ref(0)
+const caddyRevision = ref(0)
 // 横幅只在消费 /config 的分页成立（集群/任务监控不读它，文案会误导）
 const configBannerVisible = computed(() => configLoadFailed.value && settingsTabConsumesConfig(activeTab.value))
 const fetchSettings = async () => {
@@ -240,6 +246,8 @@ const fetchSettings = async () => {
       applyCertKeys(res.data)
       configLoaded.value = true
       configLoadFailed.value = false
+      basicRevision.value++
+      caddyRevision.value++
     }
   } catch (error) {
     console.error('Failed to fetch settings:', error)
@@ -247,7 +255,7 @@ const fetchSettings = async () => {
   }
 }
 
-const refreshConfigSection = async (apply: (data: ConfigPayload) => void) => {
+const refreshConfigSection = async (apply: (data: ConfigPayload) => void, revision?: { value: number }) => {
   const requestSeq = ++settingsRequestSeq
   try {
     const res = await request.get('/config')
@@ -257,6 +265,7 @@ const refreshConfigSection = async (apply: (data: ConfigPayload) => void) => {
       // 成功的路径不再让 Basic/Caddy 保存永久禁用（原只有 fetchSettings 置 true）。
       configLoaded.value = true
       configLoadFailed.value = false
+      if (revision) revision.value++
     }
   } catch (error) {
     console.error('Failed to fetch settings:', error)
@@ -265,11 +274,11 @@ const refreshConfigSection = async (apply: (data: ConfigPayload) => void) => {
 }
 
 const handleSaveBasic = async () => {
-  await refreshConfigSection(applyBasicKeys)
+  await refreshConfigSection(applyBasicKeys, basicRevision)
 }
 
 const handleSaveCaddy = async () => {
-  await refreshConfigSection(applyCaddyKeys)
+  await refreshConfigSection(applyCaddyKeys, caddyRevision)
 }
 
 const handleSaveCertificates = async () => {
@@ -296,8 +305,18 @@ watch(() => authStore.user?.id, (userId) => {
   syncSettingsDraftIdentity(userId ?? null)
 })
 
+// 未保存改动在刷新/关闭页面时同样会静默丢失（侧栏切页的确认在 AppLayout，
+// 全站非路由驱动），原生 beforeunload 是浏览器留给页面的唯一拦截点。
+const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
+  if (!hasDirtySettingsForm()) return
+  event.preventDefault()
+  // 部分浏览器仍需 returnValue 才显示原生确认框
+  event.returnValue = ''
+}
+
 onMounted(() => {
   syncSettingsDraftIdentity(authStore.user?.id ?? null)
+  window.addEventListener('beforeunload', handleBeforeUnload)
   if (settingsTabConsumesConfig(activeTab.value)) void fetchSettings()
 })
 
@@ -305,6 +324,7 @@ onMounted(() => {
 // 存活：页内切换分页不重置（否则基础设置卡的暂存内容静默丢失），离开系统
 // 设置（本组件卸载）才复位。
 onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   resetSettingsDraft()
 })
 </script>

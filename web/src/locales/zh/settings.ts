@@ -20,11 +20,11 @@ export default {
           "bodySize": "请求体大小",
           "bodySizeHint": "MB，请求体上限；默认 128，必须为 1-1024（0 不再表示默认）",
           "read": "读取超时",
-          "readHint": "秒，读请求超时；≥1（0 = 无超时），常用 60",
+          "readHint": "秒，读请求超时；≥1，常用 60",
           "write": "写入超时",
-          "writeHint": "秒，写响应超时；≥1（0 = 无超时），常用 60",
+          "writeHint": "秒，写响应超时；≥1，常用 60",
           "idle": "空闲超时",
-          "idleHint": "秒，Keep-Alive 空闲；≥1（0 = 默认），常用 120",
+          "idleHint": "秒，Keep-Alive 空闲；≥1，常用 120",
           "upstreamKeepalive": "上游 Keepalive",
           "upstreamKeepaliveHint": "秒，上游空闲保持；0 = 默认 2 分钟"
         },
@@ -98,6 +98,7 @@ export default {
           "tabProxy": "反向代理",
           "autoRefresh": "自动刷新",
           "refreshBtn": "刷新",
+          "loadFail": "日志加载失败，自动重试中（当前展示上一次内容）",
           "closeBtn": "关闭"
         },
         "list": {
@@ -607,6 +608,7 @@ export default {
           "triggerTitle": "手动触发",
           "execute": "执行",
           "daemonControlTitle": "常驻任务控制",
+          "scheduleControlTitle": "调度控制",
           "stop": "停止",
           "cancelTitle": "手动取消",
           "cancelTask": "取消任务"
@@ -619,11 +621,21 @@ export default {
         "stopTip": {
           "generic": "引擎已停止该任务自动调度：请先修复失败原因，再重新开启调度，或重启进程恢复",
           "head": "引擎已停止自动调度（自动轮连续失败且排程槽未推进）",
-          "businessDriven": "{head}：请先修复失败原因，再到对应业务页重新保存「自动更新」开关，或重启进程恢复",
-          "genericFix": "{head}：请先修复失败原因，再打开本页调度开关恢复，或重启进程恢复"
+          "businessDriven": "{head}：请先修复失败原因，再重新保存{target}，或重启进程恢复",
+          "businessDrivenGeneric": "{head}：请先修复失败原因，再到对应业务页重新保存该功能的开关，或重启进程恢复",
+          "genericFix": "{head}：请先修复失败原因，再打开本页调度开关恢复，或重启进程恢复",
+          "recoveryTargets": {
+            "threat": "「规则集」页的「威胁情报库 · 自动更新」开关",
+            "crs": "「规则集」页的「CRS 规则库 · 自动更新」开关",
+            "ip2region": "「规则集」页的「IP 地理库 · 自动更新」开关",
+            "crawlerbotUpdate": "「规则集」页的「爬虫地址库 · 自动更新」开关",
+            "autoBackup": "「系统设置 › 基础设置」页「自动备份」弹框里的「启用」开关",
+            "autoban": "「事件日志」页的「自动封禁」开关"
+          }
         },
         "runConfirm": "立即执行「{name}」？",
         "stopConfirm": "确认停止「{name}」？停止后相关功能将中断，可随时重新启动。",
+        "scheduleStopConfirm": "确认停止「{name}」的自动调度？该任务将不再自动执行，可随时重新开启开关恢复。",
         "cancelConfirm": "取消运行中的「{name}」？下载阶段将中断，已完成部分保留。",
         "restartConfirm": "确认重启「{name}」？重启期间相关功能将短暂中断。",
         "lastErrorWithBackoff": "最后错误：{lastError}；契约响应异常，自动重试已退避至 {retryAt}",
@@ -632,7 +644,9 @@ export default {
           "subtitle": "统一任务引擎文本日志（实时刷新）",
           "empty": "暂无日志",
           "loadFailRetry": "日志加载失败，自动重试中",
-          "autoRefresh5s": "每 5 秒自动刷新"
+          "autoRefresh5s": "每 5 秒自动刷新",
+          "autoRefresh": "自动刷新",
+          "autoRefreshStopTip": "关闭后停止自动拉取；再次打开会立即刷新一次"
         },
         "logDialogTitle": "任务日志 · {name}",
         "history": {
@@ -670,8 +684,8 @@ export default {
           "appLogLevelHint": "控制 Lazy Balancer 自身日志详细程度",
           "taskLogSize": "任务日志大小",
           "taskLogSizeHint": "MB，任务与库更新日志轮转阈值",
-          "auditLogSize": "审计日志大小",
-          "auditLogSizeHint": "MB，WAF 审计日志轮转阈值",
+          "auditLogSize": "安全事件审计文件大小",
+          "auditLogSizeHint": "MB，WAF 审计文件（安全事件与此文件同源）轮转阈值；操作日志请用「操作审计保留」",
           "runLogSize": "运行日志大小",
           "runLogSizeHint": "MB，轮转阈值",
           "auditRetention": "操作审计保留",
@@ -774,6 +788,7 @@ export default {
           "slave": "从节点",
           "loading": "加载中",
           "backup": "配置备份",
+          "backupDisabledTip": "含历史 / 下载 / 还原；仅主节点可用",
           "export": "导出",
           "import": "导入",
           "restart": "重启服务",
@@ -825,6 +840,7 @@ export default {
           "failTitle": "配置导入失败",
           "failShort": "导入失败",
           "done": "导入完成",
+          "interrupted": "连接已中断；导入可能仍在后台执行，结果请到「操作日志」查看最近的导入记录。",
           "unnamedRule": "未命名规则",
           "alreadyDisabled": "已禁用",
           "willDisable": "将被禁用",
@@ -841,7 +857,7 @@ export default {
           "done": "配置备份已导出"
         },
         "autoBackup": {
-          "title": "自动备份",
+          "title": "备份与还原",
           "mon": "周一",
           "tue": "周二",
           "wed": "周三",
@@ -901,7 +917,12 @@ export default {
           "triggerScheduled": "定时",
           "restoreConfirm": "将使用备份「{name}」覆盖该备份包含的分类：{scope}；未包含的分类保持现状。此操作不可撤销。确认还原？",
           "restoreTitle": "还原配置",
-          "restoreConfirmBtn": "确认还原",
+          "restoreConfirmBtn": "仍然还原",
+          "restorePreview": {
+            "conflictsLead": "以下规则与现有配置冲突，还原后会被置为禁用：",
+            "warningsLead": "还原前请留意：",
+            "fail": "预览获取失败：{reason}；仍可继续还原，结果以操作日志为准"
+          },
           "deleteConfirm": "确认删除备份「{name}」？删除后不可恢复。",
           "deleteTitle": "删除备份",
           "deleted": "备份已删除"
@@ -920,11 +941,14 @@ export default {
         },
         "restore": {
           "success": "配置还原成功",
+          "interrupted": "连接已中断；还原可能仍在后台执行，结果请到「操作日志」查看最近的还原记录。",
           "done": "还原完成",
           "failTitle": "配置还原失败",
           "failShort": "还原失败"
         },
         "conflictsDisabled": "冲突置为禁用：{count} 条",
+        "interruptedTitle": "连接已中断",
+        "gotoAuditLog": "前往操作日志",
         "actions": {
           "save": "保存",
           "cancel": "取消",

@@ -64,4 +64,21 @@ func init() {
 	// 任务监控：不可取消任务的取消拒绝（409）。与「任务未在运行中或不支持取消」
 	// 拆分——运行中的不可取消任务不得报「未在运行」（与监控页显示自相矛盾）。
 	Register("k_44b8c98f", "该任务不支持手动取消", "This task cannot be cancelled manually")
+
+	// 覆盖前自动快照（导入/还原的整体覆盖前的唯一回退点）：成功行 message
+	// 与失败披露共用一组词条——快照失败不阻断覆盖，但必须显性披露原因。
+	Register("k_b7ea8eca", "覆盖前自动快照（%s）：%s", "Snapshot taken before overwrite (%s): %s")
+	Register("k_4b160774", "覆盖前自动快照未生成：%s（本次%s仍照常执行）", "No snapshot was taken before the overwrite: %s (%s continues anyway)")
+	Register("k_6b44007b", "备份目录无效（%s）", "Backup directory is invalid (%s)")
+	Register("k_3972ec06", "已有备份任务正在执行", "another backup task is already running")
+	Register("k_504fb692", "规则库文件正被更新或同步任务占用", "the rule-library files are being updated or synced right now")
+	Register("k_25473d88", "创建备份目录失败（%s）", "failed to create the backup directory (%s)")
+	Register("k_b814b377", "备份构建失败（%s）", "failed to build the backup (%s)")
+	Register("k_25e14bd7", "备份文件名分配失败（%s）", "failed to allocate a backup filename (%s)")
+	Register("k_498494c0", "备份文件写入失败（%s）", "failed to write the backup file (%s)")
+	Register("k_e9128651", "备份记录写入失败（%s）", "failed to write the backup record (%s)")
+
+	// 还原前只读预览的 400 归因（与导入核心同一批校验错误，走词条以支持 en）。
+	Register("k_b3d2459c", "备份文件格式不正确", "The backup file format is incorrect")
+	Register("k_b6aa582b", "备份文件校验未通过：%s", "The backup file failed validation: %s")
 }

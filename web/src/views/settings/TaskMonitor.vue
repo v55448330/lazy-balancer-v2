@@ -180,11 +180,14 @@
               <el-switch :model-value="!!row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
             </el-tooltip>
             <el-tooltip v-else-if="row.kind !== 'oneshot'" :content="scheduleStoppedTip(row as TaskInfo) || (isBusinessDrivenTask(row as TaskInfo) ? t('app.settings.taskMonitor.schedule.businessDriven') : t('app.settings.taskMonitor.schedule.toggle'))" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <!-- 引擎自行停调（连续失败未推进排程槽）：业务驱动任务的开关在本页
-                   只读，恢复入口在业务页——用警示标签替代不可用开关，避免「关着的
-                   开关」被读成用户主动停止；非业务驱动任务保留开关（打开即恢复）。 -->
-              <el-tag v-if="row.schedule_stopped_reason && isBusinessDrivenTask(row as TaskInfo)" size="small" type="danger" effect="plain">{{ t('app.settings.taskMonitor.schedule.stoppedTag') }}</el-tag>
-              <el-switch v-else :model-value="!!row.loop_on" :disabled="!canOperate || isBusinessDrivenTask(row as TaskInfo)" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
+              <!-- 引擎自行停调（连续失败未推进排程槽）与用户主动停止必须可区分：
+                   「已停调」红标对两类任务都显示，否则非业务驱动任务的关态开关会被
+                   读成用户自己的操作。业务驱动任务的开关在本页只读（恢复入口在业务
+                   页），故只渲染标签；其余任务标签之下保留开关（打开即恢复）。 -->
+              <span class="tm-schedule-cell">
+                <el-tag v-if="row.schedule_stopped_reason" size="small" type="danger" effect="plain">{{ t('app.settings.taskMonitor.schedule.stoppedTag') }}</el-tag>
+                <el-switch v-if="!isBusinessDrivenTask(row as TaskInfo)" :model-value="!!row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
+              </span>
             </el-tooltip>
             <!-- 触发类（含 cert-job 动态行）：统一显示禁用开关保持页面一致性——
                  仅手动/代码触发执行（2026-10-01 用户裁定；cert-job 特例已消除） -->
@@ -344,21 +347,32 @@
     <!-- 任务日志弹框（与证书日志同款：暗色终端流） -->
     <el-dialog v-model="logsVisible" width="min(1100px, 94vw)" top="5vh" destroy-on-close @closed="closeLogs">
       <template #header>
-        <DialogHeader :icon="Timer" :title="t('app.settings.taskMonitor.logDialogTitle', { name: logsTask?.name || '' })" :subtitle="t('app.settings.taskMonitor.log.subtitle')" />
+        <DialogHeader :icon="Timer" :title="t('app.settings.taskMonitor.logDialogTitle', { name: taskDisplayName(logsTask?.name || '') })" :subtitle="t('app.settings.taskMonitor.log.subtitle')" />
       </template>
-      <!-- 日志存储统计栏：task:<id> 逐任务真实文件（含 cert-job 动态行）；后端未含该键时组件自隐 -->
+      <!-- 日志存储统计栏：task:<id> 逐任务真实文件（含 cert-job 动态行）；后端未含该键时组件自隐。
+           显示名由本页拼（任务族显示名 + 词条后缀）——后端 name 是中文母本，不能直出。 -->
       <div class="tm-log-stats">
-        <LogStorageBar :log-key="logsTaskStorageKey" style="margin-right: auto" />
+        <LogStorageBar :log-key="logsTaskStorageKey" :label="logsStorageLabel" style="margin-right: auto" />
       </div>
-          <div ref="logContainerRef" class="dialog-panel tm-log-container">
+      <div ref="logContainerRef" class="dialog-panel tm-log-container">
+        <!-- 截断披露：提示行由前端渲染（zh/en），后端只给 truncated 标志——内容
+             本身不再混入中文提示行（英文界面/机器消费方不再见到中文母本）。 -->
+        <div v-if="logsTruncated" class="tm-log-truncated">{{ t('common.app.views.logStorage.truncatedNotice') }}</div>
         <pre v-if="logsText" class="tm-log-content">{{ logsText }}</pre>
         <el-empty v-else :description="t('app.settings.taskMonitor.log.empty')" :image-size="60" />
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
           <span v-if="logsLoadError" style="font-size: 12px; color: var(--el-color-danger); margin-right: 12px;">{{ t('app.settings.taskMonitor.log.loadFailRetry') }}</span>
-          <span style="font-size: 12px; color: #9aa0b5; margin-right: auto;">{{ t('app.settings.taskMonitor.log.autoRefresh5s') }}</span>
-          <el-button @click="logsVisible = false">{{ t('app.settings.taskMonitor.actions.close') }}</el-button>
+          <!-- 自动刷新开关（照 Caddy 日志查看器范式）：关=停轮询（内容停留，便于
+               上翻/复制），开=重新装定时器并立即拉一轮。上翻不再被轮询拉回底部
+               由 useLogTailPolling 的贴底判定保证。 -->
+          <span class="tm-log-auto-refresh" :title="t('app.settings.taskMonitor.log.autoRefreshStopTip')">
+            <span>{{ t('app.settings.taskMonitor.log.autoRefresh') }}</span>
+            <el-switch v-model="logAutoRefresh" size="small" />
+          </span>
+          <span v-if="logAutoRefresh" class="tm-log-refresh-hint">{{ t('app.settings.taskMonitor.log.autoRefresh5s') }}</span>
+          <el-button style="margin-left: auto" @click="logsVisible = false">{{ t('app.settings.taskMonitor.actions.close') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -385,6 +399,7 @@ import { useClampedPagination } from '@/composables/useClampedPagination'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
 import { hasOwn } from '@/utils/hasOwn'
 import { statusColor } from '@/utils/chartTheme'
+import { businessTaskRecoveryTargetKey } from '@/utils/businessTaskRecovery'
 import { CERT_QUEUE_VISIBLE_JOBS, certQueueHasLive, certQueueIsBusy, certQueueMoreCount } from '@/utils/certQueue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -880,7 +895,7 @@ const runCooldownReason = (row: TaskInfo): string => {
 }
 
 const onTrigger = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: t('app.settings.taskMonitor.runConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.triggerTitle'), type: 'info', confirmButtonText: t('app.settings.taskMonitor.actions.execute') },
+  confirm: { message: t('app.settings.taskMonitor.runConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.triggerTitle'), type: 'info', confirmButtonText: t('app.settings.taskMonitor.actions.execute') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/trigger`),
   successFallback: t('app.settings.taskMonitor.messages.triggered'),
   failureLabel: 'trigger task',
@@ -891,12 +906,18 @@ const onToggle = async (row: TaskInfo, enabled: boolean): Promise<void> => {
     ElMessage.warning(t('app.settings.taskMonitor.messages.businessDrivenWarn'))
     return
   }
-  // 常驻族停止前确认（功能中断影响大——如安全事件采集停摆）
-  const needConfirm = !enabled && row.kind === 'daemon'
+  // 停止定时/循环/常驻调度一律二次确认（DESIGN_SPEC §14）：停止后任务不再自动
+  // 执行，而偏好已落库（重启不复活）——静默停调的影响与常驻族同级。常驻族沿用
+  // stopConfirm（功能中断），定时/循环用 scheduleStopConfirm（不再自动执行）；
+  // 开启方向不确认（恢复动作无破坏性）。
+  const needConfirm = !enabled && row.kind !== 'oneshot'
+  const confirm = !needConfirm
+    ? undefined
+    : row.kind === 'daemon'
+      ? { message: t('app.settings.taskMonitor.stopConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
+      : { message: t('app.settings.taskMonitor.scheduleStopConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.scheduleControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
   await runTaskAction(row, {
-    confirm: needConfirm
-      ? { message: t('app.settings.taskMonitor.stopConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
-      : undefined,
+    confirm,
     request: () => request.post<APIResponse>(`/system/tasks/${row.id}/toggle`, { enabled }),
     successFallback: t('app.settings.taskMonitor.messages.updated'),
     failureLabel: 'toggle task',
@@ -905,7 +926,7 @@ const onToggle = async (row: TaskInfo, enabled: boolean): Promise<void> => {
 }
 
 const onCancel = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: t('app.settings.taskMonitor.cancelConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.cancelTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.cancelTask') },
+  confirm: { message: t('app.settings.taskMonitor.cancelConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.cancelTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.cancelTask') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/cancel`),
   successFallback: t('app.settings.taskMonitor.messages.cancelSent'),
   failureLabel: 'cancel task',
@@ -913,7 +934,7 @@ const onCancel = (row: TaskInfo): Promise<void> => runTaskAction(row, {
 
 // 常驻行操作列「重启」（control restart——启停已由调度列开关承担）
 const onRestart = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: t('app.settings.taskMonitor.restartConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.restart') },
+  confirm: { message: t('app.settings.taskMonitor.restartConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.restart') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/control`, { action: 'restart' }),
   successFallback: t('app.settings.taskMonitor.messages.restarted'),
   failureLabel: 'restart task',
@@ -971,10 +992,19 @@ const logsVisible = ref(false)
 const logsText = ref('')
 const logsTask = ref<TaskInfo | null>(null)
 const logsTaskStorageKey = computed(() => logsTask.value ? `task:${logsTask.value.id}` : 'tasks')
+// 统计条显示名：任务族名走词条（taskDisplayName），后缀词条化——后端下发的
+// name 是 `<中文任务名>日志`，英文界面直出即中文混入。
+const logsStorageLabel = computed(() =>
+  logsTask.value ? t('common.app.views.logStorage.taskLogName', { name: taskDisplayName(logsTask.value.name) }) : '')
 const logContainerRef = ref<HTMLElement | null>(null)
 // 日志加载失败显性化（原静默）；轮询收敛
 // useLogTailPolling 单源——补上本页原缺的后台标签页暂停。
 const logsLoadError = ref(false)
+// 截断标志由后端给（truncated），提示行前端渲染（zh/en）——内容本身不再混入
+// 中文提示行，英文界面/机器消费方只看到日志正文。
+const logsTruncated = ref(false)
+// 自动刷新开关（照 Caddy 日志查看器）：关=停轮询、开=重启并立即刷新。
+const logAutoRefresh = ref(true)
 const taskLogEndpoint = (id: string): string =>
   id.startsWith('cert-job:') ? `/certificates/jobs/${id.slice(9)}/logs` : `/system/tasks/${id}/logs`
 const logsTail = useLogTailPolling({
@@ -985,11 +1015,12 @@ const logsTail = useLogTailPolling({
   fetch: async () => {
     const task = logsTask.value
     if (!task) return null
-    const res = await request.get<APIResponse<{ content: string }>>(taskLogEndpoint(task.id), { silent: true })
+    const res = await request.get<APIResponse<{ content: string; truncated?: boolean }>>(taskLogEndpoint(task.id), { silent: true })
     // 先确认仍是同一任务，再清错误态：切任务后迟到的成功不得清掉新任务的失败提示。
     if (logsTask.value?.id !== task.id) return null
     if (!res.data) throw new TypeError(t('app.settings.taskMonitor.messages.logsRespMissingData'))
     logsLoadError.value = false
+    logsTruncated.value = res.data.truncated === true
     return res.data.content.trim()
   },
   onError: () => { logsLoadError.value = true },
@@ -1002,13 +1033,22 @@ const openLogs = (row: TaskInfo): void => {
   logsVisible.value = true
   logsText.value = ''
   logsLoadError.value = false
-  logsTail.start()
+  logsTruncated.value = false
+  if (logAutoRefresh.value) logsTail.start()
+  else void logsTail.refresh()
 }
 const closeLogs = (): void => {
   logsTail.stop()
   logsTask.value = null
   logsText.value = ''
+  logsTruncated.value = false
 }
+// 自动刷新开关：弹框开着才联动（关闭中的开关变化不装定时器）。
+watch(logAutoRefresh, (enabled) => {
+  if (!logsVisible.value) return
+  if (enabled) logsTail.start()
+  else logsTail.stop()
+})
 onUnmounted(closeLogs)
 
 
@@ -1033,17 +1073,23 @@ const kindTag = (k: string): 'primary' | 'success' | 'info' | 'warning' =>
 const kindTagClass = (k: string) => (k === 'periodic' ? 'tm-tag-periodic' : '')
 const isBusinessDrivenTask = (row: TaskInfo) => !!row.business_driven
 // 引擎自行停调的恢复入口与用户主动停止不同：业务驱动任务的调度开关在本页
-// 只读（后端 400），须到业务页重新保存「自动更新」（setter 会重新对齐调度），
-// 或重启进程；其余任务直接打开本页开关即恢复。空串=非引擎停调。
+// 只读（后端 400），须到对应业务页重新保存那个开关（setter 会重新对齐调度）；
+// 其余任务直接打开本页开关即恢复。空串=非引擎停调。
+// 业务页/开关名按任务 id 查 utils/businessTaskRecovery（自动备份、自动封禁的
+// 恢复入口都不是「自动更新」开关）；未登记 id 回落通用「对应业务页」文案。
 const scheduleStoppedTip = (row: TaskInfo) => {
   if (!row.schedule_stopped_reason) return ''
   if (row.schedule_stopped_reason !== 'fail-streak') {
     return t('app.settings.taskMonitor.stopTip.generic')
   }
   const head = t('app.settings.taskMonitor.stopTip.head')
-  return isBusinessDrivenTask(row)
-    ? t('app.settings.taskMonitor.stopTip.businessDriven', { head })
-    : t('app.settings.taskMonitor.stopTip.genericFix', { head })
+  if (!isBusinessDrivenTask(row)) {
+    return t('app.settings.taskMonitor.stopTip.genericFix', { head })
+  }
+  const targetKey = businessTaskRecoveryTargetKey(row.id)
+  return targetKey
+    ? t('app.settings.taskMonitor.stopTip.businessDriven', { head, target: t(targetKey) })
+    : t('app.settings.taskMonitor.stopTip.businessDrivenGeneric', { head })
 }
 
 // 分类显示名映射(后端 category 为 zh 码;徽标/下拉经此翻译)
@@ -1159,6 +1205,9 @@ const fmtDuration = (ms?: number) => {
 .tm-ok { color: #34d399; font-weight: 600; }
 .tm-bad { color: #f87171; font-weight: 600; }
 .tm-pagination { display: flex; justify-content: flex-end; margin-top: 12px; }
+/* 调度列：停调红标与恢复开关同一行（标签只在引擎停调时出现，开关由业务驱动
+   与否决定——业务驱动行的恢复入口在业务页，本页只读） */
+.tm-schedule-cell { display: inline-flex; align-items: center; gap: 6px; }
 
 /* tooltip 提示 */
 :global(.tm-name-tip) { max-width: 380px; }
@@ -1177,6 +1226,9 @@ const fmtDuration = (ms?: number) => {
 
 /* 日志 */
 .tm-log-stats { display: flex; align-items: center; margin-bottom: 10px; }
+.tm-log-auto-refresh { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7280; margin-right: 12px; }
+.tm-log-refresh-hint { font-size: 12px; color: #9aa0b5; }
+.tm-log-truncated { color: #fbbf24; font-size: 12px; line-height: 1.6; margin-bottom: 6px; }
 .tm-log-container { max-height: 60vh; overflow: auto; background: #0f172a; border-radius: 0; padding: 12px; border: 1px solid #1e293b; }
 .tm-log-content { margin: 0; color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
 </style>

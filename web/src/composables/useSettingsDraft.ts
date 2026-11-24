@@ -51,9 +51,22 @@ const adminTlsCertError = ref('')
 const adminTlsUnavailable = ref(false)
 const stagedAdminTlsCert = ref<StagedAdminTlsCert | null>(null)
 
+// —— 未保存改动登记（设置域单例）——
+// 两张设置卡各自把「当前表单 vs 最近一次服务端确认值」的比较结果登记到此。
+// 守卫（侧栏切页拦截、beforeunload）与卡片不在同一组件树位置，无法用 props/
+// emit 传递；同域单例让「设置」逻辑页面之外（AppLayout）也能读到同一份状态。
+// 卡片卸载**不清**登记：用户可能切到别的设置分页后再离开设置域，此时改动仍在
+// 父级共享模型里，守卫必须继续可见（复位统一由 resetSettingsDraft 负责）。
+// 基线必须是响应式的：保存回填后 markSaved 只改基线，不触发任何表单字段变更，
+// 若基线是普通 Map，脏态 computed 不会重算——保存成功却继续提示「有未保存修改」。
+const formSnapshots = ref<Record<string, string>>({})
+const formDirty = ref<Record<string, boolean>>({})
+
 let draftIdentity: number | null | undefined
 const resetSettingsDraft = (): void => {
   draftIdentity = undefined
+  formSnapshots.value = {}
+  formDirty.value = {}
   githubTokenInput.value = ''
   githubTokenClearPending.value = false
   securityEventsRetentionDirty.value = false
@@ -78,6 +91,36 @@ export const useSettingsDraft = () => ({
   adminTlsUnavailable,
   stagedAdminTlsCert,
 })
+
+interface SettingsFormTracker {
+  /** 服务端确认值到达（首屏加载/保存后回填）：覆盖基线。 */
+  markSaved: (current: string) => void
+  /** 首次/重新挂载：仅在无基线时初始化，避免把未保存编辑当成已保存基线。 */
+  initSaved: (current: string) => void
+  /** 登记当前脏态，供跨组件守卫读取。 */
+  setDirty: (dirty: boolean) => void
+  /** 当前表单值与基线比较；无基线（未加载/已复位）不算脏。 */
+  isDirty: (current: string) => boolean
+}
+
+export const useSettingsFormTracker = (key: string): SettingsFormTracker => ({
+  markSaved: (current) => {
+    formSnapshots.value = { ...formSnapshots.value, [key]: current }
+  },
+  initSaved: (current) => {
+    if (!(key in formSnapshots.value)) formSnapshots.value = { ...formSnapshots.value, [key]: current }
+  },
+  setDirty: (dirty) => {
+    formDirty.value[key] = dirty
+  },
+  isDirty: (current) => {
+    const saved = formSnapshots.value[key]
+    return saved !== undefined && saved !== current
+  },
+})
+
+/** 任一设置卡存在未保存改动（侧栏切页与 beforeunload 共用判据）。 */
+export const hasDirtySettingsForm = (): boolean => Object.values(formDirty.value).some(Boolean)
 
 /** 身份变化时清空草稿；首次挂载只记录身份，不清空页内暂存。 */
 export const syncSettingsDraftIdentity = (userId: number | null): void => {

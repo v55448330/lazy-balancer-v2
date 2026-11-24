@@ -3176,18 +3176,20 @@ func TestAPIDocs_proxyProtocolSemanticsFaceConsistency(t *testing.T) {
 	}
 }
 
-// 任务文本日志的截断提示行契约三载体同步（REST 文档 + MCP server/tools 工具
-// 描述），且提示行字面量必须与 handler 实际注入的前置行逐字一致（证书任务
-// 日志端点同形态）——排障者据首行判断是否读到全部日志，字面量漂移即误导。
+// 任务文本日志的截断披露契约三载体同步（REST 文档 + MCP server/tools 工具
+// 描述）：截断只经 truncated 布尔披露，提示行由面板按语言渲染——handler 不再
+// 向 content 注入任何提示行（证书任务日志端点同形态）。排障者与 Agent 据
+// truncated 判断是否读到全部日志；任一载体漏标志即误导。
 func TestAPIDocs_taskLogTruncationHintContractSynced(t *testing.T) {
 	body := sourceFuncBody(t, filepath.Join("taskmonitor.go"), "func (h *Handlers) GetSystemTaskLogs")
-	hintMatch := regexp.MustCompile(`content = "(\[[^"\\]+)`).FindStringSubmatch(body)
-	if len(hintMatch) != 2 {
-		t.Fatal("GetSystemTaskLogs 源码未抽取到截断提示行字面量——注入形状变化需同步本钉")
+	if regexp.MustCompile(`content = "\[`).MatchString(body) {
+		t.Fatal("GetSystemTaskLogs 不得再向 content 注入提示行字面量（提示行由消费端按 truncated 渲染）——注入形状变化需同步本钉")
 	}
-	hint := hintMatch[1]
-	if !strings.Contains(routesEntry(t, "GET /system/tasks/:id/logs").Description, hint) {
-		t.Errorf("REST 任务日志文档缺截断提示行 %q 披露", hint)
+	if !strings.Contains(body, `"truncated": truncated`) {
+		t.Fatal("GetSystemTaskLogs 响应缺 truncated 标志")
+	}
+	if !strings.Contains(routesEntry(t, "GET /system/tasks/:id/logs").Description, "truncated") {
+		t.Error("REST 任务日志文档缺 truncated 披露")
 	}
 	for _, rel := range []string{filepath.Join("..", "mcpserver", "server.go"), filepath.Join("..", "mcpserver", "tools.go")} {
 		source, err := os.ReadFile(rel)
@@ -3198,8 +3200,8 @@ func TestAPIDocs_taskLogTruncationHintContractSynced(t *testing.T) {
 		if len(mcpDescription) != 2 {
 			t.Fatalf("%s 缺 get_system_task_logs 工具描述", rel)
 		}
-		if !strings.Contains(mcpDescription[1], hint) {
-			t.Errorf("%s 的 get_system_task_logs 描述缺截断提示行 %q: %s", rel, hint, mcpDescription[1])
+		if !strings.Contains(mcpDescription[1], "truncated") {
+			t.Errorf("%s 的 get_system_task_logs 描述缺 truncated 披露: %s", rel, mcpDescription[1])
 		}
 	}
 }

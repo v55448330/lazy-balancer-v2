@@ -48,8 +48,8 @@ test('B 提交路径镜像步进完整性门（跳步保存不得静默剔除空
   )
   assert.match(
     body,
-    /if \(wizardForm\.upstreams\.some\(\(u, i\) => upstreamRowInvalid\(u, i\)\)\) \{\s*ElMessage\.warning\(upstreamFieldWarning\.value \|\| t\('common\.app\.rules\.msgs\.upHostsRequired'\)\)/,
-    '缺 host/port 门时空行会被载荷过滤静默剔除，保存「成功」但规则少了上游',
+    /if \(wizardForm\.upstreams\.some\(\(u, i\) => upstreamRowInvalid\(u, i\)\)\) \{\s*failStep\(WIZARD_STEP\.UPSTREAMS, upstreamFieldWarning\.value \|\| t\('common\.app\.rules\.msgs\.upHostsRequired'\)\)\s*saving\.value = false\s*return\s*\}/,
+    '缺 host/port 门时空行会被载荷过滤静默剔除，保存「成功」但规则少了上游（门必须切到上游步提示并中止提交）',
   )
   // 谓词两腿：host 与 port 缺一即无效（端口清空曾不报错也不进载荷）
   const predicates = section(page, 'const upstreamRowMissingHost', 'const upstreamFieldWarning')

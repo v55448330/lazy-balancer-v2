@@ -149,6 +149,7 @@ export default {
      "contentTipReadonly": "Built-in page content is read-only",
      "contentTipEditable": "Response content returned to clients when blocked (HTML supports inline CSS)",
      "cancel": "Cancel",
+     "preview": "Preview",
      "save": "Save"
     },
     "preview": {
@@ -157,6 +158,7 @@ export default {
      "title": "Block page preview",
      "subtitle": "Preview the response content the client receives in an isolated sandbox",
      "effectTitle": "Rendered page",
+     "draftNote": "This preview shows your unsaved edits — they take effect only after you save",
      "emptyContent": "(no content)"
     },
     "messages": {
@@ -170,7 +172,7 @@ export default {
     },
     "deleteConfirm": {
      "title": "Delete block page",
-     "text": "Block page “{name}” will be deleted. This can't be undone; policies referencing it will lose this custom page.",
+     "text": "Block page “{name}” will be deleted. This can't be undone. It can't be deleted while an enabled security policy references it — remove the reference in that policy first.",
      "confirm": "Delete"
     }
    },
@@ -306,7 +308,7 @@ export default {
     "confirmFloorHint": "Suspicion needs at least {n} confirmed attacks to count",
     "banConsoleAction": "Bans & recidivism ({n})",
     "banConsoleTitle": "Bans & recidivism",
-    "banConsoleSubtitle": "\"Current bans\" lists active ban entries (including manual bans); \"Recidivism\" is the auto-ban history ledger used for repeat-offense escalation",
+    "banConsoleSubtitle": "\"Current bans\" lists every entry in the \"Auto-ban list\" (including entries added to that list by hand); \"Recidivism\" is the auto-ban history ledger used for repeat-offense escalation",
     "banConsoleTabBans": "Current bans ({n})",
     "banConsoleTabRecid": "Recidivism",
     "banSearchPlaceholder": "Search IP address",
@@ -409,6 +411,7 @@ export default {
      "title": "Security overview",
      "desc": "Protection statistics at a glance",
      "threatScreen": "Threat screen",
+     "refresh": "Refresh",
      "loadFailed": "Security overview failed to load",
      "retryNow": "Retry now"
     },
@@ -457,8 +460,8 @@ export default {
      "passRate": "Pass rate",
      "passed": "Passed",
      "failed": "Failed",
-     "passedTotal": "Passed (total)",
-     "failedTotal": "Failed (total)",
+     "passedTotal": "Passed (process total)",
+     "failedTotal": "Failed (process total)",
      "pending": "Pending",
      "stackTip": "Challenge outcomes (process total): passed / failed / pending",
      "resultTitle": "Cumulative results",
@@ -515,7 +518,7 @@ export default {
      "suggestionsEmpty": "No candidates have reached the threshold",
      "times": "hits",
      "colIdentity": "IP address",
-     "colEscalation": "Recidivism",
+     "colEscalation": "Escalation (global)",
      "escalationOffShort": "Off",
      "escalationStandardShort": "Standard",
      "escalationAggressiveShort": "Aggressive",
@@ -741,6 +744,7 @@ export default {
     "status": {
      "disabled": "Disabled",
      "enabled": "Enabled",
+     "enabledUnbound": "Enabled · unbound",
      "off": "Off"
     },
     "table": {
@@ -942,7 +946,7 @@ export default {
     },
     "bp": {
      "manageTip": "Custom pages returned to clients on blocking are managed on the \"Block Pages\" page. ",
-     "noPageDefault": "No block page (return status code directly)",
+     "noPageDefault": "No block page (falls back to the first page-enabled policy in the binding chain; Caddy's default 403 if none has a page)",
      "noPageTipDefault": "No block page: when this policy blocks, the page of the first policy with one in the binding chain is shown as fallback; if none has a page, Caddy's default 403 is returned",
      "stage2BuiltinPageLegacy": "Built-in challenge page (auto-selected by action)",
      "pageLabel": "Block Page",
@@ -1007,9 +1011,11 @@ export default {
       "ccNeedsHuman": "CC detection is effective only while human verification is on: it is currently off, so the spike/4xx/multi-UA thresholds will never issue a challenge (saving is unaffected; takes effect once human verification is enabled).",
       "challengePageTip": "The challenge page must contain the widget placeholder for the selected verification type; the built-in page already includes it. For a custom page, insert the matching widget in the block page editor.",
       "challengePageNeedsWidget": "The selected block page does not contain the widget placeholder for the selected verification type; insert the matching widget in the block page editor first.",
-      "ccRpsLabel": "Spike threshold",
-      "ccRpsPer": "requests /",
-      "ccRpsSec": "sec",
+      "ccRpsLabel": "Request rate threshold",
+      "ccRpsPer": "req/s ×",
+      "ccRpsSec": "s window",
+      "ccRpsExplain": "Counted per client IP on this rule inside one stats window: a challenge fires only when cumulative requests in {sec} seconds exceed {total} (= {n} req/s × {sec}s). The window starts at that IP's first request and restarts every {sec} seconds, so a single page-load burst does not trigger it.",
+      "ccRpsGuide": "Reference: personal sites 10-20; typical business sites 40 (default); heavy front-end sites without a CDN 80-120; for shared office/campus egress, add the egress IP to the trust list instead of raising the threshold",
       "cc4xxLabel": "4xx ratio",
       "cc4xxTip": "Trigger when ratio exceeded with ≥20 requests",
       "ccSessionLabel": "Session anomaly",
@@ -1075,6 +1081,9 @@ export default {
      "createdPolicyNoId": "Policy creation response lacks id",
      "deleteConfirm": "Policy \"{name}\" will be deleted. This cannot be undone; other policies on the rules are unaffected.",
      "deleteConfirmBtn": "Delete",
+     "deleteScopeCountOnly": "It also unbinds {n} rule(s) — the rules themselves are kept (rule names are not loaded right now).",
+     "deleteScopeLead": "It also unbinds {n} rule(s) — the rules themselves are kept:",
+     "deleteScopeMore": "{n} more (names not loaded)",
      "deleteTitle": "Delete Security Policy",
      "detailNoData": "Policy detail response lacks data",
      "discard": "Discard changes",
@@ -1112,7 +1121,7 @@ export default {
      "geoRegions": "GeoIP {n} regions",
      "mixedCombo": "Mixed · cross-stage combination (legacy)",
      "ccChallenge": "Challenge: {mode}",
-     "ccSpike": "Spike trigger {n} req/{sec}s",
+     "ccSpike": "Request rate {n} req/s (>{total} in {sec}s)",
      "trustSummary": "Trust {n} · {mode}",
      "wafMode": "WAF {mode}",
      "wafOff": "WAF off"

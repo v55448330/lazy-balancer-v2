@@ -98,7 +98,12 @@ type connectionsListPayload struct {
 	Domains     []domainStat      `json:"domains"`     // 聚合指标（采集失败时为空）
 	ReqMon      bool              `json:"req_mon"`     // lb_reqmon 端点是否可用
 	Truncated   bool              `json:"truncated"`
-	GeneratedAt string            `json:"generated_at"`
+	// RequestsTruncated 请求明细触达 500 行展示上限：requests 只含最新
+	// 500 条，counts 的口径也是这 500 条（窗口内真实总数未知，插件快照
+	// 只下发 top-N）。消费方据此呈现「500+（仅统计最新 500 条）」而非
+	// 把封顶值当窗口总数。
+	RequestsTruncated bool   `json:"requests_truncated"`
+	GeneratedAt       string `json:"generated_at"`
 }
 
 // reqMonSnapshot lbreqmon admin 端点响应（契约与插件锁定）。
@@ -130,28 +135,31 @@ var (
 )
 
 // fetchReqMonSnapshot 拉取 lb_reqmon 内存快照 → 请求明细（窗口分类+500 行
-// 截断，最新优先）。失败返回 nil, false（负缓存 30s 吸收弹框 2s 轮询）。
-func fetchReqMonSnapshot(adminURL string, now time.Time) ([]requestEntry, bool) {
+// 截断，最新优先）。失败返回 nil, false, false（负缓存 30s 吸收弹框 2s 轮询）。
+// 第三个返回值=窗口内条数触达展示上限：插件按 limit=500 只下发 newest-N，
+// 窗口内真实总数 > 500 时最新 500 条必然全在窗内（len==500）；真实总数
+// ≤ 500 时窗口内记录全在快照里，len 即准确计数。故 len 触达上限即封顶。
+func fetchReqMonSnapshot(adminURL string, now time.Time) ([]requestEntry, bool, bool) {
 	reqMonMu.Lock()
 	unavailable := now.Before(reqMonUnavailableAt)
 	reqMonMu.Unlock()
 	if unavailable || adminURL == "" {
-		return nil, false
+		return nil, false, false
 	}
 	resp, err := reqMonClient.Get(strings.TrimSuffix(adminURL, "/") + "/lb/reqmon/snapshot?limit=" + strconv.Itoa(connectionsListMaxRows))
 	if err != nil {
 		reqMonMarkUnavailable(now)
-		return nil, false
+		return nil, false, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		reqMonMarkUnavailable(now)
-		return nil, false
+		return nil, false, false
 	}
 	var snap reqMonSnapshot
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&snap); err != nil {
 		reqMonMarkUnavailable(now)
-		return nil, false
+		return nil, false, false
 	}
 	out := make([]requestEntry, 0, len(snap.Entries))
 	for _, e := range snap.Entries {
@@ -174,10 +182,11 @@ func fetchReqMonSnapshot(adminURL string, now time.Time) ([]requestEntry, bool) 
 		})
 	}
 	sort.SliceStable(out, func(a, b int) bool { return out[a].Ts > out[b].Ts })
+	truncated := len(out) >= connectionsListMaxRows
 	if len(out) > connectionsListMaxRows {
 		out = out[:connectionsListMaxRows]
 	}
-	return out, true
+	return out, true, truncated
 }
 
 func reqMonMarkUnavailable(now time.Time) {
@@ -501,7 +510,7 @@ func (h *Handlers) getConnectionsListCached() (connectionsListPayload, error) {
 			conns = conns[:connectionsListMaxRows]
 		}
 		joinConnectionsMetadata(conns)
-		requests, reqMonOK := fetchReqMonSnapshot(h.cfg.CaddyAdminURL, fresh)
+		requests, reqMonOK, requestsTruncated := fetchReqMonSnapshot(h.cfg.CaddyAdminURL, fresh)
 		if reqMonOK {
 			joinRequestMetadata(requests)
 		}
@@ -514,14 +523,15 @@ func (h *Handlers) getConnectionsListCached() (connectionsListPayload, error) {
 			viewCounts = reqCounts // 请求视图：四分类=窗口语义
 		}
 		payload := connectionsListPayload{
-			Counts:      viewCounts,
-			ConnCounts:  connCounts,
-			Requests:    requests,
-			Connections: conns,
-			Domains:     h.collectDomainStats(),
-			ReqMon:      reqMonOK,
-			Truncated:   truncated,
-			GeneratedAt: fresh.UTC().Format("2006-01-02 15:04:05"),
+			Counts:            viewCounts,
+			ConnCounts:        connCounts,
+			Requests:          requests,
+			Connections:       conns,
+			Domains:           h.collectDomainStats(),
+			ReqMon:            reqMonOK,
+			Truncated:         truncated,
+			RequestsTruncated: requestsTruncated,
+			GeneratedAt:       fresh.UTC().Format("2006-01-02 15:04:05"),
 		}
 		connectionsListMu.Lock()
 		connectionsListCache = payload

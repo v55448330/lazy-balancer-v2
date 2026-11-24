@@ -21,6 +21,14 @@
       </template>
     </el-alert>
 
+    <!-- 深翻页上限（后端 page>500 显式 400）：独立状态，不当成加载失败——
+         表格保留上一页行是「停在上限」而不是故障，给出可行动的筛选指引。 -->
+    <el-alert v-if="deepPageExceeded" type="warning" :closable="false" show-icon class="error-banner">
+      <template #title>
+        <span>{{ t('common.app.views.audit.deepPageExceeded', { limit: AUDIT_LOG_DEEP_PAGE_LIMIT }) }}</span>
+      </template>
+    </el-alert>
+
     <el-card>
       <div class="filter-bar">
         <el-date-picker
@@ -59,7 +67,7 @@
       </div>
       <el-table :data="logs" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" :tooltip-options="{ popperClass: 'log-overflow-popper' }">
         <template #empty>
-          <el-empty :description="loadError ? t('common.app.views.audit.listLoadFailed') : t('common.app.views.audit.emptyLogs')" :image-size="60" />
+          <el-empty :description="deepPageExceeded ? t('common.app.views.audit.deepPageExceeded', { limit: AUDIT_LOG_DEEP_PAGE_LIMIT }) : (loadError ? t('common.app.views.audit.listLoadFailed') : t('common.app.views.audit.emptyLogs'))" :image-size="60" />
         </template>
         <el-table-column prop="created_at" :label="t('common.app.views.audit.colTime')" width="190" :formatter="(row: AuditLogEntry) => formatDate(row.created_at)" />
         <el-table-column :label="t('common.app.views.audit.operator')" width="200">
@@ -80,7 +88,7 @@
           <template #default="{ row }">{{ auditResourceLabel(row.resource) }}</template>
         </el-table-column>
         <el-table-column prop="detail" :label="t('common.app.views.audit.colDetail')" show-overflow-tooltip />
-        <el-table-column prop="ip_address" label="IP" width="160" show-overflow-tooltip />
+        <el-table-column prop="ip_address" :label="t('common.app.views.keys.colSourceIp')" width="160" show-overflow-tooltip />
       </el-table>
 
       <div style="margin-top: 16px; display: flex; align-items: center; flex-wrap: wrap; row-gap: 8px;">
@@ -90,10 +98,15 @@
         <el-text v-if="totalStale" type="info" size="small" style="margin-right: 12px">
           {{ t('common.app.views.audit.totalStaleHint') }}
         </el-text>
+        <!-- 页码按深翻页上限截断（后端 page>500 400）：总页数仍不足真实结果数时
+             常显「请缩小筛选范围」，否则末尾页看起来就是全部结果。 -->
+        <el-text v-if="deepPageCapped" type="warning" size="small" style="margin-right: 12px">
+          {{ t('common.app.views.audit.deepPageCapped', { limit: AUDIT_LOG_DEEP_PAGE_LIMIT }) }}
+        </el-text>
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
-          :total="total"
+          :total="paginationTotal"
           :page-sizes="[20, 50, 100]"
           layout="total, sizes, prev, pager, next"
           @size-change="onPageSizeChange"
@@ -114,6 +127,7 @@ import LogStorageBar from '@/components/LogStorageBar.vue'
 
 import { buildAuditLogParams } from '@/utils/auditLogFilters'
 import { actionTagType } from '@/utils/auditActionTone'
+import { AUDIT_LOG_DEEP_PAGE_LIMIT, auditLogDeepPageExceeded, auditLogPaginationTotal, isAuditLogDeepPageError } from '@/utils/auditLogPaging'
 // 动作/对象枚举词条（audit-i18n 方案 C 第 1 步）：en 词条渲染、zh 原样；
 // 表外值回落库值原文。枚举钉 tests/auditVocabularyPairs.spec.ts。
 import { auditActionLabel, auditResourceLabel } from '@/utils/auditVocabulary'
@@ -143,6 +157,12 @@ const total = ref(0)
 // 后端 total 5 秒缓存命中时下发 total_stale=true——列表条数与总数短暂不一致
 // 必须有可见提示（不静默）。
 const totalStale = ref(false)
+// 深翻页上限：后端对 page>500 显式 400（消息键见 utils/auditLogPaging）。该状态
+// 与「加载失败」分开——停在上限不是故障，空态文案不得写成日志加载失败。
+const deepPageExceeded = ref(false)
+// 分页器总数按上限截断（页码不越界）；真实结果数仍超上限时常显缩小筛选提示。
+const paginationTotal = computed(() => auditLogPaginationTotal(total.value, pageSize.value))
+const deepPageCapped = computed(() => auditLogDeepPageExceeded(total.value, pageSize.value))
 let requestSeq = 0
 let lastLogsRequestKey = ''
 
@@ -236,10 +256,16 @@ const fetchLogs = async () => {
     total.value = nextTotal
     totalStale.value = res.data?.total_stale === true
     loadError.value = false
+    deepPageExceeded.value = false
   } catch (e) {
     console.error('Failed to fetch audit logs:', e)
     // 仅最新请求可置错误态（陈旧请求的失败不得覆盖新结果）。
-    if (currentRequestSeq === requestSeq) loadError.value = true
+    // 深翻页上限 400 ≠ 加载失败：表格保留上一页行、空态与横幅说明「已到上限，
+    // 请缩小筛选」，不得报「日志加载失败」（原实现把两者混成一条错误）。
+    if (currentRequestSeq === requestSeq && isAuditLogDeepPageError(e)) {
+      deepPageExceeded.value = true
+      loadError.value = false
+    } else if (currentRequestSeq === requestSeq) loadError.value = true
   } finally {
     if (currentRequestSeq === requestSeq) loading.value = false
   }

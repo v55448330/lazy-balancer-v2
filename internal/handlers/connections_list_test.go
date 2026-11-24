@@ -158,6 +158,111 @@ func TestGetConnectionsList_belowCapNoTruncation(t *testing.T) {
 	}
 }
 
+// 请求明细封顶必须显式披露：lb_reqmon 快照按 limit=500 拉取，窗口过滤后仍
+// 可能超过展示上限——此时 requests 只含最新 500 条、counts 同口径被截断，
+// 消费方必须拿到 requests_truncated=true 才能按「500+（仅统计最新 500 条）」
+// 呈现，而不是把封顶值当窗口总数。窗口外记录不计入（请求视图口径=最近 1 小时），
+// 插件返回满 500 条但全部超窗时同样不得报截断（列表其实一条未丢）。
+func TestGetConnectionsList_requestsTruncatedFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		entries   int
+		baseAgeMs int64
+		stepMs    int64
+		wantTrunc bool
+		wantRows  int
+	}{
+		{name: "窗口内超上限", entries: connectionsListMaxRows + 120, stepMs: 1, wantTrunc: true, wantRows: connectionsListMaxRows},
+		{name: "窗口内未超上限", entries: 3, stepMs: 1, wantTrunc: false, wantRows: 3},
+		{name: "全部在窗口外", entries: connectionsListMaxRows, baseAgeMs: int64(2 * time.Hour / time.Millisecond), stepMs: 1, wantTrunc: false, wantRows: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withIsolatedGlobal(t)
+			setupSecurityPolicyTestDB(t)
+			resetConnectionsListCachesForTest(t)
+			reqMonMu.Lock()
+			reqMonUnavailableAt = time.Time{}
+			reqMonMu.Unlock()
+			if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb-reqtrunc','请求截断规则','http','trunc.test',443,1)`); err != nil {
+				t.Fatal(err)
+			}
+
+			now := time.Now()
+			entries := make([]map[string]any, 0, tc.entries)
+			for i := range tc.entries {
+				entries = append(entries, map[string]any{
+					"ts":          now.Add(-time.Duration(tc.baseAgeMs+int64(i)*tc.stepMs) * time.Millisecond).UnixMilli(),
+					"client_ip":   "203.0.113." + strconv.Itoa(i%250+1),
+					"method":      "GET",
+					"proto":       "HTTP/1.1",
+					"scheme":      "https",
+					"rule_id":     "lb-reqtrunc",
+					"host":        "trunc.test",
+					"uri":         "/",
+					"status":      200,
+					"duration_ms": 1.0,
+					"size":        1,
+					"req_size":    1,
+				})
+			}
+			admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/lb/reqmon/snapshot") {
+					// 与真实插件同形：limit=N 只下发最新 N 条（entries 已按最新优先）。
+					// 面板侧拿到的是「恰好 N 条」，截断判定只能靠「条数触达上限」。
+					served := entries
+					if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n < len(served) {
+						served = served[:n]
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{"capacity": 50000, "entries": served})
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			t.Cleanup(admin.Close)
+
+			sample := strings.Join([]string{
+				"Proto Recv-Q Send-Q Local Address Foreign Address (state)",
+				netstatLine("ESTABLISHED", 1),
+			}, "\n")
+			oldNetstat := netstatCommand
+			netstatCommand = func(ctx context.Context) *exec.Cmd {
+				return exec.CommandContext(ctx, "printf", "%s", sample)
+			}
+			t.Cleanup(func() { netstatCommand = oldNetstat })
+
+			h := &Handlers{cfg: &config.Config{CaddyAdminURL: admin.URL, CaddyMetricsURL: admin.URL + "/metrics"}}
+			router := gin.New()
+			router.GET("/metrics/connections/list", h.GetConnectionsList)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics/connections/list", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var envelope struct {
+				Data map[string]any `json:"data"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if envelope.Data["req_mon"] != true {
+				t.Fatalf("req_mon=%v, want true（截断披露依赖请求视图在场）", envelope.Data["req_mon"])
+			}
+			flag, present := envelope.Data["requests_truncated"].(bool)
+			if !present {
+				t.Fatalf("requests_truncated 缺失：请求列表封顶时消费方无从判断计数是否封顶 body=%s", rec.Body.String())
+			}
+			if flag != tc.wantTrunc {
+				t.Fatalf("requests_truncated=%v, want %v（rows=%d）", flag, tc.wantTrunc, len(envelope.Data["requests"].([]any)))
+			}
+			rows, _ := envelope.Data["requests"].([]any)
+			if len(rows) != tc.wantRows {
+				t.Fatalf("requests 行数=%d, want %d", len(rows), tc.wantRows)
+			}
+		})
+	}
+}
+
 // 上游解析超时：DNS 挂起（解析缝被注入为阻塞到 ctx 取消）时，loadCaddyEndpoints
 // 必须在超时窗口内返回，而不是无限等待。真实失败注入——解析缝阻塞到 ctx.Done，
 // 只有带超时的上下文才能让它返回；无 ctx 超时的实现会永久挂起。

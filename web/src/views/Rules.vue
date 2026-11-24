@@ -411,7 +411,7 @@
     </el-card>
 
 
-    <el-dialog v-model="wizardVisible" class="dialog-body-inset" width="min(960px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <el-dialog v-model="wizardVisible" class="dialog-body-inset" width="min(960px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard" @open="wizardDraft.open" @opened="wizardDraft.settle">
       <template #header>
         <DialogHeader :icon="Connection" :title="editingRule ? t('common.app.rules.wizard.editRule') : (isCopyMode ? t('common.app.rules.wizard.copyRule') : t('common.app.rules.wizard.newRule'))"
           :subtitle="t('common.app.rules.list.pageSubtitle')" />
@@ -425,7 +425,7 @@
         <el-step :title="t('common.app.rules.wizard.previewSave')" :icon="Check" @click="jumpToStep(WIZARD_STEP.PREVIEW)" />
       </el-steps>
 
-      <div class="wizard-content">
+      <div class="wizard-content" @pointerdown.capture="wizardDraft.touch" @keydown.capture="wizardDraft.touch">
         <!-- Step 0: 基本配置 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
           <el-form :model="wizardForm" :label-width="$flw('100px')" :disabled="saving">
@@ -447,6 +447,8 @@
             <el-form-item :label="t('common.app.rules.common.domain')" required v-if="wizardForm.protocol === 'http'" class="domain-item">
               <el-input v-model="wizardForm.domain" :placeholder="t('common.app.rules.wizard.domainsExample')" />
               <div class="form-tip-line">{{ t('common.app.rules.wizard.domainsHint') }}</div>
+              <!-- 副本默认禁用且不继承源域名（同域名同端口一启用即冲突）：留空并说明原因 -->
+              <div v-if="isCopyMode" class="form-tip-line">{{ t('common.app.rules.wizard.copyDomainTip') }}</div>
             </el-form-item>
 
             <el-form-item :label="t('common.app.rules.wizard.listenPort')" required>
@@ -457,6 +459,7 @@
                 <span v-else>{{ t('common.app.rules.wizard.portHintTcp') }}</span>
               </span>
               <div class="form-tip-line">{{ t('common.app.rules.wizard.portServerValidationHint') }}</div>
+              <div v-if="isCopyMode && wizardForm.protocol !== 'http'" class="form-tip-line">{{ t('common.app.rules.wizard.copyDisabledTip') }}</div>
             </el-form-item>
 
             <el-form-item :label="t('common.app.rules.wizard.enableHttps')" v-if="wizardForm.protocol === 'http'">
@@ -547,10 +550,21 @@
               
               <!-- Certificate Info Display -->
               <div v-if="certInfo.valid || certInfo.warning || certInfo.error" class="cert-info-container">
-                <div v-if="certInfo.valid" class="info-note-bar cert-info-alert">
+                <div v-if="certInfo.valid" class="info-note-bar cert-info-alert" :class="{ 'is-warn': certWarnings.length > 0 }">
                   <span class="info-note-desc">{{ certInfo.warning ? t('common.app.rules.wizard.certVerifyPassedWarned') : t('common.app.rules.wizard.certVerifyPassed') }}</span>
-                  <span class="info-note-sub">{{ t('common.app.rules.wizard.certDomainPrefix') }}{{ certInfo.domain }} | {{ t('common.app.rules.wizard.expiryPrefix') }}{{ certInfo.expiryDate }} <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">{{ t('common.app.rules.wizard.daysLeftParen', { n: certInfo.daysUntilExpiry }) }}</span><span v-else class="cert-expiry-normal">{{ t('common.app.rules.wizard.daysLeftParen', { n: certInfo.daysUntilExpiry }) }}</span></span>
-                  <span v-if="certInfo.warning" class="info-note-sub">⚠️ {{ certInfo.warning }}</span>
+                  <dl class="cert-facts">
+                    <div class="cert-fact">
+                      <dt>{{ t('common.app.rules.wizard.certDomainLabel') }}</dt>
+                      <dd>{{ certInfo.domain }}</dd>
+                    </div>
+                    <div class="cert-fact">
+                      <dt>{{ t('common.app.rules.wizard.certExpiryLabel') }}</dt>
+                      <dd>{{ certInfo.expiryDate }}<span class="cert-fact-note" :class="certExpiryTone">{{ certExpiryText }}</span></dd>
+                    </div>
+                  </dl>
+                  <ul v-if="certWarnings.length > 0" class="cert-warn-list">
+                    <li v-for="item in certWarnings" :key="item">⚠️ {{ item }}</li>
+                  </ul>
                 </div>
                 <div v-if="certInfo.error" class="info-note-bar cert-info-alert"><span class="info-note-desc">{{ certInfo.error }}</span></div>
               </div>
@@ -982,6 +996,12 @@
             <el-descriptions-item :label="t('common.app.rules.wizard.ntlmCompat')" v-if="wizardForm.protocol === 'http' && ntlmOn">
               {{ t('common.app.rules.wizard.ntlmLockedSummary') }}
             </el-descriptions-item>
+            <!-- 认证网关是上游步可配置项（全部请求先经网关校验）：预览是配置核对面，
+                 缺行时「网关开没开、指向哪」只能保存后从查看器核对 -->
+            <el-descriptions-item :label="t('common.app.rules.wizard.forwardAuthLabel')" v-if="wizardForm.protocol === 'http'">
+              <template v-if="forwardAuthOn">{{ t('common.app.rules.common.on') }} · {{ wizardForm.forward_auth_upstream || '-' }} · {{ wizardForm.forward_auth_uri }}</template>
+              <template v-else>{{ t('common.app.rules.common.off') }}</template>
+            </el-descriptions-item>
             <!-- 健康检查行取自 utils/healthCheckSummary 单源：主动分支曾只打印
                  path/interval/timeout（HTTP）或探测端口（TCP），失败/恢复阈值只在
                  被动分支出现——预览自称配置核对面，改过的阈值必须同处可见。 -->
@@ -1038,13 +1058,13 @@
             </el-descriptions-item>
             <el-descriptions-item :label="t('common.app.rules.wizard.tlsCertificate')" v-if="wizardForm.enable_tls">
               <div v-if="wizardForm.tls_source === 'acme_dns'">{{ certTypeLabels.auto }} ({{ caProviderLabel }})</div>
-              <div v-else>
-                <div>{{ certTypeLabels.manual }}</div>
-                <div v-if="certInfo.valid">
-                  <el-tag size="small" :type="certInfo.warning ? 'warning' : 'success'">{{ certInfo.domain }}</el-tag>
-                  <span>{{ t('common.app.rules.wizard.expiresColon') }}{{ certInfo.expiryDate }}</span>
-                  <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">{{ t('common.app.rules.wizard.expiresInDays', { n: certInfo.daysUntilExpiry }) }}</span>
-                </div>
+              <div v-else class="cert-preview-row">
+                <span>{{ certTypeLabels.manual }}</span>
+                <template v-if="certInfo.valid">
+                  <el-tag size="small" :type="certTagType">{{ certInfo.domain }}</el-tag>
+                  <span class="cert-preview-expiry">{{ t('common.app.rules.wizard.expiresColon') }}{{ certInfo.expiryDate }}</span>
+                  <span class="cert-fact-note" :class="certExpiryTone">{{ certExpiryText }}</span>
+                </template>
               </div>
             </el-descriptions-item>
             <el-descriptions-item :label="t('common.app.rules.wizard.httpRedirect')" v-if="wizardForm.enable_tls">
@@ -1052,6 +1072,8 @@
             </el-descriptions-item>
             <el-descriptions-item :label="t('common.app.rules.common.status')">
               <el-tag :type="wizardForm.enabled ? 'success' : 'info'">{{ wizardForm.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}</el-tag>
+              <!-- 副本默认禁用：同域名 / 同端口的副本一启用就会被拦，提示写在状态行旁 -->
+              <span v-if="isCopyMode" class="form-tip-inline">{{ t('common.app.rules.wizard.copyStatusTip') }}</span>
             </el-descriptions-item>
             <el-descriptions-item :label="t('common.app.rules.wizard.upstreamServers')" :span="1">
               <el-table :data="wizardForm.upstreams" size="small" border>
@@ -1132,6 +1154,22 @@
           <el-descriptions-item label="TLS" v-else>{{ t('common.app.rules.common.disable') }}</el-descriptions-item>
           <el-descriptions-item :label="t('common.app.rules.wizard.compression')" v-if="ruleConfig.protocol === 'http'">
             {{ ruleConfig.enable_compress ? (Array.isArray(ruleConfig.compress_types) ? ruleConfig.compress_types[0] : (ruleConfig.compress_types || 'gzip')) : t('common.app.rules.common.disable') }}
+          </el-descriptions-item>
+          <!-- 向导里能配的认证网关 / NTLM / 自定义路由 / 访问日志，查看器必须能核：
+               缺行时保存后只能从原始 JSON 里找 -->
+          <el-descriptions-item :label="t('common.app.rules.wizard.forwardAuthLabel')" v-if="ruleConfig.protocol === 'http'">
+            <template v-if="ruleConfig.forward_auth_enabled === 1">{{ t('common.app.rules.common.enable') }} · {{ ruleConfig.forward_auth_upstream || '-' }} · {{ ruleConfig.forward_auth_uri }}</template>
+            <template v-else>{{ t('common.app.rules.common.disable') }}</template>
+          </el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.wizard.ntlmCompat')" v-if="ruleConfig.protocol === 'http'">
+            {{ ruleConfig.ntlm_compatible === 1 ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}
+          </el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.common.customRoutes')" v-if="ruleConfig.protocol === 'http'">
+            <template v-if="ruleConfig.custom_routes_enabled">{{ t('common.app.rules.cfg.pathRuleCount', { n: ruleConfig.path_rules.length }) }}</template>
+            <template v-else>{{ t('common.app.rules.common.disable') }}</template>
+          </el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.common.accessLog')" v-if="ruleConfig.protocol === 'http'">
+            {{ ruleConfig.log_enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}
           </el-descriptions-item>
           <!-- 与向导预览同一份摘要单源（utils/healthCheckSummary）：主动行同样点名
                失败/恢复阈值，被动行只在未启用主动探测时补位。 -->
@@ -1420,7 +1458,21 @@ import { popperViewportSafe } from '@/utils/popper'
 import { hostPortKey, upstreamDedupeKey } from '@/utils/upstreamKeys'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, payloadWeight, redistributeWeight, weightPercent } from '@/utils/upstreamWeights'
 import { projectRuleFlowPath } from '@/utils/ruleFlow'
-import { clampPassiveHealthCheckTimeout, copyRuleHostHeader, dnsServerAfterToggle } from '@/utils/ruleWizard'
+import {
+  applyDynamicUpstreamLimit,
+  applyTcpState,
+  clampPassiveHealthCheckTimeout,
+  copyRuleDomain,
+  copyRuleHostHeader,
+  createWizardDraftTracker,
+  dnsServerAfterToggle,
+  dynamicUpstreamSurplus,
+  protocolSwitchImpact,
+  resetNtlmTakeover,
+  restoreHttpState,
+  snapshotHttpState,
+  type HttpStateSnapshot,
+} from '@/utils/ruleWizard'
 import { createLogStatBuckets, recordLogStatEntry, type LogStatBuckets } from '@/utils/logStatCap'
 import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
@@ -1525,6 +1577,14 @@ interface RuleConfigView {
   request_body_max_size_mb: number
   upstream_keepalive_timeout: number
   server_tokens_hidden: number
+  // 向导可配但查看器曾缺的核对面：认证网关四件套 / NTLM / 自定义路由 / 访问日志
+  ntlm_compatible: number
+  forward_auth_enabled: number
+  forward_auth_upstream: string
+  forward_auth_uri: string
+  log_enabled: boolean
+  custom_routes_enabled: boolean
+  path_rules: PathRule[]
   upstreams: Upstream[]
   enabled: boolean
   config: object | null
@@ -2313,6 +2373,26 @@ const resetCertInfo = (): void => {
   })
 }
 
+// 证书有效期文案——预览行与 TLS 步骤提示框共用同一个来源。带符号的剩余天数不再
+// 直接上屏：过期显示「已过期 N 天」，当天到期显示「今天到期」，否则「N 天后」。
+const certExpiryText = computed(() => {
+  const days = certInfo.daysUntilExpiry
+  if (days < 0) return t('common.app.rules.wizard.expiredDaysAgo', { n: Math.abs(days) })
+  if (days === 0) return t('common.app.rules.wizard.expiresToday')
+  return t('common.app.rules.wizard.expiresInDays', { n: days })
+})
+const certExpiryTone = computed(() => {
+  if (certInfo.daysUntilExpiry < 0) return 'is-danger'
+  return certInfo.daysUntilExpiry <= 30 ? 'is-warning' : 'is-success'
+})
+const certTagType = computed(() => (certInfo.daysUntilExpiry < 0 ? 'danger' : certInfo.warning ? 'warning' : 'success'))
+// 后端警告按「；」拆成条目逐行列出；过期类警告尾部的「(过期时间: …)」与上方已展示的
+// 过期时间重复，上屏前去掉。
+const certWarnings = computed(() => certInfo.warning
+  .split(/[;；]/)
+  .map((item) => item.replace(/\s*[（(]\s*(过期时间|expired(?:\s+at)?|expiry(?:\s+date)?)\s*[:：]\s*[^()（）]*[)）]\s*$/i, '').trim())
+  .filter(Boolean))
+
 const wizardForm = reactive<RuleForm>({
   name: '',
   description: '',
@@ -2382,8 +2462,12 @@ const showTlsHint = (message: string) => {
 // 用户是否显式/已提交过监听端口：置位后停止 80↔443/8080 的自动联动，避免静默改回默认端口。
 // 编辑态打开即置位（DB 中的 listen_port 就是用户已提交的显式配置）；联动仅保留 create/复制流的默认便捷。
 const userExplicitPort = ref(false)
-// http→tcp 迁移前的 HTTP 态快照：回转 http 时判断「是否实际改过端口 / 是否被强制关闭过 TLS」。
-let preTcpSnapshot: { listenPort: number; enableTls: boolean } | null = null
+// http→tcp 迁移前的 HTTP 态快照：回转 http 时按快照回填（字段面与清理面同源在
+// utils/ruleWizard）。只还原「被切换清掉、且用户在 TCP 下没再改动」的字段。
+let preTcpSnapshot: HttpStateSnapshot | null = null
+// 协议回转回填期间置位：enable_tls 联动 watcher 不得再把「开启 TLS → 端口改 443」
+// 的默认迁移叠加到快照端口上。
+let restoringHttpState = false
 
 // Watch for enable_tls toggle to adjust default listen port
 // （用户裁定）：启用 TLS 时端口直接默认 443（不仅是提示）——
@@ -2391,7 +2475,8 @@ let preTcpSnapshot: { listenPort: number; enableTls: boolean } | null = null
 // 生产实证：短路前置导致编辑态拨 TLS 永不改端口）。用户随后手动改端口即置
 // userExplicitPort，关闭方向的自动回 80 仍受其约束（既有语义）。
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
-  if (hydratingWizard) return
+  // 回填期由快照决定 TLS 与端口，联动不得插手
+  if (hydratingWizard || restoringHttpState) return
   if (wizardForm.protocol !== 'http') return
   if (newVal && !oldVal) {
     if (wizardForm.listen_port !== 443) {
@@ -2416,63 +2501,51 @@ watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
 watch(() => wizardForm.protocol, (newVal, oldVal) => {
   if (hydratingWizard) return
   if (newVal !== 'tcp') wizardForm.tcp_proxy_protocol = false
-  if (newVal === 'tcp') {
-    // 快照进入 TCP 前的 HTTP 态（须先于下方端口/ enable_tls 变更），供回转提示判断
-    preTcpSnapshot = { listenPort: wizardForm.listen_port, enableTls: wizardForm.enable_tls }
-    // Switching to TCP: use a neutral high port and plain TCP upstreams.
-    // 无条件迁移：DB 中不存在 TCP:80/443 存量规则（后端无条件拒绝），编辑态无需保留该值
-    if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
-      wizardForm.listen_port = 8080
+  // 切 TCP 的落地动作：先拍 HTTP 态快照（须先于端口 / enable_tls 变更），再整面
+  // 清掉 HTTP 专属配置（后端 TCP 写侧门硬拒、载荷无条件上送、TCP 下没有可见控件
+  // 可关）。确认框与直接切换两条路径共用这一处。
+  const enterTcpState = (): void => {
+    preTcpSnapshot = snapshotHttpState(wizardForm)
+    if (applyTcpState(wizardForm).portRelocated) {
       ElMessage.info(t('common.app.rules.msgs.switchedToTcpPort8080'))
     }
-    wizardForm.enable_tls = false
-    if (wizardForm.strategy === 'cookie') wizardForm.strategy = 'weighted_round_robin'
-    // NTLM 兼容是 HTTP 语义：切 TCP 开关自动关 + 接管字段恢复默认（静默，设计定稿）
-    if (wizardForm.ntlm_compatible === 1) {
-      wizardForm.ntlm_compatible = 0
-      restoreNtlmDefaults()
+  }
+  if (newVal === 'tcp') {
+    // 用户填过的内容（路径规则 / 回源域名 / 认证网关）会被静默清空：先列清单确认，
+    // 取消则回滚协议与内容。切回 HTTP 会自动恢复，但保存为 TCP 后不再保留。
+    const impact = protocolSwitchImpact(wizardForm, newVal)
+    const cleared: string[] = []
+    if (impact.pathRules > 0) cleared.push(t('common.app.rules.msgs.switchTcpClearsPathRules', { n: impact.pathRules }))
+    if (impact.originDomains.length > 0) cleared.push(t('common.app.rules.msgs.switchTcpClearsOriginDomains', { domains: impact.originDomains.join('、') }))
+    if (impact.forwardAuthUpstream !== '') cleared.push(t('common.app.rules.msgs.switchTcpClearsForwardAuth', { upstream: impact.forwardAuthUpstream }))
+    if (cleared.length > 0) {
+      // 确认期间作废上一次的快照——取消回滚触发的回转分支不得回填旧值
+      preTcpSnapshot = null
+      void ElMessageBox.confirm(
+        h('div', [
+          h('p', { class: 'confirm-scope-lead' }, t('common.app.rules.msgs.switchTcpClearsLead')),
+          h('ul', { class: 'confirm-scope-list' }, cleared.map((item) => h('li', item))),
+        ]),
+        t('common.app.rules.msgs.switchTcpConfirmTitle'),
+        { type: 'warning', confirmButtonText: t('common.app.rules.common.confirm'), cancelButtonText: t('common.app.rules.common.cancel') },
+      ).then(
+        () => enterTcpState(),
+        // 取消：协议与内容都保持原样（回滚会再进一次本 watch，此时快照为空、不回填）
+        () => { wizardForm.protocol = oldVal ?? 'http' },
+      )
+      return
     }
-    // 认证网关同为 HTTP 语义：切 TCP 自动关 + 清空网关地址（路径/身份头保留
-    // 默认值，回转 HTTP 无需重填）
-    if (wizardForm.forward_auth_enabled === 1) {
-      wizardForm.forward_auth_enabled = 0
-      wizardForm.forward_auth_upstream = ''
-    }
-    // 上游强制 HTTP/1.1 同为 HTTP 传输语义——切 TCP 一并弃置
-    wizardForm.upstream_force_http1 = 0
-    wizardForm.custom_routes_enabled = false
-    wizardForm.health_check_host = ''
-    wizardForm.path_rules = []
-    // 动态上游与 DNS 服务发现同为 HTTP 语义：TCP 下这两组控件整段不渲染，
-    // 但载荷仍无条件上送——残留值会被后端「TCP 规则不支持…」门恒拒，
-    // 且用户没有可见控件可关闭（与上方 HTTP-only 字段同族清理）。
-    wizardForm.dynamic_dns = false
-    wizardForm.enable_dns_server = false
-    wizardForm.dns_server = ''
-    wizardForm.upstreams.forEach(u => {
-      // 回源域名是 HTTP-only 语义——切换即弃置，
-      // 否则隐藏残留字段被后端「回源域名仅 HTTP 规则支持」门恒拒，卡死保存
-      u.origin_domain = ''
-      if (u.protocol === 'http') u.protocol = 'tcp'
-      if (u.protocol === 'https') u.protocol = 'tls'
-    })
+    enterTcpState()
   } else if (newVal === 'http' && oldVal === 'tcp') {
-    // 回转判断基于快照而非 userExplicitPort：编辑态（userExplicitPort=true）进 TCP 同样被
-    // 无条件迁移 80/443→8080，回转不还原会保存即静默改写 DB 端口
-    const portChanged =
-      wizardForm.listen_port === 8080 &&
-      (preTcpSnapshot?.listenPort === 80 || preTcpSnapshot?.listenPort === 443)
-    const tlsWasOn = preTcpSnapshot?.enableTls === true
-    if (portChanged && preTcpSnapshot) wizardForm.listen_port = preTcpSnapshot.listenPort
-    wizardForm.upstreams.forEach(u => {
-      if (u.protocol === 'tcp') u.protocol = 'http'
-      if (u.protocol === 'tls') u.protocol = 'https'
-    })
-    // 回转提示：仅在实际改端口 / 曾强制关 TLS 时给出，走 showTlsHint 去重通道
-    const notes: string[] = []
-    if (portChanged && preTcpSnapshot) notes.push(t('common.app.rules.msgs.listenPortAdjusted', { port: preTcpSnapshot.listenPort }))
-    if (tlsWasOn) notes.push(t('common.app.rules.msgs.tlsClosedInTcp'))
-    if (notes.length > 0) showTlsHint(t('common.app.rules.msgs.switchedHttp', { notes: notes.join('；') }))
+    if (!preTcpSnapshot) return
+    restoringHttpState = true
+    let restored = false
+    try {
+      restored = restoreHttpState(wizardForm, preTcpSnapshot)
+    } finally {
+      restoringHttpState = false
+    }
+    if (restored) showTlsHint(t('common.app.rules.msgs.switchedHttpRestored'))
   }
 }, { flush: 'sync' })
 
@@ -2806,6 +2879,13 @@ const buildRuleConfigView = (
   request_body_max_size_mb: rule.request_body_max_size_mb || 0,
   upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
   server_tokens_hidden: rule.server_tokens_hidden || 0,
+  ntlm_compatible: rule.ntlm_compatible === 1 ? 1 : 0,
+  forward_auth_enabled: rule.forward_auth_enabled === 1 ? 1 : 0,
+  forward_auth_upstream: rule.forward_auth_upstream || '',
+  forward_auth_uri: rule.forward_auth_uri || '',
+  log_enabled: rule.log_enabled === true,
+  custom_routes_enabled: rule.custom_routes_enabled === true,
+  path_rules: rule.path_rules || [],
   upstreams: rule.upstreams || [],
   enabled: rule.enabled !== false,
   config,
@@ -2989,8 +3069,14 @@ const openWizard = async (rule?: Rule) => {
   wizardVisible.value = true
 }
 
+// 未保存检查的草稿跟踪：基线不能在打开的同一拍取——el-input-number 在 modelValue
+// watch 里把越界值钳写回表单（禁用行权重 0 → 1），而上游表格的单元格要到
+// el-table 挂载后的下一拍才渲染。基线时点与 touched 语义见 utils/ruleWizard。
+const wizardDraft = createWizardDraftTracker(() => wizardForm)
+
 const resetWizard = () => {
   preTcpSnapshot = null
+  wizardDraft.clear()
   userExplicitPort.value = false
   certValidationSessionSeq++
   certValidationSeq++
@@ -3016,7 +3102,15 @@ const resetWizard = () => {
 }
 
 const beforeWizardClose = (done: () => void): void => {
-  if (!saving.value) done()
+  if (saving.value) return
+  // 用户没碰过表单（只看过 / 切过步骤）就直接关闭，不打扰
+  if (!wizardDraft.isDirty()) {
+    done()
+    return
+  }
+  void ElMessageBox.confirm(t('common.app.rules.msgs.unsavedConfirm'), t('common.app.rules.msgs.discard'), {
+    type: 'warning', confirmButtonText: t('common.app.rules.msgs.discard'), cancelButtonText: t('common.app.rules.msgs.keepEditing'),
+  }).then(() => done()).catch(() => { /* 继续编辑：保留弹框与全部草稿 */ })
 }
 
 // Weights are shown and edited as percentages of enabled upstreams; the
@@ -3027,23 +3121,38 @@ const weightsToPercent = (upstreams: UpstreamInput[]): void => normalizeWeights(
 
 const onDynamicDnsToggle = (enabled: string | number | boolean): void => {
   if (!Boolean(enabled)) return
-  const enabledUpstreams = wizardForm.upstreams.filter((upstream) => upstream.enabled !== false)
-  enabledUpstreams.slice(1).forEach((upstream) => {
-    upstream.enabled = false
-    upstream.weight = 0
-  })
-  const retained = enabledUpstreams[0]
-  if (retained) retained.weight = 100
+  // 开启即只保留首个启用上游（动态 DNS 从单条目解析出多个 IP）。会禁用第 2..n 个
+  // 启用上游时先列清单确认：用户配好的上游不得被零提示清掉。水合/回填路径
+  // （规则本就是动态上游）不经确认，照旧归一。
+  const surplus = dynamicUpstreamSurplus(wizardForm.upstreams)
+  if (surplus.length > 0 && !hydratingWizard) {
+    void ElMessageBox.confirm(
+      h('div', [
+        h('div', t('common.app.rules.msgs.dynamicUpstreamDisableLead')),
+        h('ul', { class: 'confirm-scope-list' }, surplus.map((upstream) => h('li', hostPortKey(upstream.host, upstream.port)))),
+      ]),
+      t('common.app.rules.msgs.dynamicUpstreamConfirmTitle'),
+      { type: 'warning', confirmButtonText: t('common.app.rules.common.confirm'), cancelButtonText: t('common.app.rules.common.cancel') },
+    ).then(
+      () => applyDynamicUpstreamLimit(wizardForm.upstreams),
+      // 取消：开关回滚，启用状态与权重一概不动
+      () => { wizardForm.dynamic_dns = false },
+    )
+    return
+  }
+  applyDynamicUpstreamLimit(wizardForm.upstreams)
 }
 
-const validateEnabledUpstreams = (): string => {
+// 返回 null=通过；否则给出提示文案与出错字段所在步骤（协议栈在高级步选择，
+// 其余三项都在上游步——失败出口要回到改得了的那一步）。
+const validateEnabledUpstreams = (): { message: string; step: WizardStep } | null => {
   const enabledUpstreams = wizardForm.upstreams.filter((upstream) => upstream.enabled !== false)
-  if (enabledUpstreams.length === 0) return t('common.app.rules.msgs.upstreamEnabledRequired')
-  if (wizardForm.dynamic_dns && enabledUpstreams.length !== 1) return t('common.app.rules.msgs.dynamicUpstreamLimit')
-  if (wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) return t('common.app.rules.msgs.duStackRequired')
+  if (enabledUpstreams.length === 0) return { message: t('common.app.rules.msgs.upstreamEnabledRequired'), step: WIZARD_STEP.UPSTREAMS }
+  if (wizardForm.dynamic_dns && enabledUpstreams.length !== 1) return { message: t('common.app.rules.msgs.dynamicUpstreamLimit'), step: WIZARD_STEP.UPSTREAMS }
+  if (wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) return { message: t('common.app.rules.msgs.duStackRequired'), step: WIZARD_STEP.ADVANCED }
   const totalWeight = enabledUpstreams.reduce((total, upstream) => total + (upstream.weight || 0), 0)
-  if (totalWeight !== 100) return t('common.app.rules.msgs.weightTotalInvalid', { totalWeight: totalWeight })
-  return ''
+  if (totalWeight !== 100) return { message: t('common.app.rules.msgs.weightTotalInvalid', { totalWeight: totalWeight }), step: WIZARD_STEP.UPSTREAMS }
+  return null
 }
 
 
@@ -3143,17 +3252,6 @@ const applyNtlmTakeover = (): void => {
   wizardForm.tcp_try_duration = -1
   wizardForm.enable_active_health_check = false
 }
-
-const restoreNtlmDefaults = (): void => {
-  wizardForm.strategy = 'weighted_round_robin'
-  wizardForm.proxy_flush_interval = 0
-  wizardForm.upstream_keepalive_timeout = 0
-  wizardForm.upstream_force_http1 = 0
-  wizardForm.tcp_try_duration = 0
-  // 主动健康检查保持关闭（默认关，用户可再自行开启）——关闭弹框中明示
-  wizardForm.enable_active_health_check = false
-}
-
 // NTLM 开关确认弹框（参照安全策略「更新迁移预演」范式：DialogHeader+分区清单+footer）
 const ntlmConfirmVisible = ref(false)
 const ntlmConfirmMode = ref<'on' | 'off'>('on')
@@ -3169,7 +3267,8 @@ const confirmNtlmToggle = (): void => {
     applyNtlmTakeover()
   } else {
     wizardForm.ntlm_compatible = 0
-    restoreNtlmDefaults()
+    // 恢复默认的字段面与「切 TCP 时的清理」同源（utils/ruleWizard）
+    resetNtlmTakeover(wizardForm)
   }
   ntlmConfirmVisible.value = false
 }
@@ -3224,22 +3323,30 @@ const findDuplicateUpstream = (): { rowIndex: number; key: string } | null => {
 const hasInvalidActiveHealthCheckPath = (): boolean =>
   wizardForm.enable_active_health_check && !(wizardForm.health_check_path || '/').startsWith('/')
 
+// 校验失败的统一出口：先把向导切到出错字段所在步骤再提示。提交门都在预览步
+// 触发（编辑态还能点步标题跳步）——只弹一条 toast 不切步，用户不知道回哪一步改。
+const failStep = (step: WizardStep, message: string, level: 'warning' | 'error' = 'warning'): void => {
+  currentStep.value = step
+  if (level === 'error') ElMessage.error(message)
+  else ElMessage.warning(message)
+}
+
 const nextStep = (): void => {
   if (currentStep.value === WIZARD_STEP.BASIC) {
     if (!wizardForm.name) {
-      ElMessage.warning(t('common.app.rules.wizard.ruleNamePlaceholder'))
+      failStep(WIZARD_STEP.BASIC, t('common.app.rules.wizard.ruleNamePlaceholder'))
       return
     }
     if (wizardForm.protocol === 'http' && !wizardForm.domain) {
-      ElMessage.warning(t('common.app.rules.msgs.httpDomainRequired'))
+      failStep(WIZARD_STEP.BASIC, t('common.app.rules.msgs.httpDomainRequired'))
       return
     }
     if (!wizardForm.listen_port) {
-      ElMessage.warning(t('common.app.rules.wizard.listenPortPlaceholder'))
+      failStep(WIZARD_STEP.BASIC, t('common.app.rules.wizard.listenPortPlaceholder'))
       return
     }
     if (portWarning.value) {
-      ElMessage.warning(portWarning.value)
+      failStep(WIZARD_STEP.BASIC, portWarning.value)
       return
     }
     moveToAdjacentWizardStep(1)
@@ -3249,16 +3356,16 @@ const nextStep = (): void => {
     // 详情失败只影响「手动 TLS」的证书材料：切到 ACME 后证书正文不再参与保存，
     // 无条件的门会把用户钉死在 TLS 步（横幅文案本身也自述「手动 TLS 配置」）。
     if (tlsDetailError.value && wizardForm.tls_source === 'manual') {
-      ElMessage.warning(t('common.app.rules.msgs.certDetailReloadFirstHint'))
+      failStep(WIZARD_STEP.TLS, t('common.app.rules.msgs.certDetailReloadFirstHint'))
       return
     }
     if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
-      ElMessage.warning(t('common.app.rules.msgs.dnsConfigRequired'))
+      failStep(WIZARD_STEP.TLS, t('common.app.rules.msgs.dnsConfigRequired'))
       return
     }
     // 掩码私钥（tlsKeySet=true）且未粘贴新私钥时允许通过——后端保留原值
     if (wizardForm.tls_source === 'manual' && (!wizardForm.tls_cert.trim() || (!wizardForm.tls_key.trim() && !wizardForm.tlsKeySet))) {
-      ElMessage.warning(wizardForm.tls_cert.trim() ? t('common.app.rules.msgs.uploadCertAndKeyReplace') : t('common.app.rules.msgs.uploadCertAndKey'))
+      failStep(WIZARD_STEP.TLS, wizardForm.tls_cert.trim() ? t('common.app.rules.msgs.uploadCertAndKeyReplace') : t('common.app.rules.msgs.uploadCertAndKey'))
       return
     }
     moveToAdjacentWizardStep(1)
@@ -3270,28 +3377,28 @@ const nextStep = (): void => {
     // 故与红框/警告共用同一谓词）：host 与 port 缺一不放过——提交侧按
     // host+port 过滤身份，端口清空行会被静默剔除。
     if (wizardForm.upstreams.some((u, i) => upstreamRowInvalid(u, i))) {
-      ElMessage.warning(upstreamFieldWarning.value || t('common.app.rules.msgs.upHostsRequired'))
+      failStep(WIZARD_STEP.UPSTREAMS, upstreamFieldWarning.value || t('common.app.rules.msgs.upHostsRequired'))
       return
     }
     const validUpstreams = wizardForm.upstreams.filter(u => u.host && u.port)
     if (validUpstreams.length === 0) {
-      ElMessage.warning(t('common.app.rules.msgs.upstreamValidRequired'))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upstreamValidRequired'))
       return
     }
     // Check if at least one upstream is enabled
     const upstreamError = validateEnabledUpstreams()
     if (upstreamError) {
-      ElMessage.warning(upstreamError)
+      failStep(upstreamError.step, upstreamError.message)
       return
     }
     // M33/M34：上游 host:port 查重与健康检查路径门在此步前置拦截（提交侧同款双保险）
     const duplicated = findDuplicateUpstream()
     if (duplicated) {
-      ElMessage.error(t('common.app.rules.msgs.upRowDuplicate', { row: duplicated.rowIndex, key: duplicated.key }))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upRowDuplicate', { row: duplicated.rowIndex, key: duplicated.key }), 'error')
       return
     }
     if (hasInvalidActiveHealthCheckPath()) {
-      ElMessage.error(t('common.app.rules.msgs.healthPathSlash'))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.healthPathSlash'), 'error')
       return
     }
     moveToAdjacentWizardStep(1)
@@ -3299,17 +3406,17 @@ const nextStep = (): void => {
   }
   if (currentStep.value === WIZARD_STEP.CUSTOM_ROUTES) {
     if (wizardForm.path_rules.length === 0) {
-      ElMessage.warning(t('common.app.rules.msgs.pathRuleRequired'))
+      failStep(WIZARD_STEP.CUSTOM_ROUTES, t('common.app.rules.msgs.pathRuleRequired'))
       return
     }
     const pathRuleError = validatePathRules(wizardForm.path_rules)
     if (pathRuleError) {
-      ElMessage.warning(pathRuleError)
+      failStep(WIZARD_STEP.CUSTOM_ROUTES, pathRuleError)
       return
     }
   }
   if (currentStep.value === WIZARD_STEP.ADVANCED && wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) {
-    ElMessage.warning(t('common.app.rules.msgs.duStackRequired'))
+    failStep(WIZARD_STEP.ADVANCED, t('common.app.rules.msgs.duStackRequired'))
     return
   }
   moveToAdjacentWizardStep(1)
@@ -3323,24 +3430,24 @@ const submitWizard = async () => {
   if (isReadOnly.value || saving.value) return
   saving.value = true
   if (!wizardForm.name) {
-    ElMessage.warning(t('common.app.rules.wizard.ruleNamePlaceholder'))
+    failStep(WIZARD_STEP.BASIC, t('common.app.rules.wizard.ruleNamePlaceholder'))
     saving.value = false
     return
   }
   // step 标题可点击跳步绕过步进校验——提交前镜像 BASIC 步
   // 的 domain/端口前置（后端 400 兜底仍在，但报错晚且不带定位）。
   if (wizardForm.protocol === 'http' && !wizardForm.domain) {
-    ElMessage.warning(t('common.app.rules.msgs.httpDomainRequired'))
+    failStep(WIZARD_STEP.BASIC, t('common.app.rules.msgs.httpDomainRequired'))
     saving.value = false
     return
   }
   if (!wizardForm.listen_port) {
-    ElMessage.warning(t('common.app.rules.wizard.listenPortPlaceholder'))
+    failStep(WIZARD_STEP.BASIC, t('common.app.rules.wizard.listenPortPlaceholder'))
     saving.value = false
     return
   }
   if (portWarning.value) {
-    ElMessage.warning(portWarning.value)
+    failStep(WIZARD_STEP.BASIC, portWarning.value)
     saving.value = false
     return
   }
@@ -3350,7 +3457,7 @@ const submitWizard = async () => {
     // enable_tls+acme_dns 且 acme_config_id=0 时返回 400；不在此前置拦截时
     // 从 TLS 步直接跳预览保存才报错，晚且无定位。
     if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
-      ElMessage.warning(t('common.app.rules.msgs.dnsConfigRequired'))
+      failStep(WIZARD_STEP.TLS, t('common.app.rules.msgs.dnsConfigRequired'))
       saving.value = false
       return
     }
@@ -3358,19 +3465,19 @@ const submitWizard = async () => {
     // 新私钥时允许通过, 契约:空 key+tlsKeySet=保留原私钥)
     if (!wizardForm.tls_cert?.trim() || (!wizardForm.tls_key?.trim() && !wizardForm.tlsKeySet)) {
       if (wizardForm.tls_source === 'manual') {
-        ElMessage.warning(t('common.app.rules.msgs.tlsManualNeedsPair'))
+        failStep(WIZARD_STEP.TLS, t('common.app.rules.msgs.tlsManualNeedsPair'))
         saving.value = false
         return
       }
     }
   }
   if (wizardForm.upstreams.length === 0) {
-    ElMessage.warning(t('common.app.rules.msgs.upstreamRequired'))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upstreamRequired'))
     saving.value = false
     return
   }
   if (wizardForm.upstreams.length > MAX_UPSTREAM_ROWS) {
-    ElMessage.warning(t('common.app.rules.msgs.upstreamRowLimit', { maxRows: MAX_UPSTREAM_ROWS }))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upstreamRowLimit', { maxRows: MAX_UPSTREAM_ROWS }))
     saving.value = false
     return
   }
@@ -3380,7 +3487,7 @@ const submitWizard = async () => {
   // 同时让红框标出待补行。
   upstreamTouched.value = wizardForm.upstreams.map(() => true)
   if (wizardForm.upstreams.some((u, i) => upstreamRowInvalid(u, i))) {
-    ElMessage.warning(upstreamFieldWarning.value || t('common.app.rules.msgs.upHostsRequired'))
+    failStep(WIZARD_STEP.UPSTREAMS, upstreamFieldWarning.value || t('common.app.rules.msgs.upHostsRequired'))
     saving.value = false
     return
   }
@@ -3389,13 +3496,13 @@ const submitWizard = async () => {
     // 却没有路径规则时，载荷会落 custom_routes_enabled=1 + path_rules=[]，
     // 预览却按空数组显示「禁用」——字段与文案相反的死配置。
     if (wizardForm.path_rules.length === 0) {
-      ElMessage.warning(t('common.app.rules.msgs.pathRuleRequired'))
+      failStep(WIZARD_STEP.CUSTOM_ROUTES, t('common.app.rules.msgs.pathRuleRequired'))
       saving.value = false
       return
     }
     const pathRuleError = validatePathRules(wizardForm.path_rules)
     if (pathRuleError) {
-      ElMessage.warning(pathRuleError)
+      failStep(WIZARD_STEP.CUSTOM_ROUTES, pathRuleError)
       saving.value = false
       return
     }
@@ -3403,20 +3510,20 @@ const submitWizard = async () => {
 
   const upstreamError = validateEnabledUpstreams()
   if (upstreamError) {
-    ElMessage.warning(upstreamError)
+    failStep(upstreamError.step, upstreamError.message)
     saving.value = false
     return
   }
   // M33：上游 host:port 查重（不分启用状态，同后端口径）
   const duplicated = findDuplicateUpstream()
   if (duplicated) {
-    ElMessage.error(t('common.app.rules.msgs.upRowDuplicate', { row: duplicated.rowIndex, key: duplicated.key }))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upRowDuplicate', { row: duplicated.rowIndex, key: duplicated.key }), 'error')
     saving.value = false
     return
   }
   // M34：主动健康检查路径必须以 / 开头
   if (hasInvalidActiveHealthCheckPath()) {
-    ElMessage.error(t('common.app.rules.msgs.healthPathSlash'))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.healthPathSlash'), 'error')
     saving.value = false
     return
   }
@@ -3436,13 +3543,13 @@ const submitWizard = async () => {
   if (wizardForm.health_check_interval > 0
       && wizardForm.health_check_timeout > 0
       && wizardForm.health_check_timeout >= wizardForm.health_check_interval) {
-    ElMessage.warning(t('common.app.rules.msgs.healthTimeoutInvalid', { healthTimeout: wizardForm.health_check_timeout, healthInterval: wizardForm.health_check_interval }))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.healthTimeoutInvalid', { healthTimeout: wizardForm.health_check_timeout, healthInterval: wizardForm.health_check_interval }))
     saving.value = false
     return
   }
   const allowedProtocols: readonly UpstreamProtocol[] = wizardForm.protocol === 'tcp' ? ['tcp', 'tls'] : ['http', 'https']
   if (wizardForm.upstreams.some(u => !allowedProtocols.includes(u.protocol))) {
-    ElMessage.warning(t('common.app.rules.msgs.protoFamilyUpstream', { protocol: wizardForm.protocol.toUpperCase() }))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.protoFamilyUpstream', { protocol: wizardForm.protocol.toUpperCase() }))
     saving.value = false
     return
   }
@@ -3451,7 +3558,7 @@ const submitWizard = async () => {
   if (wizardForm.protocol === 'http') {
     const enabledProtos = new Set(wizardForm.upstreams.filter(u => u.enabled !== false).map(u => u.protocol || 'http'))
     if (enabledProtos.has('http') && enabledProtos.has('https')) {
-      ElMessage.warning(t('common.app.rules.msgs.upstreamProtocolMismatch'))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upstreamProtocolMismatch'))
       saving.value = false
       return
     }
@@ -3463,17 +3570,17 @@ const submitWizard = async () => {
     const origin = (upstream.origin_domain || '').trim()
     if (origin === '') continue
     if (wizardForm.protocol !== 'http') {
-      ElMessage.warning(t('common.app.rules.msgs.upstreamOriginHttpOnly', { upstreamIndex: index + 1 }))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upstreamOriginHttpOnly', { upstreamIndex: index + 1 }))
       saving.value = false
       return
     }
     if (wizardForm.dynamic_dns) {
-      ElMessage.warning(t('common.app.rules.msgs.upstreamDynamicOriginUnsupported', { upstreamIndex: index + 1 }))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upstreamDynamicOriginUnsupported', { upstreamIndex: index + 1 }))
       saving.value = false
       return
     }
     if (!isValidHostName(origin)) {
-      ElMessage.warning(t('common.app.rules.msgs.upOriginHostInvalid', { index: index + 1, origin }))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.upOriginHostInvalid', { index: index + 1, origin }))
       saving.value = false
       return
     }
@@ -3481,25 +3588,25 @@ const submitWizard = async () => {
   // 健康检查域名：probe Host 头，纯主机名不带端口（与后端同口径）
   const healthCheckHost = (wizardForm.health_check_host || '').trim()
   if (healthCheckHost !== '' && wizardForm.protocol === 'http' && !isValidHostName(healthCheckHost)) {
-    ElMessage.warning(t('common.app.rules.msgs.healthHostInvalid', { host: healthCheckHost }))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.healthHostInvalid', { host: healthCheckHost }))
     saving.value = false
     return
   }
   const allowedStrategies = strategyValuesForProtocol(wizardForm.protocol)
   if (!allowedStrategies.includes(wizardForm.strategy)) {
-    ElMessage.warning(t('common.app.rules.msgs.protoFamilyPolicy', { protocol: wizardForm.protocol.toUpperCase() }))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.protoFamilyPolicy', { protocol: wizardForm.protocol.toUpperCase() }))
     saving.value = false
     return
   }
   // NTLM 兼容预校验（与后端 validateRuleFeatures 同口径；正常交互不可达，
   // 兜直改 DB/导入产生的失配态）
   if (wizardForm.protocol === 'http' && wizardForm.ntlm_compatible === 1 && wizardForm.strategy !== 'cookie') {
-    ElMessage.warning(t('common.app.rules.msgs.ntlmRequiresCookie'))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.ntlmRequiresCookie'))
     saving.value = false
     return
   }
   if (wizardForm.protocol === 'tcp' && wizardForm.ntlm_compatible === 1) {
-    ElMessage.warning(t('common.app.rules.msgs.ntlmHttpOnly'))
+    failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.ntlmHttpOnly'))
     saving.value = false
     return
   }
@@ -3507,18 +3614,18 @@ const submitWizard = async () => {
   // 兜直改 DOM/导入产生的失配态）
   if (wizardForm.protocol === 'http' && wizardForm.forward_auth_enabled === 1) {
     if (!/^https?:\/\/.+/.test(wizardForm.forward_auth_upstream.trim())) {
-      ElMessage.warning(t('common.app.rules.msgs.forwardAuthAddressFormat'))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.forwardAuthAddressFormat'))
       saving.value = false
       return
     }
     if (!(wizardForm.forward_auth_uri || '').startsWith('/') || /[\r\n]/.test(wizardForm.forward_auth_uri)) {
-      ElMessage.warning(t('common.app.rules.msgs.forwardAuthPathFormat'))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.forwardAuthPathFormat'))
       saving.value = false
       return
     }
     const faHeaders = wizardForm.forward_auth_copy_headers.split(',').map((item) => item.trim()).filter(Boolean)
     if (faHeaders.length === 0 || faHeaders.length > 16 || faHeaders.some((item) => /[\s:]/.test(item))) {
-      ElMessage.warning(t('common.app.rules.msgs.forwardAuthHeaderListFormat'))
+      failStep(WIZARD_STEP.UPSTREAMS, t('common.app.rules.msgs.forwardAuthHeaderListFormat'))
       saving.value = false
       return
     }
@@ -3919,15 +4026,11 @@ const deleteRule = async (rule: Rule) => {
   }
 }
 
-const duplicateRule = async (rule: Rule) => {
+const duplicateRule = (rule: Rule): void => {
   if (isReadOnly.value) return
-  try {
-    await ElMessageBox.confirm(t('common.app.rules.msgs.ruleCopyConfirm', { name: rule.name }), t('common.app.rules.msgs.copyConfirmTitle'), { type: 'info' })
-    openCopyWizard(rule)
-  } catch (error: unknown) {
-    if (error === 'cancel' || error === 'close') return
-    console.error('duplicate rule failed', error)
-  }
+  // 进入前不再确认：复制向导保存路径已有「含安全策略 / 仅负载规则」确认框，
+  // 连弹两次只会在第一次就让用户以为已经复制。
+  void openCopyWizard(rule)
 }
 
 const openCopyWizard = async (rule: Rule) => {
@@ -3972,7 +4075,10 @@ const openCopyWizard = async (rule: Rule) => {
   copySourceHostHeader.value = copyRuleHostHeader(fullRule)
   Object.assign(wizardForm, wizardFormFromRule(fullRule), {
     name: t('common.app.rules.msgs.copyName', { name: fullRule.name }),
+    // 副本默认禁用；HTTP 副本不继承源域名——同域名同端口的副本一启用就撞冲突，
+    // 而冲突要到启用时才报，故进向导即留空（域名行有说明）。
     enabled: false,
+    domain: copyRuleDomain(fullRule),
   })
   weightsToPercent(wizardForm.upstreams)
   if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
@@ -4574,13 +4680,62 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
-.cert-expiry-warning {
-  color: #e6a23c;
+.cert-info-alert.is-warn {
+  background: var(--el-color-warning-light-9);
+  border-color: var(--el-color-warning-light-5);
+}
+
+/* 证书事实：标签—值成对、一行排开；有效期结论（已过期 N 天 / N 天后）紧随其后 */
+.cert-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 6px 0 0;
+}
+
+.cert-fact {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+}
+
+.cert-fact dt {
+  font-weight: 400;
+  color: #6b7280;
+}
+
+.cert-fact dd {
+  margin: 0;
+  color: #374151;
+}
+
+.cert-fact-note {
+  margin-left: 6px;
   font-weight: 600;
 }
 
-.cert-expiry-normal {
-  color: #67c23a;
+.cert-fact-note.is-danger { color: var(--el-color-danger); }
+.cert-fact-note.is-warning { color: var(--el-color-warning); }
+.cert-fact-note.is-success { color: var(--el-color-success); }
+
+.cert-warn-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--el-color-warning-dark-2);
+}
+
+/* 预览行：证书类型、域名标签、过期时间同一行对齐，项间留间距 */
+.cert-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cert-preview-expiry {
+  color: var(--el-text-color-regular);
 }
 
 

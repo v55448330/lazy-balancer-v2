@@ -149,6 +149,7 @@ export default {
      "contentTipReadonly": "内置页面内容只读，仅可查看",
      "contentTipEditable": "拦截时返回给客户端的响应内容（HTML 类型支持内联 CSS）",
      "cancel": "取消",
+     "preview": "预览",
      "save": "保存"
     },
     "preview": {
@@ -157,6 +158,7 @@ export default {
      "title": "拦截页面预览",
      "subtitle": "在隔离沙箱中预览客户端接收的响应内容",
      "effectTitle": "页面效果",
+     "draftNote": "预览的是当前编辑内容（尚未保存），保存后才会生效",
      "emptyContent": "(空内容)"
     },
     "messages": {
@@ -170,7 +172,7 @@ export default {
     },
     "deleteConfirm": {
      "title": "删除拦截页面",
-     "text": "将删除拦截页面「{name}」。删除后无法恢复，引用它的策略将失去该自定义页面。",
+     "text": "将删除拦截页面「{name}」。删除后无法恢复。被启用中的安全策略引用时不可删除，需先在对应策略中解除引用。",
      "confirm": "确认删除"
     }
    },
@@ -306,7 +308,7 @@ export default {
     "confirmFloorHint": "可疑参与累计需至少 {n} 次确认攻击打底",
     "banConsoleAction": "封禁与累犯（{n}）",
     "banConsoleTitle": "封禁与累犯",
-    "banConsoleSubtitle": "「当前封禁」是正在生效的封禁条目（含手动封禁）；「累犯前科」是自动封禁的历史记账，用于再犯升级",
+    "banConsoleSubtitle": "「当前封禁」是「自动封禁名单」中的全部条目（含手动添加到该名单的）；「累犯前科」是自动封禁的历史记账，用于再犯升级",
     "banConsoleTabBans": "当前封禁（{n}）",
     "banConsoleTabRecid": "累犯前科",
     "banSearchPlaceholder": "搜索 IP 地址",
@@ -409,6 +411,7 @@ export default {
      "title": "安全总览",
      "desc": "安全防护统计概览",
      "threatScreen": "威胁大屏",
+     "refresh": "刷新",
      "loadFailed": "安全总览数据加载失败",
      "retryNow": "立即重试"
     },
@@ -457,8 +460,8 @@ export default {
      "passRate": "挑战通过率",
      "passed": "通过",
      "failed": "失败",
-     "passedTotal": "累计通过",
-     "failedTotal": "累计失败",
+     "passedTotal": "进程累计通过",
+     "failedTotal": "进程累计失败",
      "pending": "未完成",
      "stackTip": "挑战结果分布（本进程累计）：通过 / 失败 / 未完成",
      "resultTitle": "累计结果",
@@ -515,7 +518,7 @@ export default {
      "suggestionsEmpty": "暂无达阈值候选",
      "times": "次",
      "colIdentity": "IP 地址",
-     "colEscalation": "累犯档",
+     "colEscalation": "累犯升级档（全局）",
      "escalationOffShort": "关闭",
      "escalationStandardShort": "标准",
      "escalationAggressiveShort": "激进",
@@ -741,6 +744,7 @@ export default {
     "status": {
      "disabled": "禁用",
      "enabled": "启用",
+     "enabledUnbound": "启用 · 未关联规则",
      "off": "关闭"
     },
     "table": {
@@ -942,7 +946,7 @@ export default {
     },
     "bp": {
      "manageTip": "拦截时返回给客户端的自定义页面，在\"拦截页面\"页面管理，",
-     "noPageDefault": "不使用拦截页（直接返回状态码）",
+     "noPageDefault": "不使用拦截页（兜底显示绑定链首个有页策略的页面；全链无页时返回 Caddy 默认 403）",
      "noPageTipDefault": "不配置拦截页：本策略触发拦截时兜底显示绑定链首个有页策略的页面；全链无页时返回 Caddy 默认 403",
      "stage2BuiltinPageLegacy": "内置挑战页（按动作自动选用）",
      "pageLabel": "拦截页面",
@@ -1007,9 +1011,11 @@ export default {
       "ccNeedsHuman": "CC 检测仅在人机验证开启时生效：当前人机验证已关闭，突刺/4xx/多UA 阈值不会发起挑战（保存不受影响，开启人机验证后生效）。",
       "challengePageTip": "挑战页必须包含当前验证方式的验证组件占位符；内置验证页已包含，自定义页请在拦截页编辑器插入对应组件。",
       "challengePageNeedsWidget": "所选拦截页未包含当前验证方式的验证组件；请先在拦截页编辑器插入对应组件。",
-      "ccRpsLabel": "突刺阈值",
-      "ccRpsPer": "次 /",
-      "ccRpsSec": "秒",
+      "ccRpsLabel": "请求速率阈值",
+      "ccRpsPer": "次/秒 ×",
+      "ccRpsSec": "秒窗口",
+      "ccRpsExplain": "按同一客户端 IP 在本规则上的统计窗口计算：{sec} 秒内累计请求超过 {total} 次（= {n} 次/秒 × {sec} 秒）才发起挑战；窗口从该 IP 的第一个请求开始计、满 {sec} 秒重新计数，一次页面加载的瞬时并发不会触发",
+      "ccRpsGuide": "参考：个人站点 10-20；普通业务站点 40（默认）；资源未上 CDN 的重前端站点 80-120；办公 / 校园等共享出口请把出口 IP 加入信任名单，而不是抬高阈值",
       "cc4xxLabel": "4xx 比例",
       "cc4xxTip": "占比超阈值且请求数≥20 即触发",
       "ccSessionLabel": "会话异常",
@@ -1075,6 +1081,9 @@ export default {
      "createdPolicyNoId": "创建策略响应缺少 id",
      "deleteConfirm": "将删除策略「{name}」。删除后无法恢复，规则上原有的其它策略不受影响。",
      "deleteConfirmBtn": "确认删除",
+     "deleteScopeCountOnly": "同时解除与 {n} 条规则的绑定（规则本身保留；规则名称暂未加载）。",
+     "deleteScopeLead": "同时解除与 {n} 条规则的绑定（规则本身保留）：",
+     "deleteScopeMore": "其余 {n} 条（名称未加载）",
      "deleteTitle": "删除安全策略",
      "detailNoData": "策略详情响应缺少数据",
      "discard": "放弃修改",
@@ -1112,7 +1121,7 @@ export default {
      "geoRegions": "GeoIP {n} 区域",
      "mixedCombo": "混合 · 跨阶段能力组合（存量兼容）",
      "ccChallenge": "挑战 {mode}",
-     "ccSpike": "突刺 {n} 次/{sec} 秒触发",
+     "ccSpike": "请求速率 {n} 次/秒（{sec} 秒内 >{total} 次）",
      "trustSummary": "信任 {n} 条 · {mode}",
      "wafMode": "WAF {mode}",
      "wafOff": "WAF 关闭"

@@ -1046,6 +1046,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/system/tasks/:id/control", h.ControlSystemTask)
 				admin.DELETE("/auto-backup/:id", h.DeleteAutoBackup)
 				admin.POST("/auto-backup/:id/restore", h.RestoreAutoBackup)
+				admin.GET("/auto-backup/:id/preview", h.PreviewAutoBackup)
 				admin.GET("/auto-backup/:id/download", h.DownloadAutoBackup)
 
 				// OIDC 认证集成(v2.3.0):显示/测试/修改/删除。

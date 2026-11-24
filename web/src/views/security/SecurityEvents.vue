@@ -515,7 +515,11 @@
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item :label="t('app.security.events.colTime')">{{ ctxEvent.event_time ? formatDate(ctxEvent.event_time) : '—' }}</el-descriptions-item>
               <el-descriptions-item :label="t('app.security.events.colMethod')">{{ ctxIsTcp ? t('app.security.events.tcpPlaceholder') : (ctxEvent.method || '—') }}</el-descriptions-item>
-              <el-descriptions-item :label="t('app.security.events.colClientIp')"><span style="overflow-wrap: anywhere">{{ ctxEvent.client_ip || '—' }}</span></el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.colClientIp')">
+                <!-- 与事件表同款的 IP 快捷处置入口；归属地由下方独立行承载，不在此重复内联 -->
+                <IPLocationAction v-if="ctxEvent.client_ip" :ip="ctxEvent.client_ip" :location="''" />
+                <span v-else>—</span>
+              </el-descriptions-item>
               <el-descriptions-item :label="t('app.security.events.ctxLocation')">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
               <el-descriptions-item label="URI" :span="2">{{ ctxIsTcp ? t('app.security.events.tcpPlaceholder') : (ctxEvent.uri || '—') }}</el-descriptions-item>
               <!-- 规则协议徽标（数据源=event_type；字段缺失不显示——防御式）：
@@ -605,7 +609,7 @@ import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/utils/securityStages'
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
-import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
+import { DEEP_LINK_PARAMS, pageUrl, parseSecurityEventsDeepLink } from '@/utils/deepLink'
 import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, autobanIdentityDisplay, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
 import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, AUTOBAN_SUSPICION_MULTIPLIER_MAX, AUTOBAN_CONFIRM_FLOOR_RATIOS, matchAutobanPreset, type AutobanPresetId } from '@/utils/autobanPresets'
 import { autobanEntryExpired, autobanEntryRemaining, isAutomaticBanEntry } from '@/utils/autobanEntry'
@@ -825,6 +829,13 @@ const openAutobanConfig = (): void => {
   // 每次打开重置高级折叠为收起（弹框 DOM 常驻，展开态不得跨会话残留）。
   autobanAdvancedOpen.value = []
   autobanDialogVisible.value = true
+}
+// 深链「查看自动封禁配置」的落地（状态与配置缓存就绪后调用）：不可写时（只读 /
+// 从节点 / 状态加载失败）配置弹框开不了——入口承诺的是「查看配置」，必须说明开
+// 不了的原因，不能静默无反应。
+const openAutobanConfigFromLink = (): void => {
+  if (autobanWritable.value) openAutobanConfig()
+  else ElMessage.warning(autobanConfigTooltip.value)
 }
 const saveAutobanConfig = async (): Promise<void> => {
   // 函数级纵深守卫（与 openAutobanConfig 同构）：按钮 :disabled 仅呈现层
@@ -1393,9 +1404,15 @@ const fetchEvents = async () => {
   }
 }
 onMounted(() => {
+  // 跨页深链交接（总览「查看全部」= 动作筛选；策略页「查看自动封禁配置」= 进页打开
+  // 配置弹框）：消费后 replaceState 清除——视图切换走 authStore.currentPage，残留
+  // 参数会在每次回到本页时被重新应用（与 SecurityPolicies 的 sp 口径一致）。
+  const link = parseSecurityEventsDeepLink(window.location.search)
+  if (link.action || link.openAutobanConfig) window.history.replaceState(null, '', window.location.pathname)
+  if (link.action) filters.value.action = link.action
   fetchEvents()
-  fetchAutobanStatus()
-  void fetchAutobanConfig()
+  const autobanReady = Promise.all([fetchAutobanStatus(), fetchAutobanConfig()])
+  if (link.openAutobanConfig) void autobanReady.then(openAutobanConfigFromLink)
 })
 
 // 页面刷新同时拉自动封禁状态（调度在后台持续运行，dry-run 建议

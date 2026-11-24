@@ -18,7 +18,7 @@
       </template>
     </el-alert>
 
-    <el-form v-if="!loadError" :label-width="$flw('130px')" :disabled="saving" class="creds-form">
+    <el-form v-if="!loadError" :label-width="$flw('130px')" :disabled="saving || nodeWriteBlocked" class="creds-form">
       <el-form-item :label="t('app.notification.creds.smtpHost')">
         <el-input v-model="form.smtpHost" class="creds-input" />
       </el-form-item>
@@ -51,7 +51,7 @@
         <span class="form-tip-inline">{{ t('app.notification.creds.smtpTlsHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpInsecure')">
-        <el-switch v-model="form.smtpInsecure" :disabled="!form.smtpTls" />
+        <el-switch v-model="form.smtpInsecure" :disabled="nodeWriteBlocked || !form.smtpTls" />
         <span class="form-tip-inline">{{ t('app.notification.creds.smtpInsecureHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTestTo')">

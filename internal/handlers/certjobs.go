@@ -1193,11 +1193,8 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 	}
 
 	// 截断点与残行由 readRotatedLogTail 内部处理（结果恒 ≤ 预算、首个残段
-	// 已丢弃），这里只负责提示行。
-	if truncated {
-		content = "[日志过长，仅显示最近 256KB]\n" + content
-	}
-
+	// 已丢弃）；内容本体不含提示行——截断只经 truncated 布尔披露，提示行由
+	// 消费端按语言渲染（同一响应不得出现与其它端点头不同的中文提示）。
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{"content": content, "truncated": truncated}})
 }
 

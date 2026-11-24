@@ -189,9 +189,15 @@
         <div class="info-item">
           <span class="info-label">{{ t('app.settings.basic.system.backup') }}</span>
           <div class="backup-actions">
-            <el-button size="small" :icon="Download" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">{{ t('app.settings.basic.system.export') }}</el-button>
-            <el-button size="small" :icon="Upload" :disabled="backupDisabled" @click="triggerImport">{{ t('app.settings.basic.system.import') }}</el-button>
-            <el-button size="small" :icon="Timer" :disabled="backupDisabled" @click="openAutoBackupDialog">{{ t('app.settings.basic.autoBackup.title') }}</el-button>
+            <el-tooltip :disabled="!backupDisabled" :content="t('app.settings.basic.system.backupDisabledTip')">
+              <div><el-button size="small" :icon="Download" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">{{ t('app.settings.basic.system.export') }}</el-button></div>
+            </el-tooltip>
+            <el-tooltip :disabled="!backupDisabled" :content="t('app.settings.basic.system.backupDisabledTip')">
+              <div><el-button size="small" :icon="Upload" :disabled="backupDisabled" @click="triggerImport">{{ t('app.settings.basic.system.import') }}</el-button></div>
+            </el-tooltip>
+            <el-tooltip :disabled="!backupDisabled" :content="t('app.settings.basic.system.backupDisabledTip')">
+              <div><el-button size="small" :icon="Timer" :disabled="backupDisabled" @click="openAutoBackupDialog">{{ t('app.settings.basic.autoBackup.title') }}</el-button></div>
+            </el-tooltip>
           </div>
         </div>
 
@@ -571,9 +577,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess, suspendSessionExpiredHandling } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
 import { isConfigUnchanged } from '@/utils/saveResult'
+import { isConnectionInterruption } from '@/utils/connectionInterruption'
+import { restorePreviewGroups, type AutoBackupPreviewPayload, type RestorePreviewGroups } from '@/utils/restorePreview'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
-import { useSettingsDraft, type AdminTlsCertInfo } from '@/composables/useSettingsDraft'
+import { useSettingsDraft, useSettingsFormTracker, type AdminTlsCertInfo } from '@/composables/useSettingsDraft'
 import { restartServiceWithFeedback } from '@/utils/restart'
 import { adminTlsConfirmDisabled, adminTlsPendingChange, adminTlsReusesSavedCert, adminTlsSendsStagedCert } from '@/utils/adminTlsGate'
 import { formatDate, formatDateShort } from '@/utils/date'
@@ -1014,15 +1022,48 @@ const downloadAutoBackup = async (row: AutoBackupRow): Promise<void> => {
   }
 }
 
+// 还原预览（只读探测）：跨版本告警与「将被置为禁用的规则」必须在确认前可见——
+// 原实现只有备份名+分类，版本告警与冲突自动禁用要等提交后的结果弹框才出现。
+// 失败不阻断还原（silent：预览失败不是还原失败，全局 toast 会误导）。
+const fetchRestorePreview = async (id: number): Promise<{ groups: RestorePreviewGroups; failure: string }> => {
+  try {
+    const res = await request.get<{ data?: AutoBackupPreviewPayload }>(`/auto-backup/${id}/preview`, { silent: true })
+    return { groups: restorePreviewGroups(res.data), failure: '' }
+  } catch (error) {
+    const reason = error instanceof Error && error.message ? error.message : t('app.settings.basic.messages.unknownError')
+    return { groups: restorePreviewGroups(null), failure: reason }
+  }
+}
+
 const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
   // 写动作函数级守卫（还原会覆盖配置，仅主节点管理员可执行）+ 行动作在途门
   if (backupDisabled.value || autoBackupActionBusy.value) return
   restoringBackupId.value = row.id
   try {
     const scope = autoBackupScopeText(row)
+    const preview = await fetchRestorePreview(row.id)
+    // 后果清单走 DESIGN_SPEC §20 全局单源类；清单可能很长（逐条冲突规则 + 告警），
+    // 容器限高滚动，避免弹框被撑出视口后「仍然还原」按钮不可达。
+    const previewBody = [
+      h('div', t('app.settings.basic.autoBackup.restoreConfirm', { name: row.filename, scope })),
+      ...(preview.groups.versionWarning ? [h('p', { class: 'confirm-scope-lead' }, preview.groups.versionWarning)] : []),
+      ...(preview.groups.conflicts.length > 0
+        ? [
+            h('p', { class: 'confirm-scope-lead' }, t('app.settings.basic.autoBackup.restorePreview.conflictsLead')),
+            h('ul', { class: 'confirm-scope-list' }, preview.groups.conflicts.map((conflict) => h('li', formatImportConflict(conflict)))),
+          ]
+        : []),
+      ...(preview.groups.warnings.length > 0
+        ? [
+            h('p', { class: 'confirm-scope-lead' }, t('app.settings.basic.autoBackup.restorePreview.warningsLead')),
+            h('ul', { class: 'confirm-scope-list' }, preview.groups.warnings.map((warning) => h('li', warning))),
+          ]
+        : []),
+      ...(preview.failure ? [h('p', { class: 'confirm-scope-lead' }, t('app.settings.basic.autoBackup.restorePreview.fail', { reason: preview.failure }))] : []),
+    ]
     try {
       await ElMessageBox.confirm(
-        t('app.settings.basic.autoBackup.restoreConfirm', { name: row.filename, scope }),
+        h('div', { style: 'max-height: 50vh; overflow-y: auto;' }, previewBody),
         t('app.settings.basic.autoBackup.restoreTitle'),
         { type: 'warning', confirmButtonText: t('app.settings.basic.autoBackup.restoreConfirmBtn'), cancelButtonText: t('app.settings.basic.actions.cancel') },
       )
@@ -1054,6 +1095,12 @@ const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
           : t('app.settings.basic.actions.reloadPage'),
       }
     } catch (error: unknown) {
+      // 分钟级同步请求断连：后端可能仍在提交，必须显式告知并给审计入口——
+      // 全局「网络连接失败」会被读成「没执行」。
+      if (isConnectionInterruption(error)) {
+        await showTransferInterruption(t('app.settings.basic.restore.interrupted'))
+        return
+      }
       // 全局拦截器已弹 message toast；失败响应携带的文件面判决（回退失败=文件与
       // 版本记录可能分裂 / 提交结果不确定=需人工核对）必须展示——回滚只覆盖库侧，
       // 回退失败或提交不确定时执行面可能已与库分叉，不得按「已回滚即无需动作」处理。
@@ -1173,6 +1220,21 @@ const showImportFailure = async (error: unknown, fallbackMessage: string, title:
   } catch {
     // 弹框被关闭（X/ESC）不影响任何状态：失败已由后端回滚或文件面判决披露。
   }
+}
+
+// 导入/还原是分钟级同步请求（timeout:0）：断连时后端可能仍在提交，全局拦截器
+// 的「网络连接失败」会被读成「没执行」。显式告知 + 操作日志入口，结果以审计为准。
+const showTransferInterruption = async (message: string): Promise<void> => {
+  try {
+    await ElMessageBox.confirm(message, t('app.settings.basic.interruptedTitle'), {
+      type: 'warning',
+      confirmButtonText: t('app.settings.basic.gotoAuditLog'),
+      cancelButtonText: t('app.settings.basic.actions.gotIt'),
+    })
+  } catch {
+    return
+  }
+  authStore.setCurrentPage('audit-log')
 }
 
 const triggerImport = (): void => {
@@ -1387,6 +1449,11 @@ const confirmImport = async (): Promise<void> => {
       buttonText: t('app.settings.basic.actions.reloadPage'),
     }
   } catch (error: unknown) {
+    // 分钟级同步请求断连：导入可能仍在后台提交，必须显式告知并给审计入口。
+    if (isConnectionInterruption(error)) {
+      await showTransferInterruption(t('app.settings.basic.import.interrupted'))
+      return
+    }
     // 全局拦截器只弹 message toast；失败响应的 data.warnings（规则库文件面
     // 三态判决/提交不确定的人工核对指引/软跳过清单）与冲突明细必须同框展示，
     // 与成功路径同口径。
@@ -1515,6 +1582,8 @@ const props = defineProps<{
   /** 服务端最近确认的大屏字段；用于区分展示归一与真实编辑。 */
   savedThreatScreenMode?: 'map' | 'globe'
   savedThreatTrafficSampleN?: number
+  /** 父级每成功回填一次本卡字段即自增：用于刷新「已保存」基线快照。 */
+  revision?: number
 }>()
 
 // 读取失败不得把默认值当可写值：原 getter 未加载时回退
@@ -1688,6 +1757,46 @@ const adminTlsDirty = computed(() => adminTlsPendingChange({
   savedMode: adminTlsSaved.value.mode,
   hasStagedCert: stagedAdminTlsCert.value !== null,
 }))
+
+// —— 未保存改动判定（侧栏切页与 beforeunload 守卫共读） ——
+// 本卡自有表单键全部直绑父级共享模型；另有三份只存在于设置草稿的暂存态
+// （GitHub 令牌输入/清除标记、管理面板证书开关与暂存证书）。基线=最近一次
+// 服务端确认值，由父级回填版本（revision）驱动刷新：重挂载时 initSaved 只在
+// 无基线时初始化，不会把未保存编辑当成已保存基线。
+const BASIC_FORM_KEYS = [
+  'log_level',
+  'task_log_size_mb',
+  'audit_log_size_mb',
+  'runtime_log_size_mb',
+  'audit_retention_months',
+  'notification_delivery_retention_days',
+  'jwt_expire_minutes',
+  'timezone',
+  'server_map_lat',
+  'server_map_lon',
+  'threat_screen_mode',
+  'threat_traffic_sample_n',
+  'security_events_retention_days',
+  'security_events_row_cap',
+  'mfa_write_guard',
+  'mfa_lockout_enabled',
+  'github_proxy_url',
+] as const satisfies readonly (keyof BasicSettingsConfig)[]
+const formTracker = useSettingsFormTracker('basic')
+const formSnapshot = (): string => JSON.stringify(BASIC_FORM_KEYS.map((key) => settings.value[key]))
+const dirty = computed(
+  () =>
+    formTracker.isDirty(formSnapshot()) ||
+    githubTokenInput.value.trim() !== '' ||
+    githubTokenClearPending.value ||
+    adminTlsDirty.value,
+)
+watch(dirty, (value) => formTracker.setDirty(value), { immediate: true })
+watch(() => props.revision, () => formTracker.markSaved(formSnapshot()))
+onMounted(() => {
+  if (props.configLoaded) formTracker.initSaved(formSnapshot())
+})
+defineExpose({ dirty })
 
 // /admin-tls 读取失败不再静默吞错——开关禁用直到加载成功，
 // 避免长期以默认关闭态误导「HTTPS 已关闭」。
@@ -2018,7 +2127,7 @@ const handleSave = async () => {
       if (isConfigUnchanged(saveResp as unknown as { message?: string; messageKey?: string })) {
         ElMessage.info(message || t('app.settings.basic.messages.noChanges'))
       } else {
-        mfaAwareSuccess(t('app.settings.basic.messages.saved'))
+        mfaAwareSuccess(message || t('app.settings.basic.messages.saved'))
       }
     }
   } catch (error) {
