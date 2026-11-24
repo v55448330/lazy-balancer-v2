@@ -113,6 +113,9 @@ test('设计守卫：保存/删除确认的后果清单（DESIGN_SPEC §20）', 
   // 禁用同样披露影响面（流量中断 + 防护失效），同样用标准清单类
   assert.match(rules, /ruleDisableScopeLead/, '禁用确认必须披露影响面')
   assert.match(rules, /h\('ul', \{ class: 'confirm-scope-list' \}, \[/, '禁用影响面必须以 .confirm-scope-list 列出')
+  // 披露条件必须按「目标状态」判断：开关 v-model 先行翻转，进入处理函数时
+  // rule.enabled 已是目标态。写成当前态会把条件写反（浏览器实测抓到过）。
+  assert.match(rules, /const nextEnabled = rule\.enabled[\s\S]{0,600}?const toggleBody = !nextEnabled/, '禁用披露必须以目标状态为准（!nextEnabled）')
   // 单源：该类只允许定义在 main.css
   const css = code('src/styles/main.css')
   assert.match(css, /\.confirm-scope-list \{/, '.confirm-scope-list 必须定义在 main.css')

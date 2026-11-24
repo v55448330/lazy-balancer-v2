@@ -3840,7 +3840,10 @@ const toggleRule = async (rule: Rule) => {
   try {
     // DESIGN_SPEC §20：禁用同样是对外可用性的不可逆变更（流量立即中断），
     // 确认框必须披露影响面，不得只问「确定要禁用吗」。
-    const toggleBody = rule.enabled
+    // 注意开关 v-model 先行翻转：进入本函数时 rule.enabled 已是**目标状态**
+    // （nextEnabled）——目标是「禁用」才披露影响面。按当前态判断会把条件写反
+    // （浏览器实测抓到过：禁用时只弹一句话、启用时反而弹影响清单）。
+    const toggleBody = !nextEnabled
       ? h('div', [
           h('div', t('common.app.rules.msgs.ruleActionConfirm', { action, name: rule.name })),
           h('p', { class: 'confirm-scope-lead' }, t('common.app.rules.msgs.ruleDisableScopeLead')),
