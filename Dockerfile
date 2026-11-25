@@ -5,7 +5,10 @@ FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d
 RUN apk add --no-cache git
 # GOPROXY 逗号多级回退：阿里云 404/410 时依次回落 goproxy.cn、直连；
 # 校验不符类瞬态错误由下方 xcaddy build 的重试循环兜底
-ENV GOPROXY=https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct
+# 可信源优先：2026-11-26 实测 mirrors.aliyun.com 对 letsencrypt/pebble/v2@v2.10.1
+# 返回的字节与 sum.golang.org 记录不一致（goproxy.cn 与官方源一致）→ 先走已校验
+# 通过的镜像源；校验失败一律失败退出，禁止用 GONOSUMDB/GOFLAGS 绕过。
+ENV GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct
 # 模块缓存挂载按 builder 持久（lazy-builder GC 48h）：xcaddy 自身依赖复用
 # /go/pkg/mod，避免每次构建全量重拉
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -109,9 +112,9 @@ ARG TARGETOS=linux
 ARG TARGETARCH
 # GOPROXY 逗号多级回退——与 xcaddy-builder 阶段对称
 #（阶段间 ENV 不继承，backend 此前用官方默认 proxy.golang.org，构建网络对
-# 其不可达时 go mod download 无回退直接失败）：阿里云 404/410 时依次回落
-# goproxy.cn、直连；校验不符类瞬态错误由下方 3 次重试兜底。
-ENV GOPROXY=https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct
+# 其不可达时 go mod download 无回退直接失败）：先走已校验通过的镜像源，阿里云
+# 作为次级回退；校验不符类错误由下方 3 次重试兜底，绝不关闭校验。
+ENV GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct
 # GOTOOLCHAIN=local：镜像内的 Go 二进制只由基础镜像声明的工具链产出。auto 会在
 # 模块 go 指令高于本地工具链时构建期下载新工具链——同一 Dockerfile 在不同时间
 # 可能得到不同编译器产物，且下载失败与依赖拉取失败的错误形态混淆。工具链不足
