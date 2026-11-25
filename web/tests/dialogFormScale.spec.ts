@@ -115,10 +115,17 @@ const collectFooters = (): string[] => {
 // 界面统一批次 3（规则与安全策略页面及向导）大降：U1 34→12（本批 22 个弹框全部落档）、
 // U3 29→9（策略卡/徽标/图标块/锁清单面板/威胁屏 chip 直角）；U2 4 不变（余量 = Keys ×4）、
 // U4 2 不变（余量 = 二次验证向导两个辅助按钮）。
-const BASELINE_DIALOG_WIDTH = 12
-const BASELINE_SECTION_DIVIDER = 4
-const BASELINE_RADIUS = 9
-const BASELINE_FOOTER_ORDER = 2
+// 界面统一批次 4（收尾：其余页面、行内表单、直角清零、遮罩层级）四条基线全部归零：
+// U1 12→0（连接控制台 1200、密钥 5 个弹框与 2 个详情/成功框、用户辅助弹框 520、
+// 仪表盘历史 960、个人资料 640 与其验码 520、MFA 向导 520、还原结果 640）；
+// U2 4→0（密钥两处弹框各 2 处分隔线标题改 DialogSectionHeader）；U3 9→0（代码编辑器/
+// 语法高亮/配置预览/接管徽标/还原结果 3 块/密钥代码块/可访问链接悬停底色改直角，
+// 用户列表头像 6px→50% 归入 §26-10 头像白名单）；U4 2→0（MFA 向导页脚辅助动作前移）。
+// 从此这四条是「零容忍钉」：任何新增违规都必须修，不再有存量余量。
+const BASELINE_DIALOG_WIDTH = 0
+const BASELINE_SECTION_DIVIDER = 0
+const BASELINE_RADIUS = 0
+const BASELINE_FOOTER_ORDER = 0
 
 test('判别自检：弹框宽度只认五种写法', () => {
   assert.deepEqual(nonCanonicalDialogWidths(`<el-dialog width="min(640px, 94vw)" top="6vh">`), [])

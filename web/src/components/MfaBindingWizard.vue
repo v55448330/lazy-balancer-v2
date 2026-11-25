@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    width="min(520px, 92vw)"
+    width="min(520px, 94vw)"
     class="dialog-body-inset"
     append-to-body
     :close-on-click-modal="false"
@@ -48,12 +48,15 @@
         <div v-for="item in recoveryCodes" :key="item" class="mfa-recovery-code">{{ item }}</div>
       </div>
     </div>
+    <!-- 页脚顺序（DESIGN_SPEC §26-3/§26-13 U4）：辅助动作在前、主操作在最后。
+         三步互斥（v-if），所以文档序里「上一步 / 复制恢复码」也必须排在所有
+         primary 之前，才不会在任一可见步里出现在主操作右侧。 -->
     <template #footer>
       <el-button v-if="step === 0" :disabled="loading" @click="emit('update:modelValue', false)">{{ t('common.app.views.mfa.cancel') }}</el-button>
-      <el-button v-if="step === 0" type="primary" @click="step = 1">{{ t('common.app.views.mfa.next') }}</el-button>
       <el-button v-if="step === 1" :disabled="loading" @click="step = 0">{{ t('common.app.views.mfa.prev') }}</el-button>
-      <el-button v-if="step === 1" type="primary" :loading="loading" :disabled="code.length !== 6" @click="activate">{{ t('common.app.views.mfa.verifyActivate') }}</el-button>
       <el-button v-if="step === 2" @click="copyRecovery">{{ t('common.app.views.mfa.copyAll') }}</el-button>
+      <el-button v-if="step === 0" type="primary" @click="step = 1">{{ t('common.app.views.mfa.next') }}</el-button>
+      <el-button v-if="step === 1" type="primary" :loading="loading" :disabled="code.length !== 6" @click="activate">{{ t('common.app.views.mfa.verifyActivate') }}</el-button>
       <el-button v-if="step === 2" type="primary" @click="confirmRecoverySaved">{{ t('common.app.views.mfa.savedButton') }}</el-button>
     </template>
   </el-dialog>

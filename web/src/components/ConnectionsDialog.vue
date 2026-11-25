@@ -1,8 +1,7 @@
 <template>
   <el-dialog
     :model-value="visible"
-    width="min(1280px, 96vw)"
-    top="5vh"
+    width="min(1200px, 94vw)"
     class="connections-dialog dialog-body-inset"
     align-center
     :close-on-click-modal="false"

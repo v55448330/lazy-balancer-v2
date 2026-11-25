@@ -36,7 +36,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="form" :label-width="$flw('90px')" :disabled="isReadOnly || submitting">
+      <el-form :model="form" :label-width="$flw('144px')" :disabled="isReadOnly || submitting">
         <!-- 2026-09-19 用户裁定布局:左列 用户名/显示名称/角色;右列 密码组
              (编辑=新密码+确认新密码,创建=密码+确认密码);OIDC 用户右列示数据来源 -->
         <el-row :gutter="16">
@@ -52,7 +52,7 @@
               <!-- 初始化管理员（break-glass 入口）后端不可降级：编辑弹框直接禁用
                    角色控件并在下方给出原因——否则提交必 400，且只有全局 toast 无
                    字段定位，与同页「不可删除/禁用」的显式禁用口径不一致 -->
-              <el-select v-model="form.role" style="width: 100%" :disabled="roleLocked">
+              <el-select v-model="form.role" style="width: 320px" :disabled="roleLocked">
                 <el-option :label="t('common.app.views.users.roleAdmin')" value="admin">
                   <el-tag type="danger" size="small">{{ t('common.app.views.users.roleAdmin') }}</el-tag>
                 </el-option>
@@ -213,7 +213,7 @@
 
     <!-- 统一确认/输入弹框:重置密码 / 修改密码 / 重置 MFA(替代 ElMessageBox,
          与全站 icon+标题+副标题弹框语言一致)。 -->
-    <el-dialog v-model="lbDialog.visible" width="min(500px, 92vw)" :close-on-click-modal="false" @update:model-value="lbCancel()">
+    <el-dialog v-model="lbDialog.visible" width="min(520px, 94vw)" :close-on-click-modal="false" @update:model-value="lbCancel()">
       <template #header>
         <DialogHeader
           :icon="lbDialog.spec?.icon === 'key' ? Key : lbDialog.spec?.icon === 'warning' ? Warning : Lock"
@@ -704,7 +704,8 @@ onMounted(() => {
 .user-avatar {
   width: 36px;
   height: 36px;
-  border-radius: 6px;
+  /* 头像属 §26-10 白名单（真正的头像保留圆形），与侧栏账户头像同一形状。 */
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;

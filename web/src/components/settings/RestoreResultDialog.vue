@@ -1,9 +1,8 @@
 <template>
   <el-dialog
     :model-value="visible"
-    width="min(680px, 96vw)"
+    width="min(640px, 94vw)"
     class="restore-result-dialog dialog-body-inset"
-    top="8vh"
     :close-on-click-modal="false"
     :show-close="false"
     align-center
@@ -20,7 +19,7 @@
     <div class="restore-result">
       <!-- 恢复统计:徽章网格(解析失败回退整段文本) -->
       <section v-if="stats.length > 0" class="rr-section">
-        <div class="rr-section-title">{{ t('app.settings.basic.restoreResult.statsTitle') }}</div>
+        <DialogSectionHeader :title="t('app.settings.basic.restoreResult.statsTitle')" tone="success" />
         <div class="rr-stats-grid">
           <div v-for="(s, i) in stats" :key="i" class="rr-stat-chip">
             <span class="rr-stat-num">{{ s.count }}</span>
@@ -32,7 +31,7 @@
 
       <!-- 重要提示:全局性变更(封禁/CRS 树/会话吊销/冲突计数) -->
       <section v-if="notices.length > 0" class="rr-section">
-        <div class="rr-section-title">{{ t('app.settings.basic.restoreResult.noticesTitle') }}</div>
+        <DialogSectionHeader :title="t('app.settings.basic.restoreResult.noticesTitle')" tone="warning" />
         <div class="rr-notices">
           <div v-for="(n, i) in notices" :key="i" class="rr-notice">
             <el-icon class="rr-notice-icon"><InfoFilled /></el-icon>
@@ -43,9 +42,10 @@
 
       <!-- 规则级警告:逐条可滚动 -->
       <section v-if="ruleWarnings.length > 0" class="rr-section">
-        <div class="rr-section-title">
-          {{ t('app.settings.basic.restoreResult.ruleWarningsTitle', { count: ruleWarnings.length }) }}
-        </div>
+        <DialogSectionHeader
+          :title="t('app.settings.basic.restoreResult.ruleWarningsTitle', { count: ruleWarnings.length })"
+          tone="danger"
+        />
         <div class="rr-warnings">
           <div v-for="(w, i) in ruleWarnings" :key="i" class="rr-warning">
             <el-icon class="rr-warning-icon"><WarningFilled /></el-icon>
@@ -68,6 +68,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CircleCheckFilled, InfoFilled, WarningFilled } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 
 const props = withDefaults(defineProps<{
   kind?: 'restore' | 'import'
@@ -124,15 +125,12 @@ const notices = computed(() => {
 
 <style scoped>
 .restore-result { display: flex; flex-direction: column; gap: 18px; }
-.rr-section-title {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px;
-}
 
+/* 统计徽章/提示条/警告条一律直角（DESIGN_SPEC §26-10：徽章、提示条 0 圆角）。 */
 .rr-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .rr-stat-chip {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
-  background: var(--el-fill-color-light); border-radius: 8px; padding: 10px 4px 8px;
+  background: var(--el-fill-color-light); padding: 10px 4px 8px;
 }
 .rr-stat-num { font-size: 20px; font-weight: 700; color: var(--el-color-primary); line-height: 1.1; font-variant-numeric: tabular-nums; }
 .rr-stat-label { font-size: 12px; color: var(--text-regular); }
@@ -143,7 +141,7 @@ const notices = computed(() => {
 .rr-notice {
   display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.55;
   color: var(--text-regular); background: var(--el-color-info-light-9);
-  border-left: 3px solid var(--el-color-info-light-5); border-radius: 4px; padding: 8px 10px;
+  border-left: 3px solid var(--el-color-info-light-5); padding: 8px 10px;
 }
 .rr-notice-icon { flex: none; margin-top: 3px; color: var(--el-color-info); font-size: 15px; }
 
@@ -154,7 +152,7 @@ const notices = computed(() => {
 .rr-warning {
   display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.5;
   color: var(--text-regular); background: var(--el-color-warning-light-9);
-  border-left: 3px solid var(--el-color-warning-light-5); border-radius: 4px; padding: 7px 10px;
+  border-left: 3px solid var(--el-color-warning-light-5); padding: 7px 10px;
 }
 .rr-warning-icon { flex: none; margin-top: 2px; color: var(--el-color-warning); font-size: 15px; }
 .rr-warning-text { word-break: break-word; }

@@ -20,10 +20,10 @@ const { highlighted } = useDebouncedHighlight(() => props.content, () => props.l
 </script>
 
 <style scoped>
+/* 直角：main.css `#app :is(.prism-code)` 单源（DESIGN_SPEC §26-10）。 */
 .prism-code {
   margin: 0;
   padding: 16px;
-  border-radius: 6px;
   background: #1e293b;
   font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
   font-size: 13px;

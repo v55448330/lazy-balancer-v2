@@ -441,7 +441,7 @@
       </el-col>
     </el-row>
 
-    <el-dialog v-model="ruleHistoryVisible" width="min(900px, 92vw)" destroy-on-close class="history-dialog">
+    <el-dialog v-model="ruleHistoryVisible" width="min(960px, 94vw)" destroy-on-close class="history-dialog">
       <template #header>
         <DialogHeader :icon="TrendCharts" :title="t('common.app.dashboard.history')" :subtitle="`${ruleHistoryRule?.name || ''} · ${ruleHistoryRule ? getRuleProtocolLabel(ruleHistoryRule) : ''} · :${ruleHistoryRule?.listen_port}`" />
       </template>

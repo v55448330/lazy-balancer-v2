@@ -39,8 +39,9 @@ const activate = (event: KeyboardEvent): void => {
 </script>
 
 <style scoped>
-/* 键盘焦点必须可见；浅底统一，文字色仅 primary/danger 使用主色，其余保留类型语义。 */
-.el-link { padding: 1px 3px; margin: -1px -3px; border-radius: 3px; transition: background .15s, color .15s; }
+/* 键盘焦点必须可见；浅底统一，文字色仅 primary/danger 使用主色，其余保留类型语义。
+   悬停底色/焦点环均直角（§26-10 容器一律 0；白名单只留真正圆点/圆环）。 */
+.el-link { padding: 1px 3px; margin: -1px -3px; transition: background .15s, color .15s; }
 .el-link:hover { background: var(--el-color-primary-light-9, #ecf5ff); text-decoration: none; }
 .el-link--primary:hover, .el-link--danger:hover { color: var(--el-color-primary, #409eff); }
 .el-link:active { background: var(--el-color-primary-light-8, #d9ecff); }

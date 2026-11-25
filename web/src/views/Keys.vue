@@ -228,8 +228,7 @@
     <el-dialog
       v-model="mcpDocsVisible"
       class="mcp-docs-dialog dialog-body-inset"
-      width="min(1000px, 96vw)"
-      top="5vh"
+      width="min(960px, 94vw)"
       @opened="fetchMCPTools"
     >
       <template #header>
@@ -359,21 +358,20 @@
     <el-dialog
       v-model="createDialogVisible"
       class="dialog-body-inset"
-      width="min(620px, 92vw)"
+      width="min(640px, 94vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!creating"
       :show-close="!creating"
-      top="6vh"
       @closed="resetCreateForm"
     >
       <template #header>
         <DialogHeader :icon="Key" :title="t('common.app.views.keys.createKeyTitle')" :subtitle="t('common.app.views.keys.createKeySubtitle')" tone="warning" />
       </template>
-      <el-form :label-width="$flw('110px')" :disabled="creating || nodeWriteBlocked">
+      <el-form :label-width="$flw('144px')" :disabled="creating || nodeWriteBlocked">
         <el-form-item :label="t('common.app.views.keys.keyName')" :error="createNameError">
-          <el-input v-model="createForm.name" maxlength="100" show-word-limit :placeholder="t('common.app.views.keys.enterKeyName')" @input="createNameError = ''" />
+          <el-input v-model="createForm.name" maxlength="100" show-word-limit style="width: 320px" :placeholder="t('common.app.views.keys.enterKeyName')" @input="createNameError = ''" />
         </el-form-item>
-        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
+        <div class="form-section-head"><DialogSectionHeader :title="t('common.app.views.keys.permSection')" /></div>
         <!-- 双协议对称：接入开关 + 各自只读（管理员可分别设置；非管理员恒只读） -->
         <div class="perm-grid">
           <div class="perm-col">
@@ -401,7 +399,7 @@
         </div>
         <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.permHint') }}</span></div>
         <div v-if="!isAdmin" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
-        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.expirySourceSection') }}</el-divider>
+        <div class="form-section-head"><DialogSectionHeader :title="t('common.app.views.keys.expirySourceSection')" /></div>
         <el-form-item :label="t('common.app.views.keys.expiresAt')" :error="createExpiresError">
           <el-date-picker
             v-model="createForm.expiresAt"
@@ -410,7 +408,7 @@
             format="YYYY-MM-DD HH:mm:ss"
             :disabled-date="disablePastDate"
             :placeholder="t('common.app.views.keys.expiresPlaceholder')"
-            style="width: 100%"
+            style="width: 320px"
             @change="createExpiresError = ''"
           />
         </el-form-item>
@@ -435,18 +433,17 @@
     <el-dialog
       v-model="featureDialogVisible"
       class="dialog-body-inset"
-      width="min(620px, 92vw)"
+      width="min(640px, 94vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!featureSaving"
       :show-close="!featureSaving"
-      top="6vh"
       @closed="resetFeatureForm"
     >
       <template #header>
         <DialogHeader :icon="Setting" :title="t('common.app.views.keys.featureConfig')" :subtitle="t('common.app.views.keys.featureTargetSubtitle', { name: featureTarget?.name || '' })" />
       </template>
-      <el-form :label-width="$flw('110px')" :disabled="featureSaving || nodeWriteBlocked">
-        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
+      <el-form :label-width="$flw('144px')" :disabled="featureSaving || nodeWriteBlocked">
+        <div class="form-section-head"><DialogSectionHeader :title="t('common.app.views.keys.permSection')" /></div>
         <div class="perm-grid">
           <div class="perm-col">
             <div class="perm-col-title">REST API</div>
@@ -473,7 +470,7 @@
         </div>
         <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.permHint') }}</span></div>
         <div v-if="!isAdmin" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
-        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.expirySourceSection') }}</el-divider>
+        <div class="form-section-head"><DialogSectionHeader :title="t('common.app.views.keys.expirySourceSection')" /></div>
         <el-form-item :label="t('common.app.views.keys.expiresAt')" :error="featureExpiresError">
           <el-date-picker
             v-model="featureForm.expiresAt"
@@ -482,7 +479,7 @@
             format="YYYY-MM-DD HH:mm:ss"
             :disabled-date="disablePastDate"
             :placeholder="t('common.app.views.keys.expiresPlaceholder')"
-            style="width: 100%"
+            style="width: 320px"
             @change="featureExpiresError = ''"
           />
         </el-form-item>
@@ -505,7 +502,7 @@
     </el-dialog>
 
     <!-- 密钥详情弹窗：名称点击触发，只读全量信息（前缀/属主/权限/时间） -->
-    <el-dialog v-model="keyDetailVisible" class="dialog-body-inset" width="min(620px, 92vw)" top="6vh">
+    <el-dialog v-model="keyDetailVisible" class="dialog-body-inset" width="min(640px, 94vw)">
       <template #header>
         <DialogHeader :icon="Key" :title="t('common.app.views.keys.detailTitle')" :subtitle="keyDetailTarget?.name || ''" />
       </template>
@@ -539,7 +536,7 @@
     <el-dialog
       v-model="createdKeyVisible"
       class="dialog-body-inset"
-      width="min(560px, 92vw)"
+      width="min(640px, 94vw)"
       :close-on-click-modal="false"
       :before-close="closeCreatedKey"
       @closed="createdKey = ''"
@@ -1110,7 +1107,7 @@ onMounted(() => {
 .access-row { display: flex; align-items: baseline; gap: 10px; }
 .access-row-label { flex: none; width: 64px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .access-row-value { font-size: 13px; word-break: break-all; }
-code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light); border-radius: 4px; }
+code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light); }
 .access-row-desc .access-row-value { color: var(--text-secondary, #6b7280); font-size: 12px; line-height: 1.6; }
 /* 停用提示占位槽：两卡常驻等高（提示出现/消失不改变卡片高度） */
 .access-note-slot { min-height: 46px; }
@@ -1119,8 +1116,7 @@ code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light)
 .perm-col { border: 1px solid #f3f4f6; padding: 12px 14px 4px; }
 .perm-col-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 10px; }
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.section-divider { margin: 24px 0 20px; }
-.section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
+.form-section-head { margin-top: 24px; }
 .section-label { font-size: 14px; font-weight: 600; color: #374151; margin: 20px 0 12px; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .header-actions { display: flex; gap: 8px; }
@@ -1157,7 +1153,8 @@ code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light)
 .mcp-tools-table { min-height: 120px; overflow-x: auto; }
 .mcp-tools-table :deep(.el-table) { min-width: 800px; }
 .mcp-tool-description { line-height: 1.5; white-space: normal; }
-:deep(.mcp-docs-dialog .el-dialog__body) { max-height: calc(100dvh - 200px); overflow-y: auto; }
+/* 弹框体限高走全局单源（main.css `.el-dialog .el-dialog__body`，§26-2）：本弹框
+   曾自写 calc(100dvh - 200px)，已删除——只有内部子区域需要各自滚动时才在组件内覆写。 */
 
 .created-key-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
 

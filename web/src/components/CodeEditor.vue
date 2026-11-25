@@ -58,10 +58,11 @@ const onScroll = (e: Event) => {
 </script>
 
 <style scoped>
+/* 直角：由 main.css `#app :is(.code-editor)` 单源声明（DESIGN_SPEC §26-10），
+   组件内不再重复圆角值。 */
 .code-editor {
   position: relative;
   width: 100%;
-  border-radius: 6px;
   background: #1e293b;
   overflow: hidden;
 }

@@ -500,7 +500,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
   // 记坐标，帧内拾取一次——原实现每个 pointermove 事件全量扫描 177 国多边形，
   // 快速移动时同帧多次射线拾取，hover 明显滞后。 ----
   const hoverTipEl = document.createElement('div')
-  hoverTipEl.style.cssText = `position:absolute;z-index:6;pointer-events:none;display:none;padding:5px 10px;background:rgba(4,12,32,.92);border:1px solid rgba(80,170,255,.45);color:${FLOW_HOVER_TIP_COLOR};font:12px "Noto Sans SC","PingFang SC",sans-serif;white-space:nowrap;border-radius:2px`
+  hoverTipEl.style.cssText = `position:absolute;z-index:6;pointer-events:none;display:none;padding:5px 10px;background:rgba(4,12,32,.92);border:1px solid rgba(80,170,255,.45);color:${FLOW_HOVER_TIP_COLOR};font:12px "Noto Sans SC","PingFang SC",sans-serif;white-space:nowrap;border-radius:0`
   container.appendChild(hoverTipEl)
   let hoverKeyCache: string | null = null
   let pendingMove: { x: number; y: number } | null = null

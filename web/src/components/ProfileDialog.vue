@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    width="min(520px, 92vw)"
+    width="min(640px, 94vw)"
     :close-on-click-modal="false"
     :before-close="beforeClose"
     class="profile-dialog"
@@ -12,13 +12,13 @@
       <DialogHeader :icon="User" :title="t('common.app.views.profile.title')" :subtitle="isOIDCUser ? t('common.app.views.profile.oidcSubtitle') : t('common.app.views.profile.localSubtitle')" />
     </template>
     <div v-if="isReadOnly" class="info-note-bar profile-readonly-note"><span class="info-note-desc">{{ authStore.readOnlyMessage }}</span></div>
-    <el-form :model="profileForm" :label-width="$flw('96px')" class="profile-form" :disabled="saving">
+    <el-form :model="profileForm" :label-width="$flw('144px')" class="profile-form" :disabled="saving">
       <el-form-item :label="t('common.app.views.profile.usernameLabel')">
-        <el-input v-model="profileForm.username" disabled />
+        <el-input v-model="profileForm.username" disabled style="width: 320px" />
       </el-form-item>
       <template v-if="isOIDCUser">
         <el-form-item :label="t('common.app.views.profile.displayNameLabel')">
-          <el-input :model-value="profileForm.display_name" disabled />
+          <el-input :model-value="profileForm.display_name" disabled style="width: 320px" />
         </el-form-item>
         <el-form-item :label="t('common.app.views.profile.authMethodLabel')" for="policy-auth-mode-static">
           <input type="text" id="policy-auth-mode-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
@@ -27,16 +27,16 @@
       </template>
       <template v-else>
         <el-form-item :label="t('common.app.views.profile.displayNameLabel')">
-          <el-input v-model="profileForm.display_name" :disabled="isReadOnly" :placeholder="t('common.app.views.profile.optionalPlaceholder')" maxlength="50" />
+          <el-input v-model="profileForm.display_name" :disabled="isReadOnly" :placeholder="t('common.app.views.profile.optionalPlaceholder')" maxlength="50" style="width: 320px" />
         </el-form-item>
         <el-form-item :label="t('common.app.views.profile.newPasswordLabel')">
-          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" :placeholder="t('common.app.views.profile.newPasswordPlaceholder')" show-password />
+          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" :placeholder="t('common.app.views.profile.newPasswordPlaceholder')" show-password style="width: 320px" />
         </el-form-item>
         <el-form-item :label="t('common.app.views.profile.confirmPasswordLabel')">
-          <el-input v-model="profileForm.passwordConfirm" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" :placeholder="t('common.app.views.profile.confirmPasswordPlaceholder')" show-password />
+          <el-input v-model="profileForm.passwordConfirm" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" :placeholder="t('common.app.views.profile.confirmPasswordPlaceholder')" show-password style="width: 320px" />
         </el-form-item>
         <el-form-item :label="t('common.app.views.profile.currentPasswordLabel')">
-          <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? t('common.app.views.profile.currentPasswordRequired') : t('common.app.views.profile.currentPasswordHint')" show-password />
+          <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? t('common.app.views.profile.currentPasswordRequired') : t('common.app.views.profile.currentPasswordHint')" show-password style="width: 320px" />
         </el-form-item>
         <el-form-item :label="t('common.app.views.profile.twoFactorLabel')" for="profile-mfa-static">
           <input type="text" id="profile-mfa-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
@@ -61,7 +61,7 @@
     <el-dialog
       v-model="mfaCodeDialog"
       append-to-body
-      width="min(420px, 92vw)"
+      width="min(520px, 94vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!mfaSubmitting"
       :show-close="!mfaSubmitting"

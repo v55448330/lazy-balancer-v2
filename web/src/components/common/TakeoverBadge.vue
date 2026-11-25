@@ -17,12 +17,12 @@ defineProps<{
 </script>
 
 <style scoped>
+/* 直角：main.css `#app :is(.takeover-badge)` 单源（§26-10 徽标一律 0 圆角）。 */
 .takeover-badge {
   display: inline-block;
   margin-right: 6px;
   padding: 0 6px;
   border: 1px solid var(--el-border-color);
-  border-radius: 4px;
   background: var(--el-fill-color-light);
   color: var(--el-text-color-secondary);
   font-size: 11px;

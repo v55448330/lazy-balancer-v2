@@ -160,7 +160,7 @@ function makeLabelElement(text: string, color: string): HTMLDivElement {
   const div = document.createElement('div')
   div.className = 'ts-label'
   div.textContent = text
-  div.style.cssText = 'position:absolute;z-index:6;pointer-events:none;padding:5px 10px;background:rgba(4,12,32,.92);border:1px solid rgba(80,170,255,.45);border-radius:2px;color:' + color + ';font:12px "Noto Sans SC","PingFang SC",sans-serif;white-space:nowrap'
+  div.style.cssText = 'position:absolute;z-index:6;pointer-events:none;padding:5px 10px;background:rgba(4,12,32,.92);border:1px solid rgba(80,170,255,.45);border-radius:0;color:' + color + ';font:12px "Noto Sans SC","PingFang SC",sans-serif;white-space:nowrap'
   return div
 }
 

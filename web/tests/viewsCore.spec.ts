@@ -531,7 +531,8 @@ test('用户页：初始化管理员不可删除/禁用（标记由列表响应�
   assert.match(users, /isReadOnly \|\| row\.is_setup_admin \|\| row\.id === authStore\.user\?\.id/, '删除按钮须对初始化管理员禁用')
   // 第三个保护面：编辑弹框的角色下拉（后端 protected 恒 400「不可降级」）
   assert.match(users, /const roleLocked = computed\(\(\) => editingSelf\.value \|\| editingUser\.value\?\.is_setup_admin === true\)/)
-  assert.match(users, /<el-select v-model="form\.role" style="width: 100%" :disabled="roleLocked">/)
+  // 控件宽度按内容定型（DESIGN_SPEC §26-7 下拉=中宽 320），锁定态禁用不变。
+  assert.match(users, /<el-select v-model="form\.role" style="width: 320px" :disabled="roleLocked">/)
   assert.match(users, /t\('common\.app\.views\.users\.setupAdminNoDemote'\)/)
   assert.ok(code('src/locales/zh/views.ts').includes('系统初始化管理员不可降级'), '不可降级原因原文必须在 zh 母本词条中')
 })

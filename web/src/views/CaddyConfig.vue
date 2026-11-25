@@ -109,7 +109,8 @@ watch(canViewConfig, (allowed) => {
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 /* 滚动唯一归 SyntaxHighlight 内层（70vh 自滚）——外层不得叠加 max-height+
    overflow（双垂直滚动条根因，本页是唯一未传 height 的
-   消费方）；外层只保留深色底框与最小高度。 */
-.config-preview { min-height: 160px; overflow: visible; padding: 14px; border-radius: var(--radius-md); background: #1e293b; }
+   消费方）；外层只保留深色底框与最小高度。直角由 main.css
+   `#app :is(.config-preview)` 单源（§26-10 代码块 0 圆角）。 */
+.config-preview { min-height: 160px; overflow: visible; padding: 14px; background: #1e293b; }
 
 </style>

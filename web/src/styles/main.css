@@ -24,10 +24,9 @@
   /* Background Colors */
   --bg-primary: #ffffff;
   --bg-secondary: #f9fafb;
-  
-  /* Border Radius - Refined (less rounded) */
-  --radius-sm: 4px;
-  --radius-md: 6px;
+
+  /* 圆角尺度变量已删除：全站直角（DESIGN_SPEC §1/§26-10），白名单外的圆角
+     一律写 0，不再提供「小/中圆角」这类可取用的非零档位。 */
 }
 
 * {
@@ -424,6 +423,13 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   max-height: calc(100vh - 260px);
   overflow-y: auto;
 }
+/* 遮罩层级（DESIGN_SPEC §26-11）：弹框遮罩必须覆盖到视口底部，并高于页脚与侧栏
+ * 底部用户区。Element Plus 的 `.el-overlay` 是 `position: fixed; inset: 0`
+ * （视口全覆盖，不足视口高度不会出现），z-index 从 2000 起逐次递增。因此：
+ *   - 布局级固定层（侧栏窄屏浮层与其承接遮罩）一律取 2000 以下的号段，
+ *     见 AppLayout.vue `.layout-aside.is-overlay` / `.sidebar-backdrop`；
+ *   - 页脚与侧栏底部用户区不设 z-index、不做固定/粘性定位，恒在遮罩之下。
+ * 守卫：tests/layerStacking.spec.ts（本注释与号段约定都可被它证伪）。 */
 /* 正文留白标记类：与上方全局三段式正文 padding 同值（20px）的显式声明——
    消费方挂此类表达「标准正文留白」语义；全局规则已覆盖全部弹框，本规则
    不改变渲染，只保证标记类有定义、留白口径单点可查。 */

@@ -430,20 +430,24 @@ onUnmounted(() => {
 }
 
 /* 窄屏展开=浮层：不挤压内容区，抬到内容之上；遮罩承接「点空白收起」。
-   height/inset 用固定定位脱离 el-container 流式布局。 */
+   height/inset 用固定定位脱离 el-container 流式布局。
+   层级契约（DESIGN_SPEC §26-11）：弹框遮罩必须高于侧栏底部用户区——Element Plus
+   的 `.el-overlay` 从 2000 起逐次递增，故布局侧栏浮层与其承接遮罩一律取 2000 以下
+   的号段（1901/1900）。写成 2000+ 会让左下角用户块浮在弹框遮罩之上、点不开也
+   关不掉（窄屏展开侧栏 + 打开任一弹框时的实测形态）。守卫：tests/layerStacking.spec.ts。 */
 .layout-aside.is-overlay {
   position: fixed;
   top: 0;
   bottom: 0;
   left: 0;
-  z-index: 2001;
+  z-index: 1901;
   box-shadow: 0 8px 24px rgba(17, 24, 39, 0.16);
 }
 
 .sidebar-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: 1900;
   background: rgba(17, 24, 39, 0.32);
 }
 
