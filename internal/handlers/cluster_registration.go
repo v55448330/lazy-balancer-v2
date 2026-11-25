@@ -78,7 +78,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 	}
 	recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(fmt.Sprintf("有效期至：%s", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "生成了集群注册令牌", "3": "有效期至 " + expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_9fc1e233"), MessageKey: "k_9fc1e233", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.registrationTokenGenerated"), MessageKey: "cluster.registrationTokenGenerated", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
 }
 
 func (h *Handlers) RegisterClusterNode(c *gin.Context) {
@@ -213,7 +213,7 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "查询注册状态失败", err)
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_98221b20"), MessageKey: "k_98221b20", Data: status})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.registrationStatusQueried"), MessageKey: "cluster.registrationStatusQueried", Data: status})
 }
 
 func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
@@ -245,7 +245,7 @@ func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog("system", "确认", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %s", nodeName), "注册密钥已失效", services.AuditResultPart("success")), c.ClientIP())
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_e0e46090"), MessageKey: "k_e0e46090"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.registrationConfirmed"), MessageKey: "cluster.registrationConfirmed"})
 }
 
 func (h *Handlers) ApproveClusterNode(c *gin.Context) {
@@ -326,7 +326,7 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 		"2": "更新了节点站点坐标",
 		"3": fmt.Sprintf("节点 %d（纬度 %.4f，经度 %.4f）", id, *req.ServerMapLat, *req.ServerMapLon),
 	}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_fc52663d"), MessageKey: "k_fc52663d", Data: gin.H{
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeSiteCoordinatesSaved"), MessageKey: "cluster.nodeSiteCoordinatesSaved", Data: gin.H{
 		"server_map_lat": *req.ServerMapLat,
 		"server_map_lon": *req.ServerMapLon,
 	}})
@@ -415,10 +415,10 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 	recordAudit(c, action, "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), services.AuditResultPart("success")))
 	// 成功消息的动词插值按请求语言取词条（审计动作词保持 zh 字面量）——
 	// 此前中文动词直达 en 模板呈「审批 node succeeded」中英混杂。
-	verbKeys := map[string]string{"审批": "k_779c0c37", "拒绝": "k_e13e8259", "删除": "k_9ae0ab8e", "更新地址": "k_ead777fd"}
+	verbKeys := map[string]string{"审批": "cluster.nodeActionApprove", "拒绝": "cluster.nodeActionReject", "删除": "cluster.nodeActionDelete", "更新地址": "cluster.nodeActionUpdateAccessUrl"}
 	verb := action
 	if key, ok := verbKeys[action]; ok {
 		verb = apimsg.T(c, key)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_6139d1f3", verb), MessageKey: "k_6139d1f3"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "cluster.nodeActionSucceeded", verb), MessageKey: "cluster.nodeActionSucceeded"})
 }

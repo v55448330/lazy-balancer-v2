@@ -58,7 +58,7 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 			services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(nodeLabel, fmt.Sprintf("下发版本：%d", snapshot.Version)), c.ClientIP())
 		}
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_e2134b03"), MessageKey: "k_e2134b03", Data: snapshot})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.snapshotGenerated"), MessageKey: "cluster.snapshotGenerated", Data: snapshot})
 }
 
 // authenticatedClusterToken 读取集群令牌。两处调用方
@@ -102,7 +102,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	// 窗口内提交要么被导入覆盖，要么阻塞在 SQLite 写锁上至 busy_timeout 后 500。
 	// 与节点写族同口径 409；后台 daemon 仍按「主节点为准」保留。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "k_86db0e60"), MessageKey: "k_86db0e60"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "cluster.manualSyncBlockedByConfigImport"), MessageKey: "cluster.manualSyncBlockedByConfigImport"})
 		return
 	}
 	result, err := h.syncService.Pull(c.Request.Context())
@@ -118,7 +118,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	}
 	services.ResumeSyncIfUserEnabled(h.syncService.Resume)
 	notify.Publish(notify.Event{Type: notify.EvtClusterManualSync, Fields: map[string]string{"1": c.GetString("username")}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_91110f22"), MessageKey: "k_91110f22", Data: result})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.manualSyncCompleted"), MessageKey: "cluster.manualSyncCompleted", Data: result})
 }
 
 // ForgetClusterPins 是从节点管理员的 PinMismatch 补救端点：主节点更换
@@ -152,7 +152,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		}
 		if isMaster {
 			recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail("主节点调用被拒绝：主节点 pin 目录存各从节点钉", services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_14d8a178"), MessageKey: "k_14d8a178"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cluster.fingerprintClearSlaveOnly"), MessageKey: "cluster.fingerprintClearSlaveOnly"})
 			return
 		}
 	}
@@ -167,7 +167,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		services.AuditResultPart("success"),
 	))
 	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "清除了全部集群信任锚", "3": fmt.Sprintf("主节点证书指纹 %d 个", removed)}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_d94bc52e"), MessageKey: "k_d94bc52e"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.allMasterFingerprintsCleared"), MessageKey: "cluster.allMasterFingerprintsCleared"})
 }
 
 // ForgetClusterNodePin 是主节点侧「单节点 TOFU 指纹钉」重置端点（与从节点
@@ -206,7 +206,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 			// 不阻断运维排障流程。
 			recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
 				fmt.Sprintf("节点 %d", nodeID), "该节点没有已钉扎的证书指纹，无需清除"))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ec34e103"), MessageKey: "k_ec34e103"})
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeHasNoPinnedFingerprint"), MessageKey: "cluster.nodeHasNoPinnedFingerprint"})
 			return
 		}
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), err.Error()))
@@ -223,7 +223,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 		"2": "清除了单节点证书指纹钉",
 		"3": fmt.Sprintf("节点 %d（%s）", nodeID, host),
 	}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_bcd41466"), MessageKey: "k_bcd41466"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeFingerprintCleared"), MessageKey: "cluster.nodeFingerprintCleared"})
 }
 
 // GetClusterWafFiles serves the full CRS/IP2Region file bundle on demand to
@@ -242,7 +242,7 @@ func (h *Handlers) GetClusterWafFiles(c *gin.Context) {
 	}
 	body := services.BuildWafFileBundleResponse()
 	if body == nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_cf2eac23"), MessageKey: "k_cf2eac23"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "cluster.masterHasNoSecurityData"), MessageKey: "cluster.masterHasNoSecurityData"})
 		return
 	}
 	c.Data(http.StatusOK, "application/json; charset=utf-8", body)

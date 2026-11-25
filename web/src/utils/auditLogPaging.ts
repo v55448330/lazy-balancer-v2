@@ -8,7 +8,7 @@
 // 器旁常显提示（有更多结果，请缩小筛选）；400 错误按该 key 归为独立状态而非
 // 通用加载失败。
 export const AUDIT_LOG_DEEP_PAGE_LIMIT = 500
-export const AUDIT_LOG_DEEP_PAGE_MESSAGE_KEY = 'k_c17e3275'
+export const AUDIT_LOG_DEEP_PAGE_MESSAGE_KEY = 'audit.deepPageLimitExceeded'
 
 const normalizedPageSize = (pageSize: number): number => {
   const rows = Math.floor(pageSize)

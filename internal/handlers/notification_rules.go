@@ -477,13 +477,13 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			}
 		}
 		if len(eventIDs) == 0 {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_9be13c70", group), MessageKey: "k_9be13c70"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "notify.eventGroupNotFound", group), MessageKey: "notify.eventGroupNotFound"})
 			return
 		}
 		// 级别白名单与订阅矩阵端点同源（validSubLevel）：此前原样落库，
 		// min_level:"urgent" 会让 levelRank=0 变成最宽松下限（静默放行全部级别）。
 		if req.MinLevel != nil && !validSubLevel(*req.MinLevel) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3ae60346"), MessageKey: "k_3ae60346"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "notify.invalidSubscriptionLevel"), MessageKey: "notify.invalidSubscriptionLevel"})
 			return
 		}
 		// 规则级「事件×通道模板」保存门（与派发渲染同门）：webhook 必须是可
@@ -623,7 +623,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		}
 
 	default:
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_958958af", ruleID), MessageKey: "k_958958af"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "notify.invalidRuleId", ruleID), MessageKey: "notify.invalidRuleId"})
 		return
 	}
 
@@ -676,7 +676,7 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 	}
 	ruleID := c.Param("id")
 	if len(ruleID) < 7 || ruleID[:6] != "group:" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_958958af", ruleID), MessageKey: "k_958958af"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "notify.invalidRuleId", ruleID), MessageKey: "notify.invalidRuleId"})
 		return
 	}
 	group := ruleID[6:]
@@ -689,7 +689,7 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 		}
 	}
 	if eventType == "" {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_9be13c70", group), MessageKey: "k_9be13c70"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "notify.eventGroupNotFound", group), MessageKey: "notify.eventGroupNotFound"})
 		return
 	}
 	proxy := ""
@@ -702,7 +702,7 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(proxy, "规则「"+group+"」", services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_75aeb7a0"), MessageKey: "k_75aeb7a0"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "notify.testMessageQueued"), MessageKey: "notify.testMessageQueued"})
 }
 
 // TestNotificationDaily POST /notification/daily/test——当前用户日报测试发送
@@ -716,7 +716,7 @@ func (h *Handlers) TestNotificationDaily(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_165a4c01"), MessageKey: "k_165a4c01"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "notify.dailyReportTestQueued"), MessageKey: "notify.dailyReportTestQueued"})
 }
 
 // dailyItemsForWizard 日报可选项（向导选择包含项目）。

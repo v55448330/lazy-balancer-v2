@@ -1,5 +1,6 @@
 // Package apimsg — handler 侧 API 消息双语取用薄层。
-// 用法(codemod 生成):models.APIResponse{Code: x, Message: apimsg.T(c, "k_x"), MessageKey: "k_x"}
+// 用法:models.APIResponse{Code: x, Message: apimsg.T(c, "rule.versionConflict"), MessageKey: "rule.versionConflict"}
+// 键是语义键(域名.驼峰名),在 internal/i18n 的目录登记 zh/en;未登记的键会被原样返回。
 package apimsg
 
 import (

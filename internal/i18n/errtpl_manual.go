@@ -1,9 +1,9 @@
 package i18n
 
-// 手工补充错误模板（非 codemod 产物）：errtpl_gen.go 带 "Code generated" 标记
-// 不可手改，仓库内也没有可重跑的 errtpl 生成器——生成面之外新增的服务层错误
-// 模板在此登记（与 catalog_manual.go 之于 catalog_gen.go 同构）。zh 母本 +
-// en 译文成对；RegisterErrTpl 自带去重与按字面量具体度排序。
+// 手工登记的服务层错误模板。errtpl_gen.go 带 "Code generated" 标记、仓库内没有可重跑的
+// 生成器，生成面之外新增的错误模板在此登记（与词条目录分 catalog_gen.go /
+// catalog_manual.go 两份的由来相同）。zh 母本 + en 译文成对；RegisterErrTpl 自带去重与
+// 按字面量具体度排序。
 
 func init() {
 	// 认证网关地址携带用户名/密码凭据的写侧拒绝

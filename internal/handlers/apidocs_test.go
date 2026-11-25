@@ -2112,9 +2112,9 @@ func TestAPIDocs_setupAdminProtectionRejectionsDocumented(t *testing.T) {
 		message  string
 		keywords []string
 	}{
-		{"PUT /users/:id", "k_e006c462", "初始管理员不可降级", []string{"不可降级"}},
-		{"PUT /users/:id/status", "k_d7b79496", "初始管理员不可禁用", []string{"不可禁用"}},
-		{"DELETE /users/:id", "k_93ea00a0", "初始管理员不可删除", []string{"不可删除"}},
+		{"PUT /users/:id", "user.initialAdminCannotBeDemoted", "初始管理员不可降级", []string{"不可降级"}},
+		{"PUT /users/:id/status", "user.initialAdminCannotBeDisabled", "初始管理员不可禁用", []string{"不可禁用"}},
+		{"DELETE /users/:id", "user.initialAdminCannotBeDeleted", "初始管理员不可删除", []string{"不可删除"}},
 	} {
 		if !strings.Contains(string(source), want.key) {
 			t.Errorf("users.go 未使用保护键 %s（%s 实现与文档对账的单源已漂移）", want.key, want.message)
@@ -3365,13 +3365,18 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 			exits = append(exits, rejection{code: code, message: m[2]})
 		}
 	}
-	// i18n 迁移:出口消息=apimsg.T(c,"k_x") 的,以 catalog_gen.go 的 zh 母本回填
-	catalogSrc, catErr := os.ReadFile(filepath.Join("..", "i18n", "catalog_gen.go"))
-	if catErr != nil {
-		t.Fatalf("读 catalog 母本失败: %v", catErr)
+	// 出口消息=apimsg.T(c,"域名.驼峰名") 的，以词条目录（catalog_gen.go + catalog_manual.go）
+	// 的 zh 母本回填。键里带点，拼正则前必须转义。
+	var catalogSrc []byte
+	for _, name := range []string{"catalog_gen.go", "catalog_manual.go"} {
+		part, err := os.ReadFile(filepath.Join("..", "i18n", name))
+		if err != nil {
+			t.Fatalf("读 catalog 母本失败: %v", err)
+		}
+		catalogSrc = append(catalogSrc, part...)
 	}
 	catalogZh := func(key string) string {
-		m := regexp.MustCompile(`Register\("` + key + `", "([^"]+)"`).FindStringSubmatch(string(catalogSrc))
+		m := regexp.MustCompile(`Register\("` + regexp.QuoteMeta(key) + `", "([^"]+)"`).FindStringSubmatch(string(catalogSrc))
 		if m == nil {
 			return ""
 		}
@@ -3390,9 +3395,9 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 			exits = append(exits, rejection{code: code, message: zh})
 		}
 	}
-	extractKeyed(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: apimsg\.T\([^,]+, "(k_[a-f0-9]+)"\)`)
-	extractKeyed(cooldownBody, `return true, (http\.StatusConflict), apimsg\.T\([^,]+, "(k_[a-f0-9]+)"\)`)
-	extractKeyed(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), apimsg\.T\([^,]+, "(k_[a-f0-9]+)"\)`)
+	extractKeyed(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: apimsg\.T\([^,]+, "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
+	extractKeyed(cooldownBody, `return true, (http\.StatusConflict), apimsg\.T\([^,]+, "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
+	extractKeyed(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), apimsg\.T\([^,]+, "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
 	extract(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: "([^"]+)"`)
 	extract(cooldownBody, `return true, (http\.StatusConflict), "([^"]+)"`)
 	extract(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), "([^"]+)"`)

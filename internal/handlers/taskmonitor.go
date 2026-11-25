@@ -24,7 +24,7 @@ import (
 )
 
 // msgInvalidJobID 畸形 cert-job ID 的 400 词条键（zh/en 见 catalog_manual.go）。
-const msgInvalidJobID = "k_688f8e91"
+const msgInvalidJobID = "system.taskIdInvalid"
 
 // ListSystemTasks 聚合全部任务族状态（全员可见）。
 func (h *Handlers) ListSystemTasks(c *gin.Context) {
@@ -82,11 +82,11 @@ func triggerAuditContext(c *gin.Context, family, name string) services.TriggerAu
 // 审计由触发服务/调用方按既有单记口径处理，本 helper 只写响应。
 func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 	if errors.Is(err, taskengine.ErrNotMaster) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.Tf(c, "k_b550cb83", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.Tf(c, "system.taskTriggerRejected", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if errors.Is(err, taskengine.ErrAlreadyRunning) || errors.Is(err, taskengine.ErrSchedulingPaused) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_b550cb83", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "system.taskTriggerRejected", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 引擎已停止（IsStopped 预检之后才停止的关停竞态窗）：与 toggle/cancel/
@@ -96,7 +96,7 @@ func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 		respondTaskEngineStopped(c)
 		return
 	}
-	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.Tf(c, "k_684247f0", apimsg.ErrMsg(c, err))})
+	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.Tf(c, "system.taskTriggerFailed", apimsg.ErrMsg(c, err))})
 }
 
 // respondTaskEngineUnavailable 任务引擎未装配的统一响应。引擎缺失属「服务
@@ -104,14 +104,14 @@ func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 // 全仓单一出口（库更新触发端点此前 500，与任务监控 503
 // 形成家族状态码漂移）。
 func respondTaskEngineUnavailable(c *gin.Context) {
-	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_a6d5c0b8"), MessageKey: "k_a6d5c0b8"})
+	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "system.taskEngineNotInitialized"), MessageKey: "system.taskEngineNotInitialized"})
 }
 
 // respondTaskEngineStopped 引擎已停止（关停窗口/测试装配/嵌入形态）时的统一
 // 响应：调度写端点在已停引擎上调用 StartLoop/StopLoop 均为 no-op，回 200 与
 // 「已恢复/已停止」文案是假信号（只有偏好落库、下次启动才生效）。
 func respondTaskEngineStopped(c *gin.Context) {
-	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_3d2721ca"), MessageKey: "k_3d2721ca"})
+	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "system.taskEngineStopped"), MessageKey: "system.taskEngineStopped"})
 }
 
 // TriggerSystemTask 手动触发（admin；仅排程/队列类任务族）。
@@ -121,7 +121,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	// 产出误导性的「触发失败」审计——显式拒绝让客户端拿到文档登记的
 	// import_in_progress 码（cert-job 分支经重试核心内部同门，此处先行拦截）。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_14adc731"), MessageKey: "k_14adc731"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "system.taskTriggerBlockedByImport"), MessageKey: "system.taskTriggerBlockedByImport"})
 		return
 	}
 	id := c.Param("id")
@@ -151,13 +151,13 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 		}
 		if m, ok := te.Lookup(id); ok { // 单任务元数据（免全量 DescribeAll）
 			if !m.CanTrigger {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_eeea6558"), MessageKey: "k_eeea6558"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "system.taskTriggerNotSupported"), MessageKey: "system.taskTriggerNotSupported"})
 				return
 			}
 			// v2.0：单飞由引擎 CAS 强制；在跑任务同步 409
 			// （曾异步吞错恒 200+apidocs 409 不可达——双击假成功）
 			if te.IsTaskInFlight(id) {
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_723ca537"), MessageKey: "k_723ca537"})
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "security.taskRunningRetryLater"), MessageKey: "security.taskRunningRetryLater"})
 				return
 			}
 			// 触发与审计统一走 services.TriggerTaskAsync（单源）——
@@ -175,7 +175,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 			return
 		}
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_583965f9"), MessageKey: "k_583965f9"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "system.taskNotFound"), MessageKey: "system.taskNotFound"})
 		return
 	}
 	// 无引擎时统一 503（回退 switch 删除）。
@@ -188,7 +188,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 // 触发=不可调度（前端显示禁用开关）。
 func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_ea42c97d"), MessageKey: "k_ea42c97d"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "system.taskScheduleToggleBlockedByImport"), MessageKey: "system.taskScheduleToggleBlockedByImport"})
 		return
 	}
 	id := c.Param("id")
@@ -203,7 +203,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e1092d80"), MessageKey: "k_e1092d80"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "system.taskToggleEnabledRequired"), MessageKey: "system.taskToggleEnabledRequired"})
 		return
 	}
 	if te := services.TaskEngine(); te != nil {
@@ -215,13 +215,13 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 		}
 		if m, ok := te.Lookup(id); ok {
 			if m.Kind == taskengine.KindOneshot {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_08cac21d"), MessageKey: "k_08cac21d"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "system.taskNotSchedulableTriggerOnly"), MessageKey: "system.taskNotSchedulableTriggerOnly"})
 				return
 			}
 			// 业务驱动任务（自动更新/自动备份/自动封禁）只能由对应业务页开关
 			// 修改；引擎只同步 loop_on，禁止在任务监控反写业务配置或另开第二入口。
 			if services.IsBusinessDrivenTask(id) {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_2a3ae254"), MessageKey: "k_2a3ae254"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "system.taskToggleControlledByFeaturePage"), MessageKey: "system.taskToggleControlledByFeaturePage"})
 				return
 			}
 			// 用户显式启停落节点本地偏好（重启后不得按默认清单复活）。
@@ -229,7 +229,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			// 500——此前先切换再吞 WARN，响应仍 200 且偏好零行，重启后按
 			// 默认清单复活与用户意图相反。
 			if err := services.RecordTaskLoopPref(id, *req.Enabled); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c0dd93d", apimsg.ErrMsg(c, err))})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "system.taskPreferenceSaveFailedStateUnchanged", apimsg.ErrMsg(c, err))})
 				return
 			}
 			if *req.Enabled {
@@ -240,15 +240,15 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			if *req.Enabled {
 				recordAudit(c, "恢复", "任务监控", m.Name+" 调度")
 				notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "恢复调度"}})
-				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_bf082546", m.Name)})
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "system.taskScheduleResumed", m.Name)})
 			} else {
 				recordAudit(c, "停止", "任务监控", m.Name+" 调度")
 				notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "停止调度"}})
-				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_cc16b9ca", m.Name)})
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "system.taskScheduleStopped", m.Name)})
 			}
 			return
 		}
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_583965f9"), MessageKey: "k_583965f9"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "system.taskNotFound"), MessageKey: "system.taskNotFound"})
 		return
 	}
 	// 无引擎时统一 503（回退 switch 删除）。
@@ -265,7 +265,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 	// consumeCancelledSlotLocked 消费已到期槽——与「导入排空不消费槽（恢复后
 	// 补跑）」语义相反，回滚后该族自动更新会推迟到下一排程槽。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_48976923"), MessageKey: "k_48976923"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "system.taskCancelBlockedByImport"), MessageKey: "system.taskCancelBlockedByImport"})
 		return
 	}
 	id := c.Param("id")
@@ -282,7 +282,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 		}
 		m, ok := te.Lookup(id)
 		if !ok {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_583965f9"), MessageKey: "k_583965f9"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "system.taskNotFound"), MessageKey: "system.taskNotFound"})
 			return
 		}
 		// 不可取消的任务（描述符 Cancelable=false）：拒绝原因是「任务不支持
@@ -290,18 +290,18 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 		// 矛盾，会让运维反复点取消并怀疑状态失真。零副作用：不记取消审计、
 		// 不发事件。
 		if !m.Cancelable {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_44b8c98f"), MessageKey: "k_44b8c98f"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "system.taskCancelNotSupported"), MessageKey: "system.taskCancelNotSupported"})
 			return
 		}
 		if !te.Cancel(id) {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_9dd23c40"), MessageKey: "k_9dd23c40"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "system.taskNotRunningOrNotCancelable"), MessageKey: "system.taskNotRunningOrNotCancelable"})
 			return
 		}
 		// 文案中性化：可取消族含 crs/ip2region（检查→拉取→安装/重载），
 		// 硬编码「下载阶段」会让审计台账与真实中断阶段不一致。
 		recordAudit(c, "取消", "任务监控", "手动取消任务 "+id+"（当前阶段中断，已完成部分保留）")
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "取消运行"}})
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_bf64e658"), MessageKey: "k_bf64e658"})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "system.taskCancelRequested"), MessageKey: "system.taskCancelRequested"})
 		return
 	}
 	// 无引擎时统一 503（回退 switch 删除）。
@@ -315,7 +315,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 // 对其恒 400。v2.0 前「Continuous 族可控」注释已随四类型标准作废。
 func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_91cbc6a9"), MessageKey: "k_91cbc6a9"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "system.taskStartStopBlockedByImport"), MessageKey: "system.taskStartStopBlockedByImport"})
 		return
 	}
 	id := c.Param("id")
@@ -329,7 +329,7 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || (req.Action != "start" && req.Action != "stop" && req.Action != "restart") {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e6fdc41c"), MessageKey: "k_e6fdc41c"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "system.taskControlActionInvalid"), MessageKey: "system.taskControlActionInvalid"})
 		return
 	}
 	te := services.TaskEngine()
@@ -345,18 +345,18 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	}
 	m, ok := te.Lookup(id)
 	if !ok {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_583965f9"), MessageKey: "k_583965f9"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "system.taskNotFound"), MessageKey: "system.taskNotFound"})
 		return
 	}
 	if !m.Controllable {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_86d859ae"), MessageKey: "k_86d859ae"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "system.taskStartStopNotSupported"), MessageKey: "system.taskStartStopNotSupported"})
 		return
 	}
 	// 用户显式启停落节点本地偏好；restart 的终态为运行。与 toggle 同口径：
 	// 先持久化再动作——写失败即 500 且内存态不动（否则「已重启」是假信号，
 	// 重启后偏好仍是旧值）。
 	if err := services.RecordTaskLoopPref(id, req.Action != "stop"); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c0dd93d", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "system.taskPreferenceSaveFailedStateUnchanged", apimsg.ErrMsg(c, err))})
 		return
 	}
 	switch req.Action {
@@ -372,15 +372,15 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	case "start":
 		recordAudit(c, "启动", "任务监控", "常驻任务 "+id+" 启动")
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "启动"}})
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_e86a82e6", id)})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "system.taskStarted", id)})
 	case "stop":
 		recordAudit(c, "停止", "任务监控", "常驻任务 "+id+" 停止")
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "停止"}})
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_60bfa15e", id)})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "system.taskStopped", id)})
 	default:
 		recordAudit(c, "重启", "任务监控", "常驻任务 "+id+" 重启")
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "重启"}})
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_42ea59c6", id)})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "system.taskRestarted", id)})
 	}
 }
 
@@ -397,7 +397,7 @@ func (h *Handlers) GetSystemTaskHistory(c *gin.Context) {
 	}
 	if te := services.TaskEngine(); te != nil {
 		if _, ok := te.Lookup(id); !ok {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_583965f9"), MessageKey: "k_583965f9"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "system.taskNotFound"), MessageKey: "system.taskNotFound"})
 			return
 		}
 		// 残留 running 行归一在引擎 History/LatestRun 内完成（与列表同一判定
@@ -429,7 +429,7 @@ func (h *Handlers) certJobRunHistory(c *gin.Context, taskID string) {
 	// 兜成 500 + 栈噪声）。
 	database := db.DB
 	if database == nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_9ac2e1cd"), MessageKey: "k_9ac2e1cd"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "system.databaseNotInitialized"), MessageKey: "system.databaseNotInitialized"})
 		return
 	}
 	var status, message string
@@ -475,7 +475,7 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 		// 本路由属业务读面（全部登录用户可读）——原始 DB/驱动错误只入库内
 		// 日志，对外保持 500 + 固定文案（不泄露 schema/驱动/挂载路径）。
 		services.Logf("error", "任务日志路径解析失败（%s）: %v", id, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_f7935b2c"), MessageKey: "k_f7935b2c"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "system.taskLogPathResolveFailed"), MessageKey: "system.taskLogPathResolveFailed"})
 		return
 	}
 	if path == "" {
@@ -496,7 +496,7 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 	content, truncated, readErr := readRotatedLogTail(path, keep, tail, 0, tail)
 	if readErr != nil {
 		services.Logf("error", "任务日志读取失败（%s, %s）: %v", id, "read", readErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_a40704d5"), MessageKey: "k_a40704d5"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "system.taskLogReadFailed"), MessageKey: "system.taskLogReadFailed"})
 		return
 	}
 	// 截断只以 truncated 布尔披露（与证书任务日志端点同形态）——提示行由消费端

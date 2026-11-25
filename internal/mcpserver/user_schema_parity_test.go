@@ -100,9 +100,9 @@ func TestUserToolsDocumentSetupAdminProtection(t *testing.T) {
 		zh   string // catalog 母本
 		verb string // MCP 侧必须点名的保护动作
 	}{
-		{"update_user", "k_e006c462", "初始管理员不可降级", "降级"},
-		{"toggle_user_status", "k_d7b79496", "初始管理员不可禁用", "禁用"},
-		{"delete_user", "k_93ea00a0", "初始管理员不可删除", "删除"},
+		{"update_user", "user.initialAdminCannotBeDemoted", "初始管理员不可降级", "降级"},
+		{"toggle_user_status", "user.initialAdminCannotBeDisabled", "初始管理员不可禁用", "禁用"},
+		{"delete_user", "user.initialAdminCannotBeDeleted", "初始管理员不可删除", "删除"},
 	} {
 		if !strings.Contains(source, tc.key) {
 			t.Errorf("handlers/users.go 未使用保护键 %s（%s 派生单源已漂移）", tc.key, tc.zh)

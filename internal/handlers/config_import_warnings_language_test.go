@@ -43,7 +43,7 @@ func zhCtx() i18n.Ctx {
 
 // catalogZH 返回字面量作为词条键时的中文母本；不是键或未登记时返回空串。
 func catalogZH(literal string) string {
-	if !strings.HasPrefix(literal, "k_") || len(literal) != len("k_00000000") {
+	if !i18n.IsMessageKey(literal) {
 		return ""
 	}
 	zh := i18n.T(i18n.ZH, literal)
@@ -480,7 +480,6 @@ func TestGetLogStats_securityEventsRetentionNoteFollowsLanguage(t *testing.T) {
 // 模板的 fmt 动词序列一致——模板经 fmt.Sprintf 渲染，动词不一致时英文界面
 // 会输出 %!verb 或丢参数；英文译文不得残留汉字。
 func TestImportWarningCatalog_keysRegisteredAndVerbsAligned(t *testing.T) {
-	keyPattern := regexp.MustCompile(`^k_[0-9a-f]{8}$`)
 	files := []string{
 		"config_backup.go", "config_import_chain.go", "config_import_v1.go",
 		"config_backup_lbbak.go", "config_import_coordinator.go", "helpers.go", "logstats.go",
@@ -499,16 +498,18 @@ func TestImportWarningCatalog_keysRegisteredAndVerbsAligned(t *testing.T) {
 				return true
 			}
 			key, err := strconv.Unquote(literal.Value)
-			if err != nil || !keyPattern.MatchString(key) {
+			if err != nil || !i18n.IsMessageKey(key) {
+				return true
+			}
+			zh, en := i18n.T(i18n.ZH, key), i18n.T(i18n.EN, key)
+			// 形态像键但未登记的，是 manifest.json / caddy.log 这类文件名字面量——语义键与
+			// 文件名同为「小写.小写」形态，只看形态分不出来。是否登记由全仓守卫
+			// TestMessageKeyUses_areRegistered 负责；这里只管已登记词条的 zh/en 对齐。
+			if zh == key {
 				return true
 			}
 			checked++
 			position := fset.Position(literal.Pos())
-			zh, en := i18n.T(i18n.ZH, key), i18n.T(i18n.EN, key)
-			if zh == key || en == key {
-				t.Errorf("%s: 词条 %s 未登记", position, key)
-				return true
-			}
 			if zhVerbs, enVerbs := fmtVerbs(zh), fmtVerbs(en); !slices.Equal(zhVerbs, enVerbs) {
 				t.Errorf("%s: 词条 %s 的 zh/en 动词不一致 zh=%q%v en=%q%v", position, key, zh, zhVerbs, en, enVerbs)
 			}

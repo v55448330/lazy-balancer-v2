@@ -1061,17 +1061,17 @@ func countStalledNonTerminalCertJobs() (count int, unknown bool) {
 func (recovery *importQueueRecovery) stalledWarning() importWarning {
 	if recovery.recoveryErr != nil {
 		if recovery.wasActive {
-			return importWarn("k_39df510b", recovery.recoveryErr)
+			return importWarn("backup.importCertJobRequeueFailedQueueResumed", recovery.recoveryErr)
 		}
-		return importWarn("k_7f690b4a", recovery.recoveryErr)
+		return importWarn("backup.importCertJobRequeueFailedQueueStillStopped", recovery.recoveryErr)
 	}
 	if recovery.stalledUnknown {
-		return importWarn("k_854c7ae0")
+		return importWarn("backup.importCertJobsNotRequeuedQueueStoppedCountUnknown")
 	}
 	if recovery.stalledNonTerminal <= 0 {
 		return importWarning{}
 	}
-	return importWarn("k_96e1e1a8", recovery.stalledNonTerminal)
+	return importWarn("backup.importCertJobsNotRequeuedQueueStopped", recovery.stalledNonTerminal)
 }
 
 func finishImportFailure(tx *sql.Tx, recovery *importQueueRecovery, importErr error) error {
@@ -1146,9 +1146,9 @@ func backupProductVersionWarning(meta configBackupMeta, currentVersion string) i
 		return importWarning{}
 	}
 	if meta.AppVersion == "" {
-		return importWarn("k_f5db32dd", currentVersion)
+		return importWarn("backup.importExportedProductVersionMissing", currentVersion)
 	}
-	return importWarn("k_264dfeb4", meta.AppVersion, currentVersion)
+	return importWarn("backup.importExportedProductVersionDiffers", meta.AppVersion, currentVersion)
 }
 
 type tableQuerier interface {
@@ -3121,10 +3121,10 @@ func certJobProviderDanglingCounts(ctx context.Context, q certJobRowQueryer, tab
 func certJobProviderDanglingWarnings(disabled, missing int) importWarnings {
 	warnings := make(importWarnings, 0, 2)
 	if disabled > 0 {
-		warnings = append(warnings, importWarn("k_56860680", disabled))
+		warnings = append(warnings, importWarn("backup.importCertJobCaProviderDisabled", disabled))
 	}
 	if missing > 0 {
-		warnings = append(warnings, importWarn("k_464e8105", missing))
+		warnings = append(warnings, importWarn("backup.importCertJobCaProviderMissing", missing))
 	}
 	return warnings
 }
@@ -3178,7 +3178,7 @@ func validateV2BackupCertJobsWithQuerier(ctx context.Context, tables map[string]
 		}
 	}
 	if danglingProviderJobs > 0 {
-		warnings = append(warnings, importWarn("k_54e8dd71", danglingProviderJobs))
+		warnings = append(warnings, importWarn("backup.importCertJobCaProviderDanglingNormalizedToDefault", danglingProviderJobs))
 	}
 	jobRows, carried := tables["cert_jobs"]
 	if !carried {
@@ -4010,11 +4010,11 @@ func validateV2BackupAutobanConfig(config map[string]any) (importWarnings, error
 					clamped = 10000
 				}
 				config["autoban_threshold"] = clamped
-				notes = append(notes, importWarn("k_5452edb3", n, clamped))
+				notes = append(notes, importWarn("backup.importAutobanThresholdClamped", n, clamped))
 			}
 		} else {
 			config["autoban_threshold"] = db.DefaultAutobanThreshold
-			notes = append(notes, importWarn("k_f5cd955a", db.DefaultAutobanThreshold))
+			notes = append(notes, importWarn("backup.importAutobanThresholdNotIntegerNormalized", db.DefaultAutobanThreshold))
 		}
 	}
 	if raw, exists := config["autoban_window_minutes"]; exists && raw != nil {
@@ -4028,11 +4028,11 @@ func validateV2BackupAutobanConfig(config map[string]any) (importWarnings, error
 					clamped = 60
 				}
 				config["autoban_window_minutes"] = clamped
-				notes = append(notes, importWarn("k_933e7850", n, clamped))
+				notes = append(notes, importWarn("backup.importAutobanWindowMinutesClamped", n, clamped))
 			}
 		} else {
 			config["autoban_window_minutes"] = db.DefaultAutobanWindowMinutes
-			notes = append(notes, importWarn("k_f37da833", db.DefaultAutobanWindowMinutes))
+			notes = append(notes, importWarn("backup.importAutobanWindowMinutesNotIntegerNormalized", db.DefaultAutobanWindowMinutes))
 		}
 	}
 	// 旧备份兼容（2026-11-13 口径多选改造）：单值 scope（blocked/logged/all）
@@ -4042,7 +4042,7 @@ func validateV2BackupAutobanConfig(config map[string]any) (importWarnings, error
 			if strings.TrimSpace(value) == "" {
 				// 空串=未设置，归一为新默认全选（不走旧值映射）。
 				config["autoban_scope"] = db.DefaultAutobanScope
-				notes = append(notes, importWarn("k_ff362aae"))
+				notes = append(notes, importWarn("backup.importAutobanScopeEmptyNormalizedToDefault"))
 			} else {
 				countHuman := false
 				if ch, ok := config["autoban_count_human_failed"]; ok {
@@ -4053,7 +4053,7 @@ func validateV2BackupAutobanConfig(config map[string]any) (importWarnings, error
 				migrated := services.MigrateLegacyAutobanScope(value, countHuman)
 				if migrated != value {
 					config["autoban_scope"] = migrated
-					notes = append(notes, importWarn("k_979ef9c1", value, migrated))
+					notes = append(notes, importWarn("backup.importAutobanScopeLegacySingleValueMigrated", value, migrated))
 				}
 			}
 		}
@@ -4076,11 +4076,11 @@ func validateV2BackupAutobanConfig(config map[string]any) (importWarnings, error
 					clamped = services.AutobanSuspicionMultiplierMax
 				}
 				config["autoban_suspicion_multiplier"] = clamped
-				notes = append(notes, importWarn("k_f59c70bf", n, clamped))
+				notes = append(notes, importWarn("backup.importAutobanSuspicionMultiplierClamped", n, clamped))
 			}
 		} else {
 			config["autoban_suspicion_multiplier"] = db.DefaultAutobanSuspicionMultiplier
-			notes = append(notes, importWarn("k_6277ad5e", db.DefaultAutobanSuspicionMultiplier))
+			notes = append(notes, importWarn("backup.importAutobanSuspicionMultiplierNotIntegerNormalized", db.DefaultAutobanSuspicionMultiplier))
 		}
 	}
 	for _, field := range []struct {
@@ -4107,7 +4107,7 @@ func validateV2BackupAutobanConfig(config map[string]any) (importWarnings, error
 		}
 		if strings.TrimSpace(value) == "" {
 			config[field.key] = field.def
-			notes = append(notes, importWarn("k_75473069", field.key, field.def))
+			notes = append(notes, importWarn("backup.importAutobanFieldEmptyNormalizedToDefault", field.key, field.def))
 			continue
 		}
 		if field.invalid(value) {
@@ -5258,7 +5258,7 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) importWarnings
 			name = caddyID
 		}
 		skippedIDs[caddyID] = true
-		warnings = append(warnings, importWarn("k_64ab7fb0", name))
+		warnings = append(warnings, importWarn("backup.importRuleEmptyDomainSkipped", name))
 	}
 	if len(skippedIDs) == 0 {
 		return nil
@@ -5294,7 +5294,7 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) importWarnings
 		tables[ref.table] = filtered
 	}
 	if droppedBindings > 0 {
-		warnings = append(warnings, importWarn("k_f4867f3d", droppedBindings))
+		warnings = append(warnings, importWarn("backup.importEmptyDomainRulePolicyBindingsSkipped", droppedBindings))
 	}
 	return warnings
 }
@@ -5327,7 +5327,7 @@ func skipEmptyBlockPages(tables map[string][]map[string]any) importWarnings {
 		if id := backupInt(row["id"]); id > 0 {
 			skipped[id] = struct{}{}
 		}
-		warnings = append(warnings, importWarn("k_9777b466", name))
+		warnings = append(warnings, importWarn("backup.importBlockPageEmptyContentSkipped", name))
 	}
 	if len(warnings) == 0 {
 		return nil
@@ -5466,12 +5466,12 @@ func clampBackupConfigInts(config map[string]any) importWarnings {
 		n, ok := backupInteger(value)
 		if !ok {
 			config[rule.Key] = rule.Def
-			notes = append(notes, importWarn("k_be9391c5", rule.Key, rule.Def))
+			notes = append(notes, importWarn("backup.importConfigFieldInvalidShapeResetToDefault", rule.Key, rule.Def))
 			continue
 		}
 		if rule.ResetOnLow && n < rule.Lo {
 			config[rule.Key] = rule.Def
-			notes = append(notes, importWarn("k_0906bec1", rule.Key, rule.Def))
+			notes = append(notes, importWarn("backup.importConfigFieldNotPositiveIntegerResetToDefault", rule.Key, rule.Def))
 			continue
 		}
 		if rule.Hi == 0 {
@@ -5484,7 +5484,7 @@ func clampBackupConfigInts(config map[string]any) importWarnings {
 		}
 		if rule.ResetOnHigh && n > rule.Hi {
 			config[rule.Key] = rule.Def
-			notes = append(notes, importWarn("k_fa5433f6", rule.Key, rule.Def))
+			notes = append(notes, importWarn("backup.importConfigFieldOutOfRangeResetToDefault", rule.Key, rule.Def))
 			continue
 		}
 		clamped := n
@@ -5495,7 +5495,7 @@ func clampBackupConfigInts(config map[string]any) importWarnings {
 			clamped = rule.Hi
 		}
 		config[rule.Key] = clamped
-		notes = append(notes, importWarn("k_ab5ac3ed", rule.Key, n, clamped))
+		notes = append(notes, importWarn("backup.importConfigFieldOutOfRangeClamped", rule.Key, n, clamped))
 	}
 	return notes
 }
@@ -6080,7 +6080,7 @@ func prepareV2BackupSkips(backup *configBackup, payload *lbbakPayload, sectionTa
 				return nil, err
 			}
 			delete(backup.Tables, "security_threat_sources")
-			warnings = append(warnings, importWarn("k_959f5965"))
+			warnings = append(warnings, importWarn("backup.importPlainJsonThreatSourcesKeptLocal"))
 		}
 	}
 	warnings = append(warnings, skipEmptyDomainHTTPRules(backup.Tables)...)
@@ -6132,10 +6132,10 @@ func normalizeImportedVersionUpdateStatuses(tables map[string][]map[string]any) 
 	}
 	var warnings importWarnings
 	if carried > 0 {
-		warnings = append(warnings, importWarn("k_517d0571", carried))
+		warnings = append(warnings, importWarn("backup.importVersionSourceActiveUpdateNormalizedToFailed", carried))
 	}
 	if normalized > 0 {
-		warnings = append(warnings, importWarn("k_d45c1567", normalized))
+		warnings = append(warnings, importWarn("backup.importVersionSourceUnknownUpdateStatusNormalizedToIdle", normalized))
 	}
 	return warnings
 }
@@ -6284,7 +6284,7 @@ func rejectConcurrentConfigImport(c *gin.Context, action string) bool {
 		return false
 	}
 	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict,
-		Message: apimsg.Tf(c, "k_9118ba7d", "开始新的"+action)})
+		Message: apimsg.Tf(c, "backup.importInProgressActionNotAllowed", "开始新的"+action)})
 	return true
 }
 
@@ -7132,7 +7132,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if backup.Config != nil {
 		if raw, carried := backup.Config["branding_json"]; carried {
 			if _, err := services.MaterializeBranding(h.cfg.DataDir, backupString(raw)); err != nil {
-				brandingWarning = importWarn("k_922ae27b", err)
+				brandingWarning = importWarn("backup.importBrandingFileRestoreFailed", err)
 				recordAudit(c, action+"警告", "配置备份", brandingWarning.render(i18n.ZH))
 				// 文件仍是唯一事实源：立即把 DB 镜像回本地文件，避免留下分叉。
 				if _, mirrorErr := services.RefreshBrandingMirror(h.cfg.DataDir); mirrorErr != nil {
@@ -7141,7 +7141,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			} else {
 				reseedBlockPageNeeded = true
 				if _, err := services.RefreshBrandingMirror(h.cfg.DataDir); err != nil {
-					brandingWarning = importWarn("k_f42c573c", err)
+					brandingWarning = importWarn("backup.importBrandingMirrorRefreshFailed", err)
 					recordAudit(c, action+"警告", "配置备份", brandingWarning.render(i18n.ZH))
 				}
 			}
@@ -7274,7 +7274,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if adminTLS, tlsErr := services.LoadAdminTLSConfigE(); tlsErr != nil {
 		services.Logf("warn", "导入后读取管理面板 HTTPS 配置失败，跳过重启判定: %v", tlsErr)
 	} else if services.RuntimeAdminTLSChanged(adminTLS) {
-		adminTLSRestartWarning = importWarn(importActionKey(action, "k_54eed4be", "k_725cf35e"))
+		adminTLSRestartWarning = importWarn(importActionKey(action, "backup.importAdminTlsRestartRequired", "backup.restoreAdminTlsRestartRequired"))
 		recordAudit(c, action+"警告", "配置备份", adminTLSRestartWarning.render(i18n.ZH))
 	}
 	// off→on 且水位线为空/陈旧（>1 分钟）→ 置 now，避免导入后立即
@@ -7363,44 +7363,44 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		responseWarnings = append(append([]string{}, responseWarnings...), brandingWarning.render(lang))
 	}
 	if ignoredNodeTokens > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_d201bf89", ignoredNodeTokens))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importNodeTokenMismatchLocalKept", ignoredNodeTokens))
 	}
 	if attributionMismatches > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_653168b7", attributionMismatches))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importRecordOwnerMismatchNotRewritten", attributionMismatches))
 	}
 	if prunedBindings > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_e59272f4", prunedBindings))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importDanglingPolicyBindingsPruned", prunedBindings))
 	}
 	if autobanRuntimeNote != "" {
 		responseWarnings = append(append([]string{}, responseWarnings...), autobanRuntimeNoteLocalized)
 	}
 	if customOnlyNormalized > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_8f24dccc", customOnlyNormalized))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importWafOffPolicyNormalizedToCustomOnly", customOnlyNormalized))
 	}
 	// 两档悬挂告警与预览/审计同源（文案单源），不得再各写一份字面量。
 	if dangling := certJobProviderDanglingWarnings(certJobProviderDisabled, certJobProviderMissing); len(dangling) > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), dangling.render(lang)...)
 	}
 	if certJobProviderCountErr != nil {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_a941d605", certJobProviderCountErr))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importCertJobDanglingCheckNotCompleted", certJobProviderCountErr))
 	}
 	if acmeDanglingCountErr != nil {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_c321af37", acmeDanglingCountErr))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importAcmeRefDanglingCheckNotCompleted", acmeDanglingCountErr))
 	}
 	if droppedTCPBindings > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_3bcda218", droppedTCPBindings))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importTcpRulePolicyBindingsRemoved", droppedTCPBindings))
 	}
 	if wafMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_15ae2f31"))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "backup.importRuleLibraryVersionRecordsSkippedNoDataFile"))
 	}
 	if crsTreeReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_fff391ed"))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "backup.importCrsTreeReplacedPolicyRefsUnverified"))
 	}
 	if wafCRSMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_a8f33c4d"))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "backup.importCrsVersionRecordSkippedNoDataFile"))
 	}
 	if wafXdbMetadataSkipped {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_81ef1989"))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "backup.importIp2RegionVersionRecordSkippedNoDataFile"))
 	}
 	// manifest 未登记的威胁库条目——不拒绝（老备份
 	// 兼容），但响应与审计必须可见「内容未经完整性校验」。
@@ -7413,26 +7413,26 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		responseWarnings = append(append([]string{}, responseWarnings...), wafApply.Warnings.render(lang)...)
 	}
 	if operatorReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_610d9398"))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "backup.importOperatorAccountNotInBackup"))
 	}
 	if oidcConverged {
 		// 双通道：收敛清空会让启用中的 OIDC 登出（用户按备份替换），
 		// 与同函数 custom_only 归一一致——响应 warnings 之外必须落操作审计，
 		// 否则事后只能看到「OIDC 忽然关闭」而无从追溯来源。
 		detail := "备份未携带 OIDC 配置——现有 OIDC 配置已随备份收敛清空（用户数据按备份替换，避免「OIDC 启用但零用户」不一致状态）"
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "k_ae6c81db"))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "backup.importOidcConfigClearedToMatchBackup"))
 		recordAudit(c, action+"警告", "配置备份", detail)
 	}
 	if revokedSessions && !operatorReplaced {
-		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, importActionKey(action, "k_dffc3f29", "k_23e13305")))
+		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, importActionKey(action, "backup.importSystemDataSessionsRevoked", "backup.restoreSystemDataSessionsRevoked")))
 	}
 	if acmeDanglingRules > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), importWarn(importActionKey(action, "k_8a06e6ae", "k_0f2464ba"), acmeDanglingRules).render(lang))
+		responseWarnings = append(append([]string{}, responseWarnings...), importWarn(importActionKey(action, "backup.importLocalRulesDnsProviderDangling", "backup.restoreLocalRulesDnsProviderDangling"), acmeDanglingRules).render(lang))
 	}
 	// 反向悬挂警告(与上方审计同文案族;与 acmeDanglingRules 互斥,
 	// 方向不同:此处为导入规则引用 live 缺失)。
 	if acmeDanglingImported > 0 {
-		responseWarnings = append(append([]string{}, responseWarnings...), importWarn(importActionKey(action, "k_5a6b172f", "k_6518c08b"), acmeDanglingImported).render(lang))
+		responseWarnings = append(append([]string{}, responseWarnings...), importWarn(importActionKey(action, "backup.importBackupRulesDnsProviderDangling", "backup.restoreBackupRulesDnsProviderDangling"), acmeDanglingImported).render(lang))
 	}
 	// 证书任务级 CA 提供商悬挂/禁用引用的归一警告（validateV2BackupCertJobs 产出）。
 	if len(certJobProviderWarnings) > 0 {
@@ -7486,7 +7486,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if crawlerSourcesReplaced || ipListsReplaced {
 		if err := services.RestoreCrawlerIPListSnapshot(); err != nil {
 			recordAudit(c, action+"警告", "配置备份", "爬虫运行快照重建失败（重启或下次更新后重试）: "+err.Error())
-			responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "k_893f9b1b", err))
+			responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importCrawlerRuntimeSnapshotRebuildFailed", err))
 		}
 	}
 	// api_keys 已随导入整体替换——清空白名单 CIDR
@@ -7503,7 +7503,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		return
 	}
 	notifyImportOutcome(c, action, true, "")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_2499ff15", action, strings.ReplaceAll(counts, "；", "、")), MessageKey: "k_2499ff15", Data: gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "backup.importOrRestoreSucceeded", action, strings.ReplaceAll(counts, "；", "、")), MessageKey: "backup.importOrRestoreSucceeded", Data: gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings}})
 }
 
 // importPartialSuccessMessage 是「部分成功」（数据库已提交、证书任务恢复失败）
@@ -7517,7 +7517,7 @@ func importPartialSuccessMessage(action string, queueRecoveryErr error) string {
 
 // importPartialSuccessWarning 是部分成功响应 warnings 的单条说明（同源口径）。
 func importPartialSuccessWarning(c i18n.Ctx, queueRecoveryErr error) string {
-	return apimsg.Tf(c, "k_672e1587", importFailureCause(queueRecoveryErr))
+	return apimsg.Tf(c, "backup.importCommittedCertJobRecoveryFailed", importFailureCause(queueRecoveryErr))
 }
 
 // collectImportCertificates 待物化的手动证书材料与质量警告（/
@@ -7556,7 +7556,7 @@ func collectImportCertificates(rows []map[string]any) ([]importCertificate, impo
 		}
 		certs = append(certs, importCertificate{ruleID: caddyID, certPEM: certPEM, keyPEM: keyPEM})
 		for _, warning := range tlsCertificateNotes(certPEM, keyPEM, backupString(row["domain"])) {
-			warnings = append(warnings, importWarn("k_550e4adc", backupString(row["name"]), caddyID, warning))
+			warnings = append(warnings, importWarn("backup.importRuleCertificateWarning", backupString(row["name"]), caddyID, warning))
 		}
 	}
 	return certs, warnings

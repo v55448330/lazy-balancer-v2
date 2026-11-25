@@ -80,7 +80,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	if raw := c.Query("page_size"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 			return
 		}
 		if n > 200 {
@@ -99,8 +99,8 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		switch status {
 		case "pending", "sent", "partial", "failed", "dead":
 		default:
-			msg := apimsg.Tf(c, "k_0d569dd0", status)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg, MessageKey: "k_0d569dd0"})
+			msg := apimsg.Tf(c, "notify.unsupportedDeliveryStatusFilter", status)
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg, MessageKey: "notify.unsupportedDeliveryStatusFilter"})
 			return
 		}
 	}
@@ -223,7 +223,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	var req struct {
@@ -234,7 +234,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	}
 	// 空 body 兼容（旧客户端无 body 全量重发）：EOF 视同缺省，坏 JSON 仍 400。
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	uid := contextUserID(c)
@@ -242,15 +242,15 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	var owner int64
 	var status, title string
 	if err := db.DB.QueryRow(`SELECT user_id, status, title FROM notification_deliveries WHERE id=?`, id).Scan(&owner, &status, &title); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_e742ee3f"), MessageKey: "k_e742ee3f"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "notify.deliveryNotFound"), MessageKey: "notify.deliveryNotFound"})
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_e18b003b"), MessageKey: "k_e18b003b"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "notify.canOnlyResendOwnDelivery"), MessageKey: "notify.canOnlyResendOwnDelivery"})
 		return
 	}
 	if status == "pending" {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_c16c1667"), MessageKey: "k_c16c1667"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "notify.deliveryAlreadyQueued"), MessageKey: "notify.deliveryAlreadyQueued"})
 		return
 	}
 	// 审计通道名在重置前取快照（重置唤醒投递后结果行可能追加）。
@@ -262,7 +262,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	}
 	if !found || !reset {
 		// 预检后状态被并发改变（已 pending 或已删除）。
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_c16c1667"), MessageKey: "k_c16c1667"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "notify.deliveryAlreadyQueued"), MessageKey: "notify.deliveryAlreadyQueued"})
 		return
 	}
 	subject := "重发投递「" + title + "」"
@@ -273,7 +273,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 		subject = "管理员" + subject
 	}
 	recordAudit(c, "重发", "通知投递", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_07b47533"), MessageKey: "k_07b47533"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "notify.resendAccepted"), MessageKey: "notify.resendAccepted"})
 }
 
 // resendAuditChannelNames 重发审计通道名：每通道取最新结果行（重发追加行，

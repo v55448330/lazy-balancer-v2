@@ -48,7 +48,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	}
 	var req services.AutobanConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.invalidRequestParams"), MessageKey: "common.invalidRequestParams"})
 		return
 	}
 	// 缺省归一（旧客户端未携带新字段）与 SetAutobanConfig 同单源。
@@ -85,7 +85,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		return
 	}
 	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了自动封禁配置"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_7c026b1f"), MessageKey: "k_7c026b1f", Data: updated})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "security.autoBanConfigUpdated"), MessageKey: "security.autoBanConfigUpdated", Data: updated})
 }
 
 func boolOnOff(b bool) string {
@@ -254,7 +254,7 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	identity := services.AutobanEntryIdentity(c.Param("identity"))
 	identity, err := services.DeleteAutobanRecidivismGuarded(caddyWriteCtx(c), identity)
 	if errors.Is(err, services.ErrAutobanIdentityBanned) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d5ad4db8"), MessageKey: "k_d5ad4db8"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.recidivismRecordCannotBeRemovedWhileBanned"), MessageKey: "security.recidivismRecordCannotBeRemovedWhileBanned"})
 		return
 	}
 	if err != nil {

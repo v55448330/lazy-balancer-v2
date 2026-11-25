@@ -93,7 +93,7 @@ func TestCatalogKeysUnique(t *testing.T) {
 // 生成管线的转义回归:含双引号的词条在用户侧必须是裸引号,
 // 不得出现反斜杠(双重转义会让用户看到 {\"all\": true})。
 func TestCatalogQuotedEntriesRenderWithoutBackslashes(t *testing.T) {
-	for _, key := range []string{"k_a1f26fc3", "k_d2bed58b"} {
+	for _, key := range []string{"cert.batchIssuanceExplicitConfirmRequired", "cert.acmeEmailNotConfigured"} {
 		for _, lang := range []string{ZH, EN} {
 			got := T(lang, key)
 			if strings.Contains(got, `\`) {
@@ -101,7 +101,7 @@ func TestCatalogQuotedEntriesRenderWithoutBackslashes(t *testing.T) {
 			}
 		}
 	}
-	if got := T(ZH, "k_a1f26fc3"); !strings.Contains(got, `{"all": true}`) {
+	if got := T(ZH, "cert.batchIssuanceExplicitConfirmRequired"); !strings.Contains(got, `{"all": true}`) {
 		t.Errorf("zh 词条应含裸引号 JSON 示例, got %q", got)
 	}
 }

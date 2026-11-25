@@ -26,7 +26,7 @@ import (
 func rejectMFAChallengeLogin(c *gin.Context) {
 	// 挑战无效不泄露具体原因
 	services.RecordAuditLog("", "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "挑战令牌无效或已过期"), c.ClientIP())
-	c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_5c5030a7"), MessageKey: "k_5c5030a7"})
+	c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.mfaChallengeInvalidOrExpired"), MessageKey: "auth.mfaChallengeInvalidOrExpired"})
 }
 
 // mfaLoginInflight 同一挑战令牌的验码串行化。先消费后验码使「同一 token 的
@@ -67,7 +67,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 		Code     string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	var meta db.UserRowMeta
@@ -85,7 +85,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 			// 审计——此前三处 500 分支零留痕，与 Login 的同型 internal_error
 			// 口径不一致。
 			services.RecordAuditLog("", "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "挑战查询失败"), c.ClientIP())
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "common.databaseError"), MessageKey: "common.databaseError"})
 			return
 		}
 		rejectMFAChallengeLogin(c)
@@ -125,19 +125,19 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 			return
 		}
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "锁定状态读取失败"), c.ClientIP())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "common.databaseError"), MessageKey: "common.databaseError"})
 		return
 	}
 	locked, lockErr := loginLockedNow(loginLockedUntil)
 	if lockErr != nil {
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "锁定开关读取失败"), c.ClientIP())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "common.databaseError"), MessageKey: "common.databaseError"})
 		return
 	}
 	if locked {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(userID, user.Username), "账户已锁定"), c.ClientIP())
 		notifyLoginFailed(user.Username, "账户已锁定", c.ClientIP())
-		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: apimsg.Tf(c, "k_be499438", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())), MessageKey: "k_be499438"})
+		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: apimsg.Tf(c, "auth.accountLocked", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())), MessageKey: "auth.accountLocked"})
 		return
 	}
 
@@ -147,7 +147,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	// 注意：此标记在消费之前、全部身份/锁定/版本门之后获取。
 	if !tryLockMFAChallengeToken(req.MFAToken) {
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验证进行中（并发请求）"), c.ClientIP())
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_2687e67f"), MessageKey: "k_2687e67f"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "auth.mfaVerifyInProgress"), MessageKey: "auth.mfaVerifyInProgress"})
 		return
 	}
 	defer unlockMFAChallengeToken(req.MFAToken)
@@ -159,7 +159,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	consumed, consumeErr := services.MFAConsumeChallenge(req.MFAToken, userID)
 	if consumeErr != nil {
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "挑战消费服务故障"), c.ClientIP())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8e6ad05e"), MessageKey: "k_8e6ad05e"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.mfaVerifyServiceUnavailable"), MessageKey: "auth.mfaVerifyServiceUnavailable"})
 		return
 	}
 	if !consumed {
@@ -167,7 +167,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 		// 外部竞态的观测面——与同函数其余拒绝分支同密度留痕（此前这是唯一
 		// 无审计的拒绝分支，事后无法区分「客户端重试」与「重放已消费挑战」）。
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "挑战已被使用"), c.ClientIP())
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_201b3428"), MessageKey: "k_201b3428"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.mfaChallengeAlreadyUsed"), MessageKey: "auth.mfaChallengeAlreadyUsed"})
 		return
 	}
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
@@ -184,7 +184,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 			// 不累加挑战级/账户级失败计数（否则基础设施抖动会烧掉挑战额度
 			// 并把用户锁 10 分钟）。
 			services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验证服务故障"), c.ClientIP())
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8e6ad05e"), MessageKey: "k_8e6ad05e"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.mfaVerifyServiceUnavailable"), MessageKey: "auth.mfaVerifyServiceUnavailable"})
 			return
 		}
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验证码错误"), c.ClientIP())
@@ -194,7 +194,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 		_ = services.MFARecordChallengeFailure(req.MFAToken)
 		// 统一登录失败计数（开关语义见 recordLoginFailure）。
 		recordLoginFailure(userID)
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_345a8c4a"), MessageKey: "k_345a8c4a"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.mfaVerificationCodeIncorrect"), MessageKey: "auth.mfaVerificationCodeIncorrect"})
 		return
 	}
 	// 完整登录成功：清零登录失败计数与锁定（密码步未清零，见 Login 注释）。
@@ -221,7 +221,7 @@ func (h *Handlers) MFAStatus(c *gin.Context) {
 		// ErrNoRows 只可能是「鉴权与 handler 之间用户被并发删除」（jwtAuth 已
 		// 校验存在/启用）——与全仓 401 约定一致，不诱导客户端重试。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_620981d6"), MessageKey: "k_620981d6"})
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.userNotFoundOrDisabled"), MessageKey: "auth.userNotFoundOrDisabled"})
 			return
 		}
 		// 其余为基础设施故障（列缺失/恢复码存储损坏/库锁）：固定文案 + 服务端
@@ -253,14 +253,14 @@ func rejectOIDCUserMFAOperation(c *gin.Context, targetUserID int) bool {
 		// ErrNoRows=目标用户不存在(输入错误,404);真实读故障才是 500。
 		// 两者都必须拒绝操作——身份来源不可判定时不按非 OIDC 放行。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_5ea09f41"), MessageKey: "k_5ea09f41"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
 			return true
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_4578e33b"), MessageKey: "k_4578e33b"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.identityLoadFailed"), MessageKey: "user.identityLoadFailed"})
 		return true
 	}
 	if provider == "oidc" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_0bf61b56"), MessageKey: "k_0bf61b56"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "auth.oidcUserLocalMfaNotSupported"), MessageKey: "auth.oidcUserLocalMfaNotSupported"})
 		return true
 	}
 	return false
@@ -277,7 +277,7 @@ func rejectNonJWTSelfServiceMFA(c *gin.Context) bool {
 		return false
 	}
 	recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA 自助操作仅限 JWT 会话（机器身份拒绝）", services.AuditResultPart("failure")))
-	c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_528f89a0"), MessageKey: "k_528f89a0"})
+	c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "auth.mfaSelfServiceRequiresLoginSession"), MessageKey: "auth.mfaSelfServiceRequiresLoginSession"})
 	return true
 }
 
@@ -298,14 +298,14 @@ func mfaVerifyFailureResponse(c *gin.Context, verr error, failureDetail string) 
 	}
 	if verr != nil {
 		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("验证服务故障", services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8e6ad05e"), MessageKey: "k_8e6ad05e"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.mfaVerifyServiceUnavailable"), MessageKey: "auth.mfaVerifyServiceUnavailable"})
 		return
 	}
 	recordAudit(c, "认证拒绝", "用户认证", failureDetail)
 	// MFA 验证码校验失败通知（安全可观测面；真码错才发，业务态/故障不发）。
 	// 「用户|IP」10 分钟去抖在 notify.PublishMFAVerifyFailed 内收敛。
 	notify.PublishMFAVerifyFailed(c.GetString("username"), failureDetail, c.ClientIP())
-	c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_345a8c4a"), MessageKey: "k_345a8c4a"})
+	c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.mfaVerificationCodeIncorrect"), MessageKey: "auth.mfaVerificationCodeIncorrect"})
 }
 
 // mfaInternalFailure 收敛 MFA 写端点的「基础设施故障」响应：固定
@@ -314,7 +314,7 @@ func mfaVerifyFailureResponse(c *gin.Context, verr error, failureDetail string) 
 // 按哨兵错误映射 400，不走此路径。
 func mfaInternalFailure(c *gin.Context, op string, err error) {
 	services.Logf("error", "MFA %s 失败: %v", op, err)
-	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_628b4c94"), MessageKey: "k_628b4c94"})
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.mfaOperationFailed"), MessageKey: "auth.mfaOperationFailed"})
 }
 
 // mfaGenerateSecretForTest 密钥生成故障的测试缝：crypto/rand 故障无法在用例
@@ -350,7 +350,7 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 	var mfaEnabled bool
 	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", userID).Scan(&mfaEnabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_620981d6"), MessageKey: "k_620981d6"})
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.userNotFoundOrDisabled"), MessageKey: "auth.userNotFoundOrDisabled"})
 			return
 		}
 		mfaInternalFailure(c, "读取 MFA 状态", err)
@@ -364,7 +364,7 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 			Code string `json:"code"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 			return
 		}
 		// 守卫验码放行路径跳过本层验码(同 MFADisable)——拆除/重绑属高敏操作，
@@ -437,7 +437,7 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		Code string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	// 先过内存滑动窗限流（与登录后验码同一 per-user 实现）：pending 校验的
@@ -459,7 +459,7 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		if verr != nil {
 			services.Logf("error", "MFA 读取 pending 绑定状态失败: user_id=%d: %v", userID, verr)
 			recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("绑定 MFA", "验证服务故障", services.AuditResultPart("failure")))
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8e6ad05e"), MessageKey: "k_8e6ad05e"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.mfaVerifyServiceUnavailable"), MessageKey: "auth.mfaVerifyServiceUnavailable"})
 			return
 		}
 		// 真验证码错误：先在内存窗口记一次（不依赖 DB，故障期即是唯一硬闸），
@@ -479,10 +479,10 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		}
 		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail(failureDetail, services.AuditResultPart("failure")))
 		if invalidated {
-			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_df527f47"), MessageKey: "k_df527f47"})
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.mfaBindingVoidedTooManyAttempts"), MessageKey: "auth.mfaBindingVoidedTooManyAttempts"})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ef0110b0"), MessageKey: "k_ef0110b0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "auth.mfaBindingCodeIncorrect"), MessageKey: "auth.mfaBindingCodeIncorrect"})
 		return
 	}
 	services.MFAClearVerifyAttempts(userID)
@@ -501,7 +501,7 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 	recordAudit(c, "启用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtMFAChanged,
 		Fields: map[string]string{"1": c.GetString("username"), "2": "启用"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_2e37ecec"), MessageKey: "k_2e37ecec", Data: gin.H{"recovery_codes": codes}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "auth.mfaEnabled"), MessageKey: "auth.mfaEnabled", Data: gin.H{"recovery_codes": codes}})
 }
 
 // MFADisable POST /auth/mfa/disable — 确认有效验证码后禁用（2026-09 用户裁定：
@@ -525,7 +525,7 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	// 守卫验码放行路径(标记在)跳过
@@ -552,7 +552,7 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 	recordAudit(c, "禁用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtMFAChanged,
 		Fields: map[string]string{"1": c.GetString("username"), "2": "禁用"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_62e2b696"), MessageKey: "k_62e2b696"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "auth.mfaDisabled"), MessageKey: "auth.mfaDisabled"})
 }
 
 // MFARecoveryCodes POST /auth/mfa/recovery-codes — 重生成恢复码（2026-09 用户
@@ -579,14 +579,14 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 	// 故障=500 且留痕。
 	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", userID).Scan(&enabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_620981d6"), MessageKey: "k_620981d6"})
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.userNotFoundOrDisabled"), MessageKey: "auth.userNotFoundOrDisabled"})
 			return
 		}
 		mfaInternalFailure(c, "读取 MFA 状态", err)
 		return
 	}
 	if !enabled {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_685ec826"), MessageKey: "k_685ec826"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "auth.mfaNotEnabled"), MessageKey: "auth.mfaNotEnabled"})
 		return
 	}
 	// 原地重写（旧码全部作废）
@@ -598,7 +598,7 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 	// （2026-09-05 审计裁定）：恢复码重生成是纯会话门下「旧码全作废+明文
 	// 下发 10 个登录可用凭证」的高敏动作——成功留痕，与禁用/重置 MFA 同密度。
 	recordAudit(c, "生成", "恢复码", services.FormatAuditDetail("MFA", "旧恢复码全部作废", services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_e97ccf4d"), MessageKey: "k_e97ccf4d", Data: gin.H{"recovery_codes": codes}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "auth.recoveryCodesRegenerated"), MessageKey: "auth.recoveryCodesRegenerated", Data: gin.H{"recovery_codes": codes}})
 }
 
 // MFAVerifyStep POST /auth/mfa/ — 验证码 → 新 JWT（mfa_ts 刷新）。
@@ -621,7 +621,7 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 		Code string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	if mfaVerifyRateLimitedRejection(c, userID) {
@@ -644,11 +644,11 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	// 会话声明，避免导入混合行在验码后获得 OIDC 的本地 MFA 写门豁免。
 	user, err := db.ScanUserRow(db.DB.QueryRow(`SELECT `+db.UserRowColumns("")+` FROM users WHERE id=?`, userID), &meta)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_2e580a94"), MessageKey: "k_2e580a94"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.stepUpUserLoadFailed"), MessageKey: "auth.stepUpUserLoadFailed"})
 		return
 	}
 	if !user.IsEnabled {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_04c25502"), MessageKey: "k_04c25502"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "auth.stepUpUserDisabled"), MessageKey: "auth.stepUpUserDisabled"})
 		return
 	}
 	h.respondLoginWithMFA(c, user, meta.PasswordVersion, time.Now().Unix(), false, c.GetString("auth_method"))
@@ -812,7 +812,7 @@ func mfaVerifyRateLimitedRejection(c *gin.Context, userID int) bool {
 		return false
 	}
 	recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验码尝试过于频繁（限流）"))
-	c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: apimsg.T(c, "k_50fcb3cb"), MessageKey: "k_50fcb3cb"})
+	c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: apimsg.T(c, "auth.mfaVerifyRateLimited"), MessageKey: "auth.mfaVerifyRateLimited"})
 	return true
 }
 
@@ -840,7 +840,7 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c76476b5"), MessageKey: "k_c76476b5"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "auth.invalidUserId"), MessageKey: "auth.invalidUserId"})
 		return
 	}
 	if rejectOIDCUserMFAOperation(c, id) {
@@ -854,7 +854,7 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	// 操作者自己启用 MFA → 必须验码（本人重置自己的 MFA 也一样——与
@@ -875,7 +875,7 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	// 或请求为机器身份时才走本层验码——此时守卫均不参与、无双重消费，重放保护
 	// 照旧。
 	if operatorMfa, err := services.MFAUserEnabled(operatorID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ad908098"), MessageKey: "k_ad908098"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.operatorMfaStatusLoadFailed"), MessageKey: "auth.operatorMfaStatusLoadFailed"})
 		return
 	} else if operatorMfa && !mfaStepUpVerifiedForDestructiveOp(c) {
 		// 管理员拆除 MFA 同样收窄为守卫验码 ≤15s 窄窗豁免（与自助 disable 同口径）。
@@ -894,10 +894,10 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	var target string
 	if err := db.DB.QueryRow("SELECT username FROM users WHERE id=?", id).Scan(&target); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_5ea09f41"), MessageKey: "k_5ea09f41"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_33aeb95e"), MessageKey: "k_33aeb95e"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.userLoadFailed"), MessageKey: "auth.userLoadFailed"})
 		return
 	}
 	if err := services.MFAResetForUser(id); err != nil {
@@ -914,5 +914,5 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	recordAudit(c, "重置", "用户认证", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtMFAChanged,
 		Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("重置了目标用户 %s", target)}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_54bac549"), MessageKey: "k_54bac549"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "auth.userMfaReset"), MessageKey: "auth.userMfaReset"})
 }

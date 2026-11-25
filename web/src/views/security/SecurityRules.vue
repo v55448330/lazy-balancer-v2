@@ -1229,9 +1229,9 @@ const toggleIP2RegionV6 = async (val: boolean | string | number) => {
     // 原读 res.data?.message 恒 undefined，退化 200 被吞成「成功」。
     const res = await request.put<APIResponse<{ message?: string }>>('/security/ip2region/v6-enabled', { enabled: !!val })
     // 退化 200（库开关已落库、Caddy 重载失败）判定走稳定语义键（语言无关）：
-    // k_7d87740a=已保存但重载失败（需用户知晓「待下次重载生效」），
-    // k_573eb966=已更新。不用 zh 字面量比较。
-    if (res.messageKey === 'k_7d87740a') {
+    // security.savedButCaddyReloadFailed=已保存但重载失败（需用户知晓「待下次重载生效」），
+    // security.updated=已更新。不用 zh 字面量比较。
+    if (res.messageKey === 'security.savedButCaddyReloadFailed') {
       ElMessage.warning(res.message || t('common.app.views.secRules.lib.v6ReloadFailed'))
     } else {
       mfaAwareSuccess(t('common.app.views.secRules.lib.v6ToggleResult', { state: val ? t('common.app.views.secRules.lib.stateOn') : t('common.app.views.secRules.lib.stateOff') }))

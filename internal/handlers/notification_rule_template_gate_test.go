@@ -42,8 +42,8 @@ func TestUpdateNotificationRule_ruleChannelTemplateSaveGate(t *testing.T) {
 
 	// 目标形状：webhook 模板不是 JSON → 400，且这一组事件一行都不落。
 	status, out := doNotifyRequest(t, r, http.MethodPost, path, `{"enabled":true,"channel_templates":{"`+hookKey+`":"probe-ev not json"}}`)
-	if status != http.StatusBadRequest || out["message_key"] != "k_00c1f3e8" {
-		t.Fatalf("webhook 非法模板 status=%d out=%v, want 400 k_00c1f3e8", status, out)
+	if status != http.StatusBadRequest || out["message_key"] != "notify.ruleTemplateInvalidJson" {
+		t.Fatalf("webhook 非法模板 status=%d out=%v, want 400 notify.ruleTemplateInvalidJson", status, out)
 	}
 	var rows int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=7`).Scan(&rows); err != nil {
@@ -55,16 +55,16 @@ func TestUpdateNotificationRule_ruleChannelTemplateSaveGate(t *testing.T) {
 
 	// 畸形形状：机器人模板超长 → 400。
 	status, out = doNotifyRequest(t, r, http.MethodPost, path, `{"enabled":true,"channel_templates":{"`+qqKey+`":"`+strings.Repeat("x", 2001)+`"}}`)
-	if status != http.StatusBadRequest || out["message_key"] != "k_0d9a61a4" {
-		t.Fatalf("机器人模板超长 status=%d out=%v, want 400 k_0d9a61a4", status, out)
+	if status != http.StatusBadRequest || out["message_key"] != "notify.ruleTemplateTooLong" {
+		t.Fatalf("机器人模板超长 status=%d out=%v, want 400 notify.ruleTemplateTooLong", status, out)
 	}
 
 	// 畸形形状：通道键的非规范数字写法（前导零）与规范键指向同一通道——派发
 	// 侧按数值解析键，保存门必须同样归一后校验，不得借写法绕过。无法解析的键
 	// 在派发侧永不命中，不拦（见下方回归形状里的 "abc"）。
 	status, out = doNotifyRequest(t, r, http.MethodPost, path, `{"enabled":true,"channel_templates":{"0`+hookKey+`":"probe-ev not json"}}`)
-	if status != http.StatusBadRequest || out["message_key"] != "k_00c1f3e8" {
-		t.Fatalf("前导零通道键必须同样过保存门 status=%d out=%v, want 400 k_00c1f3e8", status, out)
+	if status != http.StatusBadRequest || out["message_key"] != "notify.ruleTemplateInvalidJson" {
+		t.Fatalf("前导零通道键必须同样过保存门 status=%d out=%v, want 400 notify.ruleTemplateInvalidJson", status, out)
 	}
 
 	// 回归形状：合法 JSON（裸占位符与裹引号占位符皆可）放行并落库；已删除通道

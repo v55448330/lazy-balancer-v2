@@ -15,7 +15,7 @@ import (
 func TestSystemTaskInvalidCertJobIDIsKeyedMessage(t *testing.T) {
 	withIsolatedGlobal(t)
 	const (
-		wantKey = "k_688f8e91" // k_fnv1a("无效的任务 ID")
+		wantKey = "system.taskIdInvalid"
 		wantZh  = "无效的任务 ID"
 	)
 	h := newBackupTestHandlers(t)

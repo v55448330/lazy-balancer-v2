@@ -5,15 +5,15 @@ import { isCaddyApplyDegraded } from '@/utils/bulkApplyResult'
 interface SaveResultLike {
   message?: string
   /** 后端 message_key 透传（稳定语义键，语言无关）。退化 200 是双键集：
-   *  k_de8cc6aa=通用写端点；k_7d87740a=安全策略/默认策略 apply（重载失败）。
+   *  security.savedButCaddyApplyFailed=通用写端点；security.savedButCaddyReloadFailed=安全策略/默认策略 apply（重载失败）。
    *  判定单源在 utils/bulkApplyResult.isCaddyApplyDegraded，勿按单键硬编码。 */
   messageKey?: string
 }
 
-/** PUT /config 无变化成功响应的稳定语义键（后端 k_f724d3c8）：DB/运行配置均未
+/** PUT /config 无变化成功响应的稳定语义键（后端 caddy.configUnchanged）：DB/运行配置均未
  *  变更。message 按 Accept-Language 翻译（zh「配置无变化」/ en「No configuration
  *  changes」），字面量比较在 en 下必然失配——三张设置卡统一走本判据。 */
-const CONFIG_UNCHANGED_MESSAGE_KEY = 'k_f724d3c8'
+const CONFIG_UNCHANGED_MESSAGE_KEY = 'caddy.configUnchanged'
 
 /** 「配置无变化」判定单源：语言无关语义键。无键旧响应按未变化=未知处理（false，
  *  回落「保存成功」是历史行为，不臆测）。 */

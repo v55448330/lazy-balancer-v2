@@ -319,7 +319,7 @@ func rejectWriteDuringImport(c *gin.Context, action string) bool {
 		return false
 	}
 	action = strings.ReplaceAll(action, "（配置导入进行中）", "")
-	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.Tf(c, "k_9118ba7d", action)})
+	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.Tf(c, "backup.importInProgressActionNotAllowed", action)})
 	return true
 }
 
@@ -535,7 +535,7 @@ func respondImportBeginError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
-	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c2f40aab"), MessageKey: "k_c2f40aab"})
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "backup.importSessionStartFailed"), MessageKey: "backup.importSessionStartFailed"})
 }
 
 func (session *configImportSession) close() {
@@ -812,16 +812,16 @@ func (session *configImportSession) indeterminateCleanupNotice() importWarning {
 		return importWarning{}
 	}
 	if len(plan.disappeared) == 0 {
-		return importWarn("k_437730e3")
+		return importWarn("backup.importCommitIndeterminateLeftoverCertCleanupRechecked")
 	}
 	gone, err := absentRuleIDs(session.cleanupContext(), db.DB, plan.disappeared)
 	if err != nil {
-		return importWarn("k_a4725e7f", err)
+		return importWarn("backup.importCommitIndeterminateRuleCleanupRecheckFailed", err)
 	}
 	if len(gone) == 0 {
-		return importWarn("k_d6d521a6")
+		return importWarn("backup.importCommitIndeterminateRulesStillPresentNoCleanup")
 	}
-	return importWarn("k_a71e068e", len(gone))
+	return importWarn("backup.importCommitIndeterminateRulesRemovedCleanupPending", len(gone))
 }
 
 func (session *configImportSession) commit(affectedRuleIDs []string, certificates []importCertificate) error {

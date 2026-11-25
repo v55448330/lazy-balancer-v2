@@ -724,7 +724,7 @@ const handleSave = async (): Promise<void> => {
     // 无需重载）：固定「保存成功」词条会把两者说成同一件事。
     const savedMessage = saved.message || ''
     // 诚实提示（v2.3.2 用户反馈）：无变化时不得谎报「保存成功」。
-    // 判定：预览未变更（!changed）或后端语义键=k_f724d3c8（语言无关；原按
+    // 判定：预览未变更（!changed）或后端语义键=caddy.configUnchanged（语言无关；原按
     // t(noChanges) 前缀比较，en 下与后端 en 文案虽同源但耦合译文、zh 下亦然——
     // 语义键是稳定判据）。
     if (!changed || isConfigUnchanged(saved as unknown as { message?: string; messageKey?: string })) {

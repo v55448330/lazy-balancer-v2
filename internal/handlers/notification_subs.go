@@ -140,7 +140,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	catalogByID := map[string]struct{}{}
@@ -155,12 +155,12 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 	ops := make([]subOp, 0, len(req.Items))
 	for _, item := range req.Items {
 		if _, ok := catalogByID[item.EventType]; !ok {
-			msg := apimsg.Tf(c, "k_74125a73", item.EventType)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg, MessageKey: "k_74125a73"})
+			msg := apimsg.Tf(c, "notify.subscriptionEventNotInCatalog", item.EventType)
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg, MessageKey: "notify.subscriptionEventNotInCatalog"})
 			return
 		}
 		if item.MinLevel != "" && !validSubLevel(item.MinLevel) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3ae60346"), MessageKey: "k_3ae60346"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "notify.invalidSubscriptionLevel"), MessageKey: "notify.invalidSubscriptionLevel"})
 			return
 		}
 		ops = append(ops, subOp{eventType: item.EventType, minLevel: item.MinLevel, bodyTemplate: item.BodyTemplate})

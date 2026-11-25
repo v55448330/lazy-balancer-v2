@@ -45,7 +45,7 @@ func configuredRequestBodyBytes() int64 {
 func guardConfiguredJSONBody(c *gin.Context) bool {
 	limit := configuredRequestBodyBytes()
 	if c.Request.ContentLength > limit {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "common.requestBodyTooLarge"), MessageKey: "common.requestBodyTooLarge"})
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
@@ -59,11 +59,11 @@ func guardConfiguredJSONBody(c *gin.Context) bool {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			// 与 ContentLength 预检同文案：同一「请求体过大」事实不分读法。
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "common.requestBodyTooLarge"), MessageKey: "common.requestBodyTooLarge"})
 			return false
 		}
 		// 读失败（连接中断/传输错误）：该批不可解析，与 binding 失败同口径 400。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return false
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))

@@ -51,7 +51,7 @@ func TestMCPGlobalSwitchGuardDisabledReturns503(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if payload.MessageKey != "k_963a42ce" || payload.Message != "MCP 已停用" {
+	if payload.MessageKey != "apikey.mcpDisabled" || payload.Message != "MCP 已停用" {
 		t.Errorf("message=%q key=%q, want 停用文案", payload.Message, payload.MessageKey)
 	}
 }

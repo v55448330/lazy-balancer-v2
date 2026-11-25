@@ -1,4 +1,4 @@
-// 退化 200 的语言无关判定：showSaveResult 首选 messageKey=k_de8cc6aa（en
+// 退化 200 的语言无关判定：showSaveResult 首选 messageKey=security.savedButCaddyApplyFailed（en
 // 文案无 zh 标记也必须常驻警告），zh 标记仅作无键旧响应兜底；普通成功走
 // mfaAwareSuccess；退化 key + 空 message 时回落文案仍按退化呈现（不静默）。
 //
@@ -17,7 +17,7 @@ const { CADDY_APPLY_FAILED_MARKER } = await import('../src/utils/bulkApplyResult
 test('en 退化 200（messageKey 判定）：无 zh 标记也必须常驻警告', () => {
   resetCalls()
   const message = 'Policy saved; but Caddy config apply failed: reload timeout'
-  showSaveResult({ message, messageKey: 'k_de8cc6aa' }, 'Saved')
+  showSaveResult({ message, messageKey: 'security.savedButCaddyApplyFailed' }, 'Saved')
   assert.deepEqual(calls, [{ fn: 'ElMessage', arg: { type: 'warning', message, duration: 0, showClose: true } }])
 })
 test('zh 标记兜底（无 messageKey 的旧响应）：仍走常驻警告', () => {
@@ -33,6 +33,6 @@ test('普通成功（en 文案 + 非退化 key）走 mfaAwareSuccess', () => {
 })
 test('退化 key + 空 message：回落文案仍按退化呈现（不静默）', () => {
   resetCalls()
-  showSaveResult({ messageKey: 'k_de8cc6aa' }, 'Saved')
+  showSaveResult({ messageKey: 'security.savedButCaddyApplyFailed' }, 'Saved')
   assert.deepEqual(calls, [{ fn: 'ElMessage', arg: { type: 'warning', message: 'Saved', duration: 0, showClose: true } }])
 })

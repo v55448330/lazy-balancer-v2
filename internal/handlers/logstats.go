@@ -627,20 +627,20 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 
 	infos := []LogStorageInfo{
-		{Key: "audit", Name: "操作日志", KeepCount: 0, DBBacked: true, ConfigSource: apimsg.T(c, "k_1c5a5dd2")},
-		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitBytes: auditLogLimit, ConfigSource: apimsg.T(c, "k_1c5a5dd2")},
-		{Key: "certjob", Name: "证书任务日志", LimitBytes: taskLogLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "k_a842fc6f")},
-		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "k_2784868e", "tasks/crs.log")},
-		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "k_2784868e", "tasks/ip2region.log")},
-		{Key: "threat_update", Name: "威胁库更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "k_2784868e", "tasks/threat.log")},
-		{Key: "crawlerbot_update", Name: "爬虫地址库更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "k_2784868e", "tasks/crawlerbot-update.log")},
-		{Key: "runtime", Name: "运行日志", LimitBytes: runtimeLogLimit, KeepCount: 0, RetentionNote: apimsg.T(c, "k_7a8d7d93"), ConfigSource: apimsg.T(c, "k_e1eefb8b")},
-		{Key: "caddy", Name: "Caddy 运行日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "k_f4f4504f")},
-		{Key: "caddy_runtime", Name: "Caddy 运行时日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "k_f4f4504f")},
-		{Key: "caddy_tls", Name: "Caddy TLS 日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "k_f4f4504f")},
-		{Key: "caddy_server", Name: "Caddy HTTP 服务器日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "k_f4f4504f")},
-		{Key: "caddy_proxy", Name: "Caddy 反向代理日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "k_f4f4504f")},
-		{Key: "rule_access", Name: "规则访问日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "k_f4f4504f")},
+		{Key: "audit", Name: "操作日志", KeepCount: 0, DBBacked: true, ConfigSource: apimsg.T(c, "system.logRetentionConfigSourceBasicSettings")},
+		{Key: "security_events", Name: "安全事件", KeepCount: 0, LimitBytes: auditLogLimit, ConfigSource: apimsg.T(c, "system.logRetentionConfigSourceBasicSettings")},
+		{Key: "certjob", Name: "证书任务日志", LimitBytes: taskLogLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "system.logSizeConfigSourceBasicTaskLog")},
+		{Key: "crs_update", Name: "CRS 更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "system.logConfigSourceUnifiedTaskLog", "tasks/crs.log")},
+		{Key: "ip2region_update", Name: "IP 库更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "system.logConfigSourceUnifiedTaskLog", "tasks/ip2region.log")},
+		{Key: "threat_update", Name: "威胁库更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "system.logConfigSourceUnifiedTaskLog", "tasks/threat.log")},
+		{Key: "crawlerbot_update", Name: "爬虫地址库更新日志", LimitBytes: taskLogLimit, KeepCount: 1, ConfigSource: apimsg.Tf(c, "system.logConfigSourceUnifiedTaskLog", "tasks/crawlerbot-update.log")},
+		{Key: "runtime", Name: "运行日志", LimitBytes: runtimeLogLimit, KeepCount: 0, RetentionNote: apimsg.T(c, "system.runtimeLogRetentionNote"), ConfigSource: apimsg.T(c, "system.logSizeConfigSourceBasicRuntime")},
+		{Key: "caddy", Name: "Caddy 运行日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "system.logSizeConfigSourceCaddyGlobal")},
+		{Key: "caddy_runtime", Name: "Caddy 运行时日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "system.logSizeConfigSourceCaddyGlobal")},
+		{Key: "caddy_tls", Name: "Caddy TLS 日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "system.logSizeConfigSourceCaddyGlobal")},
+		{Key: "caddy_server", Name: "Caddy HTTP 服务器日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "system.logSizeConfigSourceCaddyGlobal")},
+		{Key: "caddy_proxy", Name: "Caddy 反向代理日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "system.logSizeConfigSourceCaddyGlobal")},
+		{Key: "rule_access", Name: "规则访问日志", LimitBytes: caddyLimit, KeepCount: logRotatedBackups, ConfigSource: apimsg.T(c, "system.logSizeConfigSourceCaddyGlobal")},
 		// 原 coraza_audit 行删除——前端零消费方
 		// （LogStorageBar 仅 security_events/rule_access 两键），且与
 		// security_events 行同文件同统计，纯重复死面；audit_log_size_mb 配置
@@ -656,7 +656,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 	// 保留口径与事件上限只在所请求行内读取（各一次点查）。
 	if info := byKey("audit"); info != nil && want("audit") {
-		info.RetentionNote = apimsg.Tf(c, "k_916311e9", strconv.FormatInt(globalConfigInt("audit_retention_months", db.DefaultAuditRetentionMonths), 10))
+		info.RetentionNote = apimsg.Tf(c, "system.auditLogRetentionNote", strconv.FormatInt(globalConfigInt("audit_retention_months", db.DefaultAuditRetentionMonths), 10))
 	}
 	if info := byKey("security_events"); info != nil && want("security_events") {
 		// 安全事件行文案/行帽由 services 单源生成（显式
@@ -836,7 +836,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 				Key: key, Name: task.Name + "日志",
 				SizeBytes: active, RotatedBytes: rotated, RotatedCount: rotCount,
 				LimitBytes: taskLogLimit, KeepCount: keep,
-				ConfigSource: apimsg.Tf(c, "k_2784868e", filepath.Base(path)),
+				ConfigSource: apimsg.Tf(c, "system.logConfigSourceUnifiedTaskLog", filepath.Base(path)),
 			})
 		}
 	}
@@ -846,7 +846,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		// 文件名改为可逆编码（合法字母表原样、其余字符 %hex），含点等 v2 导入
 		// ID 的日志因此可读。这里只保留路径穿越形状的拒绝；文件名一律经
 		// services.RuleLogFileComponent 生成，输出恒为安全字符集。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_f7451d72"), MessageKey: "k_f7451d72"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.invalidRuleId"), MessageKey: "security.invalidRuleId"})
 		return
 	}
 	if info := byKey("certjob"); info != nil && want("certjob") {

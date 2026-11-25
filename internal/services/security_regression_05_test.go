@@ -382,8 +382,8 @@ func TestThreatIplistHasEntries_fastFirstWithoutExpansion(t *testing.T) {
 // en 译文都在 catalog——缺任一侧英文用户都会看到中文。
 func TestClusterModeSwitchMessages_catalogBilingual(t *testing.T) {
 	cases := []struct{ key, zh string }{
-		{"k_f388eab8", "已切换为从节点，等待主节点审批"},
-		{"k_2a7d816f", "已切换为从节点，等待主节点审批；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"},
+		{"cluster.switchedToSlaveAwaitingApproval", "已切换为从节点，等待主节点审批"},
+		{"cluster.switchedToSlaveAwaitingApprovalInsecureHttp", "已切换为从节点，等待主节点审批；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"},
 	}
 	for _, tc := range cases {
 		if got := i18n.T(i18n.ZH, tc.key); got != tc.zh {

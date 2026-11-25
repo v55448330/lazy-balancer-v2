@@ -899,7 +899,7 @@ const handleSave = async () => {
       })
     }
     const saveResp = await request.put('/config', payload)
-    // 无变化判定走语言无关 messageKey（k_f724d3c8）：原 zh 字面量 includes 在 en
+    // 无变化判定走语言无关 messageKey（caddy.configUnchanged）：原 zh 字面量 includes 在 en
     // 下恒失配 → 无变化被谎报为「保存成功」。
     if (isConfigUnchanged(saveResp as unknown as { message?: string; messageKey?: string })) {
       ElMessage.info((saveResp as unknown as { message?: string }).message || t('app.settings.freeCerts.messages.noChanges'))

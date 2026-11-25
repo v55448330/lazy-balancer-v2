@@ -53,7 +53,7 @@ func TestCancelSystemTask_runningNonCancelableNamesTheRealReason(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.MessageKey != "k_44b8c98f" {
+	if resp.MessageKey != "system.taskCancelNotSupported" {
 		t.Fatalf("不可取消任务的取消拒绝必须点名「该任务不支持手动取消」: key=%q message=%q", resp.MessageKey, resp.Message)
 	}
 	if strings.Contains(resp.Message, "未在运行") {
@@ -70,7 +70,7 @@ func TestCancelSystemTask_runningNonCancelableNamesTheRealReason(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/system/tasks/t-cancel-idle/cancel", nil))
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "k_9dd23c40") {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "system.taskNotRunningOrNotCancelable") {
 		t.Fatalf("可取消但未运行的任务应保持「任务未在运行」: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

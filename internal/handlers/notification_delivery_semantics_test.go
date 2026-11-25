@@ -107,7 +107,7 @@ func TestNotificationDeliveries_isTestFieldAndPartialFilter(t *testing.T) {
 
 	// 非法状态仍 400（白名单扩容不放松校验）
 	status, out = doNotifyRequest(t, r, http.MethodGet, "/notification/deliveries?status=bogus", "")
-	if status != http.StatusBadRequest || out["message_key"] != "k_0d569dd0" {
+	if status != http.StatusBadRequest || out["message_key"] != "notify.unsupportedDeliveryStatusFilter" {
 		t.Fatalf("非法 status status=%d body=%v", status, out)
 	}
 }
@@ -126,7 +126,7 @@ func TestResendNotificationDelivery_failedOnlyAndAuditDetail(t *testing.T) {
 
 	// failed_only=true 且 partial → 仅失败通道入 retry_channel_ids
 	status, out := doNotifyRequest(t, r, http.MethodPost, fmt.Sprintf("/notification/deliveries/%d/resend", id), `{"failed_only":true}`)
-	if status != http.StatusOK || out["message_key"] != "k_07b47533" {
+	if status != http.StatusOK || out["message_key"] != "notify.resendAccepted" {
 		t.Fatalf("failed_only resend status=%d body=%v", status, out)
 	}
 	var retryIDs, dbStatus string

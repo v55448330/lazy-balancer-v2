@@ -236,7 +236,7 @@ func tlsCertificateNotes(certPEM, keyPEM, domain string) importWarnings {
 		}); verr != nil {
 			var unknownAuthority x509.UnknownAuthorityError
 			if errors.As(verr, &unknownAuthority) {
-				warnings = append(warnings, importWarn("k_64f5881f"))
+				warnings = append(warnings, importWarn("cert.certChainPossiblyIncomplete"))
 			}
 		}
 	}
@@ -246,9 +246,9 @@ func tlsCertificateNotes(certPEM, keyPEM, domain string) importWarnings {
 	// 规则保存路径却丢弃未用。
 	now := time.Now()
 	if now.After(leaf.NotAfter) {
-		warnings = append(warnings, importWarn("k_233440d6", leaf.NotAfter.In(services.CurrentLocation()).Format("2006-01-02")))
+		warnings = append(warnings, importWarn("cert.certExpired", leaf.NotAfter.In(services.CurrentLocation()).Format("2006-01-02")))
 	} else if now.Before(leaf.NotBefore) {
-		warnings = append(warnings, importWarn("k_4167ea7d", leaf.NotBefore.In(services.CurrentLocation()).Format("2006-01-02")))
+		warnings = append(warnings, importWarn("cert.certNotYetValid", leaf.NotBefore.In(services.CurrentLocation()).Format("2006-01-02")))
 	}
 	for _, name := range strings.Split(domain, ",") {
 		name = strings.TrimSpace(name)
@@ -256,7 +256,7 @@ func tlsCertificateNotes(certPEM, keyPEM, domain string) importWarnings {
 			continue
 		}
 		if !tlsCertCoversDomain(leaf, name) {
-			warnings = append(warnings, importWarn("k_f24a01f7"))
+			warnings = append(warnings, importWarn("cert.certDoesNotCoverRuleDomain"))
 			break
 		}
 	}

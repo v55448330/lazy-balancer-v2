@@ -1,11 +1,13 @@
 // Package i18n 提供后端 API 消息的最小双语能力:语言协商、词条目录、
 // 服务层中文错误串的模板级英文翻译。设计原则:
 //   - 中文为母本(fallback),英文目录缺译时一律回落,绝不丢消息
-//   - 词条键由 codemod 生成(k_<hash>),人工不可手写新键(走 Register)
+//   - 词条键是语义键(域名.驼峰名,如 rule.versionConflict):描述"是哪条消息",不含措辞,
+//     是前后端之间的稳定契约;新增词条在 catalog_manual.go 登记 zh/en 成对
 package i18n
 
 import (
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +28,15 @@ var (
 	hdrMu    sync.Mutex
 	hdrCache = map[string]string{} // Accept-Language 头 -> lang(热路径缓存)
 )
+
+// messageKeyPattern 消息键的形态:小写域名 + 一个点 + 小写字母开头的驼峰名(至少两位),
+// 如 rule.versionConflict。键描述"是哪条消息",不含措辞——改文案键不变,前端可按键取文案。
+var messageKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+$`)
+
+// IsMessageKey 报告 s 是否为消息键的形态。
+func IsMessageKey(s string) bool {
+	return messageKeyPattern.MatchString(s)
+}
 
 // CtxLangKey 为语言在 gin 上下文中的键;FromCtx 安全取用。
 const CtxLangKey = "i18n.lang"

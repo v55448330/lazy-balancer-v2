@@ -1354,7 +1354,7 @@ const runApplyDefaults = async (): Promise<void> => {
     const settled = defaultsFlowSettled(true)
     defaultsPhase.value = settled.phase
     defaultsApplyFailed.value = settled.failed
-    // 退化 200（k_7d87740a：DB 已提交但重载 Caddy 失败）必须走 showSaveResult
+    // 退化 200（security.savedButCaddyReloadFailed：DB 已提交但重载 Caddy 失败）必须走 showSaveResult
     // 的常驻警告——原实现恒 ElMessage.success，重载失败被伪装成成功、用户
     // 无从得知策略尚未生效。普通成功仍走 MFA 感知提示。
     showSaveResult(res, t('app.security.policies.defaults.doneToast'))

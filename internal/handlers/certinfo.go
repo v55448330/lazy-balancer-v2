@@ -40,7 +40,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		// 与英文 tag：本端点在只读白名单（任何只读凭据可触发），响应固定中文
 		// 文案，细节只进运行日志。
 		services.Logf("warn", "GetRulesCertInfo: 请求体校验失败: %v", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.invalidRequestParams"), MessageKey: "common.invalidRequestParams"})
 		return
 	}
 
@@ -51,7 +51,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 
 	// Limit batch size to prevent abuse
 	if len(req.CaddyIDs) > 200 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d69d3a01"), MessageKey: "k_d69d3a01"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.ruleCertInfoCaddyIdsTooMany"), MessageKey: "cert.ruleCertInfoCaddyIdsTooMany"})
 		return
 	}
 

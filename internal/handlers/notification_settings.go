@@ -24,7 +24,7 @@ import (
 // 键值；secret 类只回布尔。
 func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "notify.settingsAdminOnly"), MessageKey: "notify.settingsAdminOnly"})
 		return
 	}
 	m := notify.GetSettings(
@@ -57,7 +57,7 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 // 在请求体中的键生效；secret 类传空串=清除。阈值整体校验 0<warn<critical。
 func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "notify.settingsAdminOnly"), MessageKey: "notify.settingsAdminOnly"})
 		return
 	}
 	// 通知设置（含全局 API / MCP 接入开关）只对主节点生效：从节点放行 =
@@ -87,7 +87,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 
@@ -102,7 +102,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	if req.SMTP != nil {
 		if req.SMTP.Port != nil && *req.SMTP.Port != "" {
 			if p, err := strconv.Atoi(*req.SMTP.Port); err != nil || p < 1 || p > 65535 {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d37587be"), MessageKey: "k_d37587be"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "notify.smtpPortInvalid"), MessageKey: "notify.smtpPortInvalid"})
 				return
 			}
 		}
@@ -157,7 +157,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	// warn 不得低于 info 起点（否则窗口内先 warn 后 info，级别倒序）；critical
 	// 必须严格高于 warn。写入侧拒绝而非静默抬升——GET 回读与保存值必须一致。
 	if warnAt < notify.MinBlockedWarnAt || criticalAt <= warnAt {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_04f0eea4"), MessageKey: "k_04f0eea4"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "notify.attackThresholdsInvalid"), MessageKey: "notify.attackThresholdsInvalid"})
 		return
 	}
 	if req.AttackWarnAt != nil {
@@ -168,7 +168,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	}
 
 	if len(changed) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	if err := notify.SetSettings(updates); err != nil {
@@ -177,14 +177,14 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	}
 	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail("变更键: "+strings.Join(changed, ","), "", services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtNotificationCfgChanged, Fields: map[string]string{"1": c.GetString("username")}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ce6e6687"), MessageKey: "k_ce6e6687"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "notify.settingsSaved"), MessageKey: "notify.settingsSaved"})
 }
 
 // TestSMTPSettings POST /notification/settings/smtp-test——SMTP 连通性测试
 // （管理员）：test_to 非空时发标记邮件到指定收件人，空=仅握手+AUTH。
 func (h *Handlers) TestSMTPSettings(c *gin.Context) {
 	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "notify.settingsAdminOnly"), MessageKey: "notify.settingsAdminOnly"})
 		return
 	}
 	var req struct {
@@ -202,7 +202,7 @@ func (h *Handlers) TestSMTPSettings(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
@@ -212,8 +212,8 @@ func (h *Handlers) TestSMTPSettings(c *gin.Context) {
 		draft = &notify.SMTPDraft{Host: req.Host, Port: req.Port, User: req.User, Pass: req.Pass, From: req.From, TLS: req.TLS, Insecure: req.Insecure}
 	}
 	if err := notify.SmtpConnectivityTest(ctx, req.TestTo, draft); err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_8e353bc9", err.Error()), MessageKey: "k_8e353bc9"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "notify.testMessageSendFailed", err.Error()), MessageKey: "notify.testMessageSendFailed"})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4bde3724"), MessageKey: "k_4bde3724"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "notify.testMessageSent"), MessageKey: "notify.testMessageSent"})
 }

@@ -2138,7 +2138,7 @@ const handleSave = async () => {
         ElMessage.error(t('app.settings.basic.messages.tlsSaveFail', { reason }))
       }
     } else {
-      // 无变化判定走语言无关 messageKey（k_f724d3c8）：原 zh 字面量 includes 在 en
+      // 无变化判定走语言无关 messageKey（caddy.configUnchanged）：原 zh 字面量 includes 在 en
       // 下恒失配 → 无变化被谎报为「保存成功」。无变化按 info 呈现后端如实文案。
       const message = (saveResp as unknown as { message?: string }).message ?? ''
       if (isConfigUnchanged(saveResp as unknown as { message?: string; messageKey?: string })) {

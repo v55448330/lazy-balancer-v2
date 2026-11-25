@@ -13,12 +13,12 @@ import { tSafe as t } from '../i18n/tSafe.ts'
  *  应用失败。判定首选此键——message 按 Accept-Language 翻译，en 模板不含 zh 标记。
  *
  *  两个键语义同为「已提交但 Caddy 未生效」，只是后端端点族不同：
- *    k_de8cc6aa=「已保存；但 Caddy 配置应用失败」（通用写端点）
- *    k_7d87740a=「已保存，但重载 Caddy 配置失败」（安全策略/默认策略 apply 端点，
+ *    security.savedButCaddyApplyFailed=「已保存；但 Caddy 配置应用失败」（通用写端点）
+ *    security.savedButCaddyReloadFailed=「已保存，但重载 Caddy 配置失败」（安全策略/默认策略 apply 端点，
  *               如 POST /security/policies/apply-defaults；待下次成功重载生效）
  *  只登记其一 = 另一族端点的失败对 UI 不可见（apply-defaults 曾把重载失败当成功）。 */
-const CADDY_APPLY_FAILED_MESSAGE_KEY = 'k_de8cc6aa'
-const CADDY_APPLY_FAILED_MESSAGE_KEYS = [CADDY_APPLY_FAILED_MESSAGE_KEY, 'k_7d87740a'] as const
+const CADDY_APPLY_FAILED_MESSAGE_KEY = 'security.savedButCaddyApplyFailed'
+const CADDY_APPLY_FAILED_MESSAGE_KEYS = [CADDY_APPLY_FAILED_MESSAGE_KEY, 'security.savedButCaddyReloadFailed'] as const
 
 /** 后端退化 200 的 zh message 标记（DB 已提交、Caddy 应用失败）。仅作无键旧响应
  *  的兜底判据（分类语义同 utils/mfaErrors 的白名单）；不得作为唯一判据。 */

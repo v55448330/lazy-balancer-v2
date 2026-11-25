@@ -27,10 +27,10 @@ export const MFA_CREDENTIAL_REJECTION_MESSAGES: readonly string[] = [
 // i18n 后判定首选 message_key(稳定,与文案语言解耦);字面量仅作无键旧响应兜底。
 // 键与文案母本钉测见 tests/mfaErrors.spec.ts ↔ internal/i18n/catalog_gen.go。
 const MFA_CREDENTIAL_REJECTION_KEYS: readonly string[] = [
-  'k_345a8c4a',
-  'k_df527f47',
-  'k_5c5030a7',
-  'k_201b3428',
+  'auth.mfaVerificationCodeIncorrect',
+  'auth.mfaBindingVoidedTooManyAttempts',
+  'auth.mfaChallengeInvalidOrExpired',
+  'auth.mfaChallengeAlreadyUsed',
 ]
 
 /**

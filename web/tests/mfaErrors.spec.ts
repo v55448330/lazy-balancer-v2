@@ -34,10 +34,10 @@ test('401 豁免白名单与后端 mfa.go 文案逐字对齐（跨栈钉）', ()
   const go = repoCode('internal/handlers/mfa.go')
   const catalog = repoCode('internal/i18n/catalog_gen.go')
   for (const [key, msg] of [
-    ['k_345a8c4a', '验证码错误'],
-    ['k_df527f47', '验证码错误次数过多，绑定已作废，请重新开始绑定'],
-    ['k_5c5030a7', 'MFA 挑战无效或已过期，请重新登录'],
-    ['k_201b3428', 'MFA 挑战已被使用，请重新登录'],
+    ['auth.mfaVerificationCodeIncorrect', '验证码错误'],
+    ['auth.mfaBindingVoidedTooManyAttempts', '验证码错误次数过多，绑定已作废，请重新开始绑定'],
+    ['auth.mfaChallengeInvalidOrExpired', 'MFA 挑战无效或已过期，请重新登录'],
+    ['auth.mfaChallengeAlreadyUsed', 'MFA 挑战已被使用，请重新登录'],
   ] as const) {
     assert.ok(catalog.includes(`Register("${key}", "${msg}"`), `catalog 母本漂移:「${msg}」`)
     assert.ok(go.includes(`MessageKey: "${key}"`), `mfa.go 调用点不再使用键 ${key}(401 文案「${msg}」)——前端白名单失配`)
@@ -55,13 +55,15 @@ test('同端点的会话过期 401 不得被豁免（428→verify-step 窗口）
 // 误加一条真实会话文案会让过期令牌被判成「验证码错误」，用户卡在弹码循环。
 test('jwtAuth 会话 401 文案一律不豁免（真实过期/吊销/改密/凭证无效）', () => {
   const jwtAuth = section(repoCode('internal/middleware/middleware.go'), 'func jwtAuth(', 'func apiKeyAuth(')
-  const catalog = repoCode('internal/i18n/catalog_gen.go')
-  // i18n 后:middleware 消息=apimsg.T 调用点,扫描 message_key 键集,catalog 映射回 zh 母本对表
+  const catalog = repoCode('internal/i18n/catalog_gen.go') + repoCode('internal/i18n/catalog_manual.go')
+  // middleware 消息=apimsg.T 调用点：扫描 message_key 键集（域名.驼峰名），回目录取 zh 母本对表
   const keySet = [
-    ...new Set([...jwtAuth.matchAll(/"message_key": "(k_[a-f0-9]+)"/g)].map((m) => m[1])),
+    ...new Set([...jwtAuth.matchAll(/"message_key": "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"/g)].map((m) => m[1])),
   ]
   const zhOf = (key: string): string => {
-    const mm = catalog.match(new RegExp('Register\\("' + key + '", "((?:[^"\\\\]|\\\\.)*)"'))
+    // 键里带点：拼正则前转义，否则点会当通配符
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const mm = catalog.match(new RegExp('Register\\("' + escaped + '", "((?:[^"\\\\]|\\\\.)*)"'))
     return mm ? mm[1] : ''
   }
   const messages = keySet.map(zhOf)

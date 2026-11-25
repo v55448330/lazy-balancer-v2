@@ -120,7 +120,7 @@ func (h *Handlers) TicketLogin(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		recordTicketLoginFailure(c, "", "invalid_request")
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	// 装配缺失 fail-closed 必须晚于体积/格式门：公开端点的 413 预检是请求

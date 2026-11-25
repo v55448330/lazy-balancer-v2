@@ -26,7 +26,7 @@ func (h *Handlers) PostBindSession(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || (req.Type != "qq" && req.Type != "wx_clawbot") || req.ScannerID == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	uid := contextUserID(c)

@@ -735,41 +735,41 @@ func AutobanConfigReplaceEffectNote(old, new AutobanConfig, lang string) string 
 	if effect.resetCounters {
 		changed := make([]string, 0, 3)
 		if effect.windowChanged {
-			changed = append(changed, say("k_f51fda25", old.WindowMinutes, new.WindowMinutes))
+			changed = append(changed, say("security.autoBanStatsWindowChanged", old.WindowMinutes, new.WindowMinutes))
 		}
 		if effect.scopeChanged {
-			changed = append(changed, say("k_a5957fda", old.Scope, new.Scope))
+			changed = append(changed, say("security.autoBanStatsScopeChanged", old.Scope, new.Scope))
 		}
 		if effect.countingParamsChanged {
 			params := make([]string, 0, 3)
 			if old.CountingMode != new.CountingMode {
-				params = append(params, say("k_bc07f397", old.CountingMode, new.CountingMode))
+				params = append(params, say("security.autoBanCountingModeChanged", old.CountingMode, new.CountingMode))
 			}
 			if old.SuspicionMultiplier != new.SuspicionMultiplier {
-				params = append(params, say("k_e652808f",
+				params = append(params, say("security.autoBanSuspicionMultiplierChanged",
 					old.SuspicionMultiplier, new.SuspicionMultiplier))
 			}
 			if old.ConfirmFloorRatio != new.ConfirmFloorRatio {
-				params = append(params, say("k_5036bfda",
+				params = append(params, say("security.autoBanConfirmFloorRatioChanged",
 					old.ConfirmFloorRatio, new.ConfirmFloorRatio))
 			}
-			changed = append(changed, say("k_7fccba3a", strings.Join(params, listSep)))
+			changed = append(changed, say("security.autoBanEvidenceTierParamsChanged", strings.Join(params, listSep)))
 		}
-		parts = append(parts, strings.Join(changed, sep)+say("k_ca3c3bab"))
+		parts = append(parts, strings.Join(changed, sep)+say("security.autoBanStatsCountersCleared"))
 	} else if effect.recomputeReached {
-		parts = append(parts, say("k_e5903e21", old.Threshold, new.Threshold))
+		parts = append(parts, say("security.autoBanThresholdChangedReachedRecomputed", old.Threshold, new.Threshold))
 	}
 	if effect.disableFlushTransition {
-		parts = append(parts, say("k_922a8854"))
+		parts = append(parts, say("security.autoBanDisabledFinalizationDone"))
 	} else if effect.disableFlush {
-		parts = append(parts, say("k_dd8099ce"))
+		parts = append(parts, say("security.autoBanRemainsDisabledCleanupDone"))
 	} else if effect.loopToggled {
-		parts = append(parts, say("k_27b4fed8"))
+		parts = append(parts, say("security.autoBanEnabledSchedulerStarted"))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return say("k_1f352d1a") + strings.Join(parts, sep)
+	return say("security.autoBanConfigChanged") + strings.Join(parts, sep)
 }
 
 // AutobanEnabled 业务开关（EnabledFn 数据源，fail-closed：读库失败=已停止）。

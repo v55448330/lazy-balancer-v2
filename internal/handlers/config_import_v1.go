@@ -195,7 +195,7 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 		if len(tlsIndexes) == 0 || len(plainIndexes) == 0 {
 			continue
 		}
-		reason := importWarn("k_4047995d", port)
+		reason := importWarn("backup.importConflictTlsAndPlainSamePort", port)
 		for _, plainIndex := range plainIndexes {
 			reasons[plainIndex] = append(reasons[plainIndex], reason)
 			for _, tlsIndex := range tlsIndexes {
@@ -223,7 +223,7 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 			// 放行禁用自环行后该组合首次可达此分支。
 			if left.enabled && right.enabled {
 				if domain, hit := intersectFirst(rightIndex, leftIndex); hit {
-					reason = importWarn("k_06f94a25", domain)
+					reason = importWarn("backup.importConflictHttpDomainDuplicated", domain)
 				}
 			}
 		case left.protocol == "http" && right.protocol == "http" && left.listenPort != right.listenPort:
@@ -233,11 +233,11 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 			if left.enabled && right.enabled {
 				if left.listenPort == 80 && right.enableTLS && right.tlsHTTPRedirect {
 					if domain, hit := intersectFirst(rightIndex, leftIndex); hit {
-						reason = importWarn("k_6cab3806", domain)
+						reason = importWarn("backup.importConflictHttpDomainShadowedByRedirect", domain)
 					}
 				} else if right.listenPort == 80 && left.enableTLS && left.tlsHTTPRedirect {
 					if domain, hit := intersectFirst(leftIndex, rightIndex); hit {
-						reason = importWarn("k_6cab3806", domain)
+						reason = importWarn("backup.importConflictHttpDomainShadowedByRedirect", domain)
 					}
 				}
 			}
@@ -248,11 +248,11 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 			// 禁用 TCP 规则不渲染（caddy.go WHERE enabled=1）、无运行时端口占用，
 			// 不得把启用中的一方静默置禁用。
 			if left.enabled && right.enabled {
-				reason = importWarn("k_99a31c82", left.listenPort)
+				reason = importWarn("backup.importConflictTcpPortDuplicated", left.listenPort)
 			}
 		case left.protocol == "tcp" || right.protocol == "tcp":
 			if left.enabled && right.enabled {
-				reason = importWarn("k_e25b3624", left.listenPort)
+				reason = importWarn("backup.importConflictTcpAndHttpSamePort", left.listenPort)
 			}
 		}
 		if reason.isZero() {
@@ -384,7 +384,7 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 		f := p.Fields
 		strategy, mapped := mapV1BalancerStrategy(f.BalancerType)
 		if !mapped && f.BalancerType != "" {
-			warnings = append(warnings, importWarn("k_601d3128", f.ProxyName, strconv.Quote(f.BalancerType)))
+			warnings = append(warnings, importWarn("backup.importV1StrategyUnmappableDefaulted", f.ProxyName, strconv.Quote(f.BalancerType)))
 		}
 		rule := convertedRule{
 			Name: f.ProxyName,
@@ -410,7 +410,7 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 			rule.Protocol = "tcp"
 		}
 		if rule.Protocol == "http" && strings.TrimSpace(rule.Domain) == "" {
-			warnings = append(warnings, importWarn("k_64ab7fb0", f.ProxyName))
+			warnings = append(warnings, importWarn("backup.importRuleEmptyDomainSkipped", f.ProxyName))
 			continue
 		}
 		// 落库前把域名归一为规范形式（小写/punycode/去重/逗号无空格）：v1 导入
@@ -420,7 +420,7 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 		if rule.Protocol == "http" {
 			canonicalDomain, err := db.CanonicalDomains(rule.Domain)
 			if err != nil {
-				warnings = append(warnings, importWarn("k_edbaf122", f.ProxyName, strconv.Quote(f.ServerName), err))
+				warnings = append(warnings, importWarn("backup.importV1RuleDomainInvalidSkipped", f.ProxyName, strconv.Quote(f.ServerName), err))
 				continue
 			}
 			rule.Domain = canonicalDomain
@@ -485,11 +485,11 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 	var normalizations importWarnings
 	for index, rule := range rules {
 		if err := validatePort(rule.Protocol, rule.ListenPort); err != nil {
-			skips = append(skips, importWarn("k_2d634eaf", index+1, rule.Name, err))
+			skips = append(skips, importWarn("backup.importV1RuleInvalidSkipped", index+1, rule.Name, err))
 			continue
 		}
 		if rule.Protocol != "http" && rule.Protocol != "tcp" {
-			skips = append(skips, importWarn("k_36a641a5", index+1, rule.Name))
+			skips = append(skips, importWarn("backup.importV1RuleProtocolInvalid", index+1, rule.Name))
 			continue
 		}
 		if rule.Protocol == "http" {
@@ -497,7 +497,7 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 			for _, domain := range strings.Split(rule.Domain, ",") {
 				domain = strings.TrimSpace(domain)
 				if domain != "" && !isValidDomain(domain) {
-					skips = append(skips, importWarn("k_3112f593", index+1, rule.Name, strconv.Quote(domain)))
+					skips = append(skips, importWarn("backup.importV1RuleDomainInvalid", index+1, rule.Name, strconv.Quote(domain)))
 					domainBad = true
 					break
 				}
@@ -517,18 +517,18 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 					if upstream.Protocol == "tls" {
 						normalized = "https"
 					}
-					normalizations = append(normalizations, importWarn("k_735a8f5e", index+1, rule.Name, upstreamIndex+1, upstream.Protocol, normalized))
+					normalizations = append(normalizations, importWarn("backup.importV1HttpRuleUpstreamProtocolNormalized", index+1, rule.Name, upstreamIndex+1, upstream.Protocol, normalized))
 					upstream.Protocol = normalized
 				} else if rule.Protocol == "tcp" && (upstream.Protocol == "http" || upstream.Protocol == "https") {
 					normalized := "tcp"
 					if upstream.Protocol == "https" {
 						normalized = "tls"
 					}
-					normalizations = append(normalizations, importWarn("k_dcf9c45f", index+1, rule.Name, upstreamIndex+1, upstream.Protocol, normalized))
+					normalizations = append(normalizations, importWarn("backup.importV1TcpRuleUpstreamProtocolNormalized", index+1, rule.Name, upstreamIndex+1, upstream.Protocol, normalized))
 					upstream.Protocol = normalized
 				}
 			default:
-				skips = append(skips, importWarn("k_32e30624", index+1, rule.Name, upstreamIndex+1, strconv.Quote(upstream.Protocol)))
+				skips = append(skips, importWarn("backup.importV1UpstreamProtocolInvalid", index+1, rule.Name, upstreamIndex+1, strconv.Quote(upstream.Protocol)))
 				upstreamBad = true
 			}
 			if upstreamBad {
@@ -544,11 +544,11 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 		}
 		enabledUpstreams, err := validateRuleUpstreams(rule.Protocol, false, upstreams, true)
 		if err != nil {
-			skips = append(skips, importWarn("k_2d634eaf", index+1, rule.Name, err))
+			skips = append(skips, importWarn("backup.importV1RuleInvalidSkipped", index+1, rule.Name, err))
 			continue
 		}
 		if err := validateRuleHostHeader(rule.HostHeader); err != nil {
-			skips = append(skips, importWarn("k_2d634eaf", index+1, rule.Name, err))
+			skips = append(skips, importWarn("backup.importV1RuleInvalidSkipped", index+1, rule.Name, err))
 			continue
 		}
 		// 导入 INSERT 的 health_check_timeout 恒取 db.DefaultHealthCheckTimeout，
@@ -558,7 +558,7 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 		// 不区分主动/被动（被动熔断窗口同样由间隔派生）。
 		if minInterval := db.DefaultHealthCheckTimeout + 1; rule.HealthInt < minInterval {
 			rule.HealthInt = minInterval
-			normalizations = append(normalizations, importWarn("k_6b0cc379", index+1, rule.Name, minInterval, db.DefaultHealthCheckTimeout))
+			normalizations = append(normalizations, importWarn("backup.importV1HealthCheckIntervalRaised", index+1, rule.Name, minInterval, db.DefaultHealthCheckTimeout))
 		}
 		// TCP 规则在 v2 渲染侧不终结入站 TLS（buildTCPServer 不触碰 TLS
 		// 字段），v1 的 SSL 开关对 TCP 无意义；保留 enable_tls=1 + 空 manual 证书会因
@@ -568,14 +568,14 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 		if rule.Protocol == "tcp" && rule.EnableTLS {
 			rule.EnableTLS = false
 			rule.TLSCert, rule.TLSKey = "", ""
-			normalizations = append(normalizations, importWarn("k_61e13486", index+1, rule.Name))
+			normalizations = append(normalizations, importWarn("backup.importV1TcpRuleTlsTurnedOff", index+1, rule.Name))
 		}
 		// v1 SSL 规则导入后 tls_source 恒为 manual（tlsSource()）；启用但
 		// 证书/私钥为空的规则会在 TLS 端口明文服务（镜像 rule_features.go 保存/启用侧
 		// 口径），按 v1 风格软跳过并警告而非整包拒绝。
 		if rule.Enabled && rule.Protocol == "http" && rule.EnableTLS &&
 			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
-			skips = append(skips, importWarn("k_8ea54163", index+1, rule.Name))
+			skips = append(skips, importWarn("backup.importV1RuleTlsWithoutCertSkipped", index+1, rule.Name))
 			continue
 		}
 		// 禁用的空证书 SSL 行此前原样落库（enable_tls=1 + tls_source=
@@ -584,7 +584,7 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 		if !rule.Enabled && rule.Protocol == "http" && rule.EnableTLS &&
 			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 			rule.EnableTLS = false
-			normalizations = append(normalizations, importWarn("k_4ed6710d", index+1, rule.Name))
+			normalizations = append(normalizations, importWarn("backup.importV1DisabledRuleTlsTurnedOff", index+1, rule.Name))
 		}
 		// /：strategy 白名单与 80 端口
 		// +TLS 跳转自环门自导入循环前移至此——预览/导入共用同门，summary 计数
@@ -599,7 +599,7 @@ func validateConvertedV1Rules(rules []convertedRule, portGates ...func(string, i
 			HealthCheckInterval: rule.HealthInt, HealthCheckTimeout: db.DefaultHealthCheckTimeout,
 			EnabledUpstreamCount: enabledUpstreams, EnableCompress: rule.Compress, CompressTypes: "gzip",
 		}); validateErr != nil {
-			skips = append(skips, importWarn("k_2d634eaf", index+1, rule.Name, validateErr))
+			skips = append(skips, importWarn("backup.importV1RuleInvalidSkipped", index+1, rule.Name, validateErr))
 			continue
 		}
 		valid = append(valid, rule)
@@ -674,7 +674,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_a8188910", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "backup.importFileLoadFailed", apimsg.ErrMsg(c, err))})
 			return
 		}
 		body = raw
@@ -694,7 +694,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		c.Set("lbbak_payload", payload)
 	}
 	if len(body) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d1f91b35"), MessageKey: "k_d1f91b35"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.importFileEmpty"), MessageKey: "backup.importFileEmpty"})
 		return
 	}
 	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
@@ -744,17 +744,17 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		// 完全不含校验和的史前 v1 备份：导入照常（结构门全执行），预览必须
 		// 明确告知内容未经摘要校验——与导入侧审计警告同文案。
 		if chain.NoIntegrityChecksum {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "k_1c71d3a4"))
+			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importNoIntegrityChecksumOnlyStructurallyValidated"))
 		}
 		if crsTreeReplaced {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "k_fff391ed"))
+			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importCrsTreeReplacedPolicyRefsUnverified"))
 		}
 		if importUsername := c.GetString("username"); importUsername != "" && sectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], importUsername) {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "k_acbc4130"))
+			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.validateOperatorAccountNotInBackup"))
 		}
 		// 反向悬挂降级警告进预览(与导入 responseWarnings 同文案)。
 		if acmeDanglingImported > 0 {
-			validateWarnings = append(validateWarnings, apimsg.Tf(c, "k_5a6b172f", acmeDanglingImported))
+			validateWarnings = append(validateWarnings, apimsg.Tf(c, "backup.importBackupRulesDnsProviderDangling", acmeDanglingImported))
 		}
 		// 证书任务级 CA 提供商悬挂/禁用引用的归一警告（与导入同通道）。
 		validateWarnings = append(validateWarnings, chain.CertJobProviderWarnings.render(lang)...)
@@ -777,9 +777,9 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			hasWaf = payload.CRSTarGz != nil || payload.Xdb != nil || len(payload.ThreatIplists) > 0
 			if hasWaf {
 				if payload.CRSTarGz != nil || payload.Xdb != nil {
-					validateWarnings = append(validateWarnings, apimsg.T(c, "k_3f3a9de7"))
+					validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importLbbakCompleteWithRuleLibraryFiles"))
 				} else {
-					validateWarnings = append(validateWarnings, apimsg.T(c, "k_23ca6349"))
+					validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importLbbakHasOnlyThreatListFiles"))
 				}
 			}
 			// manifest 未登记的威胁库条目——预览/导入
@@ -792,13 +792,13 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		// （行级校验 → 版本表剔除 → 剔除后判据），此处只把同一事实呈现为
 		// 响应 warning，文案与导入侧共用常量。
 		if chain.WAFMetadataSkipped {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "k_15ae2f31"))
+			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importRuleLibraryVersionRecordsSkippedNoDataFile"))
 		}
 		if chain.WAFCRSMetadataSkipped {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "k_a8f33c4d"))
+			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importCrsVersionRecordSkippedNoDataFile"))
 		}
 		if chain.WAFXdbMetadataSkipped {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "k_81ef1989"))
+			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importIp2RegionVersionRecordSkippedNoDataFile"))
 		}
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {
@@ -837,9 +837,9 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			upstreamCount += len(r.Upstreams)
 		}
 		warnings := []string{
-			apimsg.T(c, "k_29089ac2"),
-			apimsg.T(c, "k_d4627f56"),
-			apimsg.T(c, "k_b60538b6"),
+			apimsg.T(c, "backup.importV1RulesOnly"),
+			apimsg.T(c, "backup.importV1CertificatesImportedAsManual"),
+			apimsg.T(c, "backup.importV1NginxSpecificConfigIgnored"),
 		}
 		warnings = append(warnings, allWarnings.render(lang)...)
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{
@@ -964,7 +964,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	if clearedBindings > 0 {
-		allWarnings = append(allWarnings, importWarn("k_f3564383", clearedBindings))
+		allWarnings = append(allWarnings, importWarn("backup.importV1PolicyBindingsCleared", clearedBindings))
 	}
 	userID := int(contextUserID(c))
 	imported := 0
@@ -976,7 +976,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
 			err = failImportAbort(c, session, "导入", "生成规则编号", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_77226237", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.importRuleIdGenerateFailed", apimsg.ErrMsg(c, err))})
 			return
 		}
 		affectedRuleIDs = append(affectedRuleIDs, caddyID)
@@ -1120,10 +1120,10 @@ func v1CertificateWarnings(r convertedRule, caddyID string) importWarnings {
 	var out importWarnings
 	for _, warning := range tlsCertificateNotes(r.TLSCert, r.TLSKey, r.Domain) {
 		if caddyID != "" {
-			out = append(out, importWarn("k_550e4adc", r.Name, caddyID, warning))
+			out = append(out, importWarn("backup.importRuleCertificateWarning", r.Name, caddyID, warning))
 			continue
 		}
-		out = append(out, importWarn("k_328102ef", r.Name, warning))
+		out = append(out, importWarn("backup.validateRuleCertificateWarning", r.Name, warning))
 	}
 	return out
 }

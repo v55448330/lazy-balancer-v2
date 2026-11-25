@@ -217,7 +217,7 @@ test('会话吊销标记同时命中导入/还原告警的中英文案', () => {
     assert.ok(mark, `${locale} 须有 restoreResult.sessionRevokeMark`)
     return mark
   })
-  for (const key of ['k_dffc3f29', 'k_23e13305']) {
+  for (const key of ['backup.importSystemDataSessionsRevoked', 'backup.restoreSystemDataSessionsRevoked']) {
     const line = catalog.split('\n').find((l) => l.includes(`"${key}"`)) ?? ''
     const texts = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1])
     assert.equal(texts.length, 3, `${key} 须为「键, 中文, 英文」三项`)

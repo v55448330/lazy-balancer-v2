@@ -103,8 +103,8 @@ func TestUpdateCertificateConfig_crossFamilyMaskedInheritanceStillRejected(t *te
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d body=%s, want 400（跨族掩码继承必须点名拒绝）", response.Code, response.Body.String())
 			}
-			if !strings.Contains(response.Body.String(), `"message_key":"k_ce55150e"`) {
-				t.Fatalf("body=%s, want 跨族守卫稳定语义键 k_ce55150e", response.Body.String())
+			if !strings.Contains(response.Body.String(), `"message_key":"cert.dnsCredentialFamilyProviderMismatch"`) {
+				t.Fatalf("body=%s, want 跨族守卫稳定语义键 cert.dnsCredentialFamilyProviderMismatch", response.Body.String())
 			}
 			var provider string
 			if err := db.DB.QueryRow("SELECT dns_provider FROM certificate_configs WHERE id=?", id).Scan(&provider); err != nil {

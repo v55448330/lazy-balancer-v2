@@ -1708,11 +1708,11 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	const collectorBodyLimit = 4096
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, collectorBodyLimit+1))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ae1fc209"), MessageKey: "k_ae1fc209"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.requestBodyReadFailed"), MessageKey: "security.requestBodyReadFailed"})
 		return
 	}
 	if len(body) > collectorBodyLimit {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_02bfce69"), MessageKey: "k_02bfce69"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "security.captureControlRequestBodyTooLarge"), MessageKey: "security.captureControlRequestBodyTooLarge"})
 		return
 	}
 	target := strings.TrimRight(h.cfg.CaddyAdminURL, "/") + "/lb/traffic-collector"
@@ -1727,7 +1727,7 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	}
 	if len(bytes.TrimSpace(body)) > 0 {
 		if err := json.Unmarshal(body, &collectorReq); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_0d2525e7"), MessageKey: "k_0d2525e7"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.captureControlRequestBodyInvalid"), MessageKey: "security.captureControlRequestBodyInvalid"})
 			return
 		}
 	}
@@ -1743,14 +1743,14 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	}
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target, bytes.NewReader(body))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_2de3d055"), MessageKey: "k_2de3d055"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.captureControlRequestBuildFailed"), MessageKey: "security.captureControlRequestBuildFailed"})
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := threatAdminClient.Do(req)
 	if err != nil {
 		services.Logf("warn", "threat-screen collector: admin request failed: %v", err)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_71c129b9"), MessageKey: "k_71c129b9"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "security.captureControlUnreachable"), MessageKey: "security.captureControlUnreachable"})
 		return
 	}
 	defer resp.Body.Close()
@@ -1761,12 +1761,12 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, collectorBodyLimit+1))
 	if readErr != nil {
 		services.Logf("warn", "threat-screen collector: read admin body failed: %v", readErr)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_3d497a6c"), MessageKey: "k_3d497a6c"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "security.captureControlResponseReadFailed"), MessageKey: "security.captureControlResponseReadFailed"})
 		return
 	}
 	if len(respBody) > collectorBodyLimit {
 		services.Logf("warn", "threat-screen collector: admin response exceeds %d bytes", collectorBodyLimit)
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "k_74f1ae29"), MessageKey: "k_74f1ae29"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "security.captureControlResponseTooLarge"), MessageKey: "security.captureControlResponseTooLarge"})
 		return
 	}
 	// 先转发成功再落本地：admin 失败（503/400）时本地租约保持原状，
@@ -1803,13 +1803,13 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	}
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, target, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_40bb937c"), MessageKey: "k_40bb937c"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventStreamRequestBuildFailed"), MessageKey: "security.eventStreamRequestBuildFailed"})
 		return
 	}
 	resp, err := threatAdminClient.Do(req)
 	if err != nil {
 		services.Logf("warn", "threat-screen events: admin request failed: %v", err)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_43766663"), MessageKey: "k_43766663"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "security.eventStreamUnreachable"), MessageKey: "security.eventStreamUnreachable"})
 		return
 	}
 	defer resp.Body.Close()
@@ -1821,10 +1821,10 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	if resp.StatusCode != http.StatusOK {
 		services.Logf("warn", "threat-screen events: admin status %d", resp.StatusCode)
 		if resp.StatusCode >= 500 {
-			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_43766663"), MessageKey: "k_43766663"})
+			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "security.eventStreamUnreachable"), MessageKey: "security.eventStreamUnreachable"})
 			return
 		}
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "k_22a58ac2"), MessageKey: "k_22a58ac2"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "security.eventStreamUpstreamFailed"), MessageKey: "security.eventStreamUpstreamFailed"})
 		return
 	}
 	// 对齐同族读端点（GetCRSRuleContent/GetCRSSetupConfig 的 413 口径）
@@ -1833,11 +1833,11 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if err != nil {
 		services.Logf("warn", "threat-screen events: read body failed: %v", err)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_43766663"), MessageKey: "k_43766663"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "security.eventStreamUnreachable"), MessageKey: "security.eventStreamUnreachable"})
 		return
 	}
 	if len(body) > 1<<20 {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_60b189b4"), MessageKey: "k_60b189b4"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "security.eventStreamResponseTooLarge"), MessageKey: "security.eventStreamResponseTooLarge"})
 		return
 	}
 	// 应用统一信封：Caddy admin 返回裸 JSON，前端 request 封装按 data 字段
@@ -1858,7 +1858,7 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		services.Logf("warn", "threat-screen events: decode failed: %v", err)
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "k_20b183a9"), MessageKey: "k_20b183a9"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "security.eventStreamResponseFormatInvalid"), MessageKey: "security.eventStreamResponseFormatInvalid"})
 		return
 	}
 	// 国名与聚合端点/前端质心表同口径（geoipnames 单源）：Caddy 发射 xdb
@@ -2156,7 +2156,7 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	trackErr(terr)
 	if firstErr != nil {
 		services.Logf("error", "threat-screen query failed: %v", firstErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_69852638"), MessageKey: "k_69852638"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.threatScreenQueryFailed"), MessageKey: "security.threatScreenQueryFailed"})
 		return
 	}
 
@@ -2181,7 +2181,7 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	// 产品语义保持整卡 500：不引入「部分卡片降级」的隐式可用性位。
 	if firstErr != nil {
 		services.Logf("error", "threat-screen query failed: %v", firstErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_69852638"), MessageKey: "k_69852638"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.threatScreenQueryFailed"), MessageKey: "security.threatScreenQueryFailed"})
 		return
 	}
 	recentRate := float64(int(float64(blocked5)/5.0*10+0.5)) / 10
@@ -2321,7 +2321,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 	}
 	var maxID int64
 	if err := db.MetricsDB.QueryRow(`SELECT COALESCE(MAX(id),0) FROM security_events`).Scan(&maxID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventsQueryFailed"), MessageKey: "security.eventsQueryFailed"})
 		return
 	}
 	if baseline {
@@ -2368,7 +2368,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 		LIMIT 200`, sinceID, maxID, toastSummaryMaxEvents)
 	if err != nil {
 		services.Logf("error", "security event toast summary: query failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventsQueryFailed"), MessageKey: "security.eventsQueryFailed"})
 		return
 	}
 	defer rows.Close()
@@ -2389,7 +2389,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 		var avgDuration float64
 		if err := rows.Scan(&ip, &action, &ruleTriggered, &ruleMsg, &count, &lastID, &avgDuration); err != nil {
 			services.Logf("error", "security event toast summary: scan failed: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventsQueryFailed"), MessageKey: "security.eventsQueryFailed"})
 			return
 		}
 		if isMissingOrReservedIP(ip) {
@@ -2417,7 +2417,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		services.Logf("error", "security event toast summary: rows iteration failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventsQueryFailed"), MessageKey: "security.eventsQueryFailed"})
 		return
 	}
 	groups := make([]*summary, 0, len(merged))
@@ -2481,7 +2481,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 	if sinceID > 0 {
 		var maxID int64
 		if err := db.MetricsDB.QueryRow(`SELECT COALESCE(MAX(id),0) FROM security_events`).Scan(&maxID); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventsQueryFailed"), MessageKey: "security.eventsQueryFailed"})
 			return
 		}
 		if sinceID > maxID {
@@ -2566,7 +2566,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 			args = append(args, pageLimit)
 			scanned, lastID := scanPage(query, args...)
 			if scanFailed {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventsQueryFailed"), MessageKey: "security.eventsQueryFailed"})
 				return
 			}
 			if lastID > 0 {
@@ -2587,7 +2587,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 			pageLimit := limit - len(events)
 			scanned, lastID := scanPage(selectCols+` WHERE id > ? ORDER BY id ASC LIMIT ?`, cursor, pageLimit)
 			if scanFailed {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.eventsQueryFailed"), MessageKey: "security.eventsQueryFailed"})
 				return
 			}
 			if lastID > 0 {

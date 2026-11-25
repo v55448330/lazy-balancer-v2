@@ -51,7 +51,7 @@ func (h *Handlers) ListMCPSessions(c *gin.Context) {
 	query += ` ORDER BY s.last_seen DESC, s.session_id`
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 会话失败", err), MessageKey: "k_835205fe"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 会话失败", err), MessageKey: "apikey.mcpSessionsLoadFailed"})
 		return
 	}
 	defer rows.Close()
@@ -77,18 +77,18 @@ func (h *Handlers) DisconnectMCPSession(c *gin.Context) {
 	var ownerUserID, ownerKeyID int64
 	if err := db.DB.QueryRow(`SELECT user_id, api_key_id FROM mcp_sessions WHERE session_id=?`, sessionID).
 		Scan(&ownerUserID, &ownerKeyID); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_3ef73d3f"), MessageKey: "k_3ef73d3f"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "apikey.mcpSessionNotFound"), MessageKey: "apikey.mcpSessionNotFound"})
 		return
 	}
 	if _, err := mcpserver.DisconnectSession(sessionID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("断开 MCP 会话失败", err), MessageKey: "k_1b35f304"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("断开 MCP 会话失败", err), MessageKey: "apikey.mcpSessionDisconnectFailed"})
 		return
 	}
 	recordAudit(c, "断开", "MCP 会话",
 		"会话 "+sessionID+"（用户 #"+strconv.FormatInt(ownerUserID, 10)+
 			"，Key #"+strconv.FormatInt(ownerKeyID, 10)+"）强制断开")
 	notify.Publish(notify.Event{Type: notify.EvtMCPDisconnected, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("会话 #%s", c.Param("id"))}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_768f666d"), MessageKey: "k_768f666d"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "apikey.mcpSessionDisconnected"), MessageKey: "apikey.mcpSessionDisconnected"})
 }
 
 // mcpToolCallsDTO TOP 工具行。
@@ -110,7 +110,7 @@ func (h *Handlers) GetMCPStats(c *gin.Context) {
 	var todayCalls, totalErrors int64
 	if err := db.DB.QueryRow(`SELECT COALESCE(SUM(calls),0), COALESCE(SUM(errors),0)
 		FROM mcp_tool_stats WHERE date=?`, today).Scan(&todayCalls, &totalErrors); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "k_369f2da8"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
 		return
 	}
 	errorRate := 0.0
@@ -120,13 +120,13 @@ func (h *Handlers) GetMCPStats(c *gin.Context) {
 	var activeSessions int64
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM mcp_sessions
 		WHERE last_seen >= datetime('now', '-30 minutes')`).Scan(&activeSessions); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "k_369f2da8"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
 		return
 	}
 	topRows, err := db.DB.Query(`SELECT tool, SUM(calls) FROM mcp_tool_stats
 		WHERE date=? GROUP BY tool ORDER BY SUM(calls) DESC LIMIT 5`, today)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "k_369f2da8"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
 		return
 	}
 	defer topRows.Close()
@@ -143,7 +143,7 @@ func (h *Handlers) GetMCPStats(c *gin.Context) {
 	trendRows, err := db.DB.Query(`SELECT date, SUM(calls) FROM mcp_tool_stats
 		WHERE date>=? GROUP BY date`, weekStart)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "k_369f2da8"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
 		return
 	}
 	defer trendRows.Close()

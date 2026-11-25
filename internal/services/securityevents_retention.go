@@ -62,7 +62,7 @@ const (
 // lang 是摘要的渲染语言（面板按请求语言取词）；行数上限不随语言变化。
 func SecurityEventsRetentionSnapshot(lang string) (string, int) {
 	policy, _ := securityEventsRetentionPolicyFromDB()
-	return fmt.Sprintf(i18n.T(lang, "k_7229ce33"),
+	return fmt.Sprintf(i18n.T(lang, "security.eventsRetentionPolicySummary"),
 		policy.Days, policy.Max, securityEventsRowMaxLabel(), securityEventsRowCapByteBudget(policy.Max)), policy.Max
 }
 

@@ -857,7 +857,7 @@ test('IPv6 地理库开关：退化 200 按 messageKey 判定（语言无关）�
   const rules = code('src/views/security/SecurityRules.vue')
   const toggle = member(rules, 'const toggleIP2RegionV6 = async')
   // 信封层读取（拦截器已解包）：res.messageKey，不是 res.data?.message（恒 undefined）
-  assert.match(toggle, /res\.messageKey === 'k_7d87740a'/, '退化判定必须走稳定语义键（语言无关）')
+  assert.match(toggle, /res\.messageKey === 'security.savedButCaddyReloadFailed'/, '退化判定必须走稳定语义键（语言无关）')
   assert.match(toggle, /ElMessage\.warning\(res\.message \|\| t\('common\.app\.views\.secRules\.lib\.v6ReloadFailed'\)\)/, '退化 200 必须显性警告（后端文案优先，词条兜底）')
   assert.doesNotMatch(toggle, /res\.data\?\.message|res\.data\.message/, '不得读载荷层 message（信封误读=退化被吞）')
   assert.doesNotMatch(toggle, /重载失败'|重载 Caddy 配置失败/, '不得用 zh 字面量比较（en 响应漏判）')

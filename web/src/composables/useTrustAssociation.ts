@@ -331,7 +331,7 @@ export const useTrustAssociation = (options: {
         return
       }
       // 移除是一次写事件（MFA step-up 覆盖）：与同文件「加入/创建」同口径经
-      // showSaveResult 发出——退化 200（messageKey=k_de8cc6aa，语言无关）必须
+      // showSaveResult 发出——退化 200（messageKey=security.savedButCaddyApplyFailed，语言无关）必须
       // 常驻警告而非成功；正常成功内部走 mfaAwareSuccess（宽限窗前缀不丢）。
       showSaveResult(res, t('common.app.views.trustAssoc.removedFromList', { name: list.name }))
       await options.onChanged?.()

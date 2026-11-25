@@ -22,7 +22,7 @@ test('版本冲突（409）刷新列表并提示重新打开，不静默覆盖',
   // 语义键与后端 catalog 的一致性见下方钉测与 tests/ruleConflict.spec.ts（无键旧
   // 响应的母本兜底亦在该处钉住）；界面不再需要本地化的冲突文案词条。
   assert.ok(
-    /RULE_VERSION_CONFLICT_MESSAGE_KEY = 'k_60ab0761'/.test(code('src/utils/ruleConflict.ts')),
+    /RULE_VERSION_CONFLICT_MESSAGE_KEY = 'rule.versionConflict'/.test(code('src/utils/ruleConflict.ts')),
     '版本冲突语义键必须与后端 catalog 一致',
   )
   // 边界硬失败：marker 缺失时 indexOf 返回 -1，slice(-1) 会退化成文件末字符、

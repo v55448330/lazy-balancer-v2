@@ -343,7 +343,7 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 			filepath.Join(services.WafDir(), "threat-"+source+".iplist.fast"),
 		} {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				warnings = append(warnings, importWarn("k_1eb7387c", source, err))
+				warnings = append(warnings, importWarn("backup.importThreatSourceLocalFileDeleteFailed", source, err))
 			} else if err == nil {
 				changed = true
 			}
@@ -374,15 +374,15 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 		// update_enabled=0 不会自动重取，必须给出可执行提示，不能笼统说「在备份
 		// 中为空」。
 		if backupString(row["update_status"]) == "success" || backupString(row["version"]) != "" {
-			removePair(name, "k_256f8be1")
+			removePair(name, "backup.importThreatSourceEmptyInBackupLocalFileRemoved")
 			continue
 		}
-		removePair(name, "k_04f9fe39")
+		removePair(name, "backup.importThreatSourceFileNotInBackupLocalFileRemoved")
 	}
 	// 源表全量替换后不再存在的源：本地残留文件同样删除。
 	entries, err := os.ReadDir(services.WafDir())
 	if err != nil {
-		warnings = append(warnings, importWarn("k_ff1557d5", err))
+		warnings = append(warnings, importWarn("backup.importThreatDirScanFailed", err))
 		return warnings, changed
 	}
 	for _, entry := range entries {
@@ -399,7 +399,7 @@ func reconcileImportedThreatFiles(tables map[string][]map[string]any, payload *l
 			continue
 		}
 		if err := os.Remove(filepath.Join(services.WafDir(), name)); err != nil && !os.IsNotExist(err) {
-			warnings = append(warnings, importWarn("k_1eb7387c", source, err))
+			warnings = append(warnings, importWarn("backup.importThreatSourceLocalFileDeleteFailed", source, err))
 		} else if err == nil {
 			changed = true
 		}
@@ -471,7 +471,7 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 		if err := validateLbbakXdbPayload(payload.Xdb); err != nil {
 			services.Logf("error", "lbbak 导入: IP2Region 数据文件无法装载，已拒绝落盘: %v", err)
 			result.FailedXdb = true
-			result.warn(c, action, "k_47e2e72c", err)
+			result.warn(c, action, "backup.importIp2RegionUnloadableFileRejected", err)
 		} else {
 			bundle.IP2RegionSha = payload.XdbSha256
 			bundle.Xdb = payload.Xdb
@@ -506,19 +506,19 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 			// 不落盘任何威胁名单。
 			for source := range payload.ThreatIplists {
 				result.FailedThreatSources = append(result.FailedThreatSources, source)
-				result.warn(c, action, "k_ea4ef9eb", source)
+				result.warn(c, action, "backup.importThreatSourceNotWrittenBundleRejected", source)
 			}
 			result.FilesLanded = crsChanged || xdbChanged
 			return result
 		}
 		if result.FailedCRS {
-			result.warn(c, action, "k_b2e292cf", bundleErr)
+			result.warn(c, action, "backup.importCrsApplyFailedVersionRecordDropped", bundleErr)
 		}
 		if result.FailedXdb {
-			result.warn(c, action, "k_d5b34aac", bundleErr)
+			result.warn(c, action, "backup.importIp2RegionApplyFailedVersionRecordDropped", bundleErr)
 		}
 		if component == "xdb" && crsChanged {
-			result.warn(c, action, "k_c8bcaf95")
+			result.warn(c, action, "backup.importCrsAppliedOnlyIp2RegionFailed")
 		}
 	}
 	for source, data := range payload.ThreatIplists {
@@ -526,14 +526,14 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 		fail := func(stage importWarning, err error) {
 			result.FailedThreatSources = append(result.FailedThreatSources, source)
 			services.Logf("error", "lbbak 导入威胁库 %s: %s: %v", source, stage.render(i18n.ZH), err)
-			result.warn(c, action, "k_91f9bc9e", source, stage, err)
+			result.warn(c, action, "backup.importThreatSourceApplyFailedLocalKept", source, stage, err)
 		}
 		if err := os.MkdirAll(filepath.Dir(iplistPath), 0755); err != nil {
-			fail(importWarn("k_455b8d5b"), err)
+			fail(importWarn("backup.importThreatSourceMkdirFailed"), err)
 			continue
 		}
 		if err := services.WriteThreatIplistCompiled(iplistPath, data); err != nil {
-			fail(importWarn("k_5f40e901"), err)
+			fail(importWarn("backup.importThreatSourceWriteCompileFailed"), err)
 			continue
 		}
 		threatLanded = true
@@ -551,7 +551,7 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 			if err := services.Reload(); err != nil {
 				services.Logf("error", "lbbak 导入后 ip2region 内存缓存热换失败(下次重启生效): %v", err)
 				// 热换失败必须对用户可见（磁盘与内存分裂，重启才收敛）。
-				result.warn(c, action, "k_76f8b3d3", err)
+				result.warn(c, action, "backup.importIp2RegionCacheHotSwapFailed", err)
 			}
 			services.RebuildRegionTreeCacheForSync()
 		}
@@ -639,7 +639,7 @@ func snapshotLbbakWafTargets(payload *lbbakPayload, threatFiles bool) (*lbbakWaf
 		}
 		snapshot.xdbExisted, snapshot.xdbSnapshotted = existed, snapshotted
 		if existed && !snapshotted {
-			snapshot.warnings = append(snapshot.warnings, importWarn("k_8e68a642"))
+			snapshot.warnings = append(snapshot.warnings, importWarn("backup.importIp2RegionFileNotRegularRollbackSkipped"))
 		}
 		versionExisted, versionSnapshotted, err := copyWafFileIfExists(liveXdb+".version", filepath.Join(root, "ip2region.xdb.version"))
 		if err != nil {
@@ -647,7 +647,7 @@ func snapshotLbbakWafTargets(payload *lbbakPayload, threatFiles bool) (*lbbakWaf
 		}
 		snapshot.xdbVersionExists, snapshot.xdbVersionSnapshotted = versionExisted, versionSnapshotted
 		if versionExisted && !versionSnapshotted {
-			snapshot.warnings = append(snapshot.warnings, importWarn("k_4d13e681"))
+			snapshot.warnings = append(snapshot.warnings, importWarn("backup.importIp2RegionVersionMarkerNotRegularRollbackSkipped"))
 		}
 	}
 	if snapshot.threatNames != nil {
@@ -657,7 +657,7 @@ func snapshotLbbakWafTargets(payload *lbbakPayload, threatFiles bool) (*lbbakWaf
 			return fail(fmt.Errorf("扫描威胁名单目录: %w", err))
 		}
 		if notDir {
-			snapshot.warnings = append(snapshot.warnings, importWarn("k_fe7c270c"))
+			snapshot.warnings = append(snapshot.warnings, importWarn("backup.importThreatListDirNotDirectoryRollbackSkipped"))
 		}
 		if len(names) > 0 {
 			if err := os.MkdirAll(filepath.Join(root, "threat"), 0o700); err != nil {
@@ -711,7 +711,7 @@ func (snapshot *lbbakWafFileSnapshot) restore() (warnings importWarnings, err er
 		case !snapshot.xdbExisted:
 			// 导入前无数据库：磁盘已回到「不存在」，但运行时无法卸载已装载
 			// 的库——只能显性告知重启收敛，不能当作静默成功。
-			warnings = append(warnings, importWarn("k_b88e56a6"))
+			warnings = append(warnings, importWarn("backup.rollbackIp2RegionFileAbsentCacheNeedsRestart"))
 		default:
 			if err := services.Reload(); err != nil {
 				errs = append(errs, fmt.Errorf("回退后热换 IP2Region 内存缓存失败（重启后生效）: %w", err))
@@ -773,15 +773,15 @@ func lbbakWafRollbackWarning(filesLanded, restoreAttempted bool, restoreErr erro
 		return importWarning{}
 	}
 	if commitIndeterminate {
-		return importWarn("k_23bf2e66")
+		return importWarn("backup.importCommitIndeterminateRuleLibraryFilesKept")
 	}
 	switch {
 	case restoreAttempted && restoreErr != nil:
-		return importWarn("k_47a1262e", restoreErr)
+		return importWarn("backup.importDbRolledBackRuleLibraryFilesRestoreFailed", restoreErr)
 	case restoreAttempted:
-		return importWarn("k_594803a8")
+		return importWarn("backup.importDbRolledBackRuleLibraryFilesRestored")
 	}
-	return importWarn("k_bbed968a")
+	return importWarn("backup.importDbRolledBackRuleLibraryFilesKept")
 }
 
 // listLbbakThreatFiles 列出 WAF 目录内的威胁名单文件（threat-*.iplist 与其

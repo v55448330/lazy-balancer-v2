@@ -335,13 +335,13 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0")})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest")})
 		return
 	}
 	switch req.Type {
 	case channelTypeWebhook, channelTypeEmail, channelTypeQQ, channelTypeWx:
 	default:
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_0b1f0aee"), MessageKey: "k_0b1f0aee"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "notify.unsupportedChannelType"), MessageKey: "notify.unsupportedChannelType"})
 		return
 	}
 	if err := validateChannelTarget(req.Type, req.Target); err != nil {
@@ -399,11 +399,11 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	var owner int64
 	var typ, name, currentTarget, currentStyle string
 	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,''), COALESCE(style_config,'{}') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget, &currentStyle); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "security.policyNotFound")})
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_6928b5b0"), MessageKey: "k_6928b5b0"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "notify.canOnlyManageOwnChannel"), MessageKey: "notify.canOnlyManageOwnChannel"})
 		return
 	}
 	var req struct {
@@ -526,11 +526,11 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 	var owner int64
 	var typ, name, currentTarget string
 	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "security.policyNotFound")})
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_6928b5b0"), MessageKey: "k_6928b5b0"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "notify.canOnlyManageOwnChannel"), MessageKey: "notify.canOnlyManageOwnChannel"})
 		return
 	}
 	if _, err := db.DB.Exec(`DELETE FROM notification_channels WHERE id=?`, id); err != nil {
@@ -559,11 +559,11 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	var typ, target, name, style string
 	var owner int64
 	if err := db.DB.QueryRow(`SELECT user_id, type, target, name, COALESCE(style_config,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &target, &name, &style); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896")})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "security.policyNotFound")})
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_435eb4ab"), MessageKey: "k_435eb4ab"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "notify.canOnlyTestOwnChannel"), MessageKey: "notify.canOnlyTestOwnChannel"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
@@ -592,10 +592,10 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("failed")))
 	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_8e353bc9", err.Error()), MessageKey: "k_8e353bc9"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "notify.testMessageSendFailed", err.Error()), MessageKey: "notify.testMessageSendFailed"})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4bde3724"), MessageKey: "k_4bde3724"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "notify.testMessageSent"), MessageKey: "notify.testMessageSent"})
 }
 
 // validateChannelStyle 通道消息样式校验+归一（返回规范化 JSON）：
@@ -804,15 +804,15 @@ func validateRuleChannelTemplates(database *sql.DB, userID int64, tpls map[strin
 		switch types[chID] {
 		case "webhook":
 			if err := probeWebhookPayloadTemplate(tpl); err != nil {
-				return &ruleTemplateValidationError{key: "k_00c1f3e8"}
+				return &ruleTemplateValidationError{key: "notify.ruleTemplateInvalidJson"}
 			}
 		case "email":
 			if len(tpl) > 4000 {
-				return &ruleTemplateValidationError{key: "k_0d9a61a4"}
+				return &ruleTemplateValidationError{key: "notify.ruleTemplateTooLong"}
 			}
 		case "qq", "wx_clawbot":
 			if len(tpl) > 2000 {
-				return &ruleTemplateValidationError{key: "k_0d9a61a4"}
+				return &ruleTemplateValidationError{key: "notify.ruleTemplateTooLong"}
 			}
 		}
 	}

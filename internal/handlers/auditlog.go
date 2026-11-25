@@ -323,7 +323,7 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 		}
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, loc)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a1d19e7f"), MessageKey: "k_a1d19e7f"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "audit.invalidTimeFilterFormat"), MessageKey: "audit.invalidTimeFilterFormat"})
 			return time.Time{}, false, true
 		}
 		return t.UTC(), true, false
@@ -377,14 +377,14 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// 偏移，同一参数在故障窗口内外的状态码分叉也无从排障。降级分支只回显
 	// 合法页码。
 	if page > auditLogDeepPageLimit {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_c17e3275", auditLogDeepPageLimit), MessageKey: "k_c17e3275"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "audit.deepPageLimitExceeded", auditLogDeepPageLimit), MessageKey: "audit.deepPageLimitExceeded"})
 		return
 	}
 	// 与 GetAuditLogOptions 同口径的 nil 守卫。降级形态与正常路径同键集：
 	// total_stale=true（计数不可信）+ partial=true，消费方无需按状态切换解码。
 	auditDB := db.AuditDB
 	if auditDB == nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_65e6a8d6"), MessageKey: "k_65e6a8d6",
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "audit.databaseNotReady"), MessageKey: "audit.databaseNotReady",
 			Data: auditLogListPayload([]map[string]any{}, 0, true, true, page, pageSize)})
 		return
 	}

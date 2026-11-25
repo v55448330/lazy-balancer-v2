@@ -184,11 +184,11 @@ func TestNotificationSubscriptions_upsertReadbackAndDefaults(t *testing.T) {
 
 	// 非法事件/级别 fail-loud。
 	status, out = doNotifyRequest(t, r, http.MethodPut, "/notification/subscriptions", `{"items":[{"event_type":"nope.nope","min_level":"warn"}]}`)
-	if status != http.StatusBadRequest || out["message_key"] != "k_74125a73" {
+	if status != http.StatusBadRequest || out["message_key"] != "notify.subscriptionEventNotInCatalog" {
 		t.Fatalf("非法事件 status=%d body=%v", status, out)
 	}
 	status, out = doNotifyRequest(t, r, http.MethodPut, "/notification/subscriptions", `{"items":[{"event_type":"cert.failed","min_level":"urgent"}]}`)
-	if status != http.StatusBadRequest || out["message_key"] != "k_3ae60346" {
+	if status != http.StatusBadRequest || out["message_key"] != "notify.invalidSubscriptionLevel" {
 		t.Fatalf("非法级别 status=%d body=%v", status, out)
 	}
 }
@@ -199,10 +199,10 @@ func TestNotificationSettings_roleGateAndSecretNonEcho(t *testing.T) {
 	// 非管理员：GET/PUT/触发全部 403（handler 级角色门，与 adminOnly 中间件双保险）。
 	userRouter := newNotificationTestRouter(h, 2, "user")
 	for _, tc := range []struct{ method, path, body, wantKey string }{
-		{http.MethodGet, "/notification/settings", "", "k_20b2245c"},
-		{http.MethodPut, "/notification/settings", `{"mcp_enabled":true}`, "k_20b2245c"},
+		{http.MethodGet, "/notification/settings", "", "notify.settingsAdminOnly"},
+		{http.MethodPut, "/notification/settings", `{"mcp_enabled":true}`, "notify.settingsAdminOnly"},
 		// 日报触发端点独立文案键（TriggerNotificationDaily）。
-		{http.MethodPost, "/notification/daily/trigger", "", "k_4b8e3591"},
+		{http.MethodPost, "/notification/daily/trigger", "", "notify.dailyTriggerForbidden"},
 	} {
 		status, out := doNotifyRequest(t, userRouter, tc.method, tc.path, tc.body)
 		if status != http.StatusForbidden || out["message_key"] != tc.wantKey {
@@ -266,11 +266,11 @@ func TestNotificationSettings_roleGateAndSecretNonEcho(t *testing.T) {
 
 	// 非法形态 fail-loud：端口/阈值序/空更新。
 	status, out = doNotifyRequest(t, adminRouter, http.MethodPut, "/notification/settings", `{"smtp":{"port":"abc"}}`)
-	if status != http.StatusBadRequest || out["message_key"] != "k_d37587be" {
+	if status != http.StatusBadRequest || out["message_key"] != "notify.smtpPortInvalid" {
 		t.Fatalf("非法端口 status=%d body=%v", status, out)
 	}
 	status, out = doNotifyRequest(t, adminRouter, http.MethodPut, "/notification/settings", `{"attack_warn_at":300,"attack_critical_at":100}`)
-	if status != http.StatusBadRequest || out["message_key"] != "k_04f0eea4" {
+	if status != http.StatusBadRequest || out["message_key"] != "notify.attackThresholdsInvalid" {
 		t.Fatalf("阈值倒挂 status=%d body=%v", status, out)
 	}
 	status, _ = doNotifyRequest(t, adminRouter, http.MethodPut, "/notification/settings", `{}`)
@@ -324,7 +324,7 @@ func TestNotificationDeliveries_scopeFilterResendAndMasking(t *testing.T) {
 		t.Fatalf("page_size=1 total=%v, want 3（total 不受分页影响）", out["data"].(map[string]any)["total"])
 	}
 	status, out = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?status=bogus", "")
-	if status != http.StatusBadRequest || out["message_key"] != "k_0d569dd0" {
+	if status != http.StatusBadRequest || out["message_key"] != "notify.unsupportedDeliveryStatusFilter" {
 		t.Fatalf("非法 status 过滤 status=%d body=%v", status, out)
 	}
 	status, _ = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?page_size=0", "")
@@ -359,7 +359,7 @@ func TestNotificationDeliveries_scopeFilterResendAndMasking(t *testing.T) {
 
 	// 重发：failed → pending；重复重发 409。
 	status, out = doNotifyRequest(t, userRouter, http.MethodPost, fmt.Sprintf("/notification/deliveries/%d/resend", ownFailed), "")
-	if status != http.StatusOK || out["message_key"] != "k_07b47533" {
+	if status != http.StatusOK || out["message_key"] != "notify.resendAccepted" {
 		t.Fatalf("resend status=%d body=%v", status, out)
 	}
 	var dbStatus string
@@ -368,17 +368,17 @@ func TestNotificationDeliveries_scopeFilterResendAndMasking(t *testing.T) {
 		t.Fatalf("重发后 status=%q attempts=%d err=%v, want pending/0", dbStatus, attempts, err)
 	}
 	status, out = doNotifyRequest(t, userRouter, http.MethodPost, fmt.Sprintf("/notification/deliveries/%d/resend", ownFailed), "")
-	if status != http.StatusConflict || out["message_key"] != "k_c16c1667" {
+	if status != http.StatusConflict || out["message_key"] != "notify.deliveryAlreadyQueued" {
 		t.Fatalf("重复重发 status=%d body=%v, want 409", status, out)
 	}
 
 	// 越权重发 403；不存在 404。
 	status, out = doNotifyRequest(t, userRouter, http.MethodPost, fmt.Sprintf("/notification/deliveries/%d/resend", otherFailed), "")
-	if status != http.StatusForbidden || out["message_key"] != "k_e18b003b" {
+	if status != http.StatusForbidden || out["message_key"] != "notify.canOnlyResendOwnDelivery" {
 		t.Fatalf("越权重发 status=%d body=%v, want 403", status, out)
 	}
 	status, out = doNotifyRequest(t, adminRouter, http.MethodPost, "/notification/deliveries/99999/resend", "")
-	if status != http.StatusNotFound || out["message_key"] != "k_e742ee3f" {
+	if status != http.StatusNotFound || out["message_key"] != "notify.deliveryNotFound" {
 		t.Fatalf("不存在行 status=%d body=%v, want 404", status, out)
 	}
 }
@@ -398,8 +398,8 @@ func TestNotificationDailyReportTrigger_adminOnlyAndAudit(t *testing.T) {
 	}
 
 	status, out = doNotifyRequest(t, userRouter, http.MethodPost, "/notification/daily/trigger", "")
-	if status != http.StatusForbidden || out["message_key"] != "k_4b8e3591" {
-		t.Fatalf("非管理员触发 status=%d body=%v, want 403 k_4b8e3591", status, out)
+	if status != http.StatusForbidden || out["message_key"] != "notify.dailyTriggerForbidden" {
+		t.Fatalf("非管理员触发 status=%d body=%v, want 403 notify.dailyTriggerForbidden", status, out)
 	}
 }
 
@@ -420,7 +420,7 @@ func TestTestSMTPSettings_malformedBodyIs400(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
 	}
-	if out["message_key"] != "k_76de02a0" {
-		t.Fatalf("坏请求体 body=%v, want message_key k_76de02a0", out)
+	if out["message_key"] != "common.malformedRequest" {
+		t.Fatalf("坏请求体 body=%v, want message_key common.malformedRequest", out)
 	}
 }

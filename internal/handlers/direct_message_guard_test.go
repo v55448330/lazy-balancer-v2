@@ -10,7 +10,7 @@ import (
 
 // handlers 响应面「中文直写 Message」机械断言。
 //
-// 背景：i18n 统一标准（Message: apimsg.T/Tf(c, "k_x") + MessageKey）确立后，
+// 背景：i18n 统一标准（Message: apimsg.T/Tf(c, "rule.versionConflict") + MessageKey）确立后，
 // 历史迁移曾声明「响应面 0 残留」，实际漏网 49 处（扫描口径未覆盖
 // fmt.Sprintf 插值形态）——en 用户在报错时收到中文文案。本守卫把
 // 「直写=0」做成机械断言（扫描覆盖字面量与 fmt.Sprintf 两种形态），

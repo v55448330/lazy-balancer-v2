@@ -24,7 +24,7 @@ func (h *Handlers) StartWxQRLogin(c *gin.Context) {
 	defer cancel()
 	qrImg, err := notify.WxQRLoginStart(ctx)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_94d8f73b", err.Error()), MessageKey: msgWxQRStartFailed})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "notify.wxLoginStartFailed", err.Error()), MessageKey: msgWxQRStartFailed})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"qr_content": qrImg}})
@@ -37,7 +37,7 @@ func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 	defer cancel()
 	status, confirmed, err := notify.WxQRLoginPoll(ctx)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_403c12fe", err.Error()), MessageKey: msgWxQRPollFailed})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "notify.wxLoginPollFailed", err.Error()), MessageKey: msgWxQRPollFailed})
 		return
 	}
 	if confirmed {

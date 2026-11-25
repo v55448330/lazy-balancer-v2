@@ -282,7 +282,7 @@ service.interceptors.response.use(
     }
     // 成功信封的稳定语义键归一：后端 wire 字段 message_key → messageKey
     // （camelCase，与 ApiRequestError.messageKey / apiFailure 契约同形）。
-    // 退化 200（k_de8cc6aa）经 showSaveResult 语言无关判定依赖此透传；
+    // 退化 200（security.savedButCaddyApplyFailed）经 showSaveResult 语言无关判定依赖此透传；
     // 无键响应不增字段（保持原样，zh 标记兜底判据仍可用）。
     if (res && typeof res === 'object' && typeof res.message_key === 'string' && res.message_key) {
       res.messageKey = res.message_key

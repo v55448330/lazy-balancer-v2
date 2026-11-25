@@ -13,7 +13,7 @@ import (
 func (h *Handlers) GetMCPTools(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{
 		Code:    0,
-		Message: apimsg.T(c, "k_02835350"), MessageKey: "k_02835350",
+		Message: apimsg.T(c, "common.querySucceeded"), MessageKey: "common.querySucceeded",
 		Data: mcpserver.ListToolSpecs(),
 	})
 }

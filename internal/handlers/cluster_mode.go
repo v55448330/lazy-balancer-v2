@@ -105,7 +105,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", fmt.Sprintf("registration_id：%d", registration.RegistrationID), err.Error()))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{
 			Code:    http.StatusInternalServerError,
-			Message: apimsg.T(c, "k_300d6248"), MessageKey: "k_300d6248",
+			Message: apimsg.T(c, "cluster.switchToSlaveFailedRemoteRegistrationCreated"), MessageKey: "cluster.switchToSlaveFailedRemoteRegistrationCreated",
 			Data: gin.H{"registration_id": registration.RegistrationID},
 		})
 		return
@@ -128,9 +128,9 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK, registration.OverwrittenNodeID, registration.OverwrittenNodeName))
 	// 成功文案走 catalog 双语（与 Promote/UpdateClusterSettings 同口径）：
 	// 明文 HTTP 警告是独立变体词条，不得拼接硬编码中文。
-	key := "k_f388eab8"
+	key := "cluster.switchedToSlaveAwaitingApproval"
 	if strings.HasPrefix(strings.TrimSpace(strings.ToLower(req.MasterURL)), "http://") {
-		key = "k_2a7d816f"
+		key = "cluster.switchedToSlaveAwaitingApprovalInsecureHttp"
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, key), MessageKey: key})
 }
@@ -182,7 +182,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	// 生命周期由任务引擎统一驱动（Promote → SetRole → daemon hook/角色门），
 	// handler 不再直调管理器或旧调度器。
 	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail("从节点 → 主节点", services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ede3e4ae"), MessageKey: "k_ede3e4ae"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.promotedToMaster"), MessageKey: "cluster.promotedToMaster"})
 }
 
 func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
@@ -241,7 +241,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 	}
 	recordAudit(c, "更新", "集群设置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtClusterSettingsChanged, Fields: map[string]string{"1": c.GetString("username")}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_42589787"), MessageKey: "k_42589787"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.settingsUpdated"), MessageKey: "cluster.settingsUpdated"})
 }
 
 // switchToSlaveAuditDetail 构建切换从节点的审计详情;出口 IP 探测失败

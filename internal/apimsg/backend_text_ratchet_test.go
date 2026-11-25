@@ -31,9 +31,11 @@ import (
 // 本测试是基线钉：它钉的是当前存量，按 TDD 规范豁免 RED；判别是否有效由
 // TestBackendTextRatchet_detector 的自检与变异验证证明。
 
-// 当前存量（2026-11-25 基线）。修掉存量后把数字调低；调高即新增违规。
+// 当前存量（2026-11-25 基线 661；同日语义键改造删除 9 个无人使用的键、补登记 7 个此前
+// 从未登记的通知词条——那 7 处用户原本看到的是原始键——净减 2）。修掉存量后把数字调低；
+// 调高即新增违规。
 const (
-	baselineCatalogRegistrations = 661
+	baselineCatalogRegistrations = 659
 	baselineErrTplRegistrations  = 750
 	baselineLiteralMessageSinks  = 5
 )

@@ -1,5 +1,5 @@
 // 默认策略弹框（POST /security/policies/apply-defaults）接线钉：
-//  1) 退化 200 判定键集必须覆盖 k_7d87740a（DB 已提交但重载 Caddy 失败）；
+//  1) 退化 200 判定键集必须覆盖 security.savedButCaddyReloadFailed（DB 已提交但重载 Caddy 失败）；
 //  2) 成功/退化一律经 showSaveResult（不得再恒 success 掩盖重载失败）；
 //  3) 失败分支不得伪造部分进度（单事务整体回滚，失败信封无已建项）；结果集
 // 为空时失败名单回落「状态未知」文案；
@@ -17,10 +17,10 @@ import { isCaddyApplyDegraded } from '../src/utils/bulkApplyResult.ts'
 
 const SRC = code('src/views/security/SecurityPolicies.vue')
 
-test('退化 200 判定键集覆盖 k_7d87740a（apply-defaults 重载失败）', () => {
+test('退化 200 判定键集覆盖 security.savedButCaddyReloadFailed（apply-defaults 重载失败）', () => {
   // 行为钉：两个键同语义（已提交、Caddy 未生效），任一缺登记 = 该端点族失败对 UI 不可见。
-  assert.equal(isCaddyApplyDegraded({ message: 'saved; reload failed', messageKey: 'k_7d87740a' }), true)
-  assert.equal(isCaddyApplyDegraded({ messageKey: 'k_de8cc6aa' }), true)
+  assert.equal(isCaddyApplyDegraded({ message: 'saved; reload failed', messageKey: 'security.savedButCaddyReloadFailed' }), true)
+  assert.equal(isCaddyApplyDegraded({ messageKey: 'security.savedButCaddyApplyFailed' }), true)
   assert.equal(isCaddyApplyDegraded({ message: 'Saved', messageKey: 'k_other' }), false)
   assert.equal(isCaddyApplyDegraded({ message: 'Saved' }), false)
 })

@@ -276,11 +276,11 @@ func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
 		// gin 解析文本含 Go 字段名/英文（只读白名单端点，任意只读凭据可触发）：
 		// 响应固定中文文案，细节只进运行日志。
 		services.Logf("warn", "GetCurrentCertJobs: 请求体校验失败: %v", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
 		return
 	}
 	if len(req.RuleIDs) > 200 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_931fff64"), MessageKey: "k_931fff64"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.currentJobsRuleIdsTooMany"), MessageKey: "cert.currentJobsRuleIdsTooMany"})
 		return
 	}
 	result := make(map[string]*models.CertJob, len(req.RuleIDs))
@@ -418,7 +418,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// 契约。409 fast-fail（拒绝重试是幂等可重试语义，不改变任何任务状态），
 	// 两个入口（RetryCertJob / TriggerSystemTask 的 cert-job 分支）共用本核心。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "k_f168c72b"), MessageKey: "k_f168c72b"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "cert.jobRetryBlockedByImport"), MessageKey: "cert.jobRetryBlockedByImport"})
 		return
 	}
 	operationLock := certJobOperationLock(id)
@@ -614,18 +614,18 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		}
 		if currentStatus != status {
 			auditFailureWithRule("state_changed")
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_cd25755f"), MessageKey: "k_cd25755f"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "cert.jobStateChanged"), MessageKey: "cert.jobStateChanged"})
 			return
 		}
 		// EnqueueIfActive 的在途命中同样走!changed 且重读
 		// 状态未变，需优先归因"任务正在队列中"，避免误导为规则禁用/配置变更。
 		if qm.IsJobActive(id) {
 			auditFailureWithRule("in_flight")
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_be699a9c"), MessageKey: "k_be699a9c"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "cert.retryJobAlreadyInQueue"), MessageKey: "cert.retryJobAlreadyInQueue"})
 			return
 		}
 		auditFailureWithRule("not_retryable")
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_65bf5516"), MessageKey: "k_65bf5516"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "cert.jobNotRetryable"), MessageKey: "cert.jobNotRetryable"})
 		return
 	}
 	// 手动重试入队成功=有在途证书工作——唤醒 cert-waiting-ca
@@ -842,7 +842,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	// 文件）。与 retryCertJobByID 共用同一探测。
 	if configImportBusy() {
 		recordAudit(c, "删除失败", "证书任务", services.FormatAuditDetail(services.AuditResultPart("import_in_progress")))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_c8b1cb09"), MessageKey: "k_c8b1cb09"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "cert.jobDeleteBlockedByImport"), MessageKey: "cert.jobDeleteBlockedByImport"})
 		return
 	}
 	id, err := strconv.Atoi(c.Param("id"))
@@ -993,7 +993,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		}
 		releaseCaddyOp()
 		auditFailure("state_changed")
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_cd25755f"), MessageKey: "k_cd25755f"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "cert.jobStateChanged"), MessageKey: "cert.jobStateChanged"})
 		return
 	}
 	// 取消移出全局 CaddyOpLock 临界区——原顺序

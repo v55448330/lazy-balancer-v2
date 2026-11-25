@@ -21,19 +21,19 @@ func zhCtx() tfCtx { return tfCtx{i18n.CtxLangKey: i18n.ZH} }
 func TestTfSlotQueue(t *testing.T) {
 	c := zhCtx()
 	// 混用模板(%s+%d)两参依序——旧实现一参双填
-	if got := apimsg.Tf(c, "k_69d65efd", "issuer", 64); got != "issuer 过长（最多 64 字符）" {
+	if got := apimsg.Tf(c, "auth.oidcFieldTooLong", "issuer", 64); got != "issuer 过长（最多 64 字符）" {
 		t.Fatalf("混用模板: %q", got)
 	}
 	// %q 槽带引号诊断形态
-	if got := apimsg.Tf(c, "k_a9176a1a", "bogus", "a、b"); got != `未知日志类型 "bogus"，可选值：a、b` {
+	if got := apimsg.Tf(c, "caddy.unknownLogType", "bogus", "a、b"); got != `未知日志类型 "bogus"，可选值：a、b` {
 		t.Fatalf("%%q 槽: %q", got)
 	}
 	// %v 槽规一为 %s 语义+参数多于槽时多余忽略
-	if got := apimsg.Tf(c, "k_410be8bf", 7, "detail"); got != "自定义规则 7 的条件解析失败: detail" {
+	if got := apimsg.Tf(c, "security.customRuleConditionParseFailed", 7, "detail"); got != "自定义规则 7 的条件解析失败: detail" {
 		t.Fatalf("%%v 槽: %q", got)
 	}
 	// 参数少于槽:占位保留
-	if got := apimsg.Tf(c, "k_69d65efd"); got != "%s 过长（最多 %d 字符）" {
+	if got := apimsg.Tf(c, "auth.oidcFieldTooLong"); got != "%s 过长（最多 %d 字符）" {
 		t.Fatalf("缺参回退: %q", got)
 	}
 }

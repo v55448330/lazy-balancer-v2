@@ -17,7 +17,7 @@ const { useTrustAssociation } = await import('../src/composables/useTrustAssocia
 test('移除退化 200（en）：经 showSaveResult 披露，不得直接成功', async () => {
   stubHost.reset()
   g.__confirm = async () => {}
-  g.__post = async () => ({ message: 'Removed; but Caddy config apply failed: timeout', messageKey: 'k_de8cc6aa', data: { removed: true } })
+  g.__post = async () => ({ message: 'Removed; but Caddy config apply failed: timeout', messageKey: 'security.savedButCaddyApplyFailed', data: { removed: true } })
   g.__get = async () => ({ data: {} }); g.__put = async () => ({ data: undefined })
   const { removeFromSideRef } = useTrustAssociation({ getList: () => [] })
   await removeFromSideRef({ id: 3, name: '办公网段' }, '203.0.113.9')
@@ -25,7 +25,7 @@ test('移除退化 200（en）：经 showSaveResult 披露，不得直接成功'
   assert.equal(saves.length, 1)
   const res = saves[0].args?.[0]
   assert.ok(res && typeof res === 'object' && 'messageKey' in res, '首参必须是带 messageKey 的响应对象')
-  assert.equal(res.messageKey, 'k_de8cc6aa')
+  assert.equal(res.messageKey, 'security.savedButCaddyApplyFailed')
   assert.equal(stubHost.callsOf('mfaAwareSuccess').length, 0)
 })
 test('移除普通成功：仍经 showSaveResult（内部 mfaAwareSuccess 单源）', async () => {

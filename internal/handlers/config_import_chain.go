@@ -91,9 +91,9 @@ func importListSeparator(lang string) string {
 // unregisteredThreatWarning 是 manifest 未登记的威胁库条目告警（预览与导入
 // 同文案）：landed 为 true 表示条目随「安全防护」分类落盘。
 func unregisteredThreatWarning(lang string, entries []string, landed bool) string {
-	key := "k_b46f2ff0"
+	key := "backup.importThreatEntryUnregisteredNotImported"
 	if landed {
-		key = "k_d5ab8a60"
+		key = "backup.importThreatEntryUnregisteredLandedUnverified"
 	}
 	return fmt.Sprintf(i18n.T(lang, key), strings.Join(entries, importListSeparator(lang)))
 }
@@ -415,7 +415,7 @@ func (ch *importValidationChain) validateCertJobProviderDangling() error {
 	disabled, missing, err := certJobProviderDanglingCounts(ch.ctx, ch.deps.DB, ch.backup.Tables, ch.result.SectionTables)
 	if err != nil {
 		services.Logf("warn", "配置预览/导入：证书任务 CA 提供商悬挂统计失败: %v", err)
-		ch.result.CertJobDanglingWarnings = append(ch.result.CertJobDanglingWarnings, importWarn("k_5c8dbec2", err))
+		ch.result.CertJobDanglingWarnings = append(ch.result.CertJobDanglingWarnings, importWarn("backup.validateCertJobDanglingCheckNotCompleted", err))
 		return nil
 	}
 	ch.result.CertJobDanglingWarnings = certJobProviderDanglingWarnings(disabled, missing)
@@ -452,9 +452,9 @@ func (ch *importValidationChain) normalizeGlobalConfigNumbers() error {
 		normalized := normalizeBackupRequestBodyMB(value, 1, db.DefaultRequestBodyMaxSizeMB)
 		ch.backup.Config["request_body_max_size_mb"] = normalized
 		if !integerShape {
-			notes = append(notes, importWarn("k_8da541b9", value, normalized))
+			notes = append(notes, importWarn("backup.importRequestBodyMaxSizeInvalidShapeNormalized", value, normalized))
 		} else if n <= 0 {
-			notes = append(notes, importWarn("k_3acfb6ae", n, normalized))
+			notes = append(notes, importWarn("backup.importRequestBodyMaxSizeOutOfRangeNormalized", n, normalized))
 		}
 	}
 	ch.result.ConfigClampNotes = notes

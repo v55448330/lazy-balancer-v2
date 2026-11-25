@@ -13,8 +13,8 @@ test('「当前密码错误」与后端 auth.go 逐字对齐（跨栈钉）', ()
   // 密码错误被误判会话失效）。
   const go = repoCode('internal/handlers/auth.go')
   const catalog = repoCode('internal/i18n/catalog_gen.go')
-  assert.ok(catalog.includes('Register("k_9561dfdb", "当前密码错误"'), 'catalog 母本漂移:「当前密码错误」')
-  assert.ok(go.includes('MessageKey: "k_9561dfdb"'), 'auth.go 不再产生「当前密码错误」键——前端豁免失配')
+  assert.ok(catalog.includes('Register("auth.currentPasswordRejected", "当前密码错误"'), 'catalog 母本漂移:「当前密码错误」')
+  assert.ok(go.includes('MessageKey: "auth.currentPasswordRejected"'), 'auth.go 不再产生「当前密码错误」键——前端豁免失配')
 })
 
 test('同端点的会话过期 401 不得误判为当前密码错误', () => {
@@ -30,8 +30,8 @@ test('其它方法、路径、状态与文案保持原会话处理', () => {
 })
 
 test('en 当前密码 401 经拦截器重建后仍本地 toast（键路径端到端）', () => {
-  // 后端 en 响应信封（Accept-Language: en，auth.go k_9561dfdb）
-  const enEnvelope = { code: 401, message: 'The current password is incorrect', message_key: 'k_9561dfdb' }
+  // 后端 en 响应信封（Accept-Language: en，auth.go auth.currentPasswordRejected）
+  const enEnvelope = { code: 401, message: 'The current password is incorrect', message_key: 'auth.currentPasswordRejected' }
   // ApiRequestError 构造同口径：messageKey 从响应体信封解出（api.ts messageKeyOf）
   const rebuiltKey = enEnvelope.message_key
   // en 文案 + 键 → 键路径命中；en 文案无键 → 字面量失配（修复前的零反馈形态）

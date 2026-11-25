@@ -64,18 +64,18 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_7014aa1d"), MessageKey: "k_7014aa1d"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.libSourceIdInvalid"), MessageKey: "security.libSourceIdInvalid"})
 		return
 	}
 	var body struct {
 		UpdateEnabled *bool `json:"update_enabled"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ef2be2f6"), MessageKey: "k_ef2be2f6"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.invalidRequest"), MessageKey: "common.invalidRequest"})
 		return
 	}
 	if body.UpdateEnabled == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_cffbd55a"), MessageKey: "k_cffbd55a"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.noFieldsToUpdate"), MessageKey: "security.noFieldsToUpdate"})
 		return
 	}
 	if !requireMasterNode(c) {
@@ -143,5 +143,5 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	}
 	recordAudit(c, "更新", spec.Family, fmt.Sprintf("%s 更新开关：%s", name, enabledStateLabel(*body.UpdateEnabled)))
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": spec.Family, "3": "更新了源开关"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "security.updated"), MessageKey: "security.updated"})
 }
