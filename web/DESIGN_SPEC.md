@@ -375,16 +375,23 @@
    `npm run gen:api-messages`（在 `web/` 下）从后端目录 `internal/i18n/catalog_gen.go`、
    `catalog_manual.go` 导出到 `src/i18n/apiMessages.ts`，不并入 vue-i18n 词条树（键是语义
    键而非路径）。渲染与回落的顺序：
-   - 有键、词条里有、参数齐（模板里的占位符与 `message_params` 按顺序一一对应；无占位
-     符的模板不得带参数）→ 前端渲染；
-   - 其余情况（无键、词条缺失、参数不齐）→ 回落后端 `message` 原文，再回落既有的
-     `t('common.app.api.requestFailed')` 等兜底。
+   - `message_params`：模板参数，JSON 字符串数组，按占位符顺序排列；元素就是后端填进
+     `message` 的那段文本（后端 `Tf` 对每个实参做 `fmt.Sprint`）。带键响应一律经
+     `apimsg.Envelope(c, code, key, args...)` 构造：一次调用同时产出业务码、按请求语言
+     渲染的 `message`、`message_key` 与 `message_params`，实参只求值一次（实参常含
+     `apimsg.ErrMsg`、脱敏、时间计算等函数调用，调用点不得再抄一份参数）。
+   - 渲染与后端 `Tf` 同口径：`%s/%d/%v/%q` 各消费一个参数并原样填入（`%q` 两侧加引号），
+     `%%` 输出一个 `%`，槽外写法原样保留；参数用完占位符原样留下、多出的忽略。
+   - 有键、词条里有、参数具备（模板带占位符时 `message_params` 必须存在且元素全是字符串）
+     → 前端渲染；其余情况（无键、词条缺失、参数缺失或形态不对）→ 回落后端 `message`
+     原文，再回落既有的 `t('common.app.api.requestFailed')` 等兜底。
    - 只在响应拦截器做，调用方不必各自处理：两条失败路径（业务码失败、HTTP 失败）的
      提示文字与 `ApiRequestError.message` 同源；成功信封能按键渲染时，`message` 就地换成
      渲染结果（直接显示 `res.message` 的成功提示因此自动本地化），渲染不出则原样保留。
-   - 守卫：`tests/apiMessagesParity.spec.ts`——生成文件必须与按后端目录重新生成的结果逐字
-     相等（后端改了词条而未重新导出即红），英文译文不得含汉字；`tests/apiMessage.spec.ts`
-     ——渲染与回落的边界。
+   - 守卫：`tests/apiMessagesParity.spec.ts`（生成文件与后端目录逐字相等、英文译文无汉字、
+     解析器判别自检）、`tests/apiMessage.spec.ts`（渲染与回落边界、覆盖后端目录全部占位符
+     形态）、`tests/fixtures/apiMessage_format.json`（两侧共享夹具：后端渲染镜像与前端
+     渲染器同一结果，Go 侧见 `internal/apimsg/envelope_test.go`）。
 
 ## 26. 增补裁定（2026-11-25 第十六轮，弹框与表单尺度）
 > 依据：项目所有者 2026-11-25 裁定——弹框宽度「根据弹框内容、样式、布局决定」；说明文字两种位置都可以，原则是「尽量不要宽度不够导致折行，如果要折行则直接使用换行样式」；页脚按钮高度「根据内容决定」；短字段并排「根据设计和布局决定」；遵循直角原则。下表的数值与判据由主审按上述原则确定。

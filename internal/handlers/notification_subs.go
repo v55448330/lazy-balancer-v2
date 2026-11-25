@@ -140,7 +140,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
 		return
 	}
 	catalogByID := map[string]struct{}{}
@@ -160,7 +160,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 			return
 		}
 		if item.MinLevel != "" && !validSubLevel(item.MinLevel) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "notify.invalidSubscriptionLevel"), MessageKey: "notify.invalidSubscriptionLevel"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidSubscriptionLevel"))
 			return
 		}
 		ops = append(ops, subOp{eventType: item.EventType, minLevel: item.MinLevel, bodyTemplate: item.BodyTemplate})

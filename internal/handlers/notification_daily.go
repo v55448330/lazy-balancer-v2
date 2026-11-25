@@ -40,7 +40,7 @@ func (h *Handlers) GetNotificationDaily(c *gin.Context) {
 // 端点共用同一实现——两处各写一份会让其中一侧静默接受非法时间。
 func validateDailySendTime(c *gin.Context, sendTime string) bool {
 	if _, err := time.Parse("15:04", sendTime); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "notify.dailySendTimeInvalid"), MessageKey: msgDailySendTimeInvalid})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.dailySendTimeInvalid"))
 		return false
 	}
 	return true
@@ -54,7 +54,7 @@ func validateDailyItems(c *gin.Context, items []string) bool {
 	}
 	for _, it := range items {
 		if !validItems[it] {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "notify.dailyItemUnknown", it), MessageKey: msgDailyItemUnknown})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.dailyItemUnknown", it))
 			return false
 		}
 	}
@@ -157,7 +157,7 @@ func (h *Handlers) TriggerNotificationDaily(c *gin.Context) {
 		return
 	}
 	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, msgDailyTriggerForbidden), MessageKey: msgDailyTriggerForbidden})
+		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "notify.dailyTriggerForbidden"))
 		return
 	}
 	rendered, err := notify.DeliverDailyForAll(c.Request.Context(), time.Now())

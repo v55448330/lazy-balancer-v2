@@ -84,6 +84,13 @@ const RESPONSE_CALL_SITE = /\b[A-Za-z_]\w*\.(?:JSON|AbortWithStatusJSON)\(/g
 /** 载荷首 token 的信封形态（`Code:`/`"code":` 之后必须能解出业务码）。 */
 const ENVELOPE_LITERAL = /^(?:models\.APIResponse\{\s*Code:|gin\.H\{\s*"(?:code|Code)"\s*:)\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)/
 
+/**
+ * 构造入口形态：`apimsg.Envelope(ctx, <业务码>, "键"[, 参数…])`——状态在 `c.JSON`
+ * 首实参、业务码在构造函数第二实参，二者在同一调用里，配对比字面量更直接。
+ * 带键响应统一经此构造（DESIGN_SPEC §25-8），不认它会把 800 余个站点误当非信封站点。
+ */
+const ENVELOPE_CALL = /^apimsg\.Envelope\(\s*[^,]+,\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/
+
 type PayloadKind =
   | { envelope: true; code: string }
   | { envelope: false; shape: string }
@@ -96,6 +103,8 @@ type PayloadKind =
 const classifyPayload = (rest: string): PayloadKind => {
   const literal = ENVELOPE_LITERAL.exec(rest)
   if (literal) return { envelope: true, code: literal[1] }
+  const envelopeCall = ENVELOPE_CALL.exec(rest)
+  if (envelopeCall) return { envelope: true, code: envelopeCall[1] }
   const call = /^([A-Za-z_][\w.]*)\s*\(/.exec(rest)
   if (call) return { envelope: false, shape: `call:${call[1]}` }
   const composite = /^([A-Za-z_][\w.]*)\s*\{/.exec(rest)
@@ -135,8 +144,10 @@ const resolveVariableEnvelope = (go: string, callIndex: number, status: string, 
   // 多返回值/分支合流不能由单变量信封证明，保守归为非信封站点。
   if (last[1].includes(',')) return undefined
   const rhs = body.slice((last.index ?? 0) + last[0].length)
-  const envelope = /^(?:models\.APIResponse\{\s*Code:|gin\.H\{\s*"(?:code|Code)"\s*:)\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)/.exec(rhs)
-  return envelope ? { status, code: envelope[1], index: callIndex } : undefined
+  const literal = /^(?:models\.APIResponse\{\s*Code:|gin\.H\{\s*"(?:code|Code)"\s*:)\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)/.exec(rhs)
+  if (literal) return { status, code: literal[1], index: callIndex }
+  const constructor = ENVELOPE_CALL.exec(rhs)
+  return constructor ? { status, code: constructor[1], index: callIndex } : undefined
 }
 
 interface ScanResult {
@@ -250,6 +261,11 @@ test('扫描器形态自测：同行/多行、两种方法/信封、字面量/�
     'resp := models.APIResponse{Code: 500}\n\tc.JSON(http.StatusOK, resp)',
     'resp := models.APIResponse{Code: statusCode}\n\tc.JSON(statusCode, resp)',
     'payload := gin.H{"code": statusCode}\n\tc.AbortWithStatusJSON(statusCode, payload)',
+    // 构造入口形态：状态与业务码在同一调用里（带键响应统一经它构造）
+    'c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "rule.versionConflict"))',
+    'c.JSON(http.StatusBadRequest, apimsg.Envelope(ctx, 400, "backup.importInProgressActionNotAllowed", "开始新的"+action))',
+    // 构造入口藏在变量里：与字面量信封同口径解析
+    'resp := apimsg.Envelope(c, 500, "common.databaseError")\n\tc.JSON(http.StatusInternalServerError, resp)',
   ]
   for (const fixture of fixtures) {
     assert.equal(scan(fixture).pairs.length, 1, `扫描器漏形态：${fixture}`)
@@ -264,6 +280,14 @@ test('扫描器形态自测：同行/多行、两种方法/信封、字面量/�
     [{ status: 'outcome.status', code: 'outcome.status' }],
     '动态形态必须解出同一表达式',
   )
+  // 构造入口形态的状态 ⇄ 业务码同义判定同样生效：错配必须判 false，而不是漏判。
+  const constructorPair = scan('c.JSON(http.StatusConflict, apimsg.Envelope(c, 500, "rule.versionConflict"))')
+  assert.deepEqual(
+    constructorPair.pairs.map(({ status, code }) => ({ status, code })),
+    [{ status: 'http.StatusConflict', code: '500' }],
+    '构造入口形态必须解出业务码',
+  )
+  assert.equal(pairConsistent(constructorPair.pairs[0] as Envelope), false, '构造入口形态的错配必须被判定为不同义')
   // 非信封载荷（登录响应、服务层结构体、自定义 gin.H 键、函数调用、变量）不参与
   assert.equal(scan('c.JSON(http.StatusOK, models.LoginResponse{Token: t})').pairs.length, 0)
   assert.equal(scan('c.JSON(http.StatusOK, gin.H{"status": "ok"})').pairs.length, 0)

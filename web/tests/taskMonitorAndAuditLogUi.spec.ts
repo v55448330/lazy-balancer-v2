@@ -67,7 +67,11 @@ test('深翻页上限与后端常量、消息键跨栈同值', () => {
   const catalog = repoCode('internal/i18n/catalog_manual.go')
   assert.ok(catalog.includes(`Register("${AUDIT_LOG_DEEP_PAGE_MESSAGE_KEY}"`), '消息键必须在手工登记表')
   const backend = repoCode('internal/handlers/auditlog.go')
-  assert.match(backend, new RegExp(`MessageKey: "${AUDIT_LOG_DEEP_PAGE_MESSAGE_KEY}"`), '后端该 400 必须下发稳定消息键（前端判别依赖）')
+  assert.match(
+    backend,
+    new RegExp(`(?:MessageKey: |apimsg\\.Envelope\\([^,]+, [^,]+, )"${AUDIT_LOG_DEEP_PAGE_MESSAGE_KEY}"`),
+    '后端该 400 必须下发稳定消息键（前端判别依赖）',
+  )
 })
 
 test('操作日志页：分页器总数走截断值，超限常显提示，上限 400 不报加载失败', () => {

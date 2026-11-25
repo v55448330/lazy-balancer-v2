@@ -95,8 +95,8 @@ func TestUpdateNotificationRule_dailyChannelIDsSanitized(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("daily all-invalid status=%d body=%v, want 400", status, out)
 	}
-	if out["message_key"] != msgNotifyChannelSelectionUnavailable {
-		t.Fatalf("message_key=%v, want %s", out["message_key"], msgNotifyChannelSelectionUnavailable)
+	if out["message_key"] != "notify.selectedChannelsAllUnavailable" {
+		t.Fatalf("message_key=%v, want %s", out["message_key"], "notify.selectedChannelsAllUnavailable")
 	}
 	if err := db.DB.QueryRow(`SELECT channel_ids FROM notification_subscriptions WHERE user_id=7 AND event_type=?`,
 		notify.EvtDailyReport).Scan(&ids); err != nil {

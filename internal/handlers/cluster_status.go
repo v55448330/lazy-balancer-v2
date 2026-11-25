@@ -81,7 +81,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 				// 从端重试脱离通知（DELETE 成功但响应丢失）时节点已不存在：
 				// 按幂等成功应答，从端据 200 停止重试；500 会让从端按
 				// 「服务端故障」持续重试并写入 last_sync_error。
-				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeNotInCluster"), MessageKey: "cluster.nodeNotInCluster"})
+				c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeNotInCluster"))
 				return
 			}
 			recordDetached("failed")
@@ -89,7 +89,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 			return
 		}
 		recordDetached("success")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeDetached"), MessageKey: "cluster.nodeDetached"})
+		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeDetached"))
 		return
 	}
 	if err := h.clusterService.ReportNode(c.Request.Context(), nodeID, req, time.Now()); err != nil {
@@ -109,5 +109,5 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "节点状态上报失败", err)
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeStatusUpdated"), MessageKey: "cluster.nodeStatusUpdated"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeStatusUpdated"))
 }

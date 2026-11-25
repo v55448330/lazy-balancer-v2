@@ -275,7 +275,7 @@ func (in *adminTLSInput) certificatePair() (string, string, error) {
 func respondAdminTLSBodyError(c *gin.Context, err error) {
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "system.adminTlsRequestBodyTooLarge"), MessageKey: "system.adminTlsRequestBodyTooLarge"})
+		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "system.adminTlsRequestBodyTooLarge"))
 		return
 	}
 	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
@@ -296,7 +296,7 @@ func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 		return
 	}
 	if _, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "system.adminTlsCertKeyMismatch", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.adminTlsCertKeyMismatch", apimsg.ErrMsg(c, err)))
 		return
 	}
 	if err := validateAdminTLSCertPeriod(certPEM, time.Now()); err != nil {
@@ -305,7 +305,7 @@ func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 	}
 	info, err := parseAdminTLSCertInfo(certPEM)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "system.adminTlsCertParseFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.adminTlsCertParseFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
@@ -432,7 +432,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	current, err := services.LoadAdminTLSConfigE()
 	if err != nil {
 		auditAdminTLSFailure(c, "读取当前 HTTPS 配置失败: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "system.adminTlsLoadFailedSaveAborted", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.adminTlsLoadFailedSaveAborted", apimsg.ErrMsg(c, err)))
 		return
 	}
 	enabled := current.Enabled
@@ -452,7 +452,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 			modeText = "未设置"
 		}
 		auditAdminTLSFailure(c, "证书材料来源与 mode 不一致（当前 mode："+modeText+"）")
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "system.adminTlsCertMaterialWithoutUploadMode", modeText)})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.adminTlsCertMaterialWithoutUploadMode", modeText))
 		return
 	}
 	cert, key := current.Cert, current.Key
@@ -485,7 +485,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	if err := validateAdminTLSConfigValues(services.AdminTLSConfig{Enabled: enabled, Mode: mode, Cert: cert, Key: key}); err != nil {
 		if unchanged {
 			auditAdminTLSFailure(c, "存量配置无效（本次值未变更）: "+err.Error())
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "system.adminTlsStoredConfigInvalidUnchanged", err.Error())})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.adminTlsStoredConfigInvalidUnchanged", err.Error()))
 			return
 		}
 		auditAdminTLSFailure(c, "配置校验失败: "+err.Error())
@@ -493,7 +493,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		return
 	}
 	if unchanged {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "system.adminTlsUnchangedNoRestart"), MessageKey: "system.adminTlsUnchangedNoRestart"})
+		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.adminTlsUnchangedNoRestart"))
 		return
 	}
 	// 独有探针：启用态以真实落盘目录探测证书可用性（自签名生成/文件读写），
@@ -502,7 +502,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key}
 		if _, err := probe.ResolveCertificate(h.cfg.DataDir); err != nil {
 			auditAdminTLSFailure(c, "证书不可用: "+err.Error())
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "system.adminTlsCertificateUnusable", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.adminTlsCertificateUnusable", apimsg.ErrMsg(c, err)))
 			return
 		}
 	}
@@ -524,7 +524,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		enabled, mode, cert, key)
 	if err != nil {
 		auditAdminTLSFailure(c, "写入 HTTPS 配置失败: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "system.adminTlsSaveFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.adminTlsSaveFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	if n, rowsErr := res.RowsAffected(); rowsErr != nil || n != 1 {
@@ -534,7 +534,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 			reason = "读取更新结果失败: " + rowsErr.Error()
 		}
 		auditAdminTLSFailure(c, "HTTPS 配置未落库（"+reason+"）")
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "system.adminTlsNotPersisted"), MessageKey: "system.adminTlsNotPersisted"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.adminTlsNotPersisted"))
 		return
 	}
 
@@ -561,7 +561,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		services.AuditResultPart("success"),
 	))
 	notify.Publish(notify.Event{Type: notify.EvtGlobalChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "管理接口 TLS"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "system.adminTlsSavedRestarting"), MessageKey: "system.adminTlsSavedRestarting"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.adminTlsSavedRestarting"))
 	// 改走统一重启触发器（restartProcess，见 system.go）——与集群同步的
 	// Admin TLS 热切换同一优雅停机信号；测试环境回退 exitProcess。
 	// 先解锁再重启：重启期间不得让并发的配置写请求阻塞在 caddyOpMu 上。

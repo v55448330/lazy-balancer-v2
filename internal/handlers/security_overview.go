@@ -40,11 +40,11 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 		// not_found，后者保持 500 且 message 归位查询失败（不再借「规则不存在」
 		// 文案）。前端对非 200 一律 stats=null，404 化不改变前端表现。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "rule.ruleNotFound"), MessageKey: "rule.ruleNotFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "rule.ruleNotFound"))
 			return
 		}
 		services.Logf("error", "stage-stats read rule domain failed for %s: %v", ruleCaddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.stageStatsQueryFailed"), MessageKey: "security.stageStatsQueryFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "security.stageStatsQueryFailed"))
 		return
 	}
 	if db.MetricsDB == nil {
@@ -66,7 +66,7 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 	stats, err := loadRuleStageStats(db.MetricsDB, ruleCaddyID, time.Now())
 	if err != nil {
 		services.Logf("error", "stage-stats query failed for %s: %v", ruleCaddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "security.stageStatsQueryFailed"), MessageKey: "security.stageStatsQueryFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "security.stageStatsQueryFailed"))
 		return
 	}
 

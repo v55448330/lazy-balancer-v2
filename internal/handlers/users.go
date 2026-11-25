@@ -22,7 +22,7 @@ import (
 func (h *Handlers) ListUsers(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT " + db.UserRowColumns("") + " FROM users ORDER BY id")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "common.databaseError"), MessageKey: "common.databaseError"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
 		return
 	}
 	defer rows.Close()
@@ -32,7 +32,7 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 		var meta db.UserRowMeta
 		u, err := db.ScanUserRow(rows, &meta)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "common.databaseError"), MessageKey: "common.databaseError"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
 			return
 		}
 		// mfa_enabled/is_setup_admin/auth_provider 均由单源扫描载入，
@@ -40,7 +40,7 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 		users = append(users, models.NewUserResponse(u, meta.MFAEnabled))
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "common.databaseError"), MessageKey: "common.databaseError"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
 		return
 	}
 
@@ -58,12 +58,12 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
 		return
 	}
 
 	if req.Role != "admin" && req.Role != "user" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.invalidRole"), MessageKey: "user.invalidRole"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.invalidRole"))
 		return
 	}
 	if err := validateUsernamePolicy(req.Username); err != nil {
@@ -76,7 +76,7 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordHashingFailed"), MessageKey: "user.passwordHashingFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordHashingFailed"))
 		return
 	}
 
@@ -86,10 +86,10 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		req.Username, string(hash), req.Role, req.DisplayName)
 	if err != nil {
 		if isUniqueConstraintError(err) {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "user.usernameAlreadyExists"), MessageKey: "user.usernameAlreadyExists"})
+			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "user.usernameAlreadyExists"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.createFailed"), MessageKey: "user.createFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.createFailed"))
 		return
 	}
 
@@ -128,7 +128,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.invalidId"), MessageKey: "user.invalidId"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.invalidId"))
 		return
 	}
 
@@ -142,12 +142,12 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
 		return
 	}
 
 	if req.Role != nil && *req.Role != "" && *req.Role != "admin" && *req.Role != "user" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.invalidRole"), MessageKey: "user.invalidRole"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.invalidRole"))
 		return
 	}
 	// break-glass 管理入口（初始化创建的首个管理员，按 is_setup_admin 标记
@@ -157,7 +157,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		return
 	}
 	if protected && req.Role != nil && *req.Role == "user" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.initialAdminCannotBeDemoted"), MessageKey: "user.initialAdminCannotBeDemoted"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.initialAdminCannotBeDemoted"))
 		return
 	}
 	// 2026-09-18 用户裁定:OIDC 用户显示名/密码源自 IdP,管理员亦不可改
@@ -185,7 +185,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.updateFailed"), MessageKey: "user.updateFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
 		return
 	}
 	committed := false
@@ -201,9 +201,9 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	var oldEnabled bool
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, COALESCE(display_name,''), is_enabled FROM users WHERE id = ?", id).Scan(&oldUsername, &oldRole, &oldDisplayName, &oldEnabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "user.notFound"))
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.userLoadFailed"), MessageKey: "auth.userLoadFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.userLoadFailed"))
 		}
 		return
 	}
@@ -220,11 +220,11 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	// 本自助锁，把 role 改成 admin 提权。
 	if c.GetString("role") != "admin" {
 		if usernameChanged {
-			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "user.usernameChangeAdminOnly"), MessageKey: "user.usernameChangeAdminOnly"})
+			c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "user.usernameChangeAdminOnly"))
 			return
 		}
 		if req.Role != nil && *req.Role != "" && *req.Role != oldRole {
-			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "user.roleChangeAdminOnly"), MessageKey: "user.roleChangeAdminOnly"})
+			c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "user.roleChangeAdminOnly"))
 			return
 		}
 	}
@@ -240,7 +240,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	if passwordChangeRequested {
 		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordHashingFailed"), MessageKey: "user.passwordHashingFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordHashingFailed"))
 			return
 		}
 		passwordHash = string(hash)
@@ -287,11 +287,11 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		if oldEnabled && oldRole == "admin" && req.Role != nil && *req.Role == "user" {
 			hasOther, err := ensureOtherEnabledAdmin(c.Request.Context(), tx, id)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.updateFailed"), MessageKey: "user.updateFailed"})
+				c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
 				return
 			}
 			if !hasOther {
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "user.cannotDemoteLastEnabledAdmin"), MessageKey: "user.cannotDemoteLastEnabledAdmin"})
+				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "user.cannotDemoteLastEnabledAdmin"))
 				return
 			}
 		}
@@ -300,15 +300,15 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		result, err := tx.ExecContext(c.Request.Context(), query, args...)
 		if err != nil {
 			if isUniqueConstraintError(err) {
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "user.usernameAlreadyExists"), MessageKey: "user.usernameAlreadyExists"})
+				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "user.usernameAlreadyExists"))
 				return
 			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.updateFailed"), MessageKey: "user.updateFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
 			return
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.updateFailed"), MessageKey: "user.updateFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
 			return
 		}
 		if rowsAffected == 0 {
@@ -317,11 +317,11 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 			// 拦截 → 409。此前一律 409 会把并发删除误报成管理员锁。
 			var exists int
 			if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id = ?", id).Scan(&exists); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.updateFailed"), MessageKey: "user.updateFailed"})
+				c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
 			} else if exists == 0 {
-				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
+				c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "user.notFound"))
 			} else {
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "user.cannotDemoteLastEnabledAdmin"), MessageKey: "user.cannotDemoteLastEnabledAdmin"})
+				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "user.cannotDemoteLastEnabledAdmin"))
 			}
 			return
 		}
@@ -330,7 +330,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	// 改密成功后在提交前吊销在册 MFA 挑战。
 	if passwordHash != "" {
 		if err := revokeMFAChallenges(tx, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.updateFailed"), MessageKey: "user.updateFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
 			return
 		}
 	}
@@ -339,13 +339,13 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	// is_setup_admin 同样恒 false，API 消费者/脚本误判。
 	user, err := db.ScanUserRow(tx.QueryRowContext(c.Request.Context(), `SELECT `+db.UserRowColumns("")+` FROM users WHERE id=?`, id), &meta)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.userLoadFailed"), MessageKey: "auth.userLoadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.userLoadFailed"))
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
 		rollbackLeakedTx()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.updateFailed"), MessageKey: "user.updateFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
 		return
 	}
 	committed = true
@@ -423,7 +423,7 @@ func oidcManagedWriteGate(c *gin.Context, userID int, fields oidcManagedWriteFie
 	}
 	oidcUser, err := isOIDCUser(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.identityLoadFailed"), MessageKey: "user.identityLoadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.identityLoadFailed"))
 		return true
 	}
 	if !oidcUser {
@@ -473,7 +473,7 @@ func setupAdminProtected(c *gin.Context, id int) (protected bool, ok bool) {
 	protected, err := db.IsSetupAdmin(c.Request.Context(), db.DB, id)
 	if err != nil {
 		services.Logf("error", "读取 setup 管理员标记失败: user_id=%d: %v", id, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.protectionStatusLoadFailed"), MessageKey: "user.protectionStatusLoadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.protectionStatusLoadFailed"))
 		return false, false
 	}
 	return protected, true
@@ -486,7 +486,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.invalidId"), MessageKey: "user.invalidId"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.invalidId"))
 		return
 	}
 
@@ -494,7 +494,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	userIDInt := int(contextUserID(c))
 
 	if userIDInt == id {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.cannotDeleteSelf"), MessageKey: "user.cannotDeleteSelf"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.cannotDeleteSelf"))
 		return
 	}
 
@@ -505,13 +505,13 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 	if protected {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.initialAdminCannotBeDeleted"), MessageKey: "user.initialAdminCannotBeDeleted"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.initialAdminCannotBeDeleted"))
 		return
 	}
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 		return
 	}
 	defer func() {
@@ -524,20 +524,20 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	var targetEnabled bool
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, is_enabled, COALESCE(auth_provider,'local') FROM users WHERE id = ?", id).Scan(&targetUsername, &targetRole, &targetEnabled, &targetProvider); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "user.notFound"))
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.userLoadFailed"), MessageKey: "auth.userLoadFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.userLoadFailed"))
 		}
 		return
 	}
 	if targetRole == "admin" && targetEnabled {
 		hasOther, err := ensureOtherEnabledAdmin(c.Request.Context(), tx, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 			return
 		}
 		if !hasOther {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "user.cannotDeleteLastEnabledAdmin"), MessageKey: "user.cannotDeleteLastEnabledAdmin"})
+			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "user.cannotDeleteLastEnabledAdmin"))
 			return
 		}
 	}
@@ -546,14 +546,14 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	var cascadeKeyIDs []int
 	keyRows, keyErr := tx.QueryContext(c.Request.Context(), "SELECT id FROM api_keys WHERE created_by = ?", id)
 	if keyErr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 		return
 	}
 	for keyRows.Next() {
 		var keyID int
 		if err := keyRows.Scan(&keyID); err != nil {
 			keyRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 			return
 		}
 		cascadeKeyIDs = append(cascadeKeyIDs, keyID)
@@ -566,14 +566,14 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 	keyRows.Close()
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 		return
 	}
 	// 连带清理该用户的 MFA 登录挑战——无越权面（消费端按 token+user_id 判定
 	// 且登录第二步 JOIN users），但簿记残留不应依赖 MFAIssueChallenge 的
 	// 惰性过期清理（过期才删；未过期行会残留至到期）。
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM mfa_challenges WHERE user_id = ?", id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 		return
 	}
 	// 通知表随用户连带清理：通道是已删账号仍可继续收安全事件的外部投递面
@@ -585,7 +585,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		"DELETE FROM notification_subscriptions WHERE user_id = ?",
 	} {
 		if _, err := tx.ExecContext(c.Request.Context(), stmt, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 			return
 		}
 	}
@@ -594,23 +594,23 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM users WHERE id = ?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 		return
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 		return
 	}
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
+		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "user.notFound"))
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
 		rollbackLeakedTx()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.deleteFailed"), MessageKey: "user.deleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.deleteFailed"))
 		return
 	}
 	// 用户删除后其登录后验码限流条目（进程内内存态）不再可被访问，顺带清除
@@ -634,7 +634,7 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.invalidId"), MessageKey: "user.invalidId"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.invalidId"))
 		return
 	}
 
@@ -647,11 +647,11 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
 		return
 	}
 	if req.IsEnabled == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.isEnabledFieldRequired"), MessageKey: "user.isEnabledFieldRequired"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.isEnabledFieldRequired"))
 		return
 	}
 	enable := *req.IsEnabled
@@ -660,7 +660,7 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	// 失效,与 DeleteUser 自保护不对称。UI 已挡/API 未挡。
 	if !enable {
 		if userIDInt := int(contextUserID(c)); userIDInt == id {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.cannotDisableSelf"), MessageKey: "user.cannotDisableSelf"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.cannotDisableSelf"))
 			return
 		}
 	}
@@ -672,14 +672,14 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 			return
 		}
 		if protected {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.initialAdminCannotBeDisabled"), MessageKey: "user.initialAdminCannotBeDisabled"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.initialAdminCannotBeDisabled"))
 			return
 		}
 	}
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 		return
 	}
 	defer func() {
@@ -691,9 +691,9 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	var wasEnabled bool
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, is_enabled, COALESCE(auth_provider,'local') FROM users WHERE id = ?", id).Scan(&statusUsername, &statusRole, &wasEnabled, &statusProvider); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "user.notFound"))
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 		}
 		return
 	}
@@ -717,11 +717,11 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		if wasEnabled && statusRole == "admin" {
 			hasOther, checkErr := ensureOtherEnabledAdmin(c.Request.Context(), tx, id)
 			if checkErr != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+				c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 				return
 			}
 			if !hasOther {
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "user.cannotDisableLastEnabledAdmin"), MessageKey: "user.cannotDisableLastEnabledAdmin"})
+				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "user.cannotDisableLastEnabledAdmin"))
 				return
 			}
 		}
@@ -730,35 +730,35 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 		return
 	}
 	if rowsAffected == 0 {
 		var exists int
 		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id = ?", id).Scan(&exists); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 		} else if exists == 0 {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "user.notFound"))
 		} else {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "user.cannotDisableLastEnabledAdmin"), MessageKey: "user.cannotDisableLastEnabledAdmin"})
+			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "user.cannotDisableLastEnabledAdmin"))
 		}
 		return
 	}
 	if statusChanged {
 		if err := revokeMFAChallenges(tx, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 			return
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
 		rollbackLeakedTx()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.statusUpdateFailed"), MessageKey: "user.statusUpdateFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.statusUpdateFailed"))
 		return
 	}
 
@@ -794,7 +794,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.invalidId"), MessageKey: "user.invalidId"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.invalidId"))
 		return
 	}
 
@@ -805,18 +805,18 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.malformedRequest"), MessageKey: "common.malformedRequest"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
 		return
 	}
 	// OIDC 用户无本地密码(bcrypt 恒空),重置/设置本地密码会破坏「OIDC 用户
 	// 密码登录天然不可用」设计——拒绝(2026-09-18 用户裁定)。
 	oidcUser, err := isOIDCUser(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.identityLoadFailed"), MessageKey: "user.identityLoadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.identityLoadFailed"))
 		return
 	}
 	if oidcUser {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "user.oidcPasswordResetNotAllowed"), MessageKey: "user.oidcPasswordResetNotAllowed"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.oidcPasswordResetNotAllowed"))
 		return
 	}
 	if err := validatePasswordPolicy(req.NewPassword); err != nil {
@@ -826,7 +826,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordHashingFailed"), MessageKey: "user.passwordHashingFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordHashingFailed"))
 		return
 	}
 
@@ -834,7 +834,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	// 移除（改密不吊销 Key，见认证底线）；MFA 挑战吊销保留（下方 revoke）。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordResetFailed"), MessageKey: "user.passwordResetFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordResetFailed"))
 		return
 	}
 	committed := false
@@ -848,33 +848,33 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	query := "UPDATE users SET " + strings.Join(passwordResetColumns(), ", ") + " WHERE id = ?"
 	result, err := tx.ExecContext(c.Request.Context(), query, string(hash), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordResetFailed"), MessageKey: "user.passwordResetFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordResetFailed"))
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordResetFailed"), MessageKey: "user.passwordResetFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordResetFailed"))
 		return
 	}
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "user.notFound"), MessageKey: "user.notFound"})
+		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "user.notFound"))
 		return
 	}
 	// 密码重置吊销在册 MFA 挑战（与更新/自助改密同语义）。
 	if err := revokeMFAChallenges(tx, id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordResetFailed"), MessageKey: "user.passwordResetFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordResetFailed"))
 		return
 	}
 	var resetUsername string
 	// 同 ToggleUserStatus——审计富化回填读失败 500。
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username FROM users WHERE id = ?", id).Scan(&resetUsername); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordResetFailed"), MessageKey: "user.passwordResetFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordResetFailed"))
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
 		rollbackLeakedTx()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "user.passwordResetFailed"), MessageKey: "user.passwordResetFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordResetFailed"))
 		return
 	}
 	committed = true
@@ -882,5 +882,5 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(services.AuditUserPart(id, resetUsername), services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtPasswordReset,
 		Fields: map[string]string{"1": c.GetString("username"), "2": resetUsername}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "user.passwordResetSucceeded"), MessageKey: "user.passwordResetSucceeded"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "user.passwordResetSucceeded"))
 }

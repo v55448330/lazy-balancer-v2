@@ -674,7 +674,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "backup.importFileLoadFailed", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.importFileLoadFailed", apimsg.ErrMsg(c, err)))
 			return
 		}
 		body = raw
@@ -694,7 +694,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		c.Set("lbbak_payload", payload)
 	}
 	if len(body) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.importFileEmpty"), MessageKey: "backup.importFileEmpty"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.importFileEmpty"))
 		return
 	}
 	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
@@ -976,7 +976,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
 			err = failImportAbort(c, session, "导入", "生成规则编号", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.importRuleIdGenerateFailed", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.importRuleIdGenerateFailed", apimsg.ErrMsg(c, err)))
 			return
 		}
 		affectedRuleIDs = append(affectedRuleIDs, caddyID)

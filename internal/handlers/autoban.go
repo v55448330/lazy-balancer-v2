@@ -48,7 +48,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	}
 	var req services.AutobanConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.invalidRequestParams"), MessageKey: "common.invalidRequestParams"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequestParams"))
 		return
 	}
 	// 缺省归一（旧客户端未携带新字段）与 SetAutobanConfig 同单源。
@@ -254,7 +254,7 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	identity := services.AutobanEntryIdentity(c.Param("identity"))
 	identity, err := services.DeleteAutobanRecidivismGuarded(caddyWriteCtx(c), identity)
 	if errors.Is(err, services.ErrAutobanIdentityBanned) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.recidivismRecordCannotBeRemovedWhileBanned"), MessageKey: "security.recidivismRecordCannotBeRemovedWhileBanned"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.recidivismRecordCannotBeRemovedWhileBanned"))
 		return
 	}
 	if err != nil {

@@ -1,14 +1,16 @@
 // 响应消息按键渲染（web/DESIGN_SPEC.md §25-8）。
 //
-// 后端响应信封带 message_key（语义键）时，前端用自己的词条按当前语言渲染提示文字；
-// 后端 message 整句只在渲染不出时作回落。apiMessageText 是响应拦截器取「要显示的
-// 文字」的唯一入口（utils/api.ts 的两条失败路径），零 Vue/Element 依赖，node --test
+// 后端响应信封带 message_key（语义键）与 message_params（模板参数，按占位符顺序、
+// 一律是字符串——就是后端填进 message 的那段文本）时，前端用自己的词条按当前语言
+// 渲染提示文字；后端 message 整句只在渲染不出时作回落。apiMessageText 是响应拦截器
+// 取「要显示的文字」的唯一入口（utils/api.ts），零 Vue/Element 依赖，node --test
 // 可直接求值。
 //
-// 渲染只实现后端 fmt.Sprintf 的一部分：占位符 %s、%d、%v、%q 与字面 %%。遇到这之外
-// 的任何形态（其它动词、宽度/精度/标志、孤立百分号），或参数与占位符对不上，一律
-// 返回 null——放弃渲染、回落原文，比拼出一句错话安全。tests/apiMessage.spec.ts 的
-// 覆盖面用例钉住「后端目录里实际出现的占位符都在实现范围内」。
+// 渲染逐字复现后端 apimsg.Tf 的槽位规则（不是标准 fmt）：%s/%d/%v/%q 各消费一个
+// 参数、原样填入，%q 在两侧加引号；%% 输出一个 %；槽以外的写法原样保留、不消费
+// 参数；参数用完后占位符原样留下，多出的参数忽略。这样切换文案来源时用户看到的
+// 文字不变。拿不准的输入（参数缺失、不是字符串数组）一律回落后端原文——比拼出
+// 一句错话安全。tests/apiMessagesParity.spec.ts 与 Go 侧共享夹具钉住两侧逐字相同。
 
 import { API_MESSAGE_EN, API_MESSAGE_ZH } from '../i18n/apiMessages.ts'
 
@@ -22,51 +24,44 @@ interface ApiMessageEnvelope {
   readonly message_params?: unknown
 }
 
-// 模板按占位符切开：偶数下标是字面文本，奇数下标是占位符（%s / %d / %v / %q / %%）。
-const VERB_SPLIT = /(%[sdvq%])/
-
-/** 模板切分后占参数的占位符个数（%% 是字面百分号，不占参数）。 */
-const argumentCount = (parts: readonly string[]): number => parts.filter((part, index) => index % 2 === 1 && part !== '%%').length
+// 模板里的占位符（与后端 Tf 同集合）：%s / %d / %v / %q 各占一槽，%% 是字面百分号。
+const VERB = /%[sdvq%]/g
 
 /** 模板里占参数的占位符动词，按出现顺序（%% 不计）。 */
-export const templateVerbs = (template: string): string[] => {
-  const parts = template.split(VERB_SPLIT)
-  return parts.flatMap((part, index) => (index % 2 === 1 && part !== '%%' ? [part[1] as string] : []))
-}
+export const templateVerbs = (template: string): string[] =>
+  [...template.matchAll(VERB)].map((match) => match[0]).filter((verb) => verb !== '%%').map((verb) => verb[1] as string)
 
 /**
- * 按模板与参数渲染（对应后端 fmt 对 %s / %d / %v / %q / %% 的语义）。
- * 参数必须与占位符一一对应：个数不等、%d 收到非整数、%q 收到非字符串，都返回
- * null——由调用方回落原文。
+ * 按模板与参数渲染（逐字复现后端 apimsg.Tf）。
+ * params 是后端渲染进 message 的那段文本，按占位符顺序排列。
  */
-export const formatApiMessage = (template: string, params: readonly unknown[]): string | null => {
-  const parts = template.split(VERB_SPLIT)
-  if (argumentCount(parts) !== params.length) return null
+export const formatApiMessage = (template: string, params: readonly string[]): string => {
   let out = ''
-  let next = 0 // 下一个待消费的参数下标
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index] as string
-    if (index % 2 === 0) {
-      // 字面文本里不得再有百分号：那是没实现的动词（%f、%.2f、孤立 %）。
-      if (part.includes('%')) return null
-      out += part
+  let next = 0
+  for (let i = 0; i < template.length; i++) {
+    const ch = template[i] as string
+    if (ch !== '%') {
+      out += ch
       continue
     }
-    if (part === '%%') {
+    const code = template[i + 1]
+    if (code === '%') {
       out += '%'
+      i++
       continue
     }
-    const value = params[next]
-    next++
-    if (part === '%s' || part === '%v') {
-      out += value === null || value === undefined ? '<nil>' : typeof value === 'object' ? JSON.stringify(value) : String(value)
-    } else if (part === '%d') {
-      if (typeof value !== 'number' || !Number.isInteger(value)) return null
-      out += String(value)
-    } else {
-      if (typeof value !== 'string') return null
-      out += JSON.stringify(value)
+    if (code === 's' || code === 'd' || code === 'v' || code === 'q') {
+      const text = params[next]
+      if (text === undefined) {
+        out += ch + code // 参数用完了：占位符原样留下（与 Tf 同口径）
+      } else {
+        out += code === 'q' ? `"${text}"` : text
+        next++
+      }
+      i++
+      continue
     }
+    out += ch // 槽以外的写法原样保留，不消费参数
   }
   return out
 }
@@ -85,6 +80,10 @@ export const apiMessageText = (envelope: unknown, locale: ApiMessageLocale): str
     ? (Object.prototype.hasOwnProperty.call(API_MESSAGE_EN, key) ? API_MESSAGE_EN[key] : undefined)
     : (Object.prototype.hasOwnProperty.call(API_MESSAGE_ZH, key) ? API_MESSAGE_ZH[key] : undefined)
   if (template === undefined) return null
-  if (params !== undefined && !Array.isArray(params)) return null
-  return formatApiMessage(template, (params ?? []) as readonly unknown[])
+  if (params === undefined) {
+    // 没有参数：模板必须不带占位符，否则会渲染出字面 %s——回落后端原文。
+    return templateVerbs(template).length === 0 ? template : null
+  }
+  if (!Array.isArray(params) || !params.every((param) => typeof param === 'string')) return null
+  return formatApiMessage(template, params as string[])
 }

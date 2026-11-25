@@ -99,7 +99,7 @@ func (h *Handlers) StartCrawlerLibUpdate(c *gin.Context) {
 		return
 	}
 	if te.IsTaskInFlight(services.CrawlerTaskID) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "security.taskRunningRetryLater"), MessageKey: "security.taskRunningRetryLater"})
+		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "security.taskRunningRetryLater"))
 		return
 	}
 	op := auditOperator(c)
@@ -129,7 +129,7 @@ func (h *Handlers) UpdateCrawlerAutoUpdate(c *gin.Context) {
 	}
 	recordAudit(c, "更新", "爬虫地址库", "自动更新总开关："+enabledStateLabel(autoUpdate))
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "爬虫地址库", "3": "自动更新开关"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "security.updated"), MessageKey: "security.updated"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }
 
 // UpdateCrawlerSchedule 保存爬虫地址库独立排程并重排全部启用源。
@@ -140,7 +140,7 @@ func (h *Handlers) UpdateCrawlerSchedule(c *gin.Context) {
 	}
 	recordAudit(c, "更新", "爬虫地址库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "爬虫地址库", "3": "定时设置"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "security.updated"), MessageKey: "security.updated"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }
 
 // GetCrawlerLibUpdateStatus 爬虫地址库任务状态（直接读 crawlerbot-update

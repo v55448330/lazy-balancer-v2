@@ -27,5 +27,8 @@ test('语义键与后端 catalog 逐字对齐（跨栈钉）', () => {
   const catalog = repoCode('internal/i18n/catalog_gen.go')
   assert.ok(catalog.includes('Register("rule.versionConflict", "规则已被他人修改，请刷新后重试"'), 'catalog 母本漂移：版本冲突键或中文母本已变')
   const go = repoCode('internal/handlers/rules.go')
-  assert.ok(go.includes('MessageKey: "rule.versionConflict"'), 'rules.go 不再随版本冲突响应返回 message_key——前端冲突识别失配')
+  assert.ok(
+    go.includes('MessageKey: "rule.versionConflict"') || go.includes('apimsg.Envelope(c, http.StatusConflict, "rule.versionConflict"'),
+    'rules.go 不再随版本冲突响应返回 message_key——前端冲突识别失配',
+  )
 })

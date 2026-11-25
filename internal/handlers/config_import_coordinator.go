@@ -319,7 +319,7 @@ func rejectWriteDuringImport(c *gin.Context, action string) bool {
 		return false
 	}
 	action = strings.ReplaceAll(action, "（配置导入进行中）", "")
-	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.Tf(c, "backup.importInProgressActionNotAllowed", action)})
+	c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "backup.importInProgressActionNotAllowed", action))
 	return true
 }
 
@@ -535,7 +535,7 @@ func respondImportBeginError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
-	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "backup.importSessionStartFailed"), MessageKey: "backup.importSessionStartFailed"})
+	c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.importSessionStartFailed"))
 }
 
 func (session *configImportSession) close() {

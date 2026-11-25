@@ -53,7 +53,7 @@ type humanLiveChallengePayload struct {
 func (h *Handlers) GetHumanLiveChallenges(c *gin.Context) {
 	scope := c.DefaultQuery("scope", "active")
 	if scope != "active" && scope != "recent" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "security.invalidChallengeScope"), MessageKey: "security.invalidChallengeScope"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.invalidChallengeScope"))
 		return
 	}
 	out := humanLiveChallengePayload{Sessions: []humanLiveChallengeSession{}}

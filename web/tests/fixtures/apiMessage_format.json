@@ -1,0 +1,16 @@
+[
+  { "template": "用户不存在", "params": [], "expected": "用户不存在" },
+  { "template": "未知的日报项目: %s", "params": ["no_such_item"], "expected": "未知的日报项目: no_such_item" },
+  { "template": "共 %d 条", "params": ["3"], "expected": "共 3 条" },
+  { "template": "%s 与 %v 混用", "params": ["a", "b"], "expected": "a 与 b 混用" },
+  { "template": "未知日志类型 %q，可选值: %s", "params": ["bogus", "a、b"], "expected": "未知日志类型 \"bogus\"，可选值: a、b" },
+  { "template": "进度 100%%", "params": [], "expected": "进度 100%" },
+  { "template": "100%% %s 完成 %d 条", "params": ["迁移", "5"], "expected": "100% 迁移 完成 5 条" },
+  { "template": "%s 条", "params": [], "expected": "%s 条" },
+  { "template": "%s 条", "params": ["a", "b"], "expected": "a 条" },
+  { "template": "%f %s", "params": ["x"], "expected": "%f x" },
+  { "template": "%5d", "params": [], "expected": "%5d" },
+  { "template": "尾部 %", "params": [], "expected": "尾部 %" },
+  { "template": "%%s", "params": [], "expected": "%s" },
+  { "template": "%q", "params": ["已保存"], "expected": "\"已保存\"" }
+]

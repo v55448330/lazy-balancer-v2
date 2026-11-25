@@ -52,7 +52,7 @@ func (h *Handlers) RestartService(c *gin.Context) {
 	}
 	recordAudit(c, "重启", "系统", "用户触发服务重启")
 	notify.Publish(notify.Event{Type: notify.EvtRestartRequested, Fields: map[string]string{"1": c.GetString("username")}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "system.serviceRestarting"), MessageKey: "system.serviceRestarting"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.serviceRestarting"))
 	restartProcess()
 }
 

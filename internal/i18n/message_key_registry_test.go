@@ -77,20 +77,30 @@ func packageStringConstants(files []*ast.File) map[string]string {
 	return constants
 }
 
-// isKeyArgument 报告 call 的第二个实参是否为 T/Tf 的键实参（apimsg.T / apimsg.Tf /
-// i18n.T / i18n.Tf，以及 i18n 包内不带限定名的 T / Tf）。
-func isKeyArgument(call *ast.CallExpr, inI18nPackage bool) bool {
-	if len(call.Args) < 2 {
-		return false
-	}
+// keyArgumentIndex 返回 call 里键实参的下标；不是取词条的调用返回 -1。
+//   - apimsg.T / apimsg.Tf、i18n.T / i18n.Tf，以及 i18n 包内不带限定名的 T / Tf：
+//     键是第二个实参（下标 1）；
+//   - apimsg.Envelope(c, code, key, args...)：带键响应信封的构造入口，键是第三个
+//     实参（下标 2）。
+func keyArgumentIndex(call *ast.CallExpr, inI18nPackage bool) int {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
 		pkg, ok := fn.X.(*ast.Ident)
-		return ok && (pkg.Name == "apimsg" || pkg.Name == "i18n") && (fn.Sel.Name == "T" || fn.Sel.Name == "Tf")
+		if !ok || (pkg.Name != "apimsg" && pkg.Name != "i18n") {
+			return -1
+		}
+		if fn.Sel.Name == "T" || fn.Sel.Name == "Tf" {
+			return 1
+		}
+		if fn.Sel.Name == "Envelope" {
+			return 2
+		}
 	case *ast.Ident:
-		return inI18nPackage && (fn.Name == "T" || fn.Name == "Tf")
+		if inI18nPackage && (fn.Name == "T" || fn.Name == "Tf") {
+			return 1
+		}
 	}
-	return false
+	return -1
 }
 
 // scanMessageKeyUses 扫描 packages（目录 -> 该目录下的 Go 文件），返回其中未登记的
@@ -149,11 +159,12 @@ func scanMessageKeyUses(packages map[string][]string) (uses []messageKeyUse, che
 						record(value, fset.Position(node.Value.Pos()))
 					}
 				case *ast.CallExpr:
-					if !isKeyArgument(node, inI18nPackage) {
+					index := keyArgumentIndex(node, inI18nPackage)
+					if index < 0 || len(node.Args) <= index {
 						return true
 					}
-					if value, ok := constantOrLiteral(node.Args[1]); ok {
-						record(value, fset.Position(node.Args[1].Pos()))
+					if value, ok := constantOrLiteral(node.Args[index]); ok {
+						record(value, fset.Position(node.Args[index].Pos()))
 					}
 				}
 				return true
@@ -245,6 +256,8 @@ func h(c int, runtimeKey string) {
 	_ = struct{ MessageKey string }{MessageKey: runtimeKey}
 	_ = apimsg.T(c, runtimeKey)
 	_ = struct{ MessageKey string }{MessageKey: msgUpper}
+	_ = apimsg.Envelope(c, 404, "rule.envelopeplain")
+	_ = apimsg.Envelope(c, 400, "rule.envelopemissing", 1)
 }
 `
 
@@ -255,7 +268,7 @@ func TestScanMessageKeyUses_recognizesKeyPositions(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 目录是包级全局表：登记合成源码里"应当已登记"的键，用完即撤。
-	registered := []string{"notify.fromUpperConst", "rule.literalUpper", "rule.lowercase", "backup.indirectRegistered", "security.lowercaseField"}
+	registered := []string{"notify.fromUpperConst", "rule.literalUpper", "rule.lowercase", "backup.indirectRegistered", "security.lowercaseField", "rule.envelopeplain"}
 	for _, key := range registered {
 		Register(key, "合成", "synthetic")
 	}
@@ -269,9 +282,10 @@ func TestScanMessageKeyUses_recognizesKeyPositions(t *testing.T) {
 
 	uses, checked := scanMessageKeyUses(map[string][]string{dir: {path}})
 
-	// 目标：未登记的两处各被报一次，出处指向各自的行——
+	// 目标：未登记的三处各被报一次，出处指向各自的行——
 	//   第 16 行的间接用法（不经 T/MessageKey）靠"任意位置"规则；
-	//   第 18 行的全小写键（notify.created，经常量引用）靠"键的位置"规则。
+	//   第 18 行的全小写键（notify.created，经常量引用）与第 24 行的全小写键
+	//   （apimsg.Envelope 的第三个实参）靠"键的位置"规则。
 	var got []string
 	for _, use := range uses {
 		got = append(got, use.key+" @ "+use.pos)
@@ -280,15 +294,17 @@ func TestScanMessageKeyUses_recognizesKeyPositions(t *testing.T) {
 	want := []string{
 		"backup.indirectUnregistered @ " + fmtSiteLine(path, 16),
 		"notify.created @ " + fmtSiteLine(path, 18),
+		"rule.envelopemissing @ " + fmtSiteLine(path, 24),
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("未登记取值点\n got %v\nwant %v", got, want)
 	}
 	// 回归：每个应被识别的位置恰好计一次；"config.yaml"（全小写的普通字面量）、
-	// 运行时变量、无值常量都不计。notify.created 的常量声明处（第 6 行）不是键的位置，
-	// 全小写名字在任意位置规则下也识别不到——所以它只有引用处那一个取值点。
-	if checked != 8 {
-		t.Errorf("核对取值点 %d 处，want 8", checked)
+	// 运行变量、无值常量都不计。notify.created 的常量声明处（第 6 行）不是键的位置，
+	// 全小写名字在任意位置规则下也识别不到——所以它只有引用处那一个取值点；
+	// rule.envelopeplain 同理，只有 Envelope 实参处那一个取值点。
+	if checked != 10 {
+		t.Errorf("核对取值点 %d 处，want 10", checked)
 	}
 }
 

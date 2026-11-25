@@ -102,7 +102,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	// 窗口内提交要么被导入覆盖，要么阻塞在 SQLite 写锁上至 busy_timeout 后 500。
 	// 与节点写族同口径 409；后台 daemon 仍按「主节点为准」保留。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "cluster.manualSyncBlockedByConfigImport"), MessageKey: "cluster.manualSyncBlockedByConfigImport"})
+		c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "cluster.manualSyncBlockedByConfigImport"))
 		return
 	}
 	result, err := h.syncService.Pull(c.Request.Context())
@@ -152,7 +152,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		}
 		if isMaster {
 			recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail("主节点调用被拒绝：主节点 pin 目录存各从节点钉", services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cluster.fingerprintClearSlaveOnly"), MessageKey: "cluster.fingerprintClearSlaveOnly"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.fingerprintClearSlaveOnly"))
 			return
 		}
 	}
@@ -167,7 +167,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		services.AuditResultPart("success"),
 	))
 	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "清除了全部集群信任锚", "3": fmt.Sprintf("主节点证书指纹 %d 个", removed)}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.allMasterFingerprintsCleared"), MessageKey: "cluster.allMasterFingerprintsCleared"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.allMasterFingerprintsCleared"))
 }
 
 // ForgetClusterNodePin 是主节点侧「单节点 TOFU 指纹钉」重置端点（与从节点
@@ -206,7 +206,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 			// 不阻断运维排障流程。
 			recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
 				fmt.Sprintf("节点 %d", nodeID), "该节点没有已钉扎的证书指纹，无需清除"))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeHasNoPinnedFingerprint"), MessageKey: "cluster.nodeHasNoPinnedFingerprint"})
+			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeHasNoPinnedFingerprint"))
 			return
 		}
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), err.Error()))
@@ -223,7 +223,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 		"2": "清除了单节点证书指纹钉",
 		"3": fmt.Sprintf("节点 %d（%s）", nodeID, host),
 	}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeFingerprintCleared"), MessageKey: "cluster.nodeFingerprintCleared"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeFingerprintCleared"))
 }
 
 // GetClusterWafFiles serves the full CRS/IP2Region file bundle on demand to
@@ -242,7 +242,7 @@ func (h *Handlers) GetClusterWafFiles(c *gin.Context) {
 	}
 	body := services.BuildWafFileBundleResponse()
 	if body == nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "cluster.masterHasNoSecurityData"), MessageKey: "cluster.masterHasNoSecurityData"})
+		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "cluster.masterHasNoSecurityData"))
 		return
 	}
 	c.Data(http.StatusOK, "application/json; charset=utf-8", body)

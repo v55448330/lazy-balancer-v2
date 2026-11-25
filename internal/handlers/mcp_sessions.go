@@ -77,7 +77,7 @@ func (h *Handlers) DisconnectMCPSession(c *gin.Context) {
 	var ownerUserID, ownerKeyID int64
 	if err := db.DB.QueryRow(`SELECT user_id, api_key_id FROM mcp_sessions WHERE session_id=?`, sessionID).
 		Scan(&ownerUserID, &ownerKeyID); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "apikey.mcpSessionNotFound"), MessageKey: "apikey.mcpSessionNotFound"})
+		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "apikey.mcpSessionNotFound"))
 		return
 	}
 	if _, err := mcpserver.DisconnectSession(sessionID); err != nil {
@@ -88,7 +88,7 @@ func (h *Handlers) DisconnectMCPSession(c *gin.Context) {
 		"会话 "+sessionID+"（用户 #"+strconv.FormatInt(ownerUserID, 10)+
 			"，Key #"+strconv.FormatInt(ownerKeyID, 10)+"）强制断开")
 	notify.Publish(notify.Event{Type: notify.EvtMCPDisconnected, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("会话 #%s", c.Param("id"))}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "apikey.mcpSessionDisconnected"), MessageKey: "apikey.mcpSessionDisconnected"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "apikey.mcpSessionDisconnected"))
 }
 
 // mcpToolCallsDTO TOP 工具行。

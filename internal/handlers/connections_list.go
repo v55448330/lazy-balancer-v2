@@ -552,7 +552,7 @@ func (h *Handlers) getConnectionsListCached() (connectionsListPayload, error) {
 func (h *Handlers) GetConnectionsList(c *gin.Context) {
 	payload, err := h.getConnectionsListCached()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "system.connectionsListReadFailed"), MessageKey: "system.connectionsListReadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.connectionsListReadFailed"))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: payload})

@@ -323,7 +323,7 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 		}
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, loc)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "audit.invalidTimeFilterFormat"), MessageKey: "audit.invalidTimeFilterFormat"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "audit.invalidTimeFilterFormat"))
 			return time.Time{}, false, true
 		}
 		return t.UTC(), true, false
@@ -377,7 +377,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// 偏移，同一参数在故障窗口内外的状态码分叉也无从排障。降级分支只回显
 	// 合法页码。
 	if page > auditLogDeepPageLimit {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "audit.deepPageLimitExceeded", auditLogDeepPageLimit), MessageKey: "audit.deepPageLimitExceeded"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "audit.deepPageLimitExceeded", auditLogDeepPageLimit))
 		return
 	}
 	// 与 GetAuditLogOptions 同口径的 nil 守卫。降级形态与正常路径同键集：

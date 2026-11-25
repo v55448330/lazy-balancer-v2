@@ -1387,7 +1387,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 func (h *Handlers) OIDCSettings(c *gin.Context) {
 	cfg, err := loadOIDCConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcConfigLoadFailed"), MessageKey: "auth.oidcConfigLoadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcConfigLoadFailed"))
 		return
 	}
 	masked := cfg.ClientSecret
@@ -1438,7 +1438,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.invalidRequestParams"), MessageKey: "common.invalidRequestParams"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequestParams"))
 		return
 	}
 	cfg, cfgErr := loadOIDCConfig()
@@ -1446,7 +1446,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 		// 读失败/损坏时不得以零值继续合并——否则会清空 issuer/
 		// client_id/secret（破坏性写）。整体拒绝，保留库中现值。
 		services.Logf("error", "OIDC 配置更新前读取失败（已拒绝写入）: %v", cfgErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcConfigLoadFailed"), MessageKey: "auth.oidcConfigLoadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcConfigLoadFailed"))
 		return
 	}
 	// 自由文本上限与前端 maxlength/实际用途对齐（此前无上限：任意长度
@@ -1465,7 +1465,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 			continue
 		}
 		if trimmed := strings.TrimSpace(*field.value); truncateRunes(trimmed, field.max) != trimmed {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "auth.oidcFieldTooLong", field.name, field.max), MessageKey: "auth.oidcFieldTooLong"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "auth.oidcFieldTooLong", field.name, field.max))
 			return
 		}
 	}
@@ -1524,7 +1524,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	// 启用前置门与公开状态共用 usable：issuer 合规且 client_id/secret 齐备。
 	if cfg.Enabled {
 		if err := cfg.usable(); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "auth.oidcEnableRequiresFullConfig"), MessageKey: "auth.oidcEnableRequiresFullConfig"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "auth.oidcEnableRequiresFullConfig"))
 			return
 		}
 	}
@@ -1543,24 +1543,20 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	if reportStaleIdentities {
 		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE auth_provider='oidc' AND oidc_issuer IN (?,?)`, before.Issuer, before.rawIssuer).Scan(&staleIdentityRows); err != nil {
 			services.Logf("error", "OIDC 服务地址变更前统计存量身份行失败: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcIdentityLoadFailed"), MessageKey: "auth.oidcIdentityLoadFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcIdentityLoadFailed"))
 			return
 		}
 	}
 	migration, err := saveOIDCConfigWithIssuerMigration(c.Request.Context(), cfg, migrateFrom)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcConfigSaveFailed"), MessageKey: "auth.oidcConfigSaveFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcConfigSaveFailed"))
 		return
 	}
 	if len(migration.conflicts) > 0 {
 		services.Logf("warn", "OIDC 设置保存被拒绝：服务地址归一后与既有身份行冲突（%d 个 subject）", len(migration.conflicts))
 		recordAudit(c, "更新失败", "OIDC 配置", services.FormatAuditDetail(
 			"服务地址归一与既有身份行冲突", "subject："+strings.Join(migration.conflicts, "、"), services.AuditResultPart("failure")))
-		c.JSON(http.StatusConflict, models.APIResponse{
-			Code:    409,
-			Message: apimsg.Tf(c, "auth.oidcNormalizedIssuerIdentityConflict", len(migration.conflicts)), MessageKey: "auth.oidcNormalizedIssuerIdentityConflict",
-			Data: gin.H{"conflicts": migration.conflicts},
-		})
+		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "auth.oidcNormalizedIssuerIdentityConflict", len(migration.conflicts)).WithData(gin.H{"conflicts": migration.conflicts}))
 		return
 	}
 	detail := oidcConfigUpdateAuditDetail(before, cfg)
@@ -1572,7 +1568,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	}
 	recordAudit(c, "更新", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtOIDCChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新"}})
-	response := models.APIResponse{Code: 0, Message: apimsg.T(c, "auth.oidcConfigSaved"), MessageKey: "auth.oidcConfigSaved"}
+	response := apimsg.Envelope(c, 0, "auth.oidcConfigSaved")
 	if reportStaleIdentities {
 		response.Data = gin.H{"stale_identity_rows": staleIdentityRows}
 	}
@@ -1647,20 +1643,20 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 	// 只有真正的空 body 才回退「测试已保存配置」；语法畸形/字段
 	// 类型错误必须 400（旧实现吞掉绑定错误，客户端格式错误会收到 200）。
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.invalidRequestParams"), MessageKey: "common.invalidRequestParams"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequestParams"))
 		return
 	}
 	issuer := normalizeOIDCIssuer(req.Issuer)
 	if issuer == "" {
 		cfg, cfgErr := loadOIDCConfig()
 		if cfgErr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcConfigLoadFailed"), MessageKey: "auth.oidcConfigLoadFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcConfigLoadFailed"))
 			return
 		}
 		issuer = cfg.Issuer
 	}
 	if issuer == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "auth.oidcIssuerRequired"), MessageKey: "auth.oidcIssuerRequired"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "auth.oidcIssuerRequired"))
 		return
 	}
 	// 探测路径与保存路径同一 scheme 策略——任何出站
@@ -1674,11 +1670,11 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 	if c.GetString("auth_type") == "api_key" {
 		stored, cfgErr := loadOIDCConfig()
 		if cfgErr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcConfigLoadFailed"), MessageKey: "auth.oidcConfigLoadFailed"})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcConfigLoadFailed"))
 			return
 		}
 		if normalizeOIDCIssuer(req.Issuer) != "" && issuer != stored.Issuer {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "auth.apiKeyOidcTestSavedConfigOnly"), MessageKey: "auth.apiKeyOidcTestSavedConfigOnly"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "auth.apiKeyOidcTestSavedConfigOnly"))
 			return
 		}
 	}
@@ -1882,11 +1878,11 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 	var oidcIdentityRows int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE auth_provider='oidc'`).Scan(&oidcIdentityRows); err != nil {
 		services.Logf("error", "OIDC 配置删除前统计存量身份行失败: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcIdentityLoadFailed"), MessageKey: "auth.oidcIdentityLoadFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcIdentityLoadFailed"))
 		return
 	}
 	if err := saveOIDCConfig(c.Request.Context(), OIDCConfig{}); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "auth.oidcConfigDeleteFailed"), MessageKey: "auth.oidcConfigDeleteFailed"})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.oidcConfigDeleteFailed"))
 		return
 	}
 	// 删除留痕「删除前的字段值」（secret 只记是否配置），供取证

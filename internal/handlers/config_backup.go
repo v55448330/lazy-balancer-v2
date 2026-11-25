@@ -6283,8 +6283,7 @@ func rejectConcurrentConfigImport(c *gin.Context, action string) bool {
 	if !configImportBeginBusy() {
 		return false
 	}
-	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict,
-		Message: apimsg.Tf(c, "backup.importInProgressActionNotAllowed", "开始新的"+action)})
+	c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "backup.importInProgressActionNotAllowed", "开始新的"+action))
 	return true
 }
 
@@ -7503,7 +7502,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		return
 	}
 	notifyImportOutcome(c, action, true, "")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "backup.importOrRestoreSucceeded", action, strings.ReplaceAll(counts, "；", "、")), MessageKey: "backup.importOrRestoreSucceeded", Data: gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings}})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.importOrRestoreSucceeded", action, strings.ReplaceAll(counts, "；", "、")).WithData(gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings}))
 }
 
 // importPartialSuccessMessage 是「部分成功」（数据库已提交、证书任务恢复失败）

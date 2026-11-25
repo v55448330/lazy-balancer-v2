@@ -892,8 +892,20 @@ type HostMetrics struct {
 type APIResponse struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-	// MessageKey 稳定语义键(i18n codemod 生成):前端本地词表优先、
-	// 缺译回落 message 原文。老客户端零感知(omitempty)。
-	MessageKey string      `json:"message_key,omitempty"`
-	Data       interface{} `json:"data,omitempty"`
+	// MessageKey 稳定语义键（域名.驼峰名）：前端本地词表优先、缺译回落 message 原文。
+	// 老客户端零感知(omitempty)。
+	MessageKey string `json:"message_key,omitempty"`
+	// MessageParams 模板参数，按 message_key 词条的占位符顺序排列，一律是字符串——
+	// 与 Message 里对应片段逐字相同。前端据键 + 参数按界面语言渲染；无参数不出字段。
+	// 带键响应一律经 apimsg.Envelope 构造，不在调用点手填。
+	MessageParams []string    `json:"message_params,omitempty"`
+	Data          interface{} `json:"data,omitempty"`
+}
+
+// WithData 给信封附带载荷并返回自身（链式）。带模板参数与数据两条都需要的响应经
+// `apimsg.Envelope(...).WithData(data)` 一次求值构造：构造入口一次给出消息/键/参数，
+// 载荷由本方法补上——避免为了另补一份参数而把实参（常含函数调用）求值两次。
+func (r APIResponse) WithData(data any) APIResponse {
+	r.Data = data
+	return r
 }

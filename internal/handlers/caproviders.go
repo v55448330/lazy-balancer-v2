@@ -26,14 +26,14 @@ func (h *Handlers) ListCAProviders(c *gin.Context) {
 func (h *Handlers) GetCAProvider(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderIdInvalid"), MessageKey: "cert.caProviderIdInvalid"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderIdInvalid"))
 		return
 	}
 
 	p, err := h.caProviderService.GetCAProvider(id)
 	if err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "cert.caProviderNotFound"), MessageKey: "cert.caProviderNotFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "cert.caProviderNotFound"))
 			return
 		}
 		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.caProviderQueryFailed", fmt.Errorf("查询 CA 提供商 #%d: %w", id, err))
@@ -97,7 +97,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderIdInvalid"), MessageKey: "cert.caProviderIdInvalid"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderIdInvalid"))
 		return
 	}
 
@@ -110,13 +110,13 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	var req models.UpdateCAProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "common.requestBodyTooLarge"), MessageKey: "common.requestBodyTooLarge"})
+			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "common.requestBodyTooLarge"))
 			return
 		}
 		// binding 错误细节(含 Go 结构体/字段名)只进日志,
 		// 客户端回固定双语文案(与 certinfo 同包自述口径一致)
 		services.Logf("error", "CA provider update binding failed: %v", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.invalidRequestParams"), MessageKey: "common.invalidRequestParams"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequestParams"))
 		return
 	}
 	// CA 提供商的「守卫 + 提交」必须与规则/默认 CA 的「校验 + 提交」互斥：
@@ -129,7 +129,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			recordCAProviderUpdateFailure(c, id, "提供商不存在")
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "cert.caProviderNotFound"), MessageKey: "cert.caProviderNotFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "cert.caProviderNotFound"))
 			return
 		}
 		if errors.Is(err, services.ErrCAProviderLastEnabled) {
@@ -151,25 +151,25 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		}
 		switch {
 		case errors.Is(err, services.ErrCAProviderInvalidProvider):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderTypeUnsupported"), MessageKey: "cert.caProviderTypeUnsupported"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderTypeUnsupported"))
 		case errors.Is(err, services.ErrCAProviderInvalidName):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "common.nameRequired"), MessageKey: "common.nameRequired"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.nameRequired"))
 		case errors.Is(err, services.ErrCAProviderNameTooLong):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderNameTooLong"), MessageKey: "cert.caProviderNameTooLong"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderNameTooLong"))
 		// directory_url 两个 400 分支已删——服务层按 provider 无条件覆写
 		// 常量（services/caproviders.go:195-199），用户输入实际无效，两错误永不触发。
 		case errors.Is(err, services.ErrCAProviderInvalidCredentials):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderCredentialsMustBeJson"), MessageKey: "cert.caProviderCredentialsMustBeJson"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderCredentialsMustBeJson"))
 		case errors.Is(err, services.ErrCAProviderLetsEncryptCredentialsNotEmpty):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.letsEncryptCredentialsMustBeEmpty"), MessageKey: "cert.letsEncryptCredentialsMustBeEmpty"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.letsEncryptCredentialsMustBeEmpty"))
 		case errors.Is(err, services.ErrCAProviderMaxConcurrentTooLow):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderMaxConcurrencyNegative"), MessageKey: "cert.caProviderMaxConcurrencyNegative"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderMaxConcurrencyNegative"))
 		case errors.Is(err, services.ErrCAProviderMaxConcurrentTooHigh):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderMaxConcurrencyTooHigh"), MessageKey: "cert.caProviderMaxConcurrencyTooHigh"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderMaxConcurrencyTooHigh"))
 		case errors.Is(err, services.ErrCAProviderMinIntervalTooLow):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderMinIntervalNegative"), MessageKey: "cert.caProviderMinIntervalNegative"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderMinIntervalNegative"))
 		case errors.Is(err, services.ErrCAProviderMinIntervalTooHigh):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderMinIntervalTooHigh"), MessageKey: "cert.caProviderMinIntervalTooHigh"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderMinIntervalTooHigh"))
 		default:
 			services.Logf("error", "Failed to update CA provider %d: %v", id, err)
 			recordCAProviderUpdateFailure(c, id, err.Error())
@@ -229,7 +229,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		caName = fmt.Sprintf("提供商 %d", id)
 	}
 	publishCertConfigChanged(c, "更新了 CA 提供商", caName)
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cert.caProviderUpdated"), MessageKey: "cert.caProviderUpdated"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.caProviderUpdated"))
 }
 
 // auditCAProviderTestResult 是 TestCAProvider 全部失败出口的审计详情单源：
@@ -252,7 +252,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.caProviderIdInvalid"), MessageKey: "cert.caProviderIdInvalid"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderIdInvalid"))
 		return
 	}
 	// 复用服务层单源查询（含 ErrCAProviderNotFound 分类），不再在
@@ -263,7 +263,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			// 预查询 404 与测试内核的 not_found 同一结果类别：测试入口无论在哪一层
 			// 判定不存在都必须留审计（成功/失败测试均留痕的既有口径）。
 			auditCAProviderTestResult(c, id, "", "not_found")
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "cert.caProviderNotFound"), MessageKey: "cert.caProviderNotFound"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "cert.caProviderNotFound"))
 			return
 		}
 		services.Logf("error", "Failed to query CA provider %d before test: %v", id, err)
@@ -277,7 +277,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			result = "not_found"
 			auditCAProviderTestResult(c, id, providerName, result)
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "cert.caProviderNotFoundOrDisabled"), MessageKey: "cert.caProviderNotFoundOrDisabled"})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "cert.caProviderNotFoundOrDisabled"))
 			return
 		}
 		var terr *services.CAProviderTestError
@@ -286,15 +286,15 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			case "email":
 				result = "missing_acme_email"
 				auditCAProviderTestResult(c, id, providerName, result)
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "cert.acmeEmailNotConfigured"), MessageKey: "cert.acmeEmailNotConfigured"})
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.acmeEmailNotConfigured"))
 			case "config":
 				result = "invalid_config"
 				auditCAProviderTestResult(c, id, providerName, result)
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "cert.caProviderConfigInvalid", apimsg.ErrMsg(c, terr))})
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.caProviderConfigInvalid", apimsg.ErrMsg(c, terr)))
 			case "register":
 				result = "register_failed"
 				auditCAProviderTestResult(c, id, providerName, result)
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "cert.acmeAccountRegistrationFailed", apimsg.ErrMsg(c, terr))})
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.acmeAccountRegistrationFailed", apimsg.ErrMsg(c, terr)))
 			default:
 				auditCAProviderTestResult(c, id, providerName, result)
 				services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
@@ -309,5 +309,5 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 	}
 
 	recordAudit(c, "测试成功", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cert.caProviderConfigValid"), MessageKey: "cert.caProviderConfigValid"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.caProviderConfigValid"))
 }

@@ -715,7 +715,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		(SELECT created_at FROM auto_backups WHERE status='success' ORDER BY created_at DESC, id DESC LIMIT 1)
 		FROM global_config WHERE id=1`).
 		Scan(&enabled, &freq, &hhmm, &day, &keep, &sectionsRaw, &lastRun, &lastSuccessRaw); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupSettingsLoadFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupSettingsLoadFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	// 读侧守卫(2026-09-19 追加裁定):升级前保存的 31-100 存量值回退 7,
@@ -732,7 +732,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	// 扫描的原始值，避免额外一次 DB 读（读侧语义单源在解码 helper）。
 	storedSections, sectionsErr := decodeAutoBackupSectionsRaw(sectionsRaw)
 	if sectionsErr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupScopeLoadFailed", apimsg.ErrMsg(c, sectionsErr))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupScopeLoadFailed", apimsg.ErrMsg(c, sectionsErr)))
 		return
 	}
 	sections := storedSections
@@ -744,14 +744,14 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	// 额外 COUNT 查询。
 	rows, err := db.DB.QueryContext(c.Request.Context(), `SELECT `+autoBackupRowColumns+` FROM auto_backups ORDER BY created_at DESC, id DESC LIMIT ?`, autoBackupListLimit+1)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupListLoadFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupListLoadFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		view, err := scanAutoBackupRowView(rows)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupListLoadFailed", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupListLoadFailed", apimsg.ErrMsg(c, err)))
 			return
 		}
 		backups = append(backups, view)
@@ -759,7 +759,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	// ⑫：迭代失败显式 500——
 	// 部分列表 + 200 会掩盖存储故障。
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupListLoadFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupListLoadFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	backupsTruncated := false
@@ -835,47 +835,47 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		// 用户会去排查格式而不是体积（与同族端点 413 口径不一致）。
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "backup.autoBackupRequestBodyTooLarge"), MessageKey: "backup.autoBackupRequestBodyTooLarge"})
+			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.autoBackupRequestBodyTooLarge"))
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.autoBackupRequestMalformed"), MessageKey: "backup.autoBackupRequestMalformed"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupRequestMalformed"))
 		return
 	}
 	if req.Enabled == nil || req.Frequency == nil || req.Time == nil || req.Day == nil || req.Keep == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.autoBackupRequiredFieldsMissing"), MessageKey: "backup.autoBackupRequiredFieldsMissing"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupRequiredFieldsMissing"))
 		return
 	}
 	switch *req.Frequency {
 	case "daily", "weekly", "monthly":
 	default:
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.autoBackupFrequencyInvalid"), MessageKey: "backup.autoBackupFrequencyInvalid"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupFrequencyInvalid"))
 		return
 	}
 	if !services.ValidScheduleHHMM(*req.Time) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.autoBackupTimeInvalid"), MessageKey: "backup.autoBackupTimeInvalid"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupTimeInvalid"))
 		return
 	}
 	if !autoBackupKeepValid(*req.Keep) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "backup.autoBackupKeepOutOfRange", autoBackupKeepMin, autoBackupKeepMax), MessageKey: "backup.autoBackupKeepOutOfRange"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupKeepOutOfRange", autoBackupKeepMin, autoBackupKeepMax))
 		return
 	}
 	dayHigh := autoBackupDayHigh(*req.Frequency)
 	if *req.Day < 1 || *req.Day > dayHigh {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "backup.autoBackupDayOutOfRange", dayHigh), MessageKey: "backup.autoBackupDayOutOfRange"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupDayOutOfRange", dayHigh))
 		return
 	}
 	if len(req.Sections) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.autoBackupScopeRequired"), MessageKey: "backup.autoBackupScopeRequired"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupScopeRequired"))
 		return
 	}
 	req.Sections = normalizeBackupSectionKeys(req.Sections)
 	if _, _, ok := configBackupSectionTables(req.Sections); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "backup.autoBackupUnknownSection"), MessageKey: "backup.autoBackupUnknownSection"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.autoBackupUnknownSection"))
 		return
 	}
 	sectionsJSON, err := json.Marshal(req.Sections)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupScopeSerializeFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupScopeSerializeFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	// 四列设置与业务开关同事务——修复前设置先落库、开关后写，
@@ -885,7 +885,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	//（保存形态全有或全无，未提交事务由下方 defer 回滚兜住）。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupSettingsSaveFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupSettingsSaveFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	committed := false
@@ -896,18 +896,18 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	}()
 	if _, err := tx.Exec(`UPDATE global_config SET auto_backup_frequency=?, auto_backup_time=?, auto_backup_day=?, auto_backup_keep=?, auto_backup_sections=?, auto_backup_sections_version=1 WHERE id=1`,
 		*req.Frequency, *req.Time, *req.Day, *req.Keep, string(sectionsJSON)); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupSettingsSaveFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupSettingsSaveFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	if err := services.SetAutoBackupEnabledTx(tx, *req.Enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupToggleSaveFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupToggleSaveFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	if err := commitTx(tx); err != nil {
 		// Commit 失败后 Tx 已 done，defer tx.Rollback 只回 ErrTxDone 不触达
 		// driver——泄漏事务持写锁必须池级补发（与 DeleteAutoBackup 同收口）。
 		rollbackLeakedTx()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupSettingsSaveFailed", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupSettingsSaveFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	committed = true
@@ -920,7 +920,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		"范围："+strings.Join(autoBackupSectionLabels(req.Sections), "、"),
 		services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtAutoBackupChanged, Fields: map[string]string{"1": c.GetString("username")}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "backup.autoBackupSettingsSaved"), MessageKey: "backup.autoBackupSettingsSaved"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.autoBackupSettingsSaved"))
 }
 
 // autoBackupDirPerm 备份目录权限：目录内是含私钥与凭证明文的备份文件
@@ -998,20 +998,20 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	if err := services.TriggerTaskAsync(te, "auto-backup", actx); err != nil {
 		switch {
 		case errors.Is(err, taskengine.ErrAlreadyRunning):
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "backup.autoBackupTriggerAlreadyRunning"), MessageKey: "backup.autoBackupTriggerAlreadyRunning"})
+			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "backup.autoBackupTriggerAlreadyRunning"))
 		case errors.Is(err, taskengine.ErrSchedulingPaused):
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "backup.autoBackupTriggerUnavailableSchedulingPaused"), MessageKey: "backup.autoBackupTriggerUnavailableSchedulingPaused"})
+			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "backup.autoBackupTriggerUnavailableSchedulingPaused"))
 		case errors.Is(err, taskengine.ErrEngineStopped):
-			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "backup.autoBackupTriggerUnavailableEngineStopped"), MessageKey: "backup.autoBackupTriggerUnavailableEngineStopped"})
+			c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(c, 503, "backup.autoBackupTriggerUnavailableEngineStopped"))
 		case errors.Is(err, taskengine.ErrNotMaster):
 			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.ErrMsg(c, err)})
 		default:
 			services.Logf("error", "手动备份触发失败: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "backup.autoBackupTriggerFailed", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.autoBackupTriggerFailed", apimsg.ErrMsg(c, err)))
 		}
 		return
 	}
-	c.JSON(http.StatusAccepted, models.APIResponse{Code: 0, Message: apimsg.T(c, "backup.autoBackupManualTriggerAccepted"), MessageKey: "backup.autoBackupManualTriggerAccepted"})
+	c.JSON(http.StatusAccepted, apimsg.Envelope(c, 0, "backup.autoBackupManualTriggerAccepted"))
 }
 
 // autoBackupDir 返回可安全 filepath.Join 的备份目录：必须非空且绝对。
@@ -1137,7 +1137,7 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	}
 	recordAudit(c, "备份删除", "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "backup.autoBackupRecordDeleted"), MessageKey: "backup.autoBackupRecordDeleted"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.autoBackupRecordDeleted"))
 }
 
 // failAutoBackupAccess 是自动备份高危操作族（还原/下载/删除）失败收尾的单一

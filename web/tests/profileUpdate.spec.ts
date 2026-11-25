@@ -14,7 +14,10 @@ test('「当前密码错误」与后端 auth.go 逐字对齐（跨栈钉）', ()
   const go = repoCode('internal/handlers/auth.go')
   const catalog = repoCode('internal/i18n/catalog_gen.go')
   assert.ok(catalog.includes('Register("auth.currentPasswordRejected", "当前密码错误"'), 'catalog 母本漂移:「当前密码错误」')
-  assert.ok(go.includes('MessageKey: "auth.currentPasswordRejected"'), 'auth.go 不再产生「当前密码错误」键——前端豁免失配')
+  assert.ok(
+    go.includes('MessageKey: "auth.currentPasswordRejected"') || go.includes('apimsg.Envelope(c, 401, "auth.currentPasswordRejected"'),
+    'auth.go 不再产生「当前密码错误」键——前端豁免失配',
+  )
 })
 
 test('同端点的会话过期 401 不得误判为当前密码错误', () => {

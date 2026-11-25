@@ -39,7 +39,7 @@ func (h *Handlers) PostQQBindCode(c *gin.Context) {
 	uid := contextUserID(c)
 	qrContent, task, err := notify.CreateBindTask()
 	if err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "notify.qqBindTaskCreateFailed", err.Error()), MessageKey: msgQQTaskCreateFailed})
+		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "notify.qqBindTaskCreateFailed", err.Error()))
 		return
 	}
 	qqTaskMu.Lock()
@@ -74,7 +74,7 @@ func (h *Handlers) GetQQBindCode(c *gin.Context) {
 	defer cancel()
 	result, err := notify.PollBindResult(ctx, task)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "notify.qqBindPollFailed", err.Error()), MessageKey: msgQQPollFailed})
+		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "notify.qqBindPollFailed", err.Error()))
 		return
 	}
 	if result.Status != notify.BindCompleted {

@@ -245,7 +245,7 @@ func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog("system", "确认", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %s", nodeName), "注册密钥已失效", services.AuditResultPart("success")), c.ClientIP())
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.registrationConfirmed"), MessageKey: "cluster.registrationConfirmed"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.registrationConfirmed"))
 }
 
 func (h *Handlers) ApproveClusterNode(c *gin.Context) {
@@ -420,5 +420,5 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 	if key, ok := verbKeys[action]; ok {
 		verb = apimsg.T(c, key)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "cluster.nodeActionSucceeded", verb), MessageKey: "cluster.nodeActionSucceeded"})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeActionSucceeded", verb))
 }
