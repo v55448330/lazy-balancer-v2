@@ -1,8 +1,8 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    width="min(640px, 94vw)"
-    top="8vh"
+    class="dialog-body-inset"
+    width="min(760px, 94vw)"
     :close-on-click-modal="false"
     :close-on-press-escape="!saving"
     :show-close="!saving"

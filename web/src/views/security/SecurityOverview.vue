@@ -162,7 +162,8 @@
       </el-col>
     </el-row>
 
-    <el-dialog :model-value="challengeLiveVisible" width="min(1120px, 96vw)" top="5vh" class="challenge-live-dialog" @update:model-value="onChallengeVisibleChange">
+    <!-- 实时挑战列表：表格 + 筛选（数据控制台 → 1200 档；顶边全局 6vh） -->
+    <el-dialog :model-value="challengeLiveVisible" width="min(1200px, 94vw)" class="challenge-live-dialog" @update:model-value="onChallengeVisibleChange">
       <template #header>
         <div class="card-header">
           <div class="card-title">

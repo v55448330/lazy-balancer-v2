@@ -133,7 +133,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <div class="form-tip-inline" v-if="(autobanStatus.suggestions?.length ?? 0) >= 50">{{ t('app.security.events.suggestionsLimit') }}</div>
+        <div class="form-tip-line" v-if="(autobanStatus.suggestions?.length ?? 0) >= 50">{{ t('app.security.events.suggestionsLimit') }}</div>
       </template>
       <!-- 当前封禁折叠区块已并入「封禁与累犯」合并弹框（用户裁定：两视图
            入口收敛，卡片不再内嵌表格）。 -->
@@ -325,7 +325,7 @@
 
     <!-- 自动封禁配置弹框：七项配置（六项基础 + 累犯升级）
          + 口径/窗口变更重置提示 -->
-    <el-dialog v-model="autobanDialogVisible" width="min(860px, 96vw)" top="3vh" append-to-body class="autoban-config-dialog dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
+    <el-dialog v-model="autobanDialogVisible" width="min(760px, 94vw)" append-to-body class="autoban-config-dialog dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
       <template #header>
         <!-- 喂入门=四维统计口径（2026-11-13 多选裁定）：WAF 命中按 blocked/logged
              计数（CRS 与自定义两族，阶段门 autobanStage3Eligible，已验证爬虫豁免
@@ -354,7 +354,7 @@
           <span class="autoban-preset-desc">{{ t('app.security.events.preset.' + id + '.desc') }}</span>
         </button>
       </div>
-      <el-form :model="autobanForm" :label-width="$flw('96px')" label-position="top" size="small" :disabled="autobanSaving">
+      <el-form :model="autobanForm" :label-width="$flw('112px')" label-position="top" size="small" :disabled="autobanSaving">
         <!-- 高级参数折叠：两列网格（860px 宽弹框，标签顶部对齐）——短项两两一行，
              口径/升级阶梯跨全列；evidence 条件字段成组保证列对齐（用户裁定）。 -->
         <el-collapse v-model="autobanAdvancedOpen" class="autoban-advanced">
@@ -443,7 +443,7 @@
          双 tab——「正在发生的封禁」与「历史前科记账」正交视图）。
          tab1 当前封禁：名单条目全功能（搜索/来源/剩余时长/解封/分页）；
          tab2 累犯前科：RecidivismTable 共享组件（总览下钻同款）。 -->
-    <el-dialog v-model="banConsoleVisible" width="min(1280px, 96vw)" top="5vh" append-to-body class="ban-console-dialog dialog-body-inset" :close-on-click-modal="false">
+    <el-dialog v-model="banConsoleVisible" width="min(1200px, 94vw)" append-to-body class="ban-console-dialog dialog-body-inset" :close-on-click-modal="false">
       <template #header>
         <DialogHeader :icon="Lock" :title="t('app.security.events.banConsoleTitle')" :subtitle="t('app.security.events.banConsoleSubtitle')" />
       </template>
@@ -484,7 +484,7 @@
             </el-table-column>
           </el-table>
           <div class="ban-console-bottom">
-            <span class="form-tip-inline">{{ t('app.security.events.banConsoleCountNote', { active: autobanBansActive.length, total: autobanBansFiltered.length }) }}</span>
+            <div class="form-tip-line">{{ t('app.security.events.banConsoleCountNote', { active: autobanBansActive.length, total: autobanBansFiltered.length }) }}</div>
             <el-pagination v-model:current-page="banPage" v-model:page-size="banPageSize" :total="autobanBansFiltered.length" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" small />
           </div>
         </el-tab-pane>
@@ -504,7 +504,7 @@
          信息行而非头行。请求体按契约前缀解析：base64-truncated: →
          base64: → 明文；明文尾部 \n...[TRUNCATED] 标记转为截断横幅；atob 解码失败
          展示原始内容 + 错误说明。宽度/顶距与 crs-event-dialog 一致。 -->
-    <el-dialog v-model="ctxDialogVisible" width="min(760px, 94vw)" top="5vh" append-to-body class="ctx-event-dialog dialog-body-inset">
+    <el-dialog v-model="ctxDialogVisible" width="min(760px, 94vw)" append-to-body class="ctx-event-dialog dialog-body-inset">
       <template #header>
         <DialogHeader :icon="Document" :title="t('app.security.events.ctxTitle')"
           :subtitle="ctxSubtitle" />
@@ -1468,7 +1468,7 @@ const refreshPage = (): void => {
 .autoban-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 /* 卡片主体=配置入口（2026-10-14 裁定）：标题/参数区可点，hover 灰底+pointer 反馈；
    padding+负 margin 扩大热区而不改变行内布局 */
-.autoban-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; min-width: 0; cursor: pointer; padding: 4px; margin: -4px; border-radius: 6px; }
+.autoban-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; min-width: 0; cursor: pointer; padding: 4px; margin: -4px; }
 .autoban-main:hover { background: #f9fafb; }
 .autoban-main.is-disabled { cursor: default; }
 .autoban-main.is-disabled:hover { background: transparent; }
@@ -1577,15 +1577,9 @@ const refreshPage = (): void => {
   flex: 0 0 auto;
 }
 
-/* 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口
-   （.crs-event-dialog 左半选择器删除——CRS 事件弹框已迁入 TriggerDetailDialog） */
-.ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
-/* 自动封禁配置弹框：两列网格压缩高度后常态无滚动；限高仅作矮视口兜底
-   （top=3vh + header/footer/padding≈230px 实测），保证保存按钮恒在视口内。 */
-.autoban-config-dialog .el-dialog__body { max-height: calc(100vh - 222px); overflow-y: auto; padding: 14px 20px; }
+/* 弹框体限高走全局单源（DESIGN_SPEC §26-2）：三个弹框不再各自写 100vh/90vh 公式；
+   请求上下文弹框的正文内部滚动由 .ctx-body-pre（320px）承担。 */
 .autoban-config-dialog .info-note-bar { margin-top: 6px; padding: 6px 10px; }
-/* 封禁与累犯合并弹框：同款限高（top=5vh，表高 480 + 工具行/分页/tab 头）。 */
-.ban-console-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 /* 请求上下文弹框正文 20px 水平留白走全局 .dialog-body-inset（2026-09-25 用户裁定；
    append-to-body teleport 场景 scoped :deep 不可靠，故类挂弹框、规则在 main.css） */
 
@@ -1604,14 +1598,14 @@ const refreshPage = (): void => {
    列表 + 使用建议正文），13px 正文紧凑排布，弹框宽 540px（customStyle 指定） */
 .autoban-confirm { text-align: left; }
 .autoban-confirm-hero { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
-.autoban-confirm-icon { flex: none; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--el-color-warning-light-9, #fdf6ec); color: var(--el-color-warning, #e6a23c); }
+.autoban-confirm-icon { flex: none; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; background: var(--el-color-warning-light-9, #fdf6ec); color: var(--el-color-warning, #e6a23c); }
 .autoban-confirm-heading { font-size: 15px; font-weight: 600; color: var(--el-text-color-primary, #303133); line-height: 1.5; }
 .autoban-confirm-sub { margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--el-text-color-regular, #606266); }
-.autoban-confirm-notes { margin: 0 0 14px; padding: 12px 16px; border-radius: 8px; background: var(--el-fill-color-light, #f5f7fa); border: 1px solid var(--el-border-color-lighter, #ebeef5); }
+.autoban-confirm-notes { margin: 0 0 14px; padding: 12px 16px; background: var(--el-fill-color-light, #f5f7fa); border: 1px solid var(--el-border-color-lighter, #ebeef5); }
 .autoban-confirm-note { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; line-height: 2; color: var(--el-text-color-regular, #606266); }
 .autoban-confirm-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--el-color-warning, #e6a23c); transform: translateY(-2px); }
 .autoban-confirm-howto { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; line-height: 1.7; color: var(--el-text-color-secondary, #909399); }
-.autoban-confirm-howto-label { flex: none; font-size: 11px; padding: 1px 8px; border-radius: 10px; color: var(--el-color-primary, #409eff); background: var(--el-color-primary-light-9, #ecf5ff); }
+.autoban-confirm-howto-label { flex: none; font-size: 11px; padding: 1px 8px; color: var(--el-color-primary, #409eff); background: var(--el-color-primary-light-9, #ecf5ff); }
 /* MessageBox 四区统一版式：外框零内边距，标题/正文/按钮区各自 24px 侧距——
    与 Element Plus 默认窄内边距（15px）整体覆盖，视觉边距一致。
    本块已是非 scoped 全局作用域：`:global()` 只在 scoped/module 块内有效，

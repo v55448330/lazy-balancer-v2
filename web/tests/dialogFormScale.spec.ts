@@ -112,9 +112,12 @@ const collectFooters = (): string[] => {
 // U4 2 不变（余量全在设置面之外：密钥/规则/安全/通知/连接等页面）。
 // 界面统一批次 2（通知与证书页面与弹框）再降：U1 36→34（模板弹框 960、通道弹框 760）、
 // U3 30→29（通道 BETA 徽标直角）；U2 4、U4 2 不变（余量全在密钥/规则/安全/连接面）。
-const BASELINE_DIALOG_WIDTH = 34
+// 界面统一批次 3（规则与安全策略页面及向导）大降：U1 34→12（本批 22 个弹框全部落档）、
+// U3 29→9（策略卡/徽标/图标块/锁清单面板/威胁屏 chip 直角）；U2 4 不变（余量 = Keys ×4）、
+// U4 2 不变（余量 = 二次验证向导两个辅助按钮）。
+const BASELINE_DIALOG_WIDTH = 12
 const BASELINE_SECTION_DIVIDER = 4
-const BASELINE_RADIUS = 29
+const BASELINE_RADIUS = 9
 const BASELINE_FOOTER_ORDER = 2
 
 test('判别自检：弹框宽度只认五种写法', () => {

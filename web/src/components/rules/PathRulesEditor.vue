@@ -81,9 +81,10 @@
             <el-option :label="t('common.app.rules.paths.staticReturn')" value="static" />
             <el-option :label="t('common.app.rules.paths.redirect301')" value="redirect" />
           </el-select>
-          <span class="form-tip-inline" v-if="isForwardResponseMode(rule)">{{ t('common.app.rules.paths.forwardHint') }}</span>
-          <span class="form-tip-inline" v-else-if="rule.response_mode === 'static'">{{ t('common.app.rules.paths.staticReturnHint') }}</span>
-          <span class="form-tip-inline" v-else>{{ t('common.app.rules.paths.redirect301Hint') }}</span>
+          <!-- 三种响应形态说明均超 §26-5 同行阈值（en 158/168）→ 统一块级说明 -->
+          <div class="form-tip-line" v-if="isForwardResponseMode(rule)">{{ t('common.app.rules.paths.forwardHint') }}</div>
+          <div class="form-tip-line" v-else-if="rule.response_mode === 'static'">{{ t('common.app.rules.paths.staticReturnHint') }}</div>
+          <div class="form-tip-line" v-else>{{ t('common.app.rules.paths.redirect301Hint') }}</div>
         </div>
 
         <!-- 直接返回字段行 -->
@@ -125,7 +126,8 @@
         <div v-if="isForwardResponseMode(rule)" class="custom-upstream-toggle">
           <span class="custom-upstream-title">{{ t('common.app.rules.paths.useCustomUpstream') }}</span>
           <el-switch :model-value="rule.upstreams !== null" @change="toggleCustomUpstreams(rule, $event)" />
-          <span class="form-tip-inline">{{ t('common.app.rules.paths.customUpstreamOffHint') }}</span>
+          <!-- 关闭态说明 en 55 字符，超 §26-5 同行阈值 → 块级 -->
+          <div class="form-tip-line">{{ t('common.app.rules.paths.customUpstreamOffHint') }}</div>
         </div>
 
         <div v-if="rule.upstreams !== null" class="custom-upstream-editor dialog-panel">
@@ -293,7 +295,7 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .path-rule-card :deep(.el-card__body) { padding: 12px; }
 /* 层次一：徽标 + 行内操作，动作列固定右上不随字段挤压 */
 .path-rule-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.path-rule-order { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.path-rule-order { padding: 4px 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
 /* 匹配行：三字段同一基线，start 对齐——校验文案只在字段下方出现，不再推移输入框 */
 .path-rule-match-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px; }
 /* flex-start：control 含 18px 预留带高于 input，center 会让标签相对输入行上浮；

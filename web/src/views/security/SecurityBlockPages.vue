@@ -85,12 +85,13 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" width="min(1080px, 96vw)" top="2vh" class="dialog-body-inset block-page-dialog" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
+    <!-- 拦截页编辑：表单 + 内容编辑器（复合编辑 → 960 档；顶边全局 6vh） -->
+    <el-dialog v-model="dialogVisible" width="min(960px, 94vw)" class="dialog-body-inset block-page-dialog" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
       <template #header>
         <DialogHeader :icon="Document" :title="dialogTitle" tone="warning"
           :subtitle="t('app.security.blockPages.dialog.subtitle')" />
       </template>
-      <el-form :model="form" :label-width="$flw('80px')" label-position="right" class="block-page-form block-page-form--scroll" :disabled="saving">
+      <el-form :model="form" :label-width="$flw('112px')" label-position="right" class="block-page-form block-page-form--scroll" :disabled="saving">
         <el-form-item :label="t('app.security.blockPages.dialog.labelName')" required>
           <el-input v-model="form.name" :placeholder="t('app.security.blockPages.dialog.placeholderName')" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>
@@ -136,13 +137,18 @@
 
       </el-form>
       <template #footer>
-        <el-button :disabled="saving" @click="dialogVisible = false">{{ t('app.security.blockPages.dialog.cancel') }}</el-button>
-        <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" :disabled="saving" @click="previewDraft">{{ t('app.security.blockPages.dialog.preview') }}</el-button>
-        <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" type="primary" :loading="saving" :disabled="saving" @click="handleSave">{{ t('app.security.blockPages.dialog.save') }}</el-button>
+        <div class="block-page-footer">
+          <!-- 辅助动作（预览草稿）放左侧，右侧恒为「取消 + 保存」（§26-3） -->
+          <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" :disabled="saving" @click="previewDraft">{{ t('app.security.blockPages.dialog.preview') }}</el-button>
+          <div class="block-page-footer-main">
+            <el-button :disabled="saving" @click="dialogVisible = false">{{ t('app.security.blockPages.dialog.cancel') }}</el-button>
+            <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" type="primary" :loading="saving" :disabled="saving" @click="handleSave">{{ t('app.security.blockPages.dialog.save') }}</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewVisible" width="min(960px, 94vw)" top="3vh" @close="previewContent = ''">
+    <el-dialog v-model="previewVisible" width="min(960px, 94vw)" @close="previewContent = ''">
       <template #header>
         <DialogHeader :icon="Document" :title="t('app.security.blockPages.preview.title')" :subtitle="t('app.security.blockPages.preview.subtitle')" />
       </template>
@@ -387,6 +393,9 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
+/* 页脚：辅助动作（预览）靠左，主操作组靠右（§26-3） */
+.block-page-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.block-page-footer-main { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .block-content-editor { border: 1px solid #e4e7ed; overflow: hidden; }
 /* 验证组件插入：单行工具条（前缀标签 + 三按钮 + ⓘ），长描述移入悬浮
    tooltip，省出高度给代码编辑器（用户裁定：组件区不得挤占编辑空间）。 */

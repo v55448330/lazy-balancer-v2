@@ -3,8 +3,7 @@
     :model-value="modelValue"
     class="dialog-body-inset"
     @update:model-value="emit('update:modelValue', $event)"
-    width="min(680px, 94vw)"
-    top="5vh"
+    width="min(960px, 94vw)"
     append-to-body
     @close="emit('update:modelValue', false)"
   >

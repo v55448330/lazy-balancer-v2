@@ -415,7 +415,8 @@
     </el-card>
 
 
-    <el-dialog v-model="wizardVisible" class="dialog-body-inset" width="min(960px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard" @open="wizardDraft.open" @opened="wizardDraft.settle">
+    <!-- 宽度 960 = §26-1「复合编辑」档（向导步骤条 + 上游表格 + 预览）；顶边由全局 6vh 决定 -->
+    <el-dialog v-model="wizardVisible" class="dialog-body-inset" width="min(960px, 94vw)" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard" @open="wizardDraft.open" @opened="wizardDraft.settle">
       <template #header>
         <DialogHeader :icon="Connection" :title="editingRule ? t('common.app.rules.wizard.editRule') : (isCopyMode ? t('common.app.rules.wizard.copyRule') : t('common.app.rules.wizard.newRule'))"
           :subtitle="t('common.app.rules.list.pageSubtitle')" />
@@ -432,7 +433,7 @@
       <div class="wizard-content" @pointerdown.capture="wizardDraft.touch" @keydown.capture="wizardDraft.touch">
         <!-- Step 0: 基本配置 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
-          <el-form :model="wizardForm" :label-width="$flw('100px')" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('144px')" :disabled="saving">
             <el-form-item :label="t('common.app.rules.common.ruleName')" required>
               <el-input v-model="wizardForm.name" :placeholder="t('common.app.rules.wizard.nameExample')" maxlength="100" show-word-limit />
             </el-form-item>
@@ -457,21 +458,18 @@
 
             <el-form-item :label="t('common.app.rules.wizard.listenPort')" required>
               <el-input-number v-model="wizardForm.listen_port" :min="1" :max="65535" controls-position="right" @change="userExplicitPort = true" />
-              <span class="form-tip-inline">
-                <span v-if="portWarning" class="port-warning">{{ portWarning }}</span>
-                <span v-else-if="wizardForm.protocol === 'http'">{{ t('common.app.rules.wizard.portHintHttp') }}</span>
-                <span v-else>{{ t('common.app.rules.wizard.portHintTcp') }}</span>
-              </span>
+              <!-- 端口提示超 §26-5 同行阈值（en 41 / zh 23）→ 块级说明 -->
+              <div v-if="portWarning" class="form-tip-line port-warning">{{ portWarning }}</div>
+              <div v-else-if="wizardForm.protocol === 'http'" class="form-tip-line">{{ t('common.app.rules.wizard.portHintHttp') }}</div>
+              <div v-else class="form-tip-line">{{ t('common.app.rules.wizard.portHintTcp') }}</div>
               <div class="form-tip-line">{{ t('common.app.rules.wizard.portServerValidationHint') }}</div>
               <div v-if="isCopyMode && wizardForm.protocol !== 'http'" class="form-tip-line">{{ t('common.app.rules.wizard.copyDisabledTip') }}</div>
             </el-form-item>
 
             <el-form-item :label="t('common.app.rules.wizard.enableHttps')" v-if="wizardForm.protocol === 'http'">
               <el-switch v-model="wizardForm.enable_tls" :disabled="isCurrentRuleLocked" />
-              <span class="form-tip-inline">
-                <span v-if="isCurrentRuleLocked" class="port-warning">{{ t('common.app.rules.wizard.certJobTlsLockedHint') }}</span>
-                <span v-else>{{ t('common.app.rules.wizard.enableTlsTransport') }}</span>
-              </span>
+              <div v-if="isCurrentRuleLocked" class="form-tip-line port-warning">{{ t('common.app.rules.wizard.certJobTlsLockedHint') }}</div>
+              <span v-else class="form-tip-inline">{{ t('common.app.rules.wizard.enableTlsTransport') }}</span>
             </el-form-item>
 
             <el-form-item :label="t('common.app.rules.common.description')">
@@ -480,7 +478,7 @@
 
             <el-form-item :label="t('common.app.rules.common.accessLog')" v-if="wizardForm.protocol === 'http'">
               <el-switch v-model="wizardForm.log_enabled" />
-              <span class="form-tip-inline">{{ t('common.app.rules.wizard.accessLogHint') }}</span>
+              <div class="form-tip-line">{{ t('common.app.rules.wizard.accessLogHint') }}</div>
             </el-form-item>
           </el-form>
         </div>
@@ -491,7 +489,7 @@
             <span class="info-note-desc">{{ t('common.app.rules.wizard.certDetailManualBlockNote') }}</span>
             <el-button size="small" type="primary" plain :loading="tlsDetailLoading" @click="retryTlsDetail">{{ t('common.app.rules.cfg.reload') }}</el-button>
           </div>
-          <el-form :model="wizardForm" :label-width="$flw('100px')" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('144px')" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
             <el-form-item :label="t('common.app.rules.wizard.certSource')" for="radio---1">
               <input type="text" id="radio---1" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" :aria-label="t('common.app.rules.wizard.certSource')">
@@ -575,7 +573,7 @@
             </template>
             <el-form-item :label="t('common.app.rules.wizard.httpRedirect')">
               <el-switch v-model="wizardForm.tls_http_redirect" />
-              <span class="form-tip-inline">{{ t('common.app.rules.wizard.httpRedirectHint') }}</span>
+              <div class="form-tip-line">{{ t('common.app.rules.wizard.httpRedirectHint') }}</div>
             </el-form-item>
           </el-form>
           <!-- 原「请先在基本配置中启用 HTTPS」说明框已删除：
@@ -586,7 +584,7 @@
 
         <!-- Step 2: 上游服务器 -->
         <div v-show="currentStep === WIZARD_STEP.UPSTREAMS" class="step-content">
-          <el-form :model="wizardForm" :label-width="$flw('100px')" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('144px')" :disabled="saving">
             <div class="upstream-header">
               <span class="section-title">{{ t('common.app.rules.wizard.upstreamListTitle') }}</span>
               <el-button size="small" type="primary" @click="addUpstream" :disabled="wizardForm.upstreams.length >= MAX_UPSTREAM_ROWS || (wizardForm.dynamic_dns && wizardForm.upstreams.length >= 1)">
@@ -683,10 +681,10 @@
             </div>
 
             <template v-if="wizardForm.protocol === 'http'">
-              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.routeBackendCompat') }}</el-divider>
+              <DialogSectionHeader :title="t('common.app.rules.wizard.routeBackendCompat')" />
               <el-form-item :label="t('common.app.rules.common.customRoutes')">
                 <el-switch v-model="wizardForm.custom_routes_enabled" @change="onCustomRoutesToggle" />
-                <span class="form-tip-inline">{{ t('common.app.rules.wizard.customRoutesHint') }}</span>
+                <div class="form-tip-line">{{ t('common.app.rules.wizard.customRoutesHint') }}</div>
               </el-form-item>
               <!-- NTLM 兼容（2026-10-12 用户定稿）：与自定义路由同区（后端兼容域）；
                    开启后以 NTLM 接管形态锁定 7 字段（清单见 onNtlmToggle 弹框） -->
@@ -704,7 +702,7 @@
                   </FieldHelpIcon></span>
                 </template>
                 <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
-                <span class="form-tip-inline">{{ t('common.app.rules.wizard.ntlmHint') }}</span>
+                <div class="form-tip-line">{{ t('common.app.rules.wizard.ntlmHint') }}</div>
               </el-form-item>
 
               <!-- 认证网关（forward_auth，NTLM 同款开关形态）：开启后全部请求
@@ -721,7 +719,7 @@
                   </FieldHelpIcon></span>
                 </template>
                 <el-switch :model-value="forwardAuthOn" @change="onForwardAuthToggle" />
-                <span class="form-tip-inline">{{ t('common.app.rules.wizard.authGatewayHint') }}</span>
+                <div class="form-tip-line">{{ t('common.app.rules.wizard.authGatewayHint') }}</div>
               </el-form-item>
 
               <template v-if="forwardAuthOn">
@@ -732,11 +730,11 @@
                     clearable
                     style="max-width: 480px;"
                   />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.authGatewayAddrHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.authGatewayAddrHint') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('common.app.rules.wizard.authPath')">
                   <el-input v-model="wizardForm.forward_auth_uri" style="max-width: 480px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.forwardAuthPathHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.forwardAuthPathHint') }}</div>
                 </el-form-item>
                 <el-collapse class="fa-advanced-collapse">
                   <el-collapse-item :title="t('common.app.rules.wizard.identityHeadersAdvanced')" name="headers">
@@ -745,13 +743,13 @@
                       placeholder="Remote-User,Remote-Groups,Remote-Email,Remote-Name"
                       style="max-width: 480px;"
                     />
-                    <span class="form-tip-inline">{{ t('common.app.rules.wizard.forwardAuthHeadersHint') }}</span>
+                    <div class="form-tip-line">{{ t('common.app.rules.wizard.forwardAuthHeadersHint') }}</div>
                   </el-collapse-item>
                 </el-collapse>
               </template>
             </template>
 
-            <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.common.lbPolicy') }}</el-divider>
+            <DialogSectionHeader :title="t('common.app.rules.common.lbPolicy')" />
 
             <div class="strategy-cards" role="radiogroup" :aria-label="t('common.app.rules.common.lbPolicy')">
               <el-tooltip
@@ -790,19 +788,19 @@
             </div>
 
 
-            <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.healthCheck') }}</el-divider>
+            <DialogSectionHeader :title="t('common.app.rules.wizard.healthCheck')" />
 
             <!-- 三个健康阈值控件均不设上限：后端只校验 ≥1（handlers.go），
                  带外合法值（API/MCP 写入 20）不得在编辑触碰控件时被静默夹到 10。 -->
             <el-form-item :label="t('common.app.rules.wizard.failThreshold')">
               <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">{{ t('common.app.rules.wizard.unhealthyThresholdHint') }}</span>
+              <div class="form-tip-line">{{ t('common.app.rules.wizard.unhealthyThresholdHint') }}</div>
             </el-form-item>
 
 
             <el-form-item :label="t('common.app.rules.wizard.checkInterval')">
               <el-input-number v-model="wizardForm.health_check_interval" :min="RULE_NUMERIC_LIMITS.healthCheckIntervalMin" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkIntervalHint') }}</span>
+              <div class="form-tip-line">{{ t('common.app.rules.wizard.checkIntervalHint') }}</div>
             </el-form-item>
 
             <template v-if="wizardForm.protocol === 'http'">
@@ -810,9 +808,9 @@
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" :disabled="ntlmOn" />
                   <TakeoverBadge v-if="ntlmOn" />
-                  <span class="form-tip-inline">{{ ntlmOn
+                  <div class="form-tip-line">{{ ntlmOn
                     ? t('common.app.rules.wizard.activeCheckNtlmOffHint')
-                    : (wizardForm.enable_active_health_check ? t('common.app.rules.wizard.activeCheckHint') : t('common.app.rules.wizard.passiveOnlyHint')) }}</span>
+                    : (wizardForm.enable_active_health_check ? t('common.app.rules.wizard.activeCheckHint') : t('common.app.rules.wizard.passiveOnlyHint')) }}</div>
                 </div>
               </el-form-item>
 
@@ -826,19 +824,19 @@
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item :label="t('common.app.rules.wizard.probeTimeout')">
                   <el-input-number v-model="wizardForm.health_check_timeout" :min="RULE_NUMERIC_LIMITS.healthCheckTimeoutMin" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.probeTimeoutSuffix') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.probeTimeoutSuffix') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('common.app.rules.wizard.checkPath')">
                   <el-input v-model="wizardForm.health_check_path" :placeholder="t('common.app.rules.paths.defaultSlash')" style="width: 180px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkPathHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.checkPathHint') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('common.app.rules.wizard.healthCheckDomain')">
                   <el-input v-model="wizardForm.health_check_host" :placeholder="t('common.app.rules.wizard.healthCheckDomainHint')" style="width: 220px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkHostHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.checkHostHint') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('common.app.rules.wizard.recoverThreshold')">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.recoverSuffix') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.recoverSuffix') }}</div>
                 </el-form-item>
               </template>
             </template>
@@ -847,22 +845,22 @@
               <el-form-item :label="t('common.app.rules.wizard.activeCheck')">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" />
-                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? t('common.app.rules.wizard.upstreamProbeHint') : t('common.app.rules.wizard.passiveOnlyHint') }}</span>
+                  <div class="form-tip-line">{{ wizardForm.enable_active_health_check ? t('common.app.rules.wizard.upstreamProbeHint') : t('common.app.rules.wizard.passiveOnlyHint') }}</div>
                 </div>
               </el-form-item>
 
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item :label="t('common.app.rules.wizard.probeTimeout')">
                   <el-input-number v-model="wizardForm.health_check_timeout" :min="RULE_NUMERIC_LIMITS.healthCheckTimeoutMin" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.probeTimeoutSuffix') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.probeTimeoutSuffix') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('common.app.rules.wizard.checkPort')">
                   <el-input-number v-model="wizardForm.tcp_health_check_port" :min="0" :max="65535" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkPortHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.checkPortHint') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('common.app.rules.wizard.recoverThreshold')">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.recoverSuffix') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.recoverSuffix') }}</div>
                 </el-form-item>
               </template>
             </template>
@@ -876,30 +874,30 @@
 
         <!-- Step 4: 高级选项 -->
         <div v-show="currentStep === WIZARD_STEP.ADVANCED" class="step-content">
-          <el-form :model="wizardForm" :label-width="$flw('100px')" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('144px')" :disabled="saving">
             <template v-if="wizardForm.protocol === 'http'">
-              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.dnsServers') }}</el-divider>
+              <DialogSectionHeader :title="t('common.app.rules.wizard.dnsServers')" />
 
               <el-form-item :label="t('common.app.rules.wizard.enableDns')">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.enable_dns_server" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.dnsForwardHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.dnsForwardHint') }}</div>
                 </div>
               </el-form-item>
 
               <template v-if="wizardForm.enable_dns_server">
                 <el-form-item :label="t('common.app.rules.wizard.dnsServers')">
                   <el-input v-model="wizardForm.dns_server" :placeholder="t('common.app.rules.wizard.dnsServersPlaceholder')" style="width: 220px;" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.dnsServersHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.dnsServersHint') }}</div>
                 </el-form-item>
               </template>
 
-              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.compressionTitle') }}</el-divider>
+              <DialogSectionHeader :title="t('common.app.rules.wizard.compressionTitle')" />
 
               <el-form-item :label="t('common.app.rules.wizard.enableCompression')">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.enable_compress" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.compressionHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.compressionHint') }}</div>
                 </div>
               </el-form-item>
               <el-form-item v-if="wizardForm.enable_compress" :label="t('common.app.rules.wizard.compressionType')" for="radio---2">
@@ -910,12 +908,12 @@
                 </el-radio-group>
               </el-form-item>
 
-              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.dynamicUpstreams') }}</el-divider>
+              <DialogSectionHeader :title="t('common.app.rules.wizard.dynamicUpstreams')" />
 
               <el-form-item :label="t('common.app.rules.wizard.enableDynamicUpstreams')">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.dynamic_dns" @change="onDynamicDnsToggle" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.dynamicDnsHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.dynamicDnsHint') }}</div>
                 </div>
               </el-form-item>
 
@@ -928,39 +926,39 @@
                 </el-form-item>
               </template>
 
-              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.proxyTimeout') }}</el-divider>
+              <DialogSectionHeader :title="t('common.app.rules.wizard.proxyTimeout')" />
               <ProxyTimeoutFields :value="wizardForm" :inherit-label="t('common.app.rules.common.global')" :field-overrides="proxyTimeoutFieldOverrides" @update="updateRuleProxyTimeout" />
 
               <!-- 上游兼容：通用强制 HTTP/1.1（https 上游禁 ALPN h2）；
                    NTLM 接管时由开关锁定为开，呈灰态 -->
-              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.upstreamCompatTitle') }}</el-divider>
+              <DialogSectionHeader :title="t('common.app.rules.wizard.upstreamCompatTitle')" />
 
               <el-form-item :label="t('common.app.rules.wizard.forceHttp11')">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.upstream_force_http1" :active-value="1" :inactive-value="0" :disabled="ntlmOn" />
                   <TakeoverBadge v-if="ntlmOn" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.http2UpgradeHint') }}</span>
+                  <div class="form-tip-line">{{ t('common.app.rules.wizard.http2UpgradeHint') }}</div>
                 </div>
               </el-form-item>
             </template>
 
             <template v-if="wizardForm.protocol === 'http' || wizardForm.protocol === 'tcp'">
-              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.connectRetry') }}</el-divider>
+              <DialogSectionHeader :title="t('common.app.rules.wizard.connectRetry')" />
 
               <el-form-item>
                 <template #label>{{ t('common.app.rules.wizard.retryWindow') }}
                 </template>
                 <el-input-number v-model="wizardForm.tcp_try_duration" :min="ntlmOn ? -1 : 0" :max="60000" controls-position="right" style="width: 120px;" :disabled="ntlmOn" />
-                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn
+                <div class="form-tip-line"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn
                   ? t('common.app.rules.wizard.retryWindowNtlmHint')
                   : (wizardForm.protocol === 'tcp'
                       ? t('common.app.rules.wizard.retryWindowTcpHint')
-                      : t('common.app.rules.wizard.retryWindowHint')) }}</span>
+                      : t('common.app.rules.wizard.retryWindowHint')) }}</div>
               </el-form-item>
 
               <el-form-item :label="t('common.app.rules.wizard.retryInterval')">
                 <el-input-number v-model="wizardForm.tcp_try_interval" :min="(wizardForm.tcp_try_duration || 0) > 0 ? 1 : 0" :max="RULE_NUMERIC_LIMITS.tcpTryIntervalMax" controls-position="right" style="width: 120px;" :disabled="ntlmOn || (wizardForm.tcp_try_duration || 0) <= 0" />
-                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? t('common.app.rules.wizard.retryDisabledIntervalIgnoredHint') : ((wizardForm.tcp_try_duration || 0) <= 0 ? t('common.app.rules.wizard.retryIntervalOffHint') : t('common.app.rules.wizard.retryIntervalHint')) }}</span>
+                <div class="form-tip-line"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? t('common.app.rules.wizard.retryDisabledIntervalIgnoredHint') : ((wizardForm.tcp_try_duration || 0) <= 0 ? t('common.app.rules.wizard.retryIntervalOffHint') : t('common.app.rules.wizard.retryIntervalHint')) }}</div>
               </el-form-item>
 
               <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
@@ -969,18 +967,18 @@
               </el-form-item>
             </template>
 
-            <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.caddyGlobalOverride') }}</el-divider>
+            <DialogSectionHeader :title="t('common.app.rules.wizard.caddyGlobalOverride')" />
 
             <el-form-item :label="t('common.app.rules.wizard.bodySize')">
               <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="1024" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">{{ t('common.app.rules.wizard.bodySizeHint') }}</span>
+              <div class="form-tip-line">{{ t('common.app.rules.wizard.bodySizeHint') }}</div>
             </el-form-item>
 
             <el-form-item :label="t('common.app.rules.wizard.keepaliveTimeout')">
               <!-- 不设上限：后端只拒绝负值（rules.go），带外合法值（API/MCP 写入 7200）
                    在编辑时不得被控件静默夹到 3600 —— 与 ProxyTimeoutFields 同口径。 -->
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 120px;" :disabled="ntlmOn" />
-              <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? t('common.app.rules.wizard.ntlmLockedNote') : t('common.app.rules.wizard.keepaliveTimeoutHint') }}</span>
+              <div class="form-tip-line"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? t('common.app.rules.wizard.ntlmLockedNote') : t('common.app.rules.wizard.keepaliveTimeoutHint') }}</div>
             </el-form-item>
           </el-form>
         </div>
@@ -1076,8 +1074,9 @@
             </el-descriptions-item>
             <el-descriptions-item :label="t('common.app.rules.common.status')">
               <el-tag :type="wizardForm.enabled ? 'success' : 'info'">{{ wizardForm.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}</el-tag>
-              <!-- 副本默认禁用：同域名 / 同端口的副本一启用就会被拦，提示写在状态行旁 -->
-              <span v-if="isCopyMode" class="form-tip-inline">{{ t('common.app.rules.wizard.copyStatusTip') }}</span>
+              <!-- 副本默认禁用：同域名 / 同端口的副本一启用就会被拦，提示写在状态行旁
+                   （19 汉字 / 69 字符，超 §26-5 同行阈值 → 块级） -->
+              <div v-if="isCopyMode" class="form-tip-line">{{ t('common.app.rules.wizard.copyStatusTip') }}</div>
             </el-descriptions-item>
             <el-descriptions-item :label="t('common.app.rules.wizard.upstreamServers')" :span="1">
               <el-table :data="wizardForm.upstreams" size="small" border>
@@ -1122,7 +1121,8 @@
     </el-dialog>
 
     <!-- View Config Dialog -->
-    <el-dialog v-model="configDialogVisible" width="min(900px, 94vw)" top="5vh" :close-on-click-modal="true" @close="onConfigDialogClosed">
+    <!-- 查看配置：含表格 + 代码块（复合编辑）→ 960 档；顶边全局 6vh -->
+    <el-dialog v-model="configDialogVisible" width="min(960px, 94vw)" :close-on-click-modal="true" @close="onConfigDialogClosed">
       <template #header>
         <DialogHeader :icon="Document" :title="t('common.app.rules.cfg.caddyConfig')"
           :subtitle="t('common.app.rules.cfg.previewHint')" />
@@ -1235,10 +1235,10 @@
       </div>
     </el-dialog>
 
+    <!-- 访问日志：以表格/终端与统计为主（数据控制台）→ 1200 档；顶边全局 6vh -->
     <el-dialog
       v-model="ruleLogDialogVisible"
-      width="min(1100px, 94vw)"
-      top="5vh"
+      width="min(1200px, 94vw)"
       destroy-on-close
       @opened="onRuleLogDialogOpened"
       @close="onRuleLogDialogClosed"
@@ -1320,7 +1320,7 @@
     </el-dialog>
 
     <!-- NTLM 开关确认（参照更新迁移预演范式）：开启=接管清单确认；关闭=恢复默认告知 -->
-    <el-dialog v-model="ntlmConfirmVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+    <el-dialog v-model="ntlmConfirmVisible" class="dialog-body-inset" width="min(520px, 94vw)" :close-on-click-modal="false">
       <template #header>
         <DialogHeader :icon="ntlmConfirmMode === 'on' ? WarningFilled : CircleCheckFilled"
           :title="ntlmConfirmMode === 'on' ? t('common.app.rules.wizard.ntlmEnableConfirmTitle') : t('common.app.rules.wizard.ntlmOffNote')"
@@ -1353,7 +1353,7 @@
       </template>
     </el-dialog>
     <!-- 认证网关开关确认（NTLM 同款范式）：开启=行为披露；关闭=确认 -->
-    <el-dialog v-model="faConfirmVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+    <el-dialog v-model="faConfirmVisible" class="dialog-body-inset" width="min(520px, 94vw)" :close-on-click-modal="false">
       <template #header>
         <DialogHeader :icon="faConfirmMode === 'on' ? WarningFilled : CircleCheckFilled"
           :title="faConfirmMode === 'on' ? t('common.app.rules.wizard.faEnableConfirmTitle') : t('common.app.rules.wizard.faOffConfirmTitle')"
@@ -4736,7 +4736,9 @@ onUnmounted(() => {
 .wizard-steps { margin-bottom: 24px; }
 .wizard-steps.is-clickable :deep(.el-step) { cursor: pointer; }
 
-.wizard-content { min-height: min(350px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
+/* 步骤正文不再自写视口限高公式（§26-2）：弹框体由全局 max-height 单源滚动，
+   此处只保留步骤间高度稳定所需的最小高度。 */
+.wizard-content { min-height: 320px; padding-right: 8px; }
 
 .step-content { padding: 8px 0; }
 
@@ -4796,7 +4798,6 @@ onUnmounted(() => {
   min-width: 0;
   padding: 6px 10px;
   border: 1px solid var(--el-border-color);
-  border-radius: 8px;
   background: var(--el-fill-color-blank);
   cursor: pointer;
   transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
@@ -4822,7 +4823,6 @@ onUnmounted(() => {
   width: 20px;
   height: 20px;
   flex: 0 0 20px;
-  border-radius: 6px;
   background: var(--el-fill-color-light);
   color: var(--el-text-color-secondary);
   font-size: 13px;
@@ -4863,20 +4863,6 @@ onUnmounted(() => {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
-}
-
-.compact-divider {
-  margin: 12px 0 8px 0;
-}
-
-.compact-divider :deep(.el-divider__text) {
-  font-size: 14px;
-  font-weight: 500;
-  padding: 0 8px;
-}
-
-.compact-divider :deep(.el-divider__line) {
-  width: calc(50% - 30px);
 }
 
 .strategy-card:hover {
@@ -5057,7 +5043,7 @@ onUnmounted(() => {
 /* 锁 hover 阶段摘要：卡片化分组 + 阶段色阶标题行 */
 .rule-lock-popper { padding: 10px 12px !important; max-height: 62vh; overflow-y: auto; }
 .rule-lock-popper .lock-summary { display: flex; flex-direction: column; gap: 8px; }
-.rule-lock-popper .lock-stage { border: 1px solid #ebeef5; border-radius: 8px; padding: 6px 10px; background: #fff; }
+.rule-lock-popper .lock-stage { border: 1px solid #ebeef5; padding: 6px 10px; background: #fff; }
 .rule-lock-popper .lock-stage-head { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
 .rule-lock-popper .lock-stage-head--s0 { color: var(--el-color-success); }
 .rule-lock-popper .lock-stage-head--s1 { color: var(--el-color-primary); }
@@ -5066,7 +5052,7 @@ onUnmounted(() => {
 .rule-lock-popper .lock-stage-line { font-size: 12px; color: #374151; line-height: 1.8; }
 .rule-lock-popper .lock-stage-empty { color: #b1b5bd; }
 /* 策略小组：多策略同阶段时框式分区；单策略（is-compact）免框保持紧凑不加重层级 */
-.rule-lock-popper .lock-policy-group { border: 1px solid #f3f4f6; border-radius: 6px; padding: 5px 8px; }
+.rule-lock-popper .lock-policy-group { border: 1px solid #f3f4f6; padding: 5px 8px; }
 .rule-lock-popper .lock-policy-group + .lock-policy-group { margin-top: 6px; }
 .rule-lock-popper .lock-policy-group.is-compact { border: none; padding: 0; }
 .rule-lock-popper .lock-policy-group.is-disabled { opacity: 0.45; }

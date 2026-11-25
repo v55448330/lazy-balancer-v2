@@ -266,7 +266,8 @@
       </el-tabs>
     </el-card>
 
-    <el-dialog v-model="contentDialogVisible" width="min(900px, 94vw)" top="5vh">
+    <!-- 规则内容预览：代码高亮只读视图（复合编辑 → 960 档；顶边全局 6vh） -->
+    <el-dialog v-model="contentDialogVisible" width="min(960px, 94vw)">
       <template #header>
         <DialogHeader :icon="Notebook" :title="t('common.app.views.secRules.ruleDialog.previewTitle')" :subtitle="currentFilename" />
       </template>
@@ -274,12 +275,13 @@
       <div v-loading="loadingContent" class="dialog-panel dialog-panel--flush"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
-    <el-dialog v-model="ruleDialogVisible" width="min(880px, 94vw)" class="custom-rule-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingRule" :show-close="!savingRule">
+    <!-- 自定义规则编辑：条件行 + 动作（复合编辑 → 960 档；顶边全局 6vh） -->
+    <el-dialog v-model="ruleDialogVisible" width="min(960px, 94vw)" class="custom-rule-dialog" :close-on-click-modal="false" :close-on-press-escape="!savingRule" :show-close="!savingRule">
       <template #header>
         <DialogHeader :icon="Filter" :title="editingRuleId ? (isReadOnly ? t('common.app.views.secRules.ruleDialog.viewCustomRule') : t('common.app.views.secRules.ruleDialog.editCustomRule')) : t('common.app.views.secRules.ruleDialog.newCustomRule')"
           :subtitle="t('common.app.views.secRules.ruleDialog.subtitle')" tone="danger" />
       </template>
-      <el-form :model="ruleForm" :label-width="$flw('80px')" label-position="right" :disabled="isReadOnly || savingRule">
+      <el-form :model="ruleForm" :label-width="$flw('112px')" label-position="right" :disabled="isReadOnly || savingRule">
         <!-- 值与后端写侧门同源（internal/handlers/security.go：名称 ≤100 rune、
              描述 ≤500 rune）——超长只能等 400 的旧形态没有字段级定位 -->
         <el-form-item :label="t('common.app.views.secRules.common.name')" required>
@@ -408,7 +410,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="ipListDialogVisible" width="min(900px, 94vw)" class="ip-list-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingIpList" :show-close="!savingIpList">
+    <!-- IP 名单编辑：表单 + 条目表格（复合编辑 → 960 档；顶边全局 6vh） -->
+    <el-dialog v-model="ipListDialogVisible" width="min(960px, 94vw)" class="ip-list-dialog" :close-on-click-modal="false" :close-on-press-escape="!savingIpList" :show-close="!savingIpList">
       <template #header>
         <DialogHeader :icon="List" :title="editingIpListId ? (ipListDialogReadOnly ? t('common.app.views.secRules.ipDialog.viewIpList') : t('common.app.views.secRules.ipDialog.editIpList')) : t('common.app.views.secRules.ipDialog.newIpList')"
           :subtitle="t('common.app.views.secRules.ipDialog.subtitle')" />
@@ -417,7 +420,7 @@
         <span class="info-note-desc">{{ t('common.app.views.secRules.ipDialog.entriesLoadFailBanner') }}</span>
         <el-button size="small" type="primary" plain @click="reloadIpListDetail">{{ t('common.app.views.secRules.common.reload') }}</el-button>
       </div>
-      <el-form :model="ipListForm" :label-width="$flw('80px')" label-position="right" v-loading="loadingIpListDetail" :disabled="savingIpList">
+      <el-form :model="ipListForm" :label-width="$flw('112px')" label-position="right" v-loading="loadingIpListDetail" :disabled="savingIpList">
         <!-- 自动封禁预置名单名称/分类/描述为内置字段（后端 400 守卫同口径），
              前端直接禁用灰态——禁止修改的字段不可输入，而非提交后报 400 -->
         <el-form-item :label="t('common.app.views.secRules.common.name')" required>
@@ -524,7 +527,7 @@
     </el-dialog>
 
 <!-- 导入重复条目弹窗（点导入即判定，不写表不执行导入）：简易样式 -->
-<el-dialog v-model="importDuplicateVisible" :title="t('common.app.views.secRules.importDup.title')" width="min(640px, 94vw)" append-to-body :close-on-click-modal="false">
+<el-dialog v-model="importDuplicateVisible" :title="t('common.app.views.secRules.importDup.title')" width="min(960px, 94vw)" append-to-body :close-on-click-modal="false">
   <el-table :data="importDuplicates" size="small" max-height="300">
     <el-table-column :label="t('common.app.views.secRules.importDup.colLineNo')" width="70" align="center">
       <template #default="{ row }">{{ row.lineNo }}</template>
@@ -544,8 +547,7 @@
 
     <el-dialog
       v-model="updateDialogVisible"
-      width="min(900px, 94vw)"
-      top="8vh"
+      width="min(960px, 94vw)"
       destroy-on-close
       @opened="onUpdateDialogOpened"
       @closed="onUpdateDialogClosed"
@@ -580,8 +582,7 @@
 
     <el-dialog
       v-model="ip2regionUpdateDialogVisible"
-      width="min(900px, 94vw)"
-      top="8vh"
+      width="min(960px, 94vw)"
       destroy-on-close
       @opened="onIP2RegionUpdateDialogOpened"
       @closed="onIP2RegionUpdateDialogClosed"
@@ -651,8 +652,7 @@
 
     <el-dialog
       v-model="threatUpdateDialogVisible"
-      width="min(900px, 94vw)"
-      top="8vh"
+      width="min(960px, 94vw)"
       destroy-on-close
       @opened="onThreatUpdateDialogOpened"
       @closed="onThreatUpdateDialogClosed"
@@ -719,8 +719,7 @@
 
     <el-dialog
       v-model="crawlerUpdateDialogVisible"
-      width="min(900px, 94vw)"
-      top="8vh"
+      width="min(960px, 94vw)"
       destroy-on-close
       @opened="onCrawlerUpdateDialogOpened"
       @closed="onCrawlerUpdateDialogClosed"
@@ -2314,7 +2313,7 @@ onUnmounted(() => {
 
 .lib-summary { color: #909399; font-size: 12px; font-weight: 400; }
 .lib-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.lib-icon { flex-shrink: 0; width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; }
+.lib-icon { flex-shrink: 0; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; }
 .lib-icon--crs { background: #eff6ff; color: #3b82f6; }
 .lib-icon--ip { background: #f0fdfa; color: #0d9488; }
 .lib-icon--threat { background: #fff1f2; color: #e11d48; }

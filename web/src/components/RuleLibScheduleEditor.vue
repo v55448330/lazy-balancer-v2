@@ -100,7 +100,6 @@ const emitSave = () => {
   margin-bottom: 14px;
   padding: 12px 14px;
   border: 1px solid #ebeef5;
-  border-radius: 8px;
   background: #f9fafb;
 }
 .schedule-editor__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }

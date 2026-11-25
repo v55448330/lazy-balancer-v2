@@ -147,8 +147,9 @@
         />
       </div>
     </el-card>
-    <!-- 混合策略更新迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
-    <el-dialog v-model="migrateVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false" :close-on-press-escape="!migrateSaving" :show-close="!migrateSaving">
+    <!-- 混合策略更新迁移预演：确认前展示将创建的子策略/重映射范围/上限风险
+         （两个分区标题 + 面板列表 → §26-1 分栏表单 760 档；顶边全局 6vh） -->
+    <el-dialog v-model="migrateVisible" class="dialog-body-inset" width="min(760px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!migrateSaving" :show-close="!migrateSaving">
       <template #header>
         <DialogHeader :icon="WarningFilled" :title="t('app.security.policies.migrate.title')"
           :subtitle="t('app.security.policies.migrate.subtitle', { name: migratePolicy?.name })" />
@@ -190,7 +191,7 @@
     </el-dialog>
 
     <!-- 混合策略只读查看：按阶段分组展示全部内容，零可编辑字段，底部唯一操作=更新迁移 -->
-    <el-dialog v-model="viewPolicyVisible" class="dialog-body-inset" width="min(760px, 94vw)" top="6vh">
+    <el-dialog v-model="viewPolicyVisible" class="dialog-body-inset" width="min(760px, 94vw)">
       <template #header>
         <DialogHeader :icon="Lock" :title="viewPolicyDetail?.name || viewPolicyRow?.name || ''"
           :subtitle="t('app.security.policies.view.subtitle')" />
@@ -225,7 +226,8 @@
         <el-button v-if="!isReadOnly" type="warning" @click="openMigrateFromView">{{ t('app.security.policies.action.migrate') }}</el-button>
       </template>
     </el-dialog>
-    <el-dialog v-model="dialogVisible" class="dialog-body-inset policy-wizard-dialog" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <!-- 策略向导：步骤条 + 分阶段表单（复合编辑 → 960 档；顶边全局 6vh） -->
+    <el-dialog v-model="dialogVisible" class="dialog-body-inset policy-wizard-dialog" width="min(960px, 94vw)" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <template #header>
         <DialogHeader :icon="Lock" :title="editingId ? (isReadOnly ? t('app.security.policies.editor.titleView') : t('app.security.policies.editor.titleEdit')) : t('app.security.policies.editor.titleCreate')"
           :subtitle="EDITOR_SUBTITLES[editorPolicyType]" tone="primary" />
@@ -243,7 +245,7 @@
       <div class="wizard-content">
         <!-- Step 0: 基础信息 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <!-- 策略类型：新建时选择（决定步骤条与表单裁剪）；编辑时固定展示。
                  与 el-form-item label 完全同构（用户裁定）；radio 不用 el-radio-group
                  包组——组容器 DIV 会被 EP 注册为表单输入 id 触发 Firefox label-for 告警，
@@ -271,7 +273,7 @@
             </el-form-item>
             <el-form-item :label="t('app.security.policies.editor.enabledLabel')">
               <el-switch v-model="form.enabled" />
-              <span class="form-tip-inline">{{ t('app.security.policies.editor.enabledTip') }}</span>
+              <div class="form-tip-line">{{ t('app.security.policies.editor.enabledTip') }}</div>
             </el-form-item>
           </el-form>
         </div>
@@ -284,7 +286,7 @@
               <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.stage0.trustIpLabel')">
               <div class="acl-inline-row">
                 <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.common.ipEntryPlaceholder')" class="acl-inline-select" />
@@ -303,7 +305,7 @@
             </el-form-item>
             <el-form-item :label="t('app.security.policies.stage0.keepDetectLabel')">
               <el-switch v-model="form.trust_detection" />
-              <span class="form-tip-inline">{{ form.trust_detection ? t('app.security.policies.stage0.detectOn') : t('app.security.policies.stage0.detectOff') }}</span>
+              <div class="form-tip-line">{{ form.trust_detection ? t('app.security.policies.stage0.detectOn') : t('app.security.policies.stage0.detectOff') }}</div>
             </el-form-item>
             <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单）：
                  el-form 直接子级（2026-10-03 模板归一），缩进由
@@ -325,7 +327,7 @@
               <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
                  label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
             <el-form-item :label="t('app.security.policies.waf.modeLabel')" for="radio-waf--10">
@@ -586,8 +588,8 @@
               <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-divider content-position="left" class="acl-divider">{{ t('app.security.policies.acl.divider') }}</el-divider>
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <DialogSectionHeader :title="t('app.security.policies.acl.divider')" />
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <el-switch v-model="form.ip_acl_enabled" />
             </el-form-item>
@@ -627,8 +629,8 @@
               </el-form-item>
             </template>
           </el-form>
-          <el-divider content-position="left" class="acl-divider">{{ t('app.security.policies.geo.divider') }}</el-divider>
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <DialogSectionHeader :title="t('app.security.policies.geo.divider')" />
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <!-- 开关即生效状态：关闭提交 geoip_mode='off'（后端零发射），名单
                    保留不清单（重开即复用）；从 off 重开时控制模式回落 deny。 -->
@@ -696,7 +698,7 @@
               <span class="stage-projection-empty">{{ boundRules.length > 0 ? t('app.security.policies.bind.appliesTo', { n: boundRules.length }) : t('app.security.policies.bind.none') }}</span>
             </div>
           </div>
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <!-- 何时介入（三档单选，消灭「智能触发 vs CC检测开关」重复）：
                  none=off / always=force（恒挑战）/ anomaly=auto+检测开（阈值触发）。 -->
             <el-form-item :label="t('app.security.policies.human.whenLabel')">
@@ -710,7 +712,7 @@
             <template v-if="ccIntervention !== 'none'">
               <!-- 异常阈值：仅「仅异常流量」展开（always=force 恒挑战，阈值不参与）。 -->
               <template v-if="ccIntervention === 'anomaly'">
-                <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
+                <DialogSectionHeader :title="t('app.security.policies.human.ccSection')" />
                 <div class="info-note-bar cc-step-note"><span class="info-note-desc">{{ t('app.security.policies.human.ccEvalTip') }}</span></div>
                 <el-form-item :label="t('app.security.policies.human.ccRpsLabel')">
                   <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" controls-position="right" style="width: 120px" />
@@ -723,15 +725,15 @@
                 <el-form-item :label="t('app.security.policies.human.cc4xxLabel')">
                   <el-input-number v-model="form.cc_4xx_ratio" :min="0" :max="100" controls-position="right" style="width: 110px" />
                   <span class="form-tip-inline">%</span>
-                  <span class="form-tip-inline">{{ t('app.security.policies.human.cc4xxTip') }}</span>
+                  <div class="form-tip-line">{{ t('app.security.policies.human.cc4xxTip') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('app.security.policies.human.ccSessionLabel')">
                   <el-switch v-model="form.cc_session_anomaly" />
                   <el-input-number v-if="form.cc_session_anomaly" v-model="form.cc_session_ua_threshold" :min="1" :max="100" controls-position="right" style="width: 100px; margin-left: 10px" />
-                  <span v-if="form.cc_session_anomaly" class="form-tip-inline">{{ t('app.security.policies.human.ccSessionTip') }}</span>
+                  <div v-if="form.cc_session_anomaly" class="form-tip-line">{{ t('app.security.policies.human.ccSessionTip') }}</div>
                 </el-form-item>
               </template>
-              <el-divider>{{ t('app.security.policies.human.actionSection') }}</el-divider>
+              <DialogSectionHeader :title="t('app.security.policies.human.actionSection')" />
               <!-- 怎么处置（三档单选，与「何时」正交）：验证方式降为 challenge 子参数，
                    动作选项不再含「滑块/JS」字样（消除语义重复）。force 恒挑战，选择器隐藏。 -->
               <el-form-item v-if="ccIntervention === 'anomaly'" :label="t('app.security.policies.human.actionLabel')">
@@ -753,13 +755,13 @@
                 </el-form-item>
                 <el-form-item :label="t('app.security.policies.human.ttlLabel')">
                   <el-input-number v-model="form.human_verify_ttl" :min="1" :max="1440" controls-position="right" style="width: 120px" />
-                  <span class="form-tip-inline">{{ t('app.security.policies.human.ttlTip') }}</span>
+                  <div class="form-tip-line">{{ t('app.security.policies.human.ttlTip') }}</div>
                 </el-form-item>
               </template>
               <!-- queue 子参数：等待秒数。 -->
               <el-form-item v-if="ccEffectiveActionValue === 'queue'" :label="t('app.security.policies.human.ccQueueWaitLabel')">
                 <el-input-number v-model="form.cc_queue_wait_sec" :min="0" :max="300" controls-position="right" style="width: 120px" />
-                <span class="form-tip-inline">{{ t('app.security.policies.human.ccQueueWaitTip', { sec: form.cc_rps_window }) }}</span>
+                <div class="form-tip-line">{{ t('app.security.policies.human.ccQueueWaitTip', { sec: form.cc_rps_window }) }}</div>
               </el-form-item>
               <el-form-item :label="t('app.security.policies.human.exemptPathsLabel')">
                 <el-select v-model="form.human_exempt_paths" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.human.exemptPathsTip')" style="width: 100%" />
@@ -774,7 +776,7 @@
 
         <!-- Step 4: 关联规则 -->
         <div v-show="currentStep === WIZARD_STEP.BINDINGS" class="step-content">
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bind.boundLabel')">
               <div class="rule-bind-field">
                 <div class="rule-picker-trigger" role="button" tabindex="0" :class="{ 'is-locked': isReadOnly }" @click="!isReadOnly && openRulePicker()" @keydown.enter.prevent="activateOnce($event, () => !isReadOnly && openRulePicker())" @keydown.space.prevent="activateOnce($event, () => !isReadOnly && openRulePicker())">
@@ -829,7 +831,7 @@
               <span v-if="boundRules.length > 0" class="stage-projection-empty">{{ t('app.security.policies.bind.relatedCount', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+          <el-form :model="form" :label-width="$flw('144px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
                 <el-option v-if="editorPolicyType !== 'stage2'" :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
@@ -871,7 +873,7 @@
               <el-select v-model="form.block_status_code" style="width: 200px" :disabled="form.block_page_id === 0">
                 <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
               </el-select>
-              <span class="form-tip-inline">{{ form.block_page_id === 0 ? t('app.security.policies.bp.statusTipNoPage') : t('app.security.policies.bp.statusTipDefault') }}</span>
+              <div class="form-tip-line">{{ form.block_page_id === 0 ? t('app.security.policies.bp.statusTipNoPage') : t('app.security.policies.bp.statusTipDefault') }}</div>
             </el-form-item>
 
             <!-- 策略级响应方式：拦截页设置恒为双档（HTML + JSON），具体返回哪种在这里选。 -->
@@ -950,8 +952,8 @@
       </template>
     </el-dialog>
 
-    <!-- 关联规则选择器 -->
-    <el-dialog v-model="rulePickerVisible" class="dialog-body-inset" width="min(640px, 90vw)" append-to-body>
+    <!-- 关联规则选择器（分区标题 + 可滚动规则清单 → 分栏表单 760 档） -->
+    <el-dialog v-model="rulePickerVisible" class="dialog-body-inset" width="min(760px, 94vw)" append-to-body>
       <template #header>
         <DialogHeader :icon="Connection" :title="t('app.security.policies.picker.title')" />
       </template>
@@ -1029,12 +1031,13 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="extractDialogVisible" class="dialog-body-inset" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false" :close-on-press-escape="!extracting" :show-close="!extracting">
+    <!-- 提取为名单：紧凑表单（4 个字段，无多行/表格）→ 520 档 -->
+    <el-dialog v-model="extractDialogVisible" class="dialog-body-inset" width="min(520px, 94vw)" append-to-body :close-on-click-modal="false" :close-on-press-escape="!extracting" :show-close="!extracting">
       <template #header>
         <DialogHeader :icon="Document" :title="t('app.security.policies.extract.title')" :subtitle="t('app.security.policies.extract.subtitle')" />
       </template>
       <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.extract.note') }}</span></div>
-      <el-form :label-width="$flw('80px')" @submit.prevent>
+      <el-form :label-width="$flw('112px')" @submit.prevent>
         <el-form-item :label="t('app.security.policies.extract.sourceLabel')" for="extract-source-static">
           <input type="text" id="extract-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : t('app.security.policies.stage0.trustIpLabel') }}{{ t('app.security.policies.extract.inlineCount', { n: extractSourceEntries.length }) }}</span>
@@ -1073,7 +1076,6 @@
       v-model="defaultsVisible"
       class="dialog-body-inset"
       width="min(760px, 94vw)"
-      top="6vh"
       :close-on-click-modal="false"
       :close-on-press-escape="!defaultsRunning"
       :show-close="!defaultsRunning"
@@ -4053,9 +4055,6 @@ onMounted(async () => {
 html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .wizard-steps.is-clickable :deep(.el-step) { cursor: pointer; }
 
-.acl-divider { margin: 4px 0 16px; }
-.acl-divider :deep(.el-divider__text) { font-size: 14px; font-weight: 500; padding: 0 8px; }
-
 /* 内联名单行：select 占满剩余宽度，「提取为列表」链接按钮贴右侧（仅内联非空时出现） */
 .acl-inline-row { display: flex; align-items: center; gap: 8px; width: 100%; }
 .acl-inline-row .acl-inline-select { flex: 1; min-width: 0; }
@@ -4063,7 +4062,8 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 
 .extract-source { font-size: 13px; color: #6b7280; }
 
-.wizard-content { min-height: min(370px, calc(100dvh - 300px)); max-height: calc(100dvh - 300px); overflow-y: auto; padding-right: 8px; }
+/* 步骤正文不再自写视口限高公式（§26-2）：弹框体由全局 max-height 单源滚动。 */
+.wizard-content { min-height: 360px; padding-right: 8px; }
 /* 弹框内 cascader 弹性兜底：本体不超出控件列宽（CRS 规则组 / 排除行 / 区域选择共用） */
 .wizard-content :deep(.el-cascader) { max-width: 100%; }
 
@@ -4148,7 +4148,6 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
   height: 32px;
   padding: 0 12px;
   border: 1px solid #dcdfe6;
-  border-radius: 4px;
   background: #ffffff;
   cursor: pointer;
   font-size: 13px;
@@ -4175,7 +4174,7 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
    统一为 el-form-item 包裹（EP label-width 自动对齐控件列，零 CSS 覆盖）
    单条缩进规则（宽度随容器自适应，无第二种弹框样式）。 */
 
-.binding-order-chip { font-size: 12px; padding: 0 7px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; display: inline-flex; align-items: center; line-height: 18px; vertical-align: middle; }
+.binding-order-chip { font-size: 12px; padding: 0 7px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; display: inline-flex; align-items: center; line-height: 18px; vertical-align: middle; }
 .binding-order-chip.is-self { font-weight: 700; box-shadow: inset 0 0 0 1px currentColor; }
 .binding-order-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
 /* 同阶段同色（阶段语义靠颜色区分，文案只保留序号）。 */
@@ -4305,7 +4304,8 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .migrate-preview-empty { font-size: 12px; color: #9ca3af; }
 
 /* 混合策略只读查看（共享分区头 + 详情面板） */
-.view-policy-body { min-height: 120px; max-height: calc(100vh - 300px); overflow-y: auto; }
+/* 查看弹框正文不再自写限高（§26-2）：全局弹框体 max-height 单源滚动。 */
+.view-policy-body { min-height: 120px; }
 .view-policy-section { margin-bottom: 12px; }
 .view-policy-row { display: flex; align-items: baseline; gap: 12px; font-size: 13px; line-height: 1.9; }
 .view-policy-label { color: #6b7280; flex: 0 0 96px; }
@@ -4374,11 +4374,10 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 </style>
 
 <style scoped>
-.placeholder-code { padding: 0 4px; border-radius: 4px; background: var(--el-fill-color-light); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.placeholder-code { padding: 0 4px; background: var(--el-fill-color-light); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .form-tip-line.is-error { color: var(--el-color-danger); }
 
-/* 默认策略弹框（第六轮：折叠行交互 + §16 体高门） */
-.defaults-dialog-body { max-height: calc(100vh - 300px); overflow-y: auto; }
+/* 默认策略弹框（第六轮：折叠行交互）；正文限高走全局单源（§26-2）。 */
 .defaults-dialog-body .dsh-head { margin-top: 14px; }
 .defaults-dialog-body .dsh-head:first-of-type { margin-top: 0; }
 .defaults-panel { padding: 4px 0; }

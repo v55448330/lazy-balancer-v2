@@ -2,7 +2,7 @@
   <!-- 累犯历史弹框（总览「累犯升级」统计下钻）：薄壳弹框 + RecidivismTable
        共享组件（与事件页「封禁与累犯」合并弹框 tab2 同一实现）。
        写门与宿主 autobanWritable 同口径（writable/blockedReason 由宿主传入）。 -->
-  <el-dialog :model-value="modelValue" width="min(1280px, 96vw)" top="5vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog :model-value="modelValue" width="min(1200px, 94vw)" append-to-body class="dialog-body-inset" :close-on-click-modal="false" @update:model-value="emit('update:modelValue', $event)">
     <template #header>
       <DialogHeader :icon="Lock" :title="t('app.security.overview.autoban.recidivismDialogTitle')" :subtitle="t('app.security.overview.autoban.recidivismDialogSubtitle')" />
     </template>

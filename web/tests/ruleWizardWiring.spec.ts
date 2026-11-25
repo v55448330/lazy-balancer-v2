@@ -176,7 +176,7 @@ test('复制：入口不再先弹确认，副本域名留空并说明，预览�
   )
   const statusItem = elementAround("t('common.app.rules.wizard.copyStatusTip')", 'el-descriptions-item')
   assert.match(statusItem, /:label="t\('common\.app\.rules\.common\.status'\)"/, '提示必须挂在预览的状态行')
-  assert.match(statusItem, /<span v-if="isCopyMode" class="form-tip-inline">\{\{ t\('common\.app\.rules\.wizard\.copyStatusTip'\) \}\}<\/span>/)
+  assert.match(statusItem, /<div v-if="isCopyMode" class="form-tip-line">\{\{ t\('common\.app\.rules\.wizard\.copyStatusTip'\) \}\}<\/div>/)
 })
 
 // ── 预览与配置查看器的核对面 ──

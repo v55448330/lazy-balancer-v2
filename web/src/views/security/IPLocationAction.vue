@@ -498,7 +498,7 @@ const retryAll = (): void => { void loadAll() }
 
 <style scoped>
 .ip-cell { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; vertical-align: middle; }
-.ip-clickable { cursor: pointer; border-radius: 3px; padding: 1px 3px; margin: -1px -3px; transition: background 0.15s, color 0.15s; }
+.ip-clickable { cursor: pointer; padding: 1px 3px; margin: -1px -3px; transition: background 0.15s, color 0.15s; }
 .ip-clickable:hover { background: var(--el-color-primary-light-9, #ecf5ff); }
 .ip-clickable:hover .ip-text { color: var(--el-color-primary, #409eff); }
 .ip-clickable:active { background: var(--el-color-primary-light-8, #d9ecff); }

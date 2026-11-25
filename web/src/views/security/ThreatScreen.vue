@@ -1466,7 +1466,7 @@ onBeforeUnmount(() => {
 /* ---------- 等级筛选 ---------- */
 .filters { display: flex; gap: 6px; padding: 8px 10px 0; flex-wrap: wrap; }
 .chip {
-  padding: 3px 10px; border-radius: 2px; cursor: pointer;
+  padding: 3px 10px; cursor: pointer;
   background: rgba(58, 209, 255, 0.05); border: 1px solid rgba(80, 160, 255, 0.16);
   font-size: 11px; color: #8ea7d6;
   display: inline-flex; gap: 5px; align-items: center;
@@ -1550,7 +1550,7 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   display: inline-flex;
   background: rgba(10, 25, 47, 0.72); border: 1px solid rgba(58, 209, 255, 0.25);
-  border-radius: 4px; overflow: hidden;
+  overflow: hidden;
 }
 .window-dock .window-btn { padding: 5px 12px; font-size: 11px; }
 .hud-tr { position: absolute; top: 14px; right: 16px; z-index: 2; pointer-events: none; display: grid; gap: 7px; justify-items: end; font-size: 11px; color: #8ea7d6; }
@@ -1598,7 +1598,6 @@ onBeforeUnmount(() => {
   top: 16%;
   transform: translateX(-50%);
   padding: 12px 30px;
-  border-radius: 2px;
   border: 1px solid rgba(80, 160, 255, 0.3);
   background: rgba(3, 10, 28, 0.8);
   color: #8ea7d6;
@@ -1692,7 +1691,7 @@ onBeforeUnmount(() => {
 .traffic-legend .sw.attack { background: #e25454; margin-left: 6px; }
 /* TCP 断连条目：虚线红 swatch（计入攻击通道），margin 与攻击条目同节奏 */
 .traffic-legend .sw.tcp { background: repeating-linear-gradient(90deg, #e25454 0 3px, transparent 3px 6px); margin-left: 6px; }
-.act { margin-left: auto; font: 10px/1 mono, monospace; padding: 2px 5px; border-radius: 3px; border: 1px solid; }
+.act { margin-left: auto; font: 10px/1 mono, monospace; padding: 2px 5px; border: 1px solid; }
 .act-blocked { color: #ff8a8a; border-color: rgba(226, 84, 84, 0.5); background: rgba(226, 84, 84, 0.12); }
 .act-logged { color: #ffd166; border-color: rgba(255, 209, 102, 0.45); background: rgba(255, 209, 102, 0.08); }
 /* trust/challenged 无徽标配色：大屏事件流走攻击口径（后端

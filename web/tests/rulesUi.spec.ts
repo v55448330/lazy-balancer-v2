@@ -30,7 +30,7 @@ test('健康检查超时只属于主动探测（HTTP/TCP 均隐藏在被动模�
   const zhLexicon = code('src/locales/zh/rules.ts')
   assert.ok(zhLexicon.includes("healthCheck: '健康检查'"), '健康检查分隔符原文必须在 zh 母本词条中')
   assert.ok(zhLexicon.includes("probeTimeout: '主动探测超时'"), '主动探测超时原文必须在 zh 母本词条中')
-  const healthStart = markerIndex(page, /<el-divider[^>]*>\{\{ t\('common\.app\.rules\.wizard\.healthCheck'\) \}\}<\/el-divider>/, '健康检查分隔符')
+  const healthStart = markerIndex(page, /<DialogSectionHeader :title="t\('common\.app\.rules\.wizard\.healthCheck'\)" \/>/, '健康检查分区标题')
   const healthEnd = page.indexOf('<div v-show="currentStep === WIZARD_STEP.CUSTOM_ROUTES"', healthStart)
   assert.ok(healthEnd > healthStart, 'missing custom routes step marker')
   const healthBlock = page.slice(healthStart, healthEnd)

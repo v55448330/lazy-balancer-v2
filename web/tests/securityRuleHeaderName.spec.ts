@@ -70,8 +70,8 @@ test('切走 target 清残留 header_name（非 headers 携带头名后端恒 40
   assert.match(helper, /cond\.header_name = undefined/, '切走 headers 必须清残留头名')
 })
 
-test('弹框与头名输入宽度钉（880px/180px）', () => {
-  assert.match(page, /width="min\(880px, 94vw\)"/, '自定义规则弹框宽度')
+test('弹框与头名输入宽度钉（960px/180px）', () => {
+  assert.match(page, /width="min\(960px, 94vw\)"/, '自定义规则弹框宽度（§26-1 复合编辑档）')
   const decls = cssDeclarations(page, '.header-name-input')
   assert.equal(decls.get('width'), '180px', '头名输入宽度收敛进类样式（类名兼作语义锚）')
   const inputTag = headerNameInput()

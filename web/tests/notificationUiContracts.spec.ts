@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 
 import { channelErrorKind, channelStatusMessageKey, channelStatusTagType } from '../src/utils/deliveryLog.ts'
 import { renderDailySamples } from '../src/utils/dailySamples.ts'
-import { code, cssDeclarations, openTags, section } from './_helpers.ts'
+import { code, openTags, section } from './_helpers.ts'
 
 const NOTIFICATIONS = 'src/views/notifications'
 const POLICIES = 'src/views/security/SecurityPolicies.vue'
@@ -52,19 +52,19 @@ test('秒级刷新主时钟不得标 role=status（读屏每秒播报）', () =>
   assert.match(threat, /class="error-stack" role="status" aria-live="polite"/, '错误栈仍须播报')
 })
 
-// ── 查看弹框体高度门（§16）──
-test('混合策略查看弹框：体限高+内部滚动，与同文件另两个弹框同口径', () => {
+// ── 弹框体高度门（§26-2：全局单源限高）──
+test('安全策略三个弹框：正文不再自写限高公式，统一走全局单源', () => {
   const policies = code(POLICIES)
   const dialog = openTagWith(policies, 'el-dialog', /v-model="viewPolicyVisible"/)
   assert.match(dialog, /class="[^"]*\bdialog-body-inset\b/, '弹框必须显式标记 dialog-body-inset（正文留白单源）')
-  const body = cssDeclarations(policies, '.view-policy-body')
-  assert.match(body.get('max-height') ?? '', /calc\(100vh - 300px\)/, '弹框体必须限高（§16）')
-  assert.equal(body.get('overflow-y'), 'auto', '超长内容在正文内滚动，footer 恒在视口内')
-  // 同文件既有两处（向导正文 / 默认策略正文）同口径——三处不得分叉
-  for (const selector of ['.wizard-content', '.defaults-dialog-body']) {
-    const decls = cssDeclarations(policies, selector)
-    assert.match(decls.get('max-height') ?? '', /calc\(100(?:d|s)?vh - \d+px\)/, `${selector} 限高口径漂移`)
-    assert.equal(decls.get('overflow-y'), 'auto', `${selector} 必须内部滚动`)
+  // 2026-11-25 §26-2 裁定：弹框体限高只允许全局 .el-dialog .el-dialog__body 一处，
+  // 组件自写的 100vh − 300px 一类公式一律删除——否则同一弹框出现两条滚动区。
+  for (const selector of ['.view-policy-body', '.wizard-content', '.defaults-dialog-body']) {
+    assert.doesNotMatch(
+      policies,
+      new RegExp(`\\${selector}\\s*\\{[^}]*max-height`),
+      `${selector} 不得自写限高公式（§26-2）`,
+    )
   }
 })
 

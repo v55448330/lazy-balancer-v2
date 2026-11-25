@@ -1,8 +1,7 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    width="min(1040px, 95vw)"
-    top="5vh"
+    width="min(960px, 94vw)"
     destroy-on-close
     class="rule-flow-dialog"
     @update:model-value="emit('update:modelValue', $event)"
@@ -933,7 +932,6 @@ const retryCertInfo = (): void => {
   font-style: normal;
   font-size: 11px;
   color: #1f6fbd;
-  border-radius: 9px;
   padding: 1px 8px;
   white-space: nowrap;
 }
