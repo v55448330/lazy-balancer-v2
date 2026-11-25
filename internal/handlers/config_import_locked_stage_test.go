@@ -31,7 +31,7 @@ func TestFailImportLockedStage_infraReadFailureMaps500FixedText(t *testing.T) {
 	c, rec, session := newLockedStageTestContext(t)
 	cause := importInfraReadFailure(fmt.Errorf("锁内读取规则引用视图失败: disk I/O error"))
 
-	err := failImportLockedStage(c, session, "导入", "导入锁内实时依赖复核失败", cause, "导入期间依赖的实时数据已变化，已拒绝导入")
+	err := failImportLockedStage(c, session, "导入", "导入锁内实时依赖复核失败", cause, "backup.importLockedStageLiveDataChangedRolledBack")
 	if err == nil {
 		t.Fatal("失败必须上抛供审计链消费")
 	}
@@ -51,7 +51,7 @@ func TestFailImportLockedStage_raceKept400(t *testing.T) {
 	c, rec, session := newLockedStageTestContext(t)
 	cause := errors.New("security_policy_bindings 第 3 行引用了不存在的规则 \"r1\"（导入期间规则已被删除）")
 
-	err := failImportLockedStage(c, session, "导入", "导入锁内实时依赖复核失败", cause, "导入期间依赖的实时数据已变化，已拒绝导入")
+	err := failImportLockedStage(c, session, "导入", "导入锁内实时依赖复核失败", cause, "backup.importLockedStageLiveDataChangedRolledBack")
 	if err == nil {
 		t.Fatal("失败必须上抛")
 	}

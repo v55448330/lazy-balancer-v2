@@ -408,13 +408,13 @@ func TestFailImportTx_auditsAndResponds(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	cause := errors.New("事务内写入失败")
 
-	run := func(responsePrefix string, status int) (*httptest.ResponseRecorder, error) {
+	run := func(key string, status int) (*httptest.ResponseRecorder, error) {
 		gin.SetMode(gin.TestMode)
 		recorder := httptest.NewRecorder()
 		ctx, _ := gin.CreateTestContext(recorder)
 		ctx.Request = httptest.NewRequest(http.MethodPost, "/config/import", nil)
 		session := &configImportSession{h: h, action: "导入"}
-		return recorder, failImportTx(ctx, session, "导入", "导入事务失败", cause, status, responsePrefix)
+		return recorder, failImportTx(ctx, session, "导入", "导入事务失败", cause, status, key)
 	}
 
 	// 客户端可修正形态（400）：响应正文即真实原因，不带「已回滚」前缀。
@@ -437,7 +437,7 @@ func TestFailImportTx_auditsAndResponds(t *testing.T) {
 	}
 
 	// 系统故障形态（500）：前缀 + 「已回滚」+ 原因。
-	recorder, _ = run("导入失败", http.StatusInternalServerError)
+	recorder, _ = run("backup.importFailedRolledBack", http.StatusInternalServerError)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500", recorder.Code)
 	}

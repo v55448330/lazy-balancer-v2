@@ -871,7 +871,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		failImportValidation(c, "导入", "备份文件读取失败: "+err.Error())
+		failImportValidation(c, "导入", "backup.importFileLoadFailed", err.Error())
 		return
 	}
 	// BOM 剥离先于魔数检测——与 validate/v2 两路径同序。
@@ -881,21 +881,21 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	// lbbak(tar.gz)是 V2 形态:提前给出正确端点指引,避免落入 JSON 解析
 	// 「不是有效的 JSON」困惑(安全面本就必拒,仅提示质量)。
 	if isLbbakBytes(body) {
-		failImportValidation(c, "导入", "V1 导入仅支持旧版 JSON 备份；lbbak 备份请使用 /api/v1/config/import")
+		failImportValidation(c, "导入", "backup.v1ImportLegacyJsonOnly")
 		return
 	}
 	if len(body) == 0 {
-		failImportValidation(c, "导入", "备份文件内容为空")
+		failImportValidation(c, "导入", "backup.importFileEmpty")
 		return
 	}
 	var v1 v1Backup
 	if err := json.Unmarshal(body, &v1); err != nil {
-		failImportValidation(c, "导入", "备份文件不是有效的 JSON")
+		failImportValidation(c, "导入", "backup.v1ImportInvalidJson")
 		return
 	}
 	proxies, upstreams, err := v1.parse()
 	if err != nil {
-		failImportValidation(c, "导入", err.Error())
+		failImportValidation(c, "导入", importFailureDetailKey, err.Error())
 		return
 	}
 	rules, conversionWarnings := convertV1Rules(proxies, upstreams)
@@ -908,7 +908,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	allWarnings = append(allWarnings, validationSkips...)
 	allWarnings = append(allWarnings, normalizations...)
 	if len(validRules) == 0 {
-		failImportValidation(c, "导入", "备份中没有可导入的有效规则")
+		failImportValidation(c, "导入", "backup.v1ImportNoValidRules")
 		return
 	}
 	disabledConflicts := disableConvertedRuleConflicts(validRules)
@@ -935,19 +935,19 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	tx := session.tx
 	restoreImportNodeRole, err := suppressImportClusterVersionBumps(ctx, tx)
 	if err != nil {
-		err = failImportTx(c, session, "导入", "准备导入事务", err, http.StatusInternalServerError, "准备导入事务失败")
+		err = failImportTx(c, session, "导入", "准备导入事务", err, http.StatusInternalServerError, "backup.importTxPrepareFailedRolledBack")
 		return
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM path_rules"); err != nil {
-		err = failImportTx(c, session, "导入", "清理旧路径规则", err, http.StatusInternalServerError, "清理旧路径规则失败")
+		err = failImportTx(c, session, "导入", "清理旧路径规则", err, http.StatusInternalServerError, "backup.importClearOldPathsFailedRolledBack")
 		return
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM upstreams"); err != nil {
-		err = failImportTx(c, session, "导入", "清理旧上游", err, http.StatusInternalServerError, "清理旧上游失败")
+		err = failImportTx(c, session, "导入", "清理旧上游", err, http.StatusInternalServerError, "backup.importClearOldUpstreamsFailedRolledBack")
 		return
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM lb_rules"); err != nil {
-		err = failImportTx(c, session, "导入", "清理旧规则", err, http.StatusInternalServerError, "清理旧规则失败")
+		err = failImportTx(c, session, "导入", "清理旧规则", err, http.StatusInternalServerError, "backup.importClearOldRulesFailedRolledBack")
 		return
 	}
 	// v1 导入覆盖 lb_rules 后须同步清空 security_policy_bindings——
@@ -956,11 +956,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	// 防护策略停止应用却零披露。TCP 绑定剪枝文案是另一语义，不在此复用。
 	var clearedBindings int64
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_policy_bindings").Scan(&clearedBindings); err != nil {
-		err = failImportTx(c, session, "导入", "统计旧策略绑定", err, http.StatusInternalServerError, "统计旧策略绑定失败")
+		err = failImportTx(c, session, "导入", "统计旧策略绑定", err, http.StatusInternalServerError, "backup.importCountOldPolicyBindingsFailedRolledBack")
 		return
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings"); err != nil {
-		err = failImportTx(c, session, "导入", "清理旧策略绑定", err, http.StatusInternalServerError, "清理旧策略绑定失败")
+		err = failImportTx(c, session, "导入", "清理旧策略绑定", err, http.StatusInternalServerError, "backup.importClearOldPolicyBindingsFailedRolledBack")
 		return
 	}
 	if clearedBindings > 0 {
@@ -993,13 +993,13 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			r.HostHeader, r.EnableTLS, tlsSource(r), r.TLSCert, r.TLSKey, r.Redirect,
 			r.Compress, r.Enabled, userID, userID, caddyID)
 		if err != nil {
-			err = failImportTx(c, session, "导入", "规则 "+r.Name, err, http.StatusInternalServerError, "导入规则失败")
+			err = failImportTx(c, session, "导入", "规则 "+r.Name, err, http.StatusInternalServerError, "backup.v1ImportRuleFailedRolledBack")
 			return
 		}
 		for _, u := range r.Upstreams {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
 				VALUES (?, ?, ?, ?, 0, ?, ?, 0)`, caddyID, u.Host, u.Port, u.Weight, u.Enabled, u.Protocol); err != nil {
-				err = failImportTx(c, session, "导入", "规则 "+r.Name+" 上游", err, http.StatusInternalServerError, "导入上游失败")
+				err = failImportTx(c, session, "导入", "规则 "+r.Name+" 上游", err, http.StatusInternalServerError, "backup.v1ImportUpstreamFailedRolledBack")
 				return
 			}
 			upstreamCount++
@@ -1021,11 +1021,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	// 事实源）。其 droppedTCPBindings 在 v1 恒为 0（绑定表已在上方清空），
 	// 故 v1 不消费返回值、也不复用 v2 的告警文案。
 	if _, err := normalizeRuleRowsForTransport(ctx, tx); err != nil {
-		err = failImportTx(c, session, "导入", "", err, http.StatusInternalServerError, "导入规则归一失败")
+		err = failImportTx(c, session, "导入", "", err, http.StatusInternalServerError, "backup.v1ImportRuleNormalizeFailedRolledBack")
 		return
 	}
 	if err := restoreImportNodeRole(); err != nil {
-		err = failImportTx(c, session, "导入", "", err, http.StatusInternalServerError, "恢复导入前节点角色失败")
+		err = failImportTx(c, session, "导入", "", err, http.StatusInternalServerError, "backup.v1ImportRestoreNodeRoleFailedRolledBack")
 		return
 	}
 	if err := session.commit(affectedRuleIDs, pendingCerts); err != nil {
