@@ -100,11 +100,31 @@ type PayloadKind =
  * `call:` 函数调用（内部失败助手）、`literal:` 其它结构体、`var:` 变量载荷
  * （再尝试解析成信封）、`unclassified` 兜底（必须人工确认后登记）。
  */
+/**
+ * 键化装配器（c.JSON 的载荷）：把「状态在 c.JSON 首实参、业务码在装配器实参」配对。
+ * 顺序与上表一致：名字 → 状态实参下标。
+ *   securityErrKeyed(status, key, cause)
+ *   clusterErrorKeyedResponse(status, key, cause)
+ *   internalErrorKeyed(tag, status, key, cause)
+ *   clusterError(c, status, message, err) / clusterErrorKeyed(c, status, message, key, err)
+ */
+const ASSEMBLER_STATUS: ReadonlyArray<readonly [RegExp, number]> = [
+  [/^securityErrKeyed\(\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/, 1],
+  [/^clusterErrorKeyedResponse\(\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/, 1],
+  [/^internalErrorKeyed\(\s*[^,]+,\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/, 1],
+  [/^clusterErrorKeyed\(\s*[^,]+,\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/, 1],
+  [/^clusterError\(\s*[^,]+,\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/, 1],
+]
+
 const classifyPayload = (rest: string): PayloadKind => {
   const literal = ENVELOPE_LITERAL.exec(rest)
   if (literal) return { envelope: true, code: literal[1] }
   const envelopeCall = ENVELOPE_CALL.exec(rest)
   if (envelopeCall) return { envelope: true, code: envelopeCall[1] }
+  for (const [pattern, group] of ASSEMBLER_STATUS) {
+    const match = pattern.exec(rest)
+    if (match) return { envelope: true, code: match[group] as string }
+  }
   // `X.WithData(载荷)` 是信封的透明包装：按接收变量解析（变量最后一次赋值为信封即可判定）。
   const withData = /^([A-Za-z_]\w*)\.WithData\(/.exec(rest)
   if (withData) return { envelope: false, shape: `var:${withData[1]}` }

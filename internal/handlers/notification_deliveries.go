@@ -113,7 +113,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	// total（底部统计）：与列表同过滤口径
 	var total int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries d`+where, args...).Scan(&total); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryReadFailed", err))
 		return
 	}
 	// 用户列：显示名优先（无显示名回退用户名）
@@ -123,7 +123,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryReadFailed", err))
 		return
 	}
 	defer rows.Close()
@@ -139,7 +139,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		var d notificationDeliveryDTO
 		var attempts, isTest int
 		if err := rows.Scan(&d.ID, &d.UserID, &d.Username, &d.EventType, &d.Level, &d.Title, &d.Body, &d.Status, &attempts, &d.Error, &d.CreatedAt, &d.SentAt, &isTest); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryReadFailed", err))
 			return
 		}
 		d.Attempts = attempts
@@ -157,7 +157,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		ids = append(ids, d.ID)
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryReadFailed", err))
 		return
 	}
 	// 每通道结果批量 JOIN（一次查询，按 delivery_id 归组）。通道名优先现表名，
@@ -179,7 +179,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 			             WHERE delivery_id=nc.delivery_id AND channel_id=nc.channel_id)
 			ORDER BY nc.id`, chArgs...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryReadFailed", err))
 			return
 		}
 		byDelivery := map[int64]int{}
@@ -191,7 +191,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 			var ch deliveryChannelDTO
 			if err := chRows.Scan(&deliveryID, &ch.ChannelID, &ch.ChannelName, &ch.ChannelType, &ch.Status, &ch.Error, &ch.DurationMs); err != nil {
 				chRows.Close()
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryReadFailed", err))
 				return
 			}
 			if ch.ChannelName == "" {
@@ -206,7 +206,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		}
 		if err := chRows.Err(); err != nil {
 			chRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryReadFailed", err))
 			return
 		}
 		chRows.Close()
@@ -256,7 +256,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	names := resendAuditChannelNames(id, req.FailedOnly && status == "partial")
 	found, reset, err := notify.ResendDelivery(id, req.FailedOnly)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("重发通知失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryResendFailed", err))
 		return
 	}
 	if !found || !reset {

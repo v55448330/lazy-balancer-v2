@@ -650,7 +650,7 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 	// 刷新 updated_at），用户组随后；id 兜底保证确定性全序。
 	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(category,''), CASE WHEN COALESCE(entries,'')='' THEN 0 ELSE json_array_length(COALESCE(entries,'[]')) END, COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,''), COALESCE(system,0) FROM security_ip_lists ORDER BY COALESCE(system,0) DESC, updated_at DESC, id ASC")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer rows.Close()
@@ -658,19 +658,19 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 	for rows.Next() {
 		var row ipListRow
 		if err := rows.Scan(&row.ID, &row.Name, &row.Description, &row.Category, &row.EntryCount, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		lists = append(lists, row)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	refs, err := loadIPListRefPolicies()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	// 受信代理引用面（global_config.trusted_proxy_range_refs）——与
@@ -759,7 +759,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.ipListNotFound"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	entriesJSON = normalizeIPListEntriesJSON(entriesJSON)
@@ -772,7 +772,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 		// DB entries 提供（不得误走威胁文件路径返回空集）。
 		vals, ferr := services.ReadThreatIplistForUI(row.Name)
 		if ferr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", ferr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", ferr))
 			return
 		}
 		// 文件条目无备注，来源位恒 false（零值）。
@@ -791,7 +791,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	}
 	encoded, err := json.Marshal(entries)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	row.Entries = json.RawMessage(encoded)
@@ -802,7 +802,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	// 展示为空，否则「无引用可删」与删除 409 自相矛盾）。
 	refs, refErr := loadIPListRefPolicies()
 	if refErr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取列表引用失败", refErr)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.ipListReferencesLoadFailed", refErr))
 		return
 	}
 	trustedProxyRefs, tpErr := loadTrustedProxyRefIDs()
@@ -842,7 +842,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	// 落库形态=校验返回的生效条目（到期条目已剔除，见 validateIPListShape）。
 	entriesJSON, err := json.Marshal(entries)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
@@ -853,7 +853,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	defer tx.Rollback()
 	dupName, sysDup, dup, err := findDuplicateIPListName(caddyWriteCtx(c), tx, req.Name, 0)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if dup {
@@ -872,7 +872,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	// 否则系统名单行会挤掉用户可建空间（导入 197 条用户名单后新建被误挡）。
 	var total int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_ip_lists WHERE COALESCE(system,0)=0").Scan(&total); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if total >= ipListMaxGlobalCount {
@@ -882,7 +882,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_ip_lists (name, description, category, entries, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,datetime('now'),?,datetime('now'))`,
 		req.Name, req.Description, req.Category, string(entriesJSON), int(contextUserID(c)), int(contextUserID(c)))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	id, _ := result.LastInsertId()
@@ -896,7 +896,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		for i, e := range entries {
 			values[i] = e.Value
 			if err := services.DeleteAutobanRecidivismFrom(caddyWriteCtx(c), tx, services.AutobanEntryIdentity(e.Value)); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 		}
@@ -948,7 +948,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.ipListNotFound"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	// 条目变化判定基准=归一后快照：存量 entries='' 行归一为 '[]' 后纯元数据
@@ -1002,7 +1002,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		// 口径，后续保存不会再被到期残留顶到上限。
 		marshaled, merr := json.Marshal(entries)
 		if merr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", merr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", merr))
 			return
 		}
 		entriesJSON = string(marshaled)
@@ -1037,7 +1037,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		if berr != nil {
 			// 守卫查询失败 fail-closed——静默放行「清空被 allow 引用的列表」
 			// 正是要防的「保存即全站 403」形态。
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("校验 IP 列表引用失败", berr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.ipListReferencesValidateFailed", berr))
 			return
 		}
 		if blocked {
@@ -1047,7 +1047,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	}
 	dupName, sysDup, dup, err := findDuplicateIPListName(caddyWriteCtx(c), tx, name, listID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if dup {
@@ -1062,7 +1062,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_ip_lists SET name=?, description=?, category=?, entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
 		name, description, category, entriesJSON, int(contextUserID(c)), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "IP 地址列表不存在") {
@@ -1102,7 +1102,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 				seen[e.Value] = struct{}{}
 				forget = append(forget, e.Value)
 				if err := services.DeleteAutobanRecidivismFrom(caddyWriteCtx(c), tx, services.AutobanEntryIdentity(e.Value)); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+					c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 					return
 				}
 			}
@@ -1182,7 +1182,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.ipListNotFound"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if system != 0 {
@@ -1201,7 +1201,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	// validateIPListRefsExistence，禁用期间被删的列表不得静默激活）。
 	rows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies WHERE enabled=1")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	referencingPolicyIDs := make(map[int64]struct{})
@@ -1210,7 +1210,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		var aclRefs, wlRefs, crsExcluded string
 		if err := rows.Scan(&policyID, &aclRefs, &wlRefs, &crsExcluded); err != nil {
 			rows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		for _, raw := range []string{aclRefs, wlRefs} {
@@ -1230,7 +1230,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if len(referencingPolicyIDs) > 0 {
@@ -1273,7 +1273,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_ip_lists WHERE id=?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "IP 地址列表不存在") {
@@ -1328,7 +1328,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.ipListNotFound"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if system != 0 {
@@ -1386,11 +1386,11 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	}
 	mergedJSON, err := json.Marshal(entries)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if _, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	// 手动加入任何名单=主动处置（用户裁定）：抹累犯前科+停当前计数——
@@ -1401,7 +1401,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	// 服务的事务形态（DeleteAutobanRecidivismFrom，与 DELETE 端点同一 SQL
 	// 单源）。identity 经 AutobanEntryIdentity 归一，与 merge 记账键同形。
 	if err := services.DeleteAutobanRecidivismFrom(caddyWriteCtx(c), tx, services.AutobanEntryIdentity(req.Value)); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	// 清桶/建议剔除经 AutobanForgetIPs 单一入口（与 remove-ip/差集保存同族；
@@ -1480,7 +1480,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.ipListNotFound"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if system != 0 {
@@ -1529,7 +1529,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	if len(keptValues) == 0 {
 		blocked, berr := allowEmptyingBlockedByPolicies(tx, listID, keptValues)
 		if berr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("校验 IP 列表引用失败", berr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.ipListReferencesValidateFailed", berr))
 			return
 		}
 		if blocked {
@@ -1539,11 +1539,11 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	}
 	mergedJSON, err := json.Marshal(kept)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if _, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_ip_lists SET entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`, string(mergedJSON), int(contextUserID(c)), id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	// （用户裁定「删除即解封」语义闭环）：预置名单移除条目
@@ -1754,7 +1754,7 @@ func (h *Handlers) ExportIPList(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	var entries []models.IPListEntry
@@ -1767,7 +1767,7 @@ func (h *Handlers) ExportIPList(c *gin.Context) {
 			// 故障必须显式 500——否则调用方拿到 200 空文件无法区分「名单为空」，
 			// 与同域读端点（GetIPList）的失败口径一致。
 			services.Logf("error", "导出威胁名单 %q 读取失败: %v", name, ferr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取威胁名单文件失败", ferr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.threatListFileReadFailed", ferr))
 			return
 		}
 		entries = make([]models.IPListEntry, 0, len(vals))

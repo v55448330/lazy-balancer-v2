@@ -33,24 +33,24 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	}
 	if h.syncService == nil {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("同步服务未初始化", services.AuditResultPart("service_unavailable")))
-		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
+		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.syncServiceNotInitialized", nil))
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterMachineBodyLimitBytes)
 	var req models.ClusterModeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", "集群模式参数无效", services.AuditResultPart("invalid_request")))
-		clusterError(c, http.StatusBadRequest, "集群模式参数无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.modeParamsInvalid", err))
 		return
 	}
 	if req.Mode == "master" {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：主节点", "请使用提升接口切换为主节点", services.AuditResultPart("invalid_request")))
-		clusterError(c, http.StatusBadRequest, "请使用提升接口切换为主节点", nil)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.usePromoteEndpoint", nil))
 		return
 	}
 	if req.MasterURL == "" || req.RegisterToken == "" {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", "主节点地址和注册令牌不能为空", services.AuditResultPart("invalid_request")))
-		clusterError(c, http.StatusBadRequest, "主节点地址和注册令牌不能为空", nil)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.masterUrlAndTokenRequired", nil))
 		return
 	}
 	parsedMasterURL, parseErr := url.Parse(req.MasterURL)
@@ -89,7 +89,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	if outboundIPOK && models.ClusterAccessURLTargetsNode(req.MasterURL, outboundIP, h.cfg.Port) {
 		const message = "不能将本节点注册为自己的从节点，请填写另一主节点的地址，或使用提升接口保持主节点角色"
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标："+masterAuditURL, message))
-		clusterError(c, http.StatusBadRequest, message, nil)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.selfRegistrationNotAllowed", nil))
 		return
 	}
 	registration, err := h.syncService.RegisterWithMaster(c.Request.Context(), req.MasterURL, models.ClusterRegisterRequest{
@@ -97,7 +97,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	})
 	if err != nil {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", err.Error()))
-		clusterError(c, http.StatusBadGateway, "向目标主节点注册失败: "+err.Error(), err)
+		c.JSON(http.StatusBadGateway, clusterErrorKeyedResponse(http.StatusBadGateway, "cluster.registerWithMasterFailed", err, err.Error()))
 		return
 	}
 	if err := h.clusterService.BecomeSlave(c.Request.Context(), strings.TrimRight(req.MasterURL, "/"), registration); err != nil {
@@ -162,7 +162,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	// 503,调用方见到失败但角色已提升,重试撞 ErrAlreadyMaster。
 	if h.syncService == nil {
 		recordAudit(c, "提升失败", "集群模式", services.FormatAuditDetail("同步服务未初始化", services.AuditResultPart("service_unavailable")))
-		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
+		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.syncServiceNotInitialized", nil))
 		return
 	}
 	if err := h.clusterService.Promote(c.Request.Context()); err != nil {
@@ -171,7 +171,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 			status = http.StatusBadRequest
 		}
 		recordAudit(c, "提升失败", "集群模式", err.Error())
-		clusterError(c, status, "提升为主节点失败: "+err.Error(), err)
+		c.JSON(status, clusterErrorKeyedResponse(status, "cluster.promoteFailed", err, err.Error()))
 		return
 	}
 	// 提升成功后清空内存 TOFU pin 缓存——Promote 的 cleanupClusterPin
@@ -201,7 +201,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 	var req models.ClusterSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail("集群设置参数无效", services.AuditResultPart("invalid_request")))
-		clusterError(c, http.StatusBadRequest, "集群设置参数无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.settingsParamsInvalid", err))
 		return
 	}
 	if err := h.clusterService.UpdateSettings(c.Request.Context(), req); err != nil {
@@ -209,16 +209,20 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		// 内部故障(500,此前误 403 误导排障)。
 		status := http.StatusInternalServerError
 		msg := "更新集群设置失败"
+		// key 为空的分支直出哨兵原文（无登记词条），保持原文出口不变。
+		key := "cluster.settingsUpdateFailed"
 		// UpdateSettings 不产出 ErrAlreadyMaster(仅 Promote 产出,
 		// Promote 路径 :93 映射保留),原 case 为死分支已删除。
 		switch {
 		case errors.Is(err, services.ErrInvalidSyncInterval) || errors.Is(err, services.ErrSyncUsersLocked):
 			status = http.StatusBadRequest
 			msg = err.Error()
+			key = ""
 		default:
 			if errors.Is(err, services.ErrSlaveReadOnly) {
 				status = http.StatusForbidden
 				msg = err.Error()
+				key = ""
 				c.Header("X-LB-Error-Code", masterRequiredErrorCode)
 			}
 		}
@@ -229,6 +233,12 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 			detail = services.FormatAuditDetail(msg, err.Error())
 		}
 		recordAudit(c, "更新失败", "集群设置", detail)
+		if key != "" {
+			c.JSON(status, clusterErrorKeyedResponse(status, key, err))
+			return
+		}
+		// 4xx 哨兵原文直出（无登记词条）。error_body_leak 政策清单把本函数登记为
+		// 「保存失败需点名」，故保留 clusterError 原文出口。
 		clusterError(c, status, msg, err)
 		return
 	}

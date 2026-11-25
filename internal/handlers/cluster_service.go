@@ -68,18 +68,18 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 	nodeID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || nodeID <= 0 {
 		auditFailure(nodeID, "节点编号无效")
-		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
 	var req models.ClusterNodeServiceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		auditFailure(nodeID, "请求格式错误")
-		clusterError(c, http.StatusBadRequest, "请求格式错误", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "common.malformedRequest", err))
 		return
 	}
 	if !models.IsValidClusterServiceAction(req.Action) {
 		auditFailure(nodeID, "动作："+registerAuditField(req.Action)+"（不支持）")
-		clusterError(c, http.StatusBadRequest, "不支持的服务控制动作", nil)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.unsupportedServiceControlAction", nil))
 		return
 	}
 	issued, err := h.clusterService.IssueServiceControlTicket(c.Request.Context(), nodeID, req.Action, time.Now())
@@ -93,6 +93,7 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 		}
 		status := http.StatusInternalServerError
 		message := "签发服务控制票据失败"
+		key := "cluster.issueServiceControlTicketFailed"
 		switch {
 		case errors.Is(err, services.ErrNodeNotFound):
 			status = http.StatusNotFound
@@ -100,11 +101,12 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 			// 已批准但令牌尚未交付：节点存在、只是暂不可签发——409 + 单源文案。
 			status = http.StatusConflict
 			message = err.Error()
+			key = ""
 			// ErrInvalidServiceAction 不可达：handler 已在入口对非法动作先行 400
 			// （服务层校验是同一谓词首语句），此处无需 400 分支。
 		}
 		auditFailure(nodeID, "签发票据失败（动作："+registerAuditField(req.Action)+"）")
-		clusterError(c, status, message, err)
+		emitClusterError(c, status, message, key, err)
 		return
 	}
 	message, err := h.callClusterServiceControl(c.Request.Context(), issued.URL, req.Action, issued.Ticket, currentUsername(c))
@@ -124,12 +126,12 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 		// 指纹不匹配必须与通用不可达区分下发——否则前端无法提示
 		//「清除该节点证书指纹」补救通道（该信息此前只进服务端日志）。
 		if errors.Is(err, services.ErrClusterPinMismatch) {
-			// 结构化语义键 pin_mismatch：前端按键判定补救通道（与文案解耦，
-			// 文案词条化后入口不失效），与从节点侧 sync_error_code 同口径。
-			clusterErrorKeyed(c, http.StatusBadGateway, "从节点证书指纹不匹配（该节点管理面板证书可能已更换），可清除该节点证书指纹后重试", "pin_mismatch", err)
+			// 结构化语义键 cluster.pinMismatch（与文案解耦，前端按 message_key
+			// 判定补救通道），与从节点侧 sync_error_code 同口径。
+			c.JSON(http.StatusBadGateway, clusterErrorKeyedResponse(http.StatusBadGateway, "cluster.pinMismatch", err))
 			return
 		}
-		clusterError(c, http.StatusBadGateway, "从节点不可达或响应异常", err)
+		c.JSON(http.StatusBadGateway, clusterErrorKeyedResponse(http.StatusBadGateway, "cluster.nodeUnreachable", err))
 		return
 	}
 	notify.Publish(notify.Event{Type: notify.EvtClusterServiceControl, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("节点 %d（%s）", nodeID, issued.NodeName), "3": clusterServiceActionLabel(req.Action), "4": "成功"}})
@@ -257,11 +259,11 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 	if err := h.clusterService.ValidateServiceControlTicket(c.Request.Context(), req.Ticket, req.Action, time.Now()); err != nil {
 		if errors.Is(err, services.ErrInvalidServiceControlTicket) {
 			recordClusterServiceControlAudit(c, req.Action, "失败：票据校验未通过（"+serviceControlTicketFailureReason(err)+"）")
-			clusterError(c, http.StatusUnauthorized, "服务控制票据无效或已过期", err)
+			c.JSON(http.StatusUnauthorized, clusterErrorKeyedResponse(http.StatusUnauthorized, "cluster.serviceControlTicketInvalid", err))
 			return
 		}
 		recordClusterServiceControlAudit(c, req.Action, "失败：票据校验出错")
-		clusterError(c, http.StatusInternalServerError, "服务控制校验失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.serviceControlTicketValidationFailed", err))
 		return
 	}
 	if req.Action == models.ClusterServiceActionRestartApp {

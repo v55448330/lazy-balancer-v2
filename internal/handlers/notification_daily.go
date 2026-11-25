@@ -24,7 +24,7 @@ func (h *Handlers) GetNotificationDaily(c *gin.Context) {
 	uid := contextUserID(c)
 	cfg, err := notify.GetDailyConfig(uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取日报配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigReadFailed", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
@@ -88,7 +88,7 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 	// 配置，任何只改 send_time/items 的请求都会把日报静默停用。
 	cfg, err := notify.GetDailyConfig(uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取日报配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigReadFailed", err))
 		return
 	}
 	if req.Enabled != nil {
@@ -103,7 +103,7 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 		cfg.Formats = req.Formats
 	}
 	if err := notify.SaveDailyConfig(cfg); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigSaveFailed", err))
 		return
 	}
 	recordAudit(c, "修改", "通知日报", services.FormatAuditDetail(
@@ -137,7 +137,7 @@ func (h *Handlers) PreviewNotificationDaily(c *gin.Context) {
 	defer cancel()
 	data, err := notify.CollectDailyData(ctx, time.Now())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("采集日报数据失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyDataCollectFailed", err))
 		return
 	}
 	content := notify.RenderDaily(data, req.Items, req.Format)
@@ -162,7 +162,7 @@ func (h *Handlers) TriggerNotificationDaily(c *gin.Context) {
 	}
 	rendered, err := notify.DeliverDailyForAll(c.Request.Context(), time.Now())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("触发全员日报失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyTriggerAllFailed", err))
 		return
 	}
 	recordAudit(c, "触发", "通知日报", services.FormatAuditDetail(
@@ -200,7 +200,7 @@ func (h *Handlers) GetDailyTargets(c *gin.Context) {
 
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyTargetsQueryFailed", err))
 		return
 	}
 	var userIDs []int64
@@ -218,7 +218,7 @@ func (h *Handlers) GetDailyTargets(c *gin.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyTargetsQueryFailed", err))
 		return
 	}
 	rows.Close()
@@ -232,7 +232,7 @@ func (h *Handlers) GetDailyTargets(c *gin.Context) {
 		chRows, err := db.DB.Query(`SELECT type, name FROM notification_channels
 			WHERE user_id=? AND enabled=1 ORDER BY id`, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyTargetsQueryFailed", err))
 			return
 		}
 		for chRows.Next() {
@@ -249,7 +249,7 @@ func (h *Handlers) GetDailyTargets(c *gin.Context) {
 		}
 		if err := chRows.Err(); err != nil {
 			chRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询日报投递目标失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyTargetsQueryFailed", err))
 			return
 		}
 		chRows.Close()

@@ -25,7 +25,7 @@ import (
 func (h *Handlers) GetAutobanConfig(c *gin.Context) {
 	cfg, err := services.GetAutobanConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanConfigReadFailed", err))
 		return
 	}
 	c.JSON(http.StatusOK, cfg)
@@ -68,7 +68,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		return
 	}
 	if err := services.SetAutobanConfig(req); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存自动封禁配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanConfigSaveFailed", err))
 		return
 	}
 	// 启用与调度是同一字段的两面（保存即联动调度启停），只产出一个状态位并
@@ -81,7 +81,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		autobanCountingModeText(req)))
 	updated, err := services.GetAutobanConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("回读自动封禁配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanConfigReadBackFailed", err))
 		return
 	}
 	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了自动封禁配置"}})
@@ -119,12 +119,12 @@ func autobanCountingModeText(cfg services.AutobanConfig) string {
 func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 	cfg, err := services.GetAutobanConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanConfigReadFailed", err))
 		return
 	}
 	entries, listID, err := services.AutobanListEntries()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁名单失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanListReadFailed", err))
 		return
 	}
 	active := services.AutobanActiveEntries(entries)
@@ -226,7 +226,7 @@ func (h *Handlers) GetAutobanRecidivism(c *gin.Context) {
 	ipFilter := strings.TrimSpace(c.Query("ip"))
 	records, total, err := services.ListAutobanRecidivism(hidePermanent, ipFilter, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁累犯记录失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanRepeatOffenderReadFailed", err))
 		return
 	}
 	for i := range records {
@@ -258,7 +258,7 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("删除自动封禁累犯记录失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanRepeatOffenderDeleteFailed", err))
 		return
 	}
 	// 移除=主动处置：清计数桶+观察建议（纯内存，与加名单中断同口径），
@@ -284,7 +284,7 @@ func (h *Handlers) ResetAutobanRecidivism(c *gin.Context) {
 		return
 	}
 	if err := services.ResetAutobanRecidivism(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("重置自动封禁累犯记录失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanRepeatOffenderResetFailed", err))
 		return
 	}
 	recordAudit(c, "重置", "累犯记录", "清空全部自动封禁累犯升级历史与窗口计数（下次达阈值按首次档起算；已生效封禁条目不受影响）")

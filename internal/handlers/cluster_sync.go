@@ -36,7 +36,7 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 			clusterMasterForbidden(c, err)
 			return
 		}
-		clusterError(c, http.StatusInternalServerError, "生成集群快照失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.snapshotGenerateFailed", err))
 		return
 	}
 	if !changed {
@@ -78,23 +78,23 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	// 装配缺失 503、角色查询失败 500（与 ForgetClusterPins 的 fail-closed
 	// 口径一致：瞬时 DB 故障不得伪装成「主节点」400 误导排障）。
 	if h.clusterService == nil {
-		clusterError(c, http.StatusServiceUnavailable, "集群服务未初始化", nil)
+		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.serviceNotInitialized", nil))
 		return
 	}
 	isMaster, roleErr := h.clusterService.IsMaster(c.Request.Context())
 	if roleErr != nil {
-		clusterError(c, http.StatusInternalServerError, "节点角色查询失败", roleErr)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.roleQueryFailed", roleErr))
 		return
 	}
 	if isMaster {
-		clusterError(c, http.StatusBadRequest, "主节点无需手动同步", nil)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.masterNoManualSync", nil))
 		return
 	}
 	// 与 SetClusterMode/Promote/
 	// ForgetClusterPins 同口径——装配缺失时 503，不得 nil 指针 panic 落成
 	// Gin recovery 的 500 空体。
 	if h.syncService == nil {
-		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
+		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.syncServiceNotInitialized", nil))
 		return
 	}
 	// 手动同步会写 global_config/lb_rules 等导入全量替代表，导入会话
@@ -108,7 +108,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	result, err := h.syncService.Pull(c.Request.Context())
 	if err != nil {
 		recordAudit(c, "同步失败", "集群同步", err.Error())
-		clusterError(c, http.StatusInternalServerError, "同步失败: "+err.Error(), err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.syncFailed", err, err.Error()))
 		return
 	}
 	if result.Changed {
@@ -130,7 +130,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 	// 的 pin 目录存的是各从节点钉（服务控制 TOFU 消费），误调会整体重置从节点
 	// 钉扎——主节点直接拒绝。
 	if h.syncService == nil {
-		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
+		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.syncServiceNotInitialized", nil))
 		return
 	}
 	// 主节点守卫不得随装配缺失 ——h.clusterService 为 nil
@@ -138,7 +138,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 	// 与 PullClusterSnapshot「装配缺失 → 503」及本文件其余口径
 	// 一致：无法确认角色即拒绝。
 	if h.clusterService == nil {
-		clusterError(c, http.StatusServiceUnavailable, "集群服务未初始化，已拒绝清除（fail-closed）", nil)
+		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.serviceNotInitializedClearRefused", nil))
 		return
 	}
 	{
@@ -147,7 +147,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		// 守卫误清从节点钉扎。
 		isMaster, err := h.clusterService.IsMaster(c.Request.Context())
 		if err != nil {
-			clusterError(c, http.StatusInternalServerError, "无法确认节点角色，已拒绝清除（fail-closed）", err)
+			c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.roleUnknownClearRefused", err))
 			return
 		}
 		if isMaster {
@@ -159,7 +159,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 	removed, err := h.syncService.ForgetPins()
 	if err != nil {
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(err.Error(), services.AuditResultPart("failure")))
-		clusterError(c, http.StatusInternalServerError, "清除主节点证书指纹失败: "+err.Error(), err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.masterFingerprintClearFailed", err, err.Error()))
 		return
 	}
 	recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
@@ -188,7 +188,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 		// 无条件早退——本分支必须自行留痕（与同文件其余失败面同口径）。
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(
 			"节点编号无效（"+registerAuditField(c.Param("id"))+"）", services.AuditResultPart("invalid_request")))
-		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
 	host, err := h.clusterService.ForgetNodePin(c.Request.Context(), nodeID)
@@ -210,7 +210,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 			return
 		}
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), err.Error()))
-		clusterError(c, status, "清除节点证书指纹失败", err)
+		c.JSON(status, clusterErrorKeyedResponse(status, "cluster.nodeFingerprintClearFailed", err))
 		return
 	}
 	if h.syncService != nil {

@@ -172,7 +172,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		return
 	}
 	if err := notify.SetSettings(updates); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知设置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.settingsSaveFailed", err))
 		return
 	}
 	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail("变更键: "+strings.Join(changed, ","), "", services.AuditResultPart("success")))

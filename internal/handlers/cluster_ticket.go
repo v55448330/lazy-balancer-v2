@@ -59,7 +59,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	nodeID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || nodeID <= 0 {
 		recordAudit(c, "生成失败", "登录票据", services.FormatAuditDetail("节点编号无效（"+registerAuditField(c.Param("id"))+"）", services.AuditResultPart("invalid_request")))
-		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
 	response, err := h.clusterService.GenerateLoginTicket(c.Request.Context(), models.ClusterLoginTicketClaims{
@@ -68,12 +68,14 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "生成登录票据失败"
+		key := "cluster.loginTicketIssueFailed"
 		auditCode := "failed"
 		auditReason := err.Error()
 		if errors.Is(err, services.ErrNotMasterNode) {
 			c.Header("X-LB-Error-Code", masterRequiredErrorCode)
 			status = http.StatusForbidden
 			message = err.Error()
+			key = ""
 			auditCode = "blocked"
 			auditReason = "节点角色已降级"
 		}
@@ -85,12 +87,14 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 			// 寻址错误误读成本端故障，排障方向被引向服务端。
 			status = http.StatusNotFound
 			message = "目标节点不存在（可能已被删除），请刷新节点列表后重试"
+			key = "cluster.loginTicketNodeNotFound"
 		}
 		if errors.Is(err, services.ErrNodeOffline) {
 			// 已批准但未上报/已离线是「现在不可达」而非
 			// 「不存在」——409 + 可行动文案，运营方据此检查从节点进程/网络。
 			status = http.StatusConflict
 			message = "目标从节点尚未上报或已离线，请确认从节点在线后重试"
+			key = "cluster.loginTicketNodeOffline"
 		}
 		if errors.Is(err, services.ErrNodeTokenPending) {
 			// 已批准但集群令牌尚未交付（从节点还没轮询注册状态）：节点存在、
@@ -98,9 +102,10 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 			// 排障引向「是否被删除」。
 			status = http.StatusConflict
 			message = err.Error()
+			key = ""
 		}
 		recordAudit(c, "生成失败", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), auditReason, services.AuditResultPart(auditCode)))
-		clusterError(c, status, message, err)
+		emitClusterError(c, status, message, key, err)
 		return
 	}
 	// 审计带节点名(与服务控制事件同格式「节点 %d（%s）」,:ID 必留,

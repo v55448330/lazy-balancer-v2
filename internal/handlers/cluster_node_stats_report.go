@@ -53,7 +53,7 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 		case errors.Is(err, services.ErrNotMasterNode):
 			clusterMasterForbidden(c, err)
 		default:
-			clusterError(c, http.StatusInternalServerError, "统计落库失败", err)
+			c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.statsSaveFailed", err))
 		}
 		return
 	}

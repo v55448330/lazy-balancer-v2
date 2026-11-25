@@ -64,7 +64,7 @@ func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 	uid := contextUserID(c)
 	rows, err := db.DB.Query(`SELECT event_type, COALESCE(min_level,''), COALESCE(body_template,''), COALESCE(enabled,1) FROM notification_subscriptions WHERE user_id=?`, uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsReadFailed", err))
 		return
 	}
 	defer rows.Close()
@@ -80,14 +80,14 @@ func (h *Handlers) ListNotificationSubscriptions(c *gin.Context) {
 		if err := rows.Scan(&eventType, &row.minLevel, &row.bodyTemplate, &enabled); err != nil {
 			// 行读取失败必须 fail-visible：静默跳行会让停用行回退成「默认态」，
 			// 用户看到的订阅矩阵与真实投递口径分叉（同族）。
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsReadFailed", err))
 			return
 		}
 		row.enabled = enabled != 0
 		explicit[eventType] = row
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知订阅失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsReadFailed", err))
 		return
 	}
 
@@ -167,7 +167,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsSaveFailed", err))
 		return
 	}
 	defer tx.Rollback()
@@ -176,7 +176,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 			// 取消订阅=停用行（保留更新者/时间；无行时补建 opt-out 行，否则
 			// 默认订阅兜底会让「关闭」静默失效）。
 			if err := disableSubscriptionRow(tx, uid, op.eventType, uid); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsSaveFailed", err))
 				return
 			}
 			continue
@@ -184,12 +184,12 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 		if _, err := tx.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, enabled, updated_at, updated_by) VALUES (?,?,?,?,1,datetime('now'),?)
 			ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template, enabled=1,
 			updated_at=excluded.updated_at, updated_by=excluded.updated_by`, uid, op.eventType, op.minLevel, op.bodyTemplate, uid); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsSaveFailed", err))
 			return
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知订阅失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsSaveFailed", err))
 		return
 	}
 	recordAudit(c, "修改", "通知订阅", services.FormatAuditDetail(fmt.Sprintf("订阅更新×%d", len(ops)), "", services.AuditResultPart("success")))

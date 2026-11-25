@@ -87,7 +87,7 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 	query += ` ORDER BY id`
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知通道失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelListQueryFailed", err))
 		return
 	}
 	defer rows.Close()
@@ -95,7 +95,7 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 	for rows.Next() {
 		r, _, err := scanNotificationChannel(rows.Scan)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知通道失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelListQueryFailed", err))
 			return
 		}
 		if r.Type == "qq" || r.Type == "wx_clawbot" {
@@ -118,7 +118,7 @@ func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知通道失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelListQueryFailed", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"channels": out}})
@@ -377,7 +377,7 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 				return
 			}
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("创建通知通道失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelCreateFailed", err))
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -449,12 +449,12 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	}
 	tx, err := db.DB.Begin()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelUpdateFailed", err))
 		return
 	}
 	defer tx.Rollback()
 	failTx := func(err error) {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelUpdateFailed", err))
 	}
 	if hasStyle {
 		if _, err := tx.Exec(`UPDATE notification_channels SET style_config=?, updated_at=datetime('now') WHERE id=?`, normalizedStyle, id); err != nil {
@@ -534,7 +534,7 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 		return
 	}
 	if _, err := db.DB.Exec(`DELETE FROM notification_channels WHERE id=?`, id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("删除通知通道失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelDeleteFailed", err))
 		return
 	}
 	auditName := name

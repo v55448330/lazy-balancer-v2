@@ -90,7 +90,7 @@ func (h *Handlers) GetQQBindCode(c *gin.Context) {
 	// 唯一入口（此前绑定完成即 upsert 通道，导致「删除通道→重新绑定→保存」
 	// 被误判已存在）。
 	if _, err := notify.SaveQQBotCredentialsIfAbsent(result.AppID, result.AppSecret); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("凭据落库失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.qqBindCredentialSaveFailed", err))
 		return
 	}
 	qqTaskMu.Lock()

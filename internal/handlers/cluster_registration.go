@@ -73,7 +73,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 			return
 		}
 		recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(services.AuditResultPart("failure"), err.Error()))
-		clusterError(c, http.StatusInternalServerError, "生成注册令牌失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.registrationTokenGenerateFailed", err))
 		return
 	}
 	recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(fmt.Sprintf("有效期至：%s", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
@@ -99,7 +99,7 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 		if !isRequestBodyTooLarge(err) {
 			services.RecordAuditLog("system", "注册失败", "集群节点", "注册请求格式错误", c.ClientIP())
 		}
-		clusterError(c, http.StatusBadRequest, "注册请求格式错误", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.registerRequestMalformed", err))
 		return
 	}
 	// access_url 的信任锚=服务端观测到的连接来源地址（路由器
@@ -110,7 +110,7 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 		if errors.Is(err, services.ErrInvalidRegisterToken) {
 			// 无效令牌路径不携带攻击者输入，详情与响应均用通用文案
 			services.RecordAuditLog("system", "注册失败", "集群节点", "注册令牌无效", c.ClientIP())
-			clusterError(c, http.StatusUnauthorized, "注册令牌无效或已过期", err)
+			c.JSON(http.StatusUnauthorized, clusterErrorKeyedResponse(http.StatusUnauthorized, "cluster.registrationTokenInvalid", err))
 			return
 		}
 		if errors.Is(err, services.ErrNotMasterNode) {
@@ -144,11 +144,11 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 			// 与同族入口（UpdateClusterNodeAccessURL/SetClusterMode/v2 导入）的
 			// 400 口径一致；此处此前缺分支，与同文件注释矛盾。
 			services.RecordAuditLog("system", "注册失败", "集群节点", services.FormatAuditDetail(registerAuditField(req.Name), registerAuditField(req.IPAddress), err.Error()), c.ClientIP())
-			clusterError(c, http.StatusBadRequest, "访问地址无效", err)
+			c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.accessUrlInvalid", err))
 			return
 		}
 		services.RecordAuditLog("system", "注册失败", "集群节点", services.FormatAuditDetail(registerAuditField(req.Name), registerAuditField(req.IPAddress), err.Error()), c.ClientIP())
-		clusterError(c, http.StatusInternalServerError, "节点注册失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.nodeRegisterFailed", err))
 		return
 	}
 	// 重复 ip:port 命中已批准节点时，upsert 会重置审批与令牌——响应与
@@ -181,7 +181,7 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 	// 参数校验先于角色门：非法 ID 恒 400，不因节点角色变化。
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		clusterError(c, http.StatusBadRequest, "注册编号无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.registrationIdInvalid", err))
 		return
 	}
 	// 导入窗口 fast-fail：本端点会写 nodes（交付集群令牌，条件 UPDATE），
@@ -213,10 +213,10 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 			if registrationStatusRejectionRecorder != nil {
 				registrationStatusRejectionRecorder(c)
 			}
-			clusterError(c, http.StatusUnauthorized, "注册凭证无效", err)
+			c.JSON(http.StatusUnauthorized, clusterErrorKeyedResponse(http.StatusUnauthorized, "cluster.registrationCredentialInvalid", err))
 			return
 		}
-		clusterError(c, http.StatusInternalServerError, "查询注册状态失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.registrationStatusQueryFailed", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.registrationStatusQueried"), MessageKey: "cluster.registrationStatusQueried", Data: status})
@@ -243,11 +243,11 @@ func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
 		// 服务层会产这两个哨兵。
 		if errors.Is(err, services.ErrInvalidClusterAuth) {
 			services.RecordAuditLog("system", "确认失败", "集群节点", services.AuditResultPart("failure"), c.ClientIP())
-			clusterError(c, http.StatusUnauthorized, "确认集群注册失败", err)
+			c.JSON(http.StatusUnauthorized, clusterErrorKeyedResponse(http.StatusUnauthorized, "cluster.registrationConfirmFailed", err))
 			return
 		}
 		services.RecordAuditLog("system", "确认失败", "集群节点", services.FormatAuditDetail(services.AuditResultPart("failure"), err.Error()), c.ClientIP())
-		clusterError(c, http.StatusInternalServerError, "确认集群注册失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.registrationConfirmFailed", err))
 		return
 	}
 	services.RecordAuditLog("system", "确认", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %s", nodeName), "注册密钥已失效", services.AuditResultPart("success")), c.ClientIP())
@@ -286,7 +286,7 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 		// 同形），失败原因槽只放结论——旧写法把整句塞进 nodeLabel 槽，
 		// reason 槽重复同一句，段落错位。
 		auditFailure("节点 "+registerAuditField(c.Param("id")), "invalid_request", "节点编号无效")
-		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
 	nodeLabel := fmt.Sprintf("节点 %d", id)
@@ -294,12 +294,12 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 	var req models.ClusterNodeSiteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		auditFailure(nodeLabel, "invalid_request", "站点坐标格式错误")
-		clusterError(c, http.StatusBadRequest, "站点坐标格式错误", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.siteCoordinatesMalformed", err))
 		return
 	}
 	if req.ServerMapLat == nil || req.ServerMapLon == nil {
 		auditFailure(nodeLabel, "invalid_request", "必须同时提交站点纬度和经度")
-		clusterError(c, http.StatusBadRequest, "必须同时提交站点纬度和经度", nil)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.siteCoordinatesBothRequired", nil))
 		return
 	}
 	if err := validateServerMapCoordinates(req.ServerMapLat, req.ServerMapLon); err != nil {
@@ -316,11 +316,11 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 		}
 		if errors.Is(err, services.ErrNodeNotFound) {
 			auditFailure(nodeLabel, "failed", "节点不存在")
-			clusterError(c, http.StatusNotFound, "更新节点站点坐标失败", err)
+			c.JSON(http.StatusNotFound, clusterErrorKeyedResponse(http.StatusNotFound, "cluster.siteCoordinatesUpdateFailed", err))
 			return
 		}
 		auditFailure(nodeLabel, "failed", err.Error())
-		clusterError(c, http.StatusInternalServerError, "更新节点站点坐标失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.siteCoordinatesUpdateFailed", err))
 		return
 	}
 	recordAudit(c, "更新", "集群节点", services.FormatAuditDetail(
@@ -355,7 +355,7 @@ func (h *Handlers) UpdateClusterNodeAccessURL(c *gin.Context) {
 		// ——与同族站点坐标端点同构。编号尚未解析，按路径参数留痕。
 		recordAudit(c, "更新地址", "集群节点", services.FormatAuditDetail(
 			"节点 "+registerAuditField(c.Param("id")), "访问地址格式错误", services.AuditResultPart("invalid_request")))
-		clusterError(c, http.StatusBadRequest, "访问地址格式错误", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.accessUrlMalformed", err))
 		return
 	}
 	h.clusterNodeAction(c, "更新地址", func(id int) error {
@@ -385,7 +385,7 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		recordAudit(c, action, "集群节点", services.FormatAuditDetail("节点编号无效（"+registerAuditField(c.Param("id"))+"）", services.AuditResultPart("failure")))
-		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
 	auditFailure := func(code, reason string) {
@@ -411,11 +411,11 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 		// 说明（同族入口 RegisterClusterNode/SetClusterMode/v2 导入均已 400）。
 		if errors.Is(err, models.ErrInvalidClusterAccessURL) {
 			auditFailure("invalid_request", "访问地址无效")
-			clusterError(c, http.StatusBadRequest, "访问地址无效", err)
+			c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.accessUrlInvalid", err))
 			return
 		}
 		auditFailure("failed", err.Error())
-		clusterError(c, status, action+"节点失败", err)
+		c.JSON(status, clusterErrorKeyedResponse(status, "cluster.nodeActionFailed", err, action))
 		return
 	}
 	recordAudit(c, action, "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), services.AuditResultPart("success")))

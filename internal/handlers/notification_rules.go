@@ -123,7 +123,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	chRows, err := db.DB.Query(`SELECT id, type, name, COALESCE(last_test_ok,0), COALESCE(target,'') FROM notification_channels
 		WHERE user_id=? AND enabled=1 ORDER BY id`, uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 		return
 	}
 	var allChannels []RuleChannel
@@ -132,7 +132,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		var target string
 		if err := chRows.Scan(&ch.ID, &ch.Type, &ch.Name, &ch.LastTestOK, &target); err != nil {
 			chRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 			return
 		}
 		if ch.Type == "wx_clawbot" {
@@ -142,7 +142,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	}
 	if err := chRows.Err(); err != nil {
 		chRows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 		return
 	}
 	chRows.Close()
@@ -157,7 +157,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	if err != nil {
 		// 聚合读失败必须 500：静默降级为空规则会让「已停用/已配置」在 UI 上
 		// 看起来像未配置，用户保存后反而覆盖真实配置。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 		return
 	}
 	type subState struct {
@@ -172,14 +172,14 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		var s subState
 		if err := subRows.Scan(&ev, &s.level, &s.tpl, &s.ids, &s.tpls, &s.updatedAt, &s.updatedBy, &s.enabled); err != nil {
 			subRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 			return
 		}
 		subsByEvent[ev] = s
 	}
 	if err := subRows.Err(); err != nil {
 		subRows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 		return
 	}
 	subRows.Close()
@@ -259,7 +259,7 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	// 必须 500，静默丢卡片同样属于聚合读失真
 	dailyCfg, err := notify.GetDailyConfig(uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取日报配置失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigReadFailed", err))
 		return
 	}
 	{
@@ -270,13 +270,13 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		var dailyBy int64
 		err := db.DB.QueryRow(`SELECT COALESCE(channel_ids,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, notify.EvtDailyReport).Scan(&dailyIDs, &dailyAt, &dailyBy)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 			return
 		}
 		var chIDs []int64
 		if dailyIDs != "" {
 			if err := json.Unmarshal([]byte(dailyIDs), &chIDs); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知规则失败", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.rulesQueryFailed", err))
 				return
 			}
 		}
@@ -405,7 +405,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		// 更新日报配置
 		cfg, err := notify.GetDailyConfig(uid)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取日报配置失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigReadFailed", err))
 			return
 		}
 		if req.Enabled != nil {
@@ -438,12 +438,12 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		// 「保存失败但时间/项目已改、通道选择仍旧」的半写状态。
 		tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigSaveFailed", err))
 			return
 		}
 		defer tx.Rollback()
 		if err := notify.SaveDailyConfigTx(c.Request.Context(), tx, cfg); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigSaveFailed", err))
 			return
 		}
 		// 日报目标通道落 sys.daily_report 订阅行（deliverOne 消费三态）；
@@ -454,15 +454,15 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				VALUES (?,?,?,?,?,?,1,datetime('now'),?)
 				ON CONFLICT(user_id, event_type) DO UPDATE SET channel_ids=excluded.channel_ids, enabled=1, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
 				uid, notify.EvtDailyReport, "info", "", string(b), "", actor); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报目标通道失败", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyTargetChannelSaveFailed", err))
 				return
 			}
 		} else if _, err := tx.ExecContext(c.Request.Context(), `UPDATE notification_subscriptions SET updated_at=datetime('now'), updated_by=? WHERE user_id=? AND event_type=?`, actor, uid, notify.EvtDailyReport); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("记录日报更新时间失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyUpdatedAtSaveFailed", err))
 			return
 		}
 		if err := tx.Commit(); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.dailyConfigSaveFailed", err))
 			return
 		}
 
@@ -502,7 +502,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 					c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, rv.key))
 					return
 				}
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("校验规则模板失败", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.ruleTemplateValidationFailed", err))
 				return
 			}
 		}
@@ -510,7 +510,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		// 失败中止时前半组已落库，UI 与投递口径分叉）。
 		tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subscriptionSaveFailed", err))
 			return
 		}
 		defer tx.Rollback()
@@ -529,7 +529,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 					// 取消选择=停用行（保留更新者/时间，不删行；无行时补建
 					// opt-out 行，否则默认订阅兜底让取消静默失效）。
 					if err := disableSubscriptionRow(tx, uid, ev, actor); err != nil {
-						c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("取消订阅失败", err)})
+						c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subscriptionCancelFailed", err))
 						return
 					}
 					continue
@@ -539,7 +539,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				// 显式停用=停用行（保留更新者/时间，不删行；投递侧按 enabled=0
 				// 过滤；无行时同样补建，否则默认订阅继续投递）。
 				if err := disableSubscriptionRow(tx, uid, ev, actor); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("取消订阅失败", err)})
+					c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subscriptionCancelFailed", err))
 					return
 				}
 				continue
@@ -554,7 +554,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				COALESCE(channel_ids,''), COALESCE(channel_templates,''), COALESCE(enabled,1) FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev).Scan(&curLevel, &curTpl, &curIDs, &curTpls, &curEnabled)
 			if err != nil {
 				if !errors.Is(err, sql.ErrNoRows) {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取订阅失败", err)})
+					c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subscriptionReadFailed", err))
 					return
 				}
 				if !wantOn {
@@ -613,12 +613,12 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				channel_ids=excluded.channel_ids, channel_templates=excluded.channel_templates, enabled=excluded.enabled,
 				updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
 				uid, ev, curLevel, curTpl, curIDs, curTpls, curEnabled, actor); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subscriptionSaveFailed", err))
 				return
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subscriptionSaveFailed", err))
 			return
 		}
 
@@ -751,18 +751,18 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 		chQuery += ` AND user_id=?`
 	}
 	if err := db.DB.QueryRow(chQuery, scopeArgs...).Scan(&totalChannels); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.statsQueryFailed", err))
 		return
 	}
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions`+scope, scopeArgs...).Scan(&totalRules); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.statsQueryFailed", err))
 		return
 	}
 	// 投递统计读主库（notification_deliveries 在主库，非指标库）；
 	// 成功口径=sent+partial（partial=部分通道成功）。
 	dlQuery := `SELECT COUNT(*) FROM notification_deliveries` + scope
 	if err := db.DB.QueryRow(dlQuery, scopeArgs...).Scan(&totalDeliveries); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.statsQueryFailed", err))
 		return
 	}
 	sentQuery := `SELECT COUNT(*) FROM notification_deliveries WHERE status IN ('sent','partial')`
@@ -770,7 +770,7 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 		sentQuery += ` AND user_id=?`
 	}
 	if err := db.DB.QueryRow(sentQuery, scopeArgs...).Scan(&sentDeliveries); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通知统计失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.statsQueryFailed", err))
 		return
 	}
 	rate := float64(0)
@@ -791,21 +791,21 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 	tcQuery += ` GROUP BY type ORDER BY type`
 	tcRows, err := db.DB.Query(tcQuery, scopeArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通道类型分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelTypeDistributionQueryFailed", err))
 		return
 	}
 	for tcRows.Next() {
 		var tc typeCount
 		if err := tcRows.Scan(&tc.Type, &tc.Count); err != nil {
 			tcRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通道类型分布失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelTypeDistributionQueryFailed", err))
 			return
 		}
 		byType = append(byType, tc)
 	}
 	if err := tcRows.Err(); err != nil {
 		tcRows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询通道类型分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.channelTypeDistributionQueryFailed", err))
 		return
 	}
 	tcRows.Close()
@@ -818,20 +818,20 @@ func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
 	var users []userBrief
 	rows, err := db.DB.Query(`SELECT id, username FROM users ORDER BY id`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询用户列表失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.userListQueryFailed", err))
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var u userBrief
 		if err := rows.Scan(&u.ID, &u.Username); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询用户列表失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.userListQueryFailed", err))
 			return
 		}
 		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询用户列表失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.userListQueryFailed", err))
 		return
 	}
 
@@ -873,12 +873,12 @@ func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
 		var total, sent int
 		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE substr(created_at,1,10)=?`+scope,
 			append([]any{day}, args...)...).Scan(&total); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递趋势失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryTrendQueryFailed", err))
 			return
 		}
 		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE substr(created_at,1,10)=? AND status IN ('sent','partial')`+scope,
 			append([]any{day}, args...)...).Scan(&sent); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递趋势失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryTrendQueryFailed", err))
 			return
 		}
 		rate := float64(0)
@@ -921,14 +921,14 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 		FROM notification_delivery_channels WHERE ` + where + ` GROUP BY channel_id, channel_type ORDER BY COUNT(*) DESC`
 	rows, err := db.DB.Query(q, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 		return
 	}
 	for rows.Next() {
 		var s chanStat
 		if err := rows.Scan(&s.ChannelID, &s.Type, &s.Total, &s.Sent); err != nil {
 			rows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 			return
 		}
 		if s.Total > 0 {
@@ -942,14 +942,14 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 			// 行已删（通道 #id 兜底）之外一律 500：DB 故障静默兜底会把
 			// 「读不到名称」伪装成已删通道。
 			rows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 			return
 		}
 		byChannel = append(byChannel, s)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 		return
 	}
 	rows.Close()
@@ -965,14 +965,14 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 		FROM notification_delivery_channels WHERE ` + where + ` GROUP BY channel_type ORDER BY COUNT(*) DESC`
 	rows, err = db.DB.Query(q, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 		return
 	}
 	for rows.Next() {
 		var s typeStat
 		if err := rows.Scan(&s.Type, &s.Total, &s.Sent); err != nil {
 			rows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 			return
 		}
 		if s.Total > 0 {
@@ -982,7 +982,7 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 		return
 	}
 	rows.Close()
@@ -1001,14 +1001,14 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 		` GROUP BY event_type ORDER BY COUNT(*) DESC LIMIT 10`
 	rows, err = db.DB.Query(q, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 		return
 	}
 	for rows.Next() {
 		var s eventStat
 		if err := rows.Scan(&s.EventType, &s.Total); err != nil {
 			rows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 			return
 		}
 		s.Title = s.EventType
@@ -1019,7 +1019,7 @@ func (h *Handlers) GetDeliveryStats(c *gin.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("查询投递分布失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.deliveryDistributionQueryFailed", err))
 		return
 	}
 	rows.Close()

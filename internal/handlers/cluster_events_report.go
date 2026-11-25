@@ -101,7 +101,7 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 			c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "cluster.reporterNodeNotRegistered"))
 			return
 		}
-		clusterError(c, http.StatusInternalServerError, "读取上报者节点失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.reporterNodeReadFailed", err))
 		return
 	}
 	// 去重登记放在角色/身份门之后：非主节点或未登记节点的重试不得消耗

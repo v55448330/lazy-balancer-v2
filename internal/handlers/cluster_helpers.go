@@ -12,6 +12,10 @@ import (
 type masterGateOptions struct {
 	queryFailure string
 	forbidden    string
+	// queryFailureKey / forbiddenKey 是对应文案的语义键（internal/i18n 集群目录）。
+	// 空表示该中文尚无登记词条（如自动备份/通知的专用提示），按字面量直出。
+	queryFailureKey string
+	forbiddenKey    string
 }
 
 const masterRequiredErrorCode = "master_required"
@@ -21,12 +25,12 @@ const masterRequiredErrorCode = "master_required"
 // 是其薄包装）；端点仅保留自己的文案，机器错误码恒为 master_required。
 func requireMasterResult(c *gin.Context, isMaster bool, err error, options masterGateOptions) bool {
 	if err != nil {
-		clusterError(c, http.StatusInternalServerError, options.queryFailure, err)
+		emitClusterError(c, http.StatusInternalServerError, options.queryFailure, options.queryFailureKey, err)
 		return false
 	}
 	if !isMaster {
 		c.Header("X-LB-Error-Code", masterRequiredErrorCode)
-		clusterError(c, http.StatusForbidden, options.forbidden, nil)
+		emitClusterError(c, http.StatusForbidden, options.forbidden, options.forbiddenKey, nil)
 		return false
 	}
 	return true
@@ -38,7 +42,7 @@ func requireMasterResult(c *gin.Context, isMaster bool, err error, options maste
 // （角色变更面/机器面/只读状态）共用本函数。
 func (h *Handlers) requireClusterService(c *gin.Context) bool {
 	if h.clusterService == nil {
-		clusterError(c, http.StatusServiceUnavailable, "集群服务未初始化", nil)
+		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.serviceNotInitialized", nil))
 		return false
 	}
 	return true
@@ -50,8 +54,10 @@ func (h *Handlers) requireMaster(c *gin.Context) bool {
 	}
 	isMaster, err := h.clusterService.IsMaster(c.Request.Context())
 	return requireMasterResult(c, isMaster, err, masterGateOptions{
-		queryFailure: "读取节点模式失败",
-		forbidden:    "该操作仅允许在主节点执行",
+		queryFailure:    "读取节点模式失败",
+		queryFailureKey: "cluster.nodeModeReadFailed",
+		forbidden:       "该操作仅允许在主节点执行",
+		forbiddenKey:    "cluster.masterOnlyOperation",
 	})
 }
 
@@ -62,15 +68,15 @@ func clusterError(c *gin.Context, status int, message string, err error) {
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
 }
 
-// clusterErrorKeyed 与 clusterError 同形，额外携带结构化语义键 messageKey
-// （前端按键判定补救通道，与文案解耦）。message 仍为 zh 母本（cluster 服务
-// 控制面 Tier 2 残余口径，与 clusterError 一致）；键经变量传入，响应面不出现
-// 「中文直写 Message + MessageKey」混合行（direct_message_guard 口径）。
-func clusterErrorKeyed(c *gin.Context, status int, message, messageKey string, err error) {
-	if err != nil {
-		services.Logf("error", "cluster request failed: %v", err)
+// emitClusterError 是集群错误面唯一出口：有语义键走键化装配器，无键（尚无
+// 登记词条的专用中文）按字面量直出。两者日志口径同为
+// "cluster request failed: <err>"。
+func emitClusterError(c *gin.Context, status int, message, key string, err error) {
+	if key != "" {
+		c.JSON(status, clusterErrorKeyedResponse(status, key, err))
+		return
 	}
-	c.JSON(status, models.APIResponse{Code: status, Message: message, MessageKey: messageKey})
+	clusterError(c, status, message, err)
 }
 
 // clusterMasterForbidden 统一服务层 ErrNotMasterNode → 403 的输出形状
@@ -78,5 +84,5 @@ func clusterErrorKeyed(c *gin.Context, status int, message, messageKey string, e
 // Pull 的错误分类（cluster_sync.go）依赖该头，服务层降级竞态 403 不得裸发。
 func clusterMasterForbidden(c *gin.Context, err error) {
 	c.Header("X-LB-Error-Code", masterRequiredErrorCode)
-	clusterError(c, http.StatusForbidden, err.Error(), err)
+	c.JSON(http.StatusForbidden, clusterErrorKeyedResponse(http.StatusForbidden, "cluster.masterOnlyOperation", err))
 }

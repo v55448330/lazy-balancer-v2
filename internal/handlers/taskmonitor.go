@@ -42,7 +42,7 @@ func (h *Handlers) ListSystemTasks(c *gin.Context) {
 func requireMasterNode(c *gin.Context) bool {
 	database := db.DB
 	if database == nil {
-		clusterError(c, http.StatusInternalServerError, "节点角色查询失败", nil)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.roleQueryFailed", nil))
 		return false
 	}
 	// 角色读脱离客户端生命周期（与 GetSystemInfo 同口径）：请求 ctx 已取消
@@ -52,8 +52,10 @@ func requireMasterNode(c *gin.Context) bool {
 	isMaster, err := services.RoleOf(roleCtx, database)
 	cancel()
 	return requireMasterResult(c, isMaster, err, masterGateOptions{
-		queryFailure: "节点角色查询失败",
-		forbidden:    "该操作仅允许在主节点执行",
+		queryFailure:    "节点角色查询失败",
+		queryFailureKey: "cluster.roleQueryFailed",
+		forbidden:       "该操作仅允许在主节点执行",
+		forbiddenKey:    "cluster.masterOnlyOperation",
 	})
 }
 

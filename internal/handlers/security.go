@@ -108,7 +108,7 @@ func loadCustomRuleRefPolicies() (map[int64][]customRuleRefPolicy, error) {
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(NULLIF(condition_logic,''),'and'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM security_custom_rules ORDER BY id")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer rows.Close()
@@ -117,7 +117,7 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 		var r models.SecurityCustomRule
 		var conditionsJSON string
 		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.ConditionLogic, &r.Action, &r.Score, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		// 解析失败与下方 rows.Err 同口径显式 500（「残缺列表不得
@@ -132,12 +132,12 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	// 迭代失败显式报错：对齐 ListSecurityPolicies/GetSecurityPolicy
 	// 的既有标准，残缺列表不得以 200 返回。
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	refs, err := loadCustomRuleRefPolicies()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	// ref_policies 恒空数组（非 null）：前端契约声明为非可选数组，null 会在
@@ -242,10 +242,13 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 // 调用方给出的泛化文案——SQLite/驱动错误可含表名/列名/SQL 片段，不得外泄给
 // 任意已登录用户（与 ListSecurityEvents「泛化文案 + 服务端留痕」同标准）。
 // 400/404/409 等可判定错误不走此函数（那些文案本就是面向用户的校验结论）。
+//
+// 已键化的出口一律走 securityErrKeyed（keyed_errors.go）；本变体只剩
+// security_threat.go 的未键化调用点（固定文案尚未登记词条、一处文案为入参变量）。
 func serverErrMsg(publicMsg string, err error) string {
 	// 与 system/crawler 同一装配实现（internalError）：本变体保留 string 返回，
-	// 供 139 处「c.JSON(..., APIResponse{Message: serverErrMsg(...)})」调用点
-	// 零改动收敛；语义（固定文案 + 服务端留痕 + err==nil 不重复日志）同源。
+	// 调用点仍可「c.JSON(..., APIResponse{Message: serverErrMsg(...)})」形态；
+	// 语义（固定文案 + 服务端留痕 + err==nil 不重复日志）与 securityErrKeyed 同源。
 	return internalError("安全处理器", publicMsg, err).Message
 }
 
@@ -325,7 +328,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	result, err := tx.Exec(`INSERT INTO security_custom_rules (name, description, conditions, condition_logic, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
 		rule.Name, rule.Description, string(conditionsJSON), rule.ConditionLogic, rule.Action, rule.Score, rule.Enabled, int(contextUserID(c)))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	id, _ := result.LastInsertId()
@@ -379,7 +382,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "rule.ruleNotFound"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取规则失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "rule.loadFailed", err))
 		return
 	}
 	// 存量条件「非空但解析失败」与「用户漏传条件」是不同故障——
@@ -430,7 +433,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_custom_rules SET name=?, description=?, conditions=?, condition_logic=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
 		merged.Name, merged.Description, string(conditionsJSON), merged.ConditionLogic, merged.Action, merged.Score, merged.Enabled, int(contextUserID(c)), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "规则不存在") {
@@ -477,14 +480,14 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	var referenced int
 	rows, err := tx.QueryContext(caddyWriteCtx(c), `SELECT COALESCE(custom_rules,'[]') FROM security_policies WHERE enabled=1`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
 			rows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		var ids []int
@@ -500,7 +503,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	}
 	rows.Close()
 	if rowsErr := rows.Err(); rowsErr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", rowsErr)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", rowsErr))
 		return
 	}
 	if referenced > 0 {
@@ -509,7 +512,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_custom_rules WHERE id=?", listID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "规则不存在") {
@@ -540,7 +543,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 		)) AS rule_ref_count
 		FROM security_block_pages bp ORDER BY bp.is_default DESC, bp.is_builtin DESC, bp.id`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer rows.Close()
@@ -548,7 +551,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	for rows.Next() {
 		var p models.SecurityBlockPage
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.JSONContent, &p.ContentType, &p.IsDefault, &p.IsBuiltin, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt, &p.RuleRefCount); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		pages = append(pages, p)
@@ -556,7 +559,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	// 迭代失败显式报错：对齐 ListSecurityPolicies/GetSecurityPolicy
 	// 的既有标准，残缺列表不得以 200 返回。
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if pages == nil {
@@ -620,7 +623,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, json_content, content_type, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Content, req.JSONContent, req.ContentType, false, int(contextUserID(c)), int(contextUserID(c)))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	id, _ := result.LastInsertId()
@@ -677,7 +680,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.blockPageNotFound"))
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		}
 		return
 	}
@@ -715,7 +718,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_block_pages SET name=?, description=?, content=?, json_content=?, content_type=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
 		page.Name, page.Description, page.Content, page.JSONContent, page.ContentType, int(contextUserID(c)), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "拦截页面不存在") {
@@ -758,7 +761,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.blockPageNotFound"))
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		}
 		return
 	}
@@ -775,7 +778,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	// 响应退化回 Caddy 默认页面，必须先解除绑定。
 	var referenced int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policies WHERE block_page_id=? AND enabled=1", id).Scan(&referenced); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if referenced > 0 {
@@ -788,7 +791,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	// 引用检查同事务（写锁已持），并发绑定无法插到检查与 DELETE 之间。
 	var ruleReferenced int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM lb_rules WHERE block_page_stage1_id=? OR block_page_stage3_id=?", id, id).Scan(&ruleReferenced); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if ruleReferenced > 0 {
@@ -797,7 +800,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_block_pages WHERE id=?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "拦截页面不存在") {
@@ -870,7 +873,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	query += " ORDER BY id"
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer rows.Close()
@@ -882,7 +885,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	for rows.Next() {
 		var p models.SecurityPolicy
 		if err := scanSecurityPolicy(rows, &p); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		var crsExcluded []json.RawMessage
@@ -911,21 +914,21 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	bindingQuery += " GROUP BY b.policy_id"
 	bindingRows, err := db.DB.Query(bindingQuery, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	for bindingRows.Next() {
 		var pid, cnt int
 		if err := bindingRows.Scan(&pid, &cnt); err != nil {
 			bindingRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		bindingCounts[pid] = cnt
 	}
 	bindingRows.Close()
 	if err := bindingRows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	// blocked_24h / trigger_24h：近 24h 每策略事件计数（metrics 库 security_events，
@@ -940,7 +943,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		counts, err := loadSecurityPolicy24hCounts(db.MetricsDB, time.Now())
 		if err != nil {
 			services.Logf("error", "security policies: 24h event count query failed: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		blockedCounts = counts.blocked
@@ -1011,7 +1014,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// 策略行迭代失败显式报错：与 GetSecurityOverview 建立的「迭代失败
 	// 显式 500」标准一致，部分列表不得以 200 返回。
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: policies})
@@ -1032,21 +1035,21 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 
 	var bindings []string
 	rows, err := db.DB.Query("SELECT rule_caddy_id FROM security_policy_bindings WHERE policy_id=? ORDER BY rule_caddy_id ASC", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var b string
 		if err := rows.Scan(&b); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		bindings = append(bindings, b)
@@ -1054,7 +1057,7 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	// 绑定迭代失败显式报错：对齐 ListSecurityPolicies/GetAllSecurityBindings
 	// 的既有模式，残缺绑定列表不得以 200 返回。
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if bindings == nil {
@@ -1233,7 +1236,7 @@ func (h *Handlers) GetDefaultPolicyCatalog(c *gin.Context) {
 	cat, err := db.GetDefaultSecurityCatalog()
 	if err != nil {
 		// 存在性探测/refs 校验的库故障不得被呈现成「未创建」——上抛 500。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取默认策略目录失败", err), Data: nil})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.defaultPolicyCatalogReadFailed", err).WithData(nil))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cat})
@@ -1334,7 +1337,7 @@ func (h *Handlers) ApplyDefaultPolicies(c *gin.Context) {
 		} else {
 			recordAudit(c, "创建失败", "安全策略", services.FormatAuditDetail(auditVerb+"：失败", services.AuditResultPart("tx_rolled_back")))
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("创建默认策略失败", err), Data: items})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.defaultPolicyCreateFailed", err).WithData(items))
 		return
 	}
 	if req.Reset {
@@ -1528,7 +1531,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	// 引用存在性单源门（拦截页 + 自定义规则 + IP 名单 refs + CRS 排除作用域
 	// 名单）：校验与写入必须同事务，见下方 BEGIN IMMEDIATE 说明。
 	if msg, err := validatePolicyReferenceExistence(tx, req.BlockPageID, req.CustomRules, req.CRSExcludedRules, aclRefsIDs, wlRefsIDs); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	} else if msg != "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -1537,7 +1540,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	// 内置威胁名单引用门禁（2026-09-24 用户裁定）：system=1 名单仅允许
 	// IP ACL 黑名单（deny）引用；信任名单/白名单模式/CRS 排除一律拒绝。
 	if msg, err := validateBuiltinThreatListRefs(tx, aclRefsIDs, wlRefsIDs, crsExcludedListRefs(req.CRSExcludedRules), req.IPACLMode); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	} else if msg != "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -1569,7 +1572,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), securityPolicyInsertSQL(), values.args()...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	id, _ := result.LastInsertId()
@@ -2255,7 +2258,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 必须指向存在的目标；未提供的字段不参与校验（保持存量列不变）。
 	// crs_excluded_rules 的作用域名单在下方按显式提供口径单独校验。
 	if msg, err := validatePolicyReferenceExistence(tx, derefInt(req.BlockPageID), derefStr(req.CustomRules), "", aclRefsIDs, wlRefsIDs); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	} else if msg != "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2277,7 +2280,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effectiveCustomRules = rawJSONString(stored.CustomRules)
 		}
 		if msg, err := validateSecurityPolicyReferences(tx, effectiveBlockPageID, effectiveCustomRules); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2293,7 +2296,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effectiveWLRefs = parseIPListRefsIDs(stored.IPWhitelistRefs)
 		}
 		if msg, err := validateIPListRefsExistence(tx, effectiveACLRefs, effectiveWLRefs); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2307,7 +2310,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effectiveCRSExcluded = *req.CRSExcludedRules
 		}
 		if msg, err := validateIPListRefsExistence(tx, crsExcludedListRefs(effectiveCRSExcluded), nil); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2334,7 +2337,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// DeleteIPList 的引用扫描拦截。
 	if req.CRSExcludedRules != nil {
 		if msg, err := validateIPListRefsExistence(tx, crsExcludedListRefs(*req.CRSExcludedRules), nil); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2367,7 +2370,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effCRSRefs = crsExcludedListRefs(rawJSONString(stored.CRSExcludedRules))
 		}
 		if msg, err := validateBuiltinThreatListRefs(tx, effACLRefs, effWLRefs, effCRSRefs, effMode); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2533,7 +2536,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	args = append(args, int(contextUserID(c)), id)
 	result, err := tx.ExecContext(caddyWriteCtx(c), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "策略不存在") {
@@ -2828,19 +2831,19 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	// 隔离的偶然性（共享缓存/单连接形态直接失效）。
 	var policyDisplayName string
 	if err := tx.QueryRow(`SELECT COALESCE(name,'') FROM security_policies WHERE id=?`, id).Scan(&policyDisplayName); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	result, err := tx.Exec("DELETE FROM security_policies WHERE id=?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !rowsAffectedOrRespond(c, result, "策略不存在") {
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM security_policy_bindings WHERE policy_id=?", id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("清理策略绑定失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.policyBindingCleanupFailed", err))
 		return
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
@@ -2899,7 +2902,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 澄清注释）。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer tx.Rollback()
@@ -2909,7 +2912,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 合并判断会把故障误报为「策略不存在」，前端无法区分重试与真 404——与
 	// DeleteSecurityBlockPage 的 ErrNoRows 先判口径一致。
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*), COALESCE(MAX(policy_type),'') FROM security_policies WHERE id=?", policyID).Scan(&policyExists, &policyType); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if policyExists == 0 {
@@ -2921,7 +2924,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 判定与其余三个写路径共用 rejectMixedPolicies。
 	policyIDInt, _ := strconv.Atoi(policyID)
 	if msg, err := rejectMixedPolicies(caddyWriteCtx(c), tx, []int{policyIDInt}); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	} else if msg != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
@@ -2933,7 +2936,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		var otherStage2 int
 		if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COUNT(*) FROM security_policy_bindings b JOIN security_policies p ON p.id=b.policy_id
 			WHERE b.rule_caddy_id=? AND p.policy_type='stage2' AND p.id != ?`, req.RuleCaddyID, policyID).Scan(&otherStage2); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		if otherStage2 > 0 {
@@ -2949,7 +2952,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 能力门拒绝（契约 C4，见下方调用）。
 	target, err := loadRuleBindingTarget(caddyWriteCtx(c), tx, req.RuleCaddyID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if !target.exists {
@@ -2960,7 +2963,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		// L4 阶段 0/1（契约 C4）：TCP 规则可绑定 stage0/stage1 特征策略；
 		// 含 G2（CC 防护）/G3（WAF）特征的策略仍拒绝（能力门单源）。
 		if msg, gateErr := tcpSecurityBindingGate(caddyWriteCtx(c), tx, []int{policyIDInt}); gateErr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", gateErr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", gateErr))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2974,13 +2977,13 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 并发绑定无法在校验与写入间插队。
 	var alreadyBound int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", req.RuleCaddyID, policyID).Scan(&alreadyBound); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if alreadyBound == 0 {
 		var siblingCount int
 		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID).Scan(&siblingCount); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		if siblingCount >= maxBindingsPerRule {
@@ -2995,7 +2998,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// （rank = 该规则现有 max(rank)+1；rank=0 遗留行按 0 参与——旧语义下它
 	// 本就排在全部显式 rank 之前）。
 	if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) SELECT ?, ?, COALESCE(MAX(rank),0)+1 FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID, policyID, req.RuleCaddyID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
@@ -3028,7 +3031,7 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer tx.Rollback()
@@ -3414,7 +3417,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer tx.Rollback()
@@ -3422,7 +3425,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	var policyExists int
 	var policyType string
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*), COALESCE(MAX(policy_type),'') FROM security_policies WHERE id=?", policyID).Scan(&policyExists, &policyType); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if policyExists == 0 {
@@ -3431,7 +3434,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	}
 	// 混合策略仅可更新迁移（与单条 bind 端点同口径；历史 共用判定）。
 	if msg, err := rejectMixedPolicies(caddyWriteCtx(c), tx, []int{policyID}); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	} else if msg != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
@@ -3459,26 +3462,26 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		// 规则的变更也整体失败。
 		boundRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT rule_caddy_id FROM security_policy_bindings WHERE rule_caddy_id IN ("+strings.Join(placeholders, ",")+") AND policy_id = ?", args...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		for boundRows.Next() {
 			var rid string
 			if err := boundRows.Scan(&rid); err != nil {
 				boundRows.Close()
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			boundToPolicy[rid] = struct{}{}
 		}
 		boundRows.Close()
 		if err := boundRows.Err(); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		bindCounts, err = bindingCountsExcluding(caddyWriteCtx(c), tx, bindIDs, policyID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		if policyType == models.PolicyTypeStage2 {
@@ -3489,21 +3492,21 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			sibArgs = append(sibArgs, policyID)
 			sibRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT DISTINCT b.rule_caddy_id FROM security_policy_bindings b JOIN security_policies p ON p.id=b.policy_id WHERE b.rule_caddy_id IN ("+strings.Join(placeholders, ",")+") AND b.policy_id != ? AND p.policy_type='stage2'", sibArgs...)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			for sibRows.Next() {
 				var rid string
 				if err := sibRows.Scan(&rid); err != nil {
 					sibRows.Close()
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+					c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 					return
 				}
 				otherStage2Rules[rid] = struct{}{}
 			}
 			sibRows.Close()
 			if err := sibRows.Err(); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 		}
@@ -3615,21 +3618,21 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		current := make([]int, 0, len(ids))
 		curRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC", ruleCaddyID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		for curRows.Next() {
 			var pid int
 			if err := curRows.Scan(&pid); err != nil {
 				curRows.Close()
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			current = append(current, pid)
 		}
 		curRows.Close()
 		if err := curRows.Err(); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		sameOrder := len(current) == len(ids)
@@ -3647,7 +3650,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		}
 		msg, err := setRulePoliciesInTx(caddyWriteCtx(c), tx, ruleCaddyID, ids)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		if msg != "" {
@@ -3737,7 +3740,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer tx.Rollback()
@@ -3751,7 +3754,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		}
 		var found int
 		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policies WHERE id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&found); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		if found != len(uniqueIDs) {
@@ -3762,7 +3765,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	// 混合策略仅可更新迁移（同 SetRuleSecurityPolicies 裁定）：批量绑定集含
 	// mixed 即 400 整体拒绝（共用 rejectMixedPolicies）。
 	if msg, err := rejectMixedPolicies(caddyWriteCtx(c), tx, uniqueIDs); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	} else if msg != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
@@ -3773,7 +3776,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	if len(uniqueIDs) > 0 {
 		stage2Count, err := countStage2Policies(tx, caddyWriteCtx(c), uniqueIDs)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		if stage2Count > 1 {
@@ -3795,7 +3798,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		}
 		target, terr := loadRuleBindingTarget(caddyWriteCtx(c), tx, ruleCaddyID)
 		if terr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", terr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", terr))
 			return
 		}
 		if !target.exists {
@@ -3807,7 +3810,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			//（与 split 重映射同文案同口径）。
 			msg, terr := tcpSecurityBindingGate(caddyWriteCtx(c), tx, uniqueIDs)
 			if terr != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", terr)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", terr))
 				return
 			}
 			if msg != "" {
@@ -3818,7 +3821,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 
 		existingRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank, policy_id", ruleCaddyID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		var existing []int
@@ -3826,7 +3829,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			var pid int
 			if err := existingRows.Scan(&pid); err != nil {
 				existingRows.Close()
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			existing = append(existing, pid)
@@ -3835,7 +3838,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		// 读取（空 existing）」当成功继续 merge/写入，静默丢绑定差异。
 		if err := existingRows.Err(); err != nil {
 			existingRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		existingRows.Close()
@@ -3861,7 +3864,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		if req.Mode == "merge" {
 			stage2Count, err := countStage2Policies(tx, caddyWriteCtx(c), final)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			if stage2Count > 1 {
@@ -3881,14 +3884,14 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		}
 		if changed {
 			if _, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			// replace=请求序、merge=现有秩优先+新项追加（final 顺序即合并序）；
 			// rank 按 final 位置重编 1..N，保持同规则内稠密有序。
 			for ordinal, id := range final {
 				if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) VALUES (?, ?, ?)", ruleCaddyID, id, ordinal+1); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+					c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 					return
 				}
 			}
@@ -4168,7 +4171,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.policyNotFound"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if p.PolicyType != models.PolicyTypeMixed {
@@ -4295,14 +4298,14 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			childBlockPageID = p.BlockPageID
 		}
 		if msg, err := validatePolicyReferenceExistence(tx, childBlockPageID, childCustomRules, childCRSExcluded, childACLRefs, childWLRefs); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.splitAbortedInvalidSourceReferences", msg))
 			return
 		}
 		if msg, err := validateBuiltinThreatListRefs(tx, childACLRefs, childWLRefs, crsExcludedListRefs(childCRSExcluded), childACLMode); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		} else if msg != "" {
 			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.splitAbortedInvalidSourceReferences", msg))
@@ -4388,7 +4391,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "security.splitAbortedChildPolicyConflict", spec.name))
 				return
 			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		resolvedIDs[index] = existingID
@@ -4417,7 +4420,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		if childID == 0 {
 			insertedID, err := insertChild(spec)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			childID = insertedID
@@ -4432,14 +4435,14 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	boundRules := []string{}
 	ruleRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT rule_caddy_id FROM security_policy_bindings WHERE policy_id=? ORDER BY rule_caddy_id", p.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	for ruleRows.Next() {
 		var ruleID string
 		if err := ruleRows.Scan(&ruleID); err != nil {
 			ruleRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		boundRules = append(boundRules, ruleID)
@@ -4448,7 +4451,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	// 规则」走完全量重映射并删除原策略，静默丢防护绑定。
 	if err := ruleRows.Err(); err != nil {
 		ruleRows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	ruleRows.Close()
@@ -4469,7 +4472,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		// 复制成 N 份子策略绑定污染绑定消费方。
 		target, terr := loadRuleBindingTarget(caddyWriteCtx(c), tx, ruleID)
 		if terr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", terr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", terr))
 			return
 		}
 		if !target.exists {
@@ -4487,7 +4490,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		}
 		existingCount, cerr := bindingCountExcluding(caddyWriteCtx(c), tx, ruleID, p.ID)
 		if cerr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", cerr)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", cerr))
 			return
 		}
 		if existingCount+len(newIDs) > maxBindingsPerRule {
@@ -4503,7 +4506,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			var otherStage2 int
 			if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COUNT(*) FROM security_policy_bindings b JOIN security_policies sp ON sp.id=b.policy_id
 				WHERE b.rule_caddy_id=? AND sp.policy_type='stage2' AND b.policy_id != ?`, ruleID, p.ID).Scan(&otherStage2); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 			if otherStage2 > 0 {
@@ -4512,13 +4515,13 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			}
 		}
 		if _, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleID, p.ID); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		for _, childID := range newIDs {
 			// 拆分迁移重建子绑定：追加到链末（同 additive 口径）。
 			if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) SELECT ?, ?, COALESCE(MAX(rank),0)+1 FROM security_policy_bindings WHERE rule_caddy_id=?", ruleID, childID, ruleID); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 				return
 			}
 		}
@@ -4528,7 +4531,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	deletedOriginal := false
 	if len(skipped) == 0 {
 		if _, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_policies WHERE id=?", p.ID); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		deletedOriginal = true
@@ -4563,12 +4566,12 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 	defer tx.Rollback()
 	res, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", ruleCaddyID, policyID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	affected, aerr := res.RowsAffected()
 	if aerr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取写入结果失败", aerr)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.writeResultReadFailed", aerr))
 		return
 	}
 	if affected == 0 {
@@ -4593,7 +4596,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	// 前端 `.length`/`.map` 不需要空值分支。
 	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC", ruleCaddyID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	policyIDs := []int{}
@@ -4601,14 +4604,14 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 		var id int
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		policyIDs = append(policyIDs, id)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	rows.Close()
@@ -4624,7 +4627,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 				// 策略被并发删除或被禁用：跳过该项，保持数组与绑定表一致
 				continue
 			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
 		policies = append(policies, p)
@@ -6110,7 +6113,7 @@ func (h *Handlers) updateLibSchedule(c *gin.Context, save func([]int, string) er
 		return nil, "", false
 	}
 	if err := save(days, req.Time); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return nil, "", false
 	}
 	return days, req.Time, true
@@ -6156,7 +6159,7 @@ func (h *Handlers) libAutoUpdate(c *gin.Context, spec libAutoUpdateSpec, save fu
 		return false, false
 	}
 	if err := save(*req.AutoUpdate); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.libAutoUpdateSaveFailed", err))
 		return false, false
 	}
 	return *req.AutoUpdate, true
@@ -6489,7 +6492,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
 		ORDER BY b.rule_caddy_id ASC, b.rank ASC, b.policy_id ASC`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	defer rows.Close()
@@ -6519,7 +6522,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 		result[ruleCaddyID] = append(result[ruleCaddyID], b)
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
@@ -7115,7 +7118,7 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 	if err != nil {
 		// 降级空列表 200 与「确实无规则」不可区分——
 		// 同域标准对齐,改 500。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("CRS 规则目录不可读", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.crsRuleDirUnreadable", err))
 		return
 	}
 
@@ -7209,7 +7212,7 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 	// 注释），规则变更须经 CRS 更新流程。
 	content, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if len(content) > 1<<20 {
@@ -7236,7 +7239,7 @@ func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
 	defer f.Close()
 	content, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
 	if len(content) > 1<<20 {
@@ -7258,7 +7261,7 @@ func parsePositiveNumericID(raw string) (int64, bool) {
 func rowsAffectedOrRespond(c *gin.Context, result sql.Result, notFoundMsg string) bool {
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取写入结果失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.writeResultReadFailed", err))
 		return false
 	}
 	if rows == 0 {

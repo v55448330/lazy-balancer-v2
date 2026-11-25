@@ -23,7 +23,7 @@ func (h *Handlers) GetClusterStatus(c *gin.Context) {
 	}
 	status, err := h.clusterService.Status(c.Request.Context())
 	if err != nil {
-		clusterError(c, http.StatusInternalServerError, "读取集群状态失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.statusReadFailed", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "common.querySucceeded"), MessageKey: "common.querySucceeded", Data: status})
@@ -35,7 +35,7 @@ func (h *Handlers) ListClusterNodes(c *gin.Context) {
 	}
 	nodes, err := h.clusterService.Nodes(c.Request.Context(), time.Now())
 	if err != nil {
-		clusterError(c, http.StatusInternalServerError, "读取集群节点失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.nodesReadFailed", err))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "common.querySucceeded"), MessageKey: "common.querySucceeded", Data: nodes})
@@ -50,7 +50,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 	var req models.ClusterReport
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportMaxBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
-		clusterError(c, http.StatusBadRequest, "节点上报格式错误", err)
+		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeReportMalformed", err))
 		return
 	}
 	nodeID := c.GetInt("cluster_node_id")
@@ -85,7 +85,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 				return
 			}
 			recordDetached("failed")
-			clusterError(c, http.StatusInternalServerError, "节点脱离处理失败", err)
+			c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.nodeDetachFailed", err))
 			return
 		}
 		recordDetached("success")
@@ -103,10 +103,10 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 			// 都只当作一次可重试失败（cluster_report.go），真正让循环停下的是
 			// 下一轮 Pull 的 401（令牌已撤销）。404 的收益是排障语义准确
 			// （「身份不存在」而非「服务端故障」），不是停止重试。
-			clusterError(c, http.StatusNotFound, "节点状态上报失败：节点已不在集群", err)
+			c.JSON(http.StatusNotFound, clusterErrorKeyedResponse(http.StatusNotFound, "cluster.nodeAlreadyRemoved", err))
 			return
 		}
-		clusterError(c, http.StatusInternalServerError, "节点状态上报失败", err)
+		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.nodeReportFailed", err))
 		return
 	}
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeStatusUpdated"))
