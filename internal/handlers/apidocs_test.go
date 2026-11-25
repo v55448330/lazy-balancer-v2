@@ -3398,11 +3398,10 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 	extractKeyed(body, `apimsg\.Envelope\([^,]+, (409|500|http\.StatusConflict|http\.StatusInternalServerError), "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
 	// 键化写点：writeInternalErrorKey(c, <5xx>, "键", cause)——文案在词条里，以中文母本对账。
 	extractKeyed(body, `writeInternalErrorKey\(c, (http\.StatusInternalServerError), "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"`)
-	extractKeyed(cooldownBody, `return true, (http\.StatusConflict), apimsg\.T\([^,]+, "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
-	extractKeyed(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), apimsg\.T\([^,]+, "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
+	// 冷却/部署失败面返回的是语义键（+参数）：以键抽出口、按 catalog 中文母本对账。
+	extractKeyed(cooldownBody, `return true, (http\.StatusConflict), "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)",`)
+	extractKeyed(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)",`)
 	extract(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: "([^"]+)"`)
-	extract(cooldownBody, `return true, (http\.StatusConflict), "([^"]+)"`)
-	extract(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), "([^"]+)"`)
 	// 5xx 统一写点形态：writeInternalError(c, status, "固定中文", cause)——
 	// 消息是第 3 参（第 4 参 cause 可能是 errors.New("英文")，不得误抽）。
 	extract(body, `writeInternalError\(c, (http\.StatusInternalServerError), "([^"]+)"`)
@@ -3417,7 +3416,10 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 	retry := routesEntry(t, "POST /certificates/jobs/:id/retry")
 	retryText := retry.Description + "\x00" + strings.Join(retry.Errors, "\x00")
 	union := triggerText + "\x00" + retryText
-	registered := map[string]string{}
+	// 文档面按“拒绝因枚举”概括书写：该条母本是整句，取其中的稳定片段对账。
+	registered := map[string]string{
+		"部署重试未触发：证书签发任务已停止，请先在任务监控中恢复后再试（%s）；已登记自动部署，恢复后自动执行": "部署重试未触发",
+	}
 	for _, exit := range exits {
 		fragment := exit.message
 		if mapped, ok := registered[exit.message]; ok {

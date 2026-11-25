@@ -473,7 +473,9 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// 「重签/运行」是知情显式操作，冷却中放行并如实留审计痕迹。其余形状
 	// （退役 409、在途执行中、部署退避窗口）不受裁定影响，按原语义拒绝。
 	failedCooldownOverride := false
-	cooling, statusCode, message := certJobRetryBlocked(status, updatedAt, createdAt, now)
+	cooling, statusCode, messageKey, messageArgs := certJobRetryBlocked(status, updatedAt, createdAt, now)
+	// 审计明细沿用中文母本（语言无关）：下方越过失败冷却的留痕要与迁移前逐字相同。
+	cooldownMessage := ""
 	if cooling {
 		if statusCode == http.StatusConflict || status != "failed" {
 			result := "cooldown"
@@ -481,13 +483,14 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 				result = "permanent"
 			}
 			auditFailureWithRule(result)
-			c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
+			c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 			return
 		}
 		// 越冷留痕以入队实际发生（changed=true）为前提（与 CA-force 族同口径）：
 		// 此处仅标记，待入队成功后并入成功审计片段——防请求最终被 CA 退避
 		// 429 拒绝/入队失败时残留成功通道审计行（稀释 cooldown_override 取证）。
 		failedCooldownOverride = true
+		cooldownMessage = apimsg.Tf(nil, messageKey, messageArgs...)
 	}
 
 	// CA 退避窗口（failed/waiting_ca 行的 ca_available_after，429=Retry-After
@@ -501,8 +504,8 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	cooldownActive := certJobCAcooldownActive(status, caAvailableAfter, now)
 	if cooldownActive && !forceRetry {
 		auditFailureWithRule("ca_cooldown")
-		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: http.StatusTooManyRequests,
-			Message: certJobCAcooldownMessage(caAvailableAfter.Time, now)})
+		key, args := certJobCAcooldownKey(caAvailableAfter.Time, now)
+		c.JSON(http.StatusTooManyRequests, apimsg.Envelope(nil, http.StatusTooManyRequests, key, args...))
 		return
 	}
 
@@ -537,12 +540,12 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 				services.Logf("error", "Manual deployment retry message update failed for job %d: %v", id, updateErr)
 			}
 		}
-		statusCode, message := deploymentRetryFailureResponse(err)
+		statusCode, messageKey, messageArgs := deploymentRetryFailureResponse(err)
 		if statusCode >= http.StatusInternalServerError {
 			services.Logf("error", "Manual deployment retry failed for job %d: %v", id, err)
 		}
 		auditFailureWithRule("deployment_retry_failed")
-		c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
+		c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 		return
 	} else if rescheduled {
 		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status), services.AuditResultPart("deployment_retry")))
@@ -644,7 +647,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		// 钉测同格式（结果：越过失败冷却），与 queued 行分列。
 		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
 			services.AuditJobPart(id), services.AuditRulePart(ruleID),
-			"手动重签越过失败冷却", message, services.AuditResultPart("cooldown_override")))
+			"手动重签越过失败冷却", cooldownMessage, services.AuditResultPart("cooldown_override")))
 	}
 	if renewalAttempts > 0 {
 		// 重试会把 renewal_attempts 归零（最大重试预算对人工操作重新计）——留痕
@@ -657,19 +660,20 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 }
 
 // deploymentRetryFailureResponse 把「手动触发部署重试」登记失败映射为
-// HTTP 状态与文案：busy/blocked/inactive 都是可行动冲突（窗口已推进、自动
-// 部署会接手），其余为 500。签发端点与证书任务重试端点共用本映射。
-func deploymentRetryFailureResponse(err error) (int, string) {
+// HTTP 状态与消息键（+ 模板参数）：busy/blocked/inactive 都是可行动冲突
+// （窗口已推进、自动部署会接手），其余为 500。签发端点与证书任务重试端点
+// 共用本映射——响应由调用点经 apimsg.Envelope 装配（中文母本在 i18n 目录、
+// 英文归前端词条），审计与失败明细用 apimsg.Tf(nil, key, args...) 取母本。
+func deploymentRetryFailureResponse(err error) (int, string, []any) {
 	switch {
 	case errors.Is(err, services.ErrCertificateDeploymentRetryBusy):
-		return http.StatusConflict, "上一次部署回调仍在退出中，已登记自动部署，稍后自动执行"
+		return http.StatusConflict, "cert.deploymentRetryBusy", nil
 	case errors.Is(err, services.ErrCertificateDeploymentRetryBlocked):
-		return http.StatusConflict, "规则证书操作被屏障阻塞（规则正在删除或更新），已登记自动部署，请稍后重试"
+		return http.StatusConflict, "cert.deploymentRetryBlocked", nil
 	case errors.Is(err, services.ErrCertificateQueueInactive):
-		status, message := certEnqueueErrorResponse("部署重试未触发", err)
-		return status, message + "；已登记自动部署，恢复后自动执行"
+		return http.StatusConflict, "cert.deploymentRetryQueueInactive", []any{err}
 	}
-	return http.StatusInternalServerError, "触发重新部署失败；已登记自动部署，稍后自动执行"
+	return http.StatusInternalServerError, "cert.deploymentRetryFailed", nil
 }
 
 // certJobDeploymentRetryTarget 记录「锁内已推进部署窗口、待锁外登记立即部署」
@@ -750,7 +754,9 @@ func certJobRetryRemainingSeconds(status string, updatedAt, createdAt, caAvailab
 	return services.CertJobRetryRemainingSeconds(status, updatedAt, createdAt, caAvailableAfter, now)
 }
 
-// certJobRetryBlocked 返回任务是否被重试门拦截，以及应返回的 HTTP 状态码。
+// certJobRetryBlocked 返回任务是否被重试门拦截、应返回的 HTTP 状态码，以及
+// 拒绝文案的消息键与模板参数：响应由调用点经 apimsg.Envelope 装配（中文母本
+// 在 i18n 目录、英文归前端词条），审计明细用 apimsg.Tf(nil, key, args...) 取母本。
 // 429 =「稍后重试可成功」（执行中/冷却），409 =「永久条件不可重试」（已退役）。
 //
 // 通用冷却窗口计算必须复用 services.CertJobRetryRemaining（下发剩余秒/任务
@@ -758,13 +764,13 @@ func certJobRetryRemainingSeconds(status string, updatedAt, createdAt, caAvailab
 // 策略源各自漂移（窗口变更后文案说谎）。CA 退避窗口不在本门内：它由
 // certJobCAcooldownActive 单独判定，force 才能越过，传入零值 NullTime 使
 // CertJobRetryRemaining 只看通用窗口。
-func certJobRetryBlocked(status string, updatedAt, createdAt sql.NullTime, now time.Time) (bool, int, string) {
+func certJobRetryBlocked(status string, updatedAt, createdAt sql.NullTime, now time.Time) (bool, int, string, []any) {
 	_, retryable := certJobRetryCooldown(status)
 	if !retryable {
 		// 永久条件不得用 429（SDK/前端会按限流退避轮询）。规则仍启用但任务行
 		// 已退役（历史残留/脏快照）时，唯一恢复路径是让规则重新解析证书任务：
 		// 文案必须给出可执行指引，而不是让用户以为需要等冷却。
-		return true, http.StatusConflict, "已退役的证书任务不能重试；请先禁用再启用该规则以重新创建签发任务"
+		return true, http.StatusConflict, "cert.jobRetiredCannotRetry", nil
 	}
 	remaining, retryable := services.CertJobRetryRemaining(status, updatedAt, createdAt, sql.NullTime{}, now)
 	if retryable && remaining > 0 {
@@ -773,18 +779,17 @@ func certJobRetryBlocked(status string, updatedAt, createdAt sql.NullTime, now t
 			// CertJobRetryRemainingSeconds 同源）——完整窗口分钟数在冷却
 			// 过半后说谎（剩 1s 仍提示等满窗口）。
 			seconds := services.CertJobRetryCooldownSeconds(remaining)
-			return true, http.StatusTooManyRequests, fmt.Sprintf("失败后请等待 %d 秒再重试", seconds)
+			return true, http.StatusTooManyRequests, "cert.jobRetryCooldownRemaining", []any{seconds}
 		}
-		message := "任务正在执行中，请稍后重试"
 		// 部署生命周期（downloaded/cleanup_dns/cleanup_warning）签发已完成（证书在库），
 		// 停在部署退避窗口——复用在途文案会误导用户以为签发流程卡住，单列部署口径。
 		// 冷却到期后再点重试 = 立即重排部署（不重签）。
 		if services.JobLifecycle(status) == services.JobLifecycleDownloaded {
-			message = "证书已下载完成，正在等待部署生效；稍后可重试以立即重新部署（不会重新签发）"
+			return true, http.StatusTooManyRequests, "cert.jobRetryAwaitingDeployment", nil
 		}
-		return true, http.StatusTooManyRequests, message
+		return true, http.StatusTooManyRequests, "cert.jobRetryInFlight", nil
 	}
-	return false, 0, ""
+	return false, 0, "", nil
 }
 
 // certJobCAcooldownActive 报告任务是否仍处于 CA 限流退避窗口（waiting_ca 且
@@ -796,14 +801,14 @@ func certJobCAcooldownActive(status string, caAvailableAfter sql.NullTime, now t
 	return services.CertJobCAcooldownActive(status, caAvailableAfter, now)
 }
 
-// certJobCAcooldownMessage 是 CA 冷却拦截的统一文案（availableAfter=冷却到期
-// 时刻），两个入口的 429 文案必须一致，避免用户以为只有任务重试受限。
+// certJobCAcooldownKey 是 CA 冷却拦截的统一文案键与模板参数（availableAfter=
+// 冷却到期时刻），两个入口的 429 文案必须一致，避免用户以为只有任务重试受限。
 // 剩余秒复用 services.CertJobRetryCooldownSeconds（向上取整，<1s 下发 1）——
 // 门禁与文案必须用同一 now：原实现对墙钟 Round，使被门禁判定为「冷却中」的
 // 任务在下发侧显示「剩余约 0s」，引导用户点一次必然 429 的重试。
-func certJobCAcooldownMessage(availableAfter, now time.Time) string {
+func certJobCAcooldownKey(availableAfter, now time.Time) (string, []any) {
 	seconds := services.CertJobRetryCooldownSeconds(availableAfter.Sub(now))
-	return fmt.Sprintf("CA 限流冷却未到期（剩余约 %s）。冷却到期后将自动重排；确需立即重签请确认后强制重试（可能再次被 CA 拒绝）", time.Duration(seconds)*time.Second)
+	return "cert.caCooldownActive", []any{time.Duration(seconds) * time.Second}
 }
 
 // reversedCertJobDomain 交换双域名任务的域名顺序：cert_jobs.domain 存排序

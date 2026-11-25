@@ -1165,30 +1165,31 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		if err == nil {
 			// 冷却门禁与文案共用同一 now（边界 <1s 时不得出现「门禁拦截、文案 0s」）。
 			now := time.Now()
-			if blocked, statusCode, message := certJobRetryBlocked(jobStatus, jobUpdatedAt, jobCreatedAt, now); blocked {
+			if blocked, statusCode, messageKey, messageArgs := certJobRetryBlocked(jobStatus, jobUpdatedAt, jobCreatedAt, now); blocked {
 				// failed 行的通用失败冷却只约束自动通道——任务卡片重试已按同一
 				// 裁定豁免（RetryCertJob 的 cooldown_override 越冷留痕）；定向
 				// 「触发签发」是同等知情显式操作，冷却中放行。其余形状（退役 409、
 				// 在途执行中、部署退避窗口文案）不受裁定影响，按原语义拒绝。
 				if statusCode != http.StatusTooManyRequests || jobStatus != "failed" {
-					auditFailure("blocked", message)
-					c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
+					auditFailure("blocked", apimsg.Tf(nil, messageKey, messageArgs...))
+					c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 					return
 				}
 				// 越冷留痕以入队实际发生（changed=true）为前提（与 CA-force 族
 				// 同口径）：此处仅标记，待 createOrRequeueCertJob 成功后记录——
 				// 防请求最终被 CA 退避 429 拒绝/入队失败时残留成功通道审计行。
 				failedCooldownOverride = true
-				failedCooldownMessage = message
+				// 审计明细沿用中文母本（语言无关），与迁移前逐字相同。
+				failedCooldownMessage = apimsg.Tf(nil, messageKey, messageArgs...)
 			}
 			// waiting_ca 的 CA 退避窗口与任务重试共用同一契约：未到期且未
 			// force 时 429 并给出剩余时长，否则手动「重新签发」会把退避窗口
 			// 静默清零、立即再次撞上 CA 限流并继续消耗配额。
 			if certJobCAcooldownActive(jobStatus, jobCAAvailableAfter, now) {
 				if !forceIssue {
-					message := certJobCAcooldownMessage(jobCAAvailableAfter.Time, now)
-					auditFailure("blocked", message)
-					c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: http.StatusTooManyRequests, Message: message})
+					cooldownKey, cooldownArgs := certJobCAcooldownKey(jobCAAvailableAfter.Time, now)
+					auditFailure("blocked", apimsg.Tf(nil, cooldownKey, cooldownArgs...))
+					c.JSON(http.StatusTooManyRequests, apimsg.Envelope(nil, http.StatusTooManyRequests, cooldownKey, cooldownArgs...))
 					return
 				}
 				forceCAOverride = true
@@ -1201,12 +1202,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			if jobMaterialUsable && services.JobLifecycle(jobStatus) == services.JobLifecycleDownloaded {
 				rescheduled, markErr := markDownloadedCertJobDeploymentPending(jobID, req.CaddyID, canonicalRuleDomain)
 				if markErr != nil {
-					statusCode, message := deploymentRetryFailureResponse(markErr)
+					statusCode, messageKey, messageArgs := deploymentRetryFailureResponse(markErr)
 					if statusCode >= http.StatusInternalServerError {
 						services.Logf("error", "IssueCertificate deployment retry failed for job %d: %v", jobID, markErr)
 					}
-					auditFailure("failed", message)
-					c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
+					auditFailure("failed", apimsg.Tf(nil, messageKey, messageArgs...))
+					c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 					return
 				}
 				if rescheduled {
@@ -1215,12 +1216,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 					h.caddyOpMu.Unlock()
 					caddyOpHeld = false
 					if deployErr := registerDownloadedCertJobDeploymentRetry(jobID, req.CaddyID); deployErr != nil {
-						statusCode, message := deploymentRetryFailureResponse(deployErr)
+						statusCode, messageKey, messageArgs := deploymentRetryFailureResponse(deployErr)
 						if statusCode >= http.StatusInternalServerError {
 							services.Logf("error", "IssueCertificate deployment retry failed for job %d: %v", jobID, deployErr)
 						}
-						auditFailure("failed", message)
-						c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
+						auditFailure("failed", apimsg.Tf(nil, messageKey, messageArgs...))
+						c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 						return
 					}
 					recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, "已触发重新部署（不重新签发）", services.AuditResultPart("deployment_retry")))
@@ -1347,7 +1348,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				Scan(&jobID, &jobStatus, &jobUpdatedAt, &jobCreatedAt, &jobCAAvailableAfter, &jobMaterialUsable)
 			switch {
 			case jobErr == nil:
-				if blocked, statusCode, _ := certJobRetryBlocked(jobStatus, jobUpdatedAt, jobCreatedAt, time.Now()); blocked {
+				if blocked, statusCode, _, _ := certJobRetryBlocked(jobStatus, jobUpdatedAt, jobCreatedAt, time.Now()); blocked {
 					if statusCode == http.StatusConflict {
 						// 永久条件（disabled 行）：不是冷却，单列归因。
 						skippedRetired++
@@ -1373,11 +1374,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				if jobMaterialUsable && services.JobLifecycle(jobStatus) == services.JobLifecycleDownloaded {
 					rescheduled, markErr := markDownloadedCertJobDeploymentPending(jobID, target.ruleID, canonicalDomain)
 					if markErr != nil {
-						statusCode, message := deploymentRetryFailureResponse(markErr)
+						statusCode, messageKey, messageArgs := deploymentRetryFailureResponse(markErr)
 						if statusCode >= http.StatusInternalServerError {
 							services.Logf("error", "Batch issue deployment retry failed for job %d: %v", jobID, markErr)
 						}
-						failed = append(failed, fmt.Sprintf("%s(%s)", target.domain, message))
+						// 失败明细是拼进响应的归因片段（审计/日志同用）：沿用中文母本。
+						failed = append(failed, fmt.Sprintf("%s(%s)", target.domain, apimsg.Tf(nil, messageKey, messageArgs...)))
 						continue
 					}
 					if rescheduled {
@@ -1442,11 +1444,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		caddyOpHeld = false
 		for _, pending := range pendingDeployments {
 			if deployErr := registerDownloadedCertJobDeploymentRetry(pending.jobID, pending.ruleID); deployErr != nil {
-				statusCode, message := deploymentRetryFailureResponse(deployErr)
+				statusCode, messageKey, messageArgs := deploymentRetryFailureResponse(deployErr)
 				if statusCode >= http.StatusInternalServerError {
 					services.Logf("error", "Batch issue deployment retry failed for job %d: %v", pending.jobID, deployErr)
 				}
-				failed = append(failed, fmt.Sprintf("%s(%s)", pending.domain, message))
+				failed = append(failed, fmt.Sprintf("%s(%s)", pending.domain, apimsg.Tf(nil, messageKey, messageArgs...)))
 				continue
 			}
 			redeployed++

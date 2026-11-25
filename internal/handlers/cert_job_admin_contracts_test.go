@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
@@ -110,12 +111,15 @@ func TestDeleteCertJobGuardedRecordsFailureAudit(t *testing.T) {
 
 // 重试冷却门禁与文案必须同源：门禁说冷却中时文案不得显示「0s」，失败文案
 // 的剩余秒由 services.CertJobRetryRemaining 按 updated_at 扣减后派生（完整
-// 窗口分钟数会在冷却过半后说谎；硬编码会随策略漂移）。
+// 窗口分钟数会在冷却过半后说谎；硬编码会随策略漂移）。文案形态是消息键 +
+// 模板参数，中文母本由目录对账（apimsg.Tf(nil, key, args...)）。
 func TestCertJobRetryCooldownGateAndMessageSharePolicy(t *testing.T) {
 	now := time.Now()
 
 	// 不足 1 秒的剩余必须向上取整为 1s（0s 会引导一次必然 429 的重试）。
-	if got := certJobCAcooldownMessage(now.Add(300*time.Millisecond), now); !strings.Contains(got, "剩余约 1s") || strings.Contains(got, "剩余约 0s") {
+	if key, args := certJobCAcooldownKey(now.Add(300*time.Millisecond), now); key != "cert.caCooldownActive" {
+		t.Fatalf("messageKey=%q, want cert.caCooldownActive", key)
+	} else if got := apimsg.Tf(nil, key, args...); !strings.Contains(got, "剩余约 1s") || strings.Contains(got, "剩余约 0s") {
 		t.Fatalf("message=%q, want 剩余约 1s（<1s 向上取整）", got)
 	}
 
@@ -128,17 +132,25 @@ func TestCertJobRetryCooldownGateAndMessageSharePolicy(t *testing.T) {
 	updated := sql.NullTime{Time: now.Add(-window + time.Second), Valid: true}
 	created := sql.NullTime{Time: now.Add(-window + time.Second), Valid: true}
 	wantSeconds, _ := services.CertJobRetryRemainingSeconds("failed", updated, created, sql.NullTime{}, now)
-	if blocked, code, message := certJobRetryBlocked("failed", updated, created, now); !blocked || code != http.StatusTooManyRequests {
+	blocked, code, messageKey, messageArgs := certJobRetryBlocked("failed", updated, created, now)
+	if !blocked || code != http.StatusTooManyRequests {
 		t.Fatalf("blocked=%v code=%d, want true/429（窗口内）", blocked, code)
-	} else if !strings.Contains(message, strconv.FormatInt(wantSeconds, 10)+" 秒") {
+	}
+	// 键 + 参数即判据：参数是「此刻剩余秒」，模板由 1 号槽承接。
+	if messageKey != "cert.jobRetryCooldownRemaining" || len(messageArgs) != 1 {
+		t.Fatalf("messageKey=%q args=%v, want cert.jobRetryCooldownRemaining + 1 参", messageKey, messageArgs)
+	}
+	message := apimsg.Tf(nil, messageKey, messageArgs...)
+	if !strings.Contains(message, strconv.FormatInt(wantSeconds, 10)+" 秒") {
 		t.Fatalf("message=%q, want 与剩余秒判据一致的 %d 秒", message, wantSeconds)
-	} else if strings.Contains(message, strconv.Itoa(int(window/time.Minute))+" 分钟") {
+	}
+	if strings.Contains(message, strconv.Itoa(int(window/time.Minute))+" 分钟") {
 		t.Fatalf("message=%q, 冷却剩 %d 秒时不得报完整窗口分钟数", message, wantSeconds)
 	}
 
 	// 窗口外放行（同一来源判定）。
 	past := sql.NullTime{Time: now.Add(-window - time.Second), Valid: true}
-	if blocked, _, _ := certJobRetryBlocked("failed", past, past, now); blocked {
+	if blocked, _, _, _ := certJobRetryBlocked("failed", past, past, now); blocked {
 		t.Fatal("窗口已过仍被判冷却中")
 	}
 }

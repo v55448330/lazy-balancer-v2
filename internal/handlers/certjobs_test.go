@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
@@ -50,7 +51,7 @@ func TestGetCurrentCertJobs_rejects_more_than_200_rule_ids(t *testing.T) {
 }
 
 func TestCertJobRetryBlocked_rejects_disabled_job_without_timestamp(t *testing.T) {
-	blocked, statusCode, _ := certJobRetryBlocked("disabled", sql.NullTime{}, sql.NullTime{}, time.Now())
+	blocked, statusCode, _, _ := certJobRetryBlocked("disabled", sql.NullTime{}, sql.NullTime{}, time.Now())
 	if !blocked {
 		t.Fatal("disabled job retry was allowed")
 	}
@@ -68,17 +69,20 @@ func TestCertJobRetryBlocked_downloaded_job_uses_deployment_message(t *testing.T
 	now := time.Now()
 
 	// When
-	blocked, _, message := certJobRetryBlocked("downloaded", sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, sql.NullTime{Time: now.Add(-time.Hour), Valid: true}, now)
+	blocked, _, messageKey, messageArgs := certJobRetryBlocked("downloaded", sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, sql.NullTime{Time: now.Add(-time.Hour), Valid: true}, now)
 
 	// Then：仍被拦截（部署窗口守卫不变），但文案单列
 	if !blocked {
 		t.Fatal("fresh downloaded job retry was allowed")
 	}
-	if message == "任务正在执行中，请稍后重试" {
-		t.Fatalf("downloaded message=%q, 复用了在途签发文案", message)
+	if messageKey == "cert.jobRetryInFlight" {
+		t.Fatalf("downloaded messageKey=%q, 复用了在途签发文案", messageKey)
 	}
-	if !strings.Contains(message, "部署") {
-		t.Fatalf("downloaded message=%q, want deployment-window wording", message)
+	if messageKey != "cert.jobRetryAwaitingDeployment" || len(messageArgs) != 0 {
+		t.Fatalf("downloaded messageKey=%q args=%v, want cert.jobRetryAwaitingDeployment（无参数）", messageKey, messageArgs)
+	}
+	if zh := apimsg.Tf(nil, messageKey, messageArgs...); !strings.Contains(zh, "部署") {
+		t.Fatalf("downloaded message=%q, want deployment-window wording", zh)
 	}
 }
 
@@ -1341,22 +1345,22 @@ func TestDeleteCertJob_recoveryKeepsCanonicalLockOrder(t *testing.T) {
 func TestCertJobRetryBlocked_updatedAtNullFallsBackToCreatedAt(t *testing.T) {
 	now := time.Now()
 	// 目标形状：updated_at=NULL 且 created_at 刚写入 → 仍受 15 分钟冷却。
-	blocked, statusCode, _ := certJobRetryBlocked("queued", sql.NullTime{}, sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, now)
+	blocked, statusCode, _, _ := certJobRetryBlocked("queued", sql.NullTime{}, sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, now)
 	if !blocked || statusCode != http.StatusTooManyRequests {
 		t.Fatalf("blocked=%v status=%d, want true/429（NULL updated_at 不得放行冷却）", blocked, statusCode)
 	}
 	// 回归形状：updated_at 有效时以 updated_at 为准（created_at 很老也不提前放行）。
-	blocked, _, _ = certJobRetryBlocked("failed", sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, sql.NullTime{Time: now.Add(-time.Hour), Valid: true}, now)
+	blocked, _, _, _ = certJobRetryBlocked("failed", sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, sql.NullTime{Time: now.Add(-time.Hour), Valid: true}, now)
 	if !blocked {
 		t.Fatal("updated_at 有效且未过冷却时必须拦截（不得回退 created_at）")
 	}
 	// fail-closed 形状：两列都缺失 → 视为冷却中（不得因缺时间戳立即放行）。
-	blocked, statusCode, _ = certJobRetryBlocked("queued", sql.NullTime{}, sql.NullTime{}, now)
+	blocked, statusCode, _, _ = certJobRetryBlocked("queued", sql.NullTime{}, sql.NullTime{}, now)
 	if !blocked || statusCode != http.StatusTooManyRequests {
 		t.Fatalf("blocked=%v status=%d, want true/429（缺时间戳 fail-closed）", blocked, statusCode)
 	}
 	// 回归形状：updated_at=NULL 但 created_at 已过冷却 → 放行。
-	blocked, _, _ = certJobRetryBlocked("queued", sql.NullTime{}, sql.NullTime{Time: now.Add(-30 * time.Minute), Valid: true}, now)
+	blocked, _, _, _ = certJobRetryBlocked("queued", sql.NullTime{}, sql.NullTime{Time: now.Add(-30 * time.Minute), Valid: true}, now)
 	if blocked {
 		t.Fatal("created_at 已过冷却时必须放行（不得永久锁死历史行）")
 	}
