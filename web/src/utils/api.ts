@@ -20,6 +20,7 @@ import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, createSess
 import { safeLocalStorageGet, safeLocalStorageRemove } from '@/utils/safeWebStorage'
 import { currentSessionGeneration } from '@/utils/sessionIdentity'
 import { decodeJwtPayload } from '@/utils/jwt'
+import { apiMessageText, type ApiMessageLocale } from '@/utils/apiMessage'
 
 declare module 'axios' {
   interface AxiosRequestConfig {
@@ -57,6 +58,9 @@ interface RequestClient {
 // 测试）：mfaStepUp = 弹码 + verify-step 刷新单飞；mfaGrace = 60s 节流、兜底条
 // 去重与「刚弹码验证」抑制。
 const mfaGrace = createMfaGraceTracker()
+
+// 响应消息按键渲染用的当前语言（DESIGN_SPEC §25-8）。拦截器四处取值必须一致。
+const apiLocale = (): ApiMessageLocale => i18n.global.locale.value as ApiMessageLocale
 
 // （用户裁决）：写操作成功提示的统一 MFA 装饰——宽限窗内（用户不知情）
 // 前缀「MFA 在验证窗口期，本次操作免验证，」；弹码后重试（用户刚验证）不加缀。
@@ -260,8 +264,10 @@ service.interceptors.response.use(
       )
     }
     if (res.code !== undefined && res.code !== 0 && res.code !== 200) {
+      // 提示文字：前端按 message_key 渲染 → 回落后端 message → 回落通用兜底。
+      const shown = apiMessageText(res, apiLocale()) || res.message || t('common.app.api.requestFailed')
       if (!response.config.silent) {
-        ElMessage.error(res.message || t('common.app.api.requestFailed'))
+        ElMessage.error(shown)
       }
       // 业务码失败与 HTTP 失败统一错误类型：调用方按
       // instanceof ApiRequestError 判别（如 409/业务码分支）时不再漏判。
@@ -278,7 +284,7 @@ service.interceptors.response.use(
       // 消费方（importFailureReport 读 data.data）静默丢失 warnings。
       // 此处 `res` 本身就是 response.data（拦截器已解包），故必须传 res 而不是
       // res.data——后者是载荷，比 HTTP 分支少一层信封。
-      return Promise.reject(new ApiRequestError(res.message || t('common.app.api.requestFailed'), response.status, res))
+      return Promise.reject(new ApiRequestError(shown, response.status, res))
     }
     // 成功信封的稳定语义键归一：后端 wire 字段 message_key → messageKey
     // （camelCase，与 ApiRequestError.messageKey / apiFailure 契约同形）。
@@ -286,6 +292,10 @@ service.interceptors.response.use(
     // 无键响应不增字段（保持原样，zh 标记兜底判据仍可用）。
     if (res && typeof res === 'object' && typeof res.message_key === 'string' && res.message_key) {
       res.messageKey = res.message_key
+      // 能按键渲染时，信封上的 message 换成前端按当前语言渲染的结果——直接显示
+      // res.message 的调用方（成功提示等）因此自动得到本地化文案；渲染不出则原样保留。
+      const localized = apiMessageText(res, apiLocale())
+      if (localized !== null) res.message = localized
     }
     return res
   },
@@ -298,6 +308,8 @@ service.interceptors.response.use(
     if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
     const backendMsg = errorEnvelopeMessage(error.response?.data) ?? (await blobErrorMessage(error.response?.data))
+    // 提示文字：前端按 message_key 渲染 → 后端 message（信封或 Blob）→ 网络层兜底。
+    const localizedMsg = apiMessageText(error.response?.data, apiLocale())
     // 网络层失败（断网/DNS/CORS）没有任何响应体，502/504 网关错误返回的是 HTML
     // 而非后端 JSON，两者都会把 axios 英文原文（"Network Error" /
     // "Request failed with status code 502"）直接抛给用户，这里统一映射为
@@ -314,7 +326,7 @@ service.interceptors.response.use(
         fallback = error.message
       }
     }
-    const message = backendMsg || fallback || t('common.app.api.networkError')
+    const message = localizedMsg || backendMsg || fallback || t('common.app.api.networkError')
     const isLoginRequest = !!(error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login'))
     const kind = classifyAuthFailure({
       status,
@@ -360,7 +372,7 @@ service.interceptors.response.use(
         sessionExpiredDetected = true
         // D-新1：confirm 的取消分支与确定行为完全相同，「取消」形同虚设且误导
         // ——改单按钮 alert（会话已死，任何请求都会 401，刷新是唯一合理结局）。
-        ElMessageBox.alert(backendMsg || t('common.app.api.sessionExpiredAlert'), t('common.app.api.sessionLost'), {
+        ElMessageBox.alert(localizedMsg || backendMsg || t('common.app.api.sessionExpiredAlert'), t('common.app.api.sessionLost'), {
           confirmButtonText: t('common.app.api.relogin'),
           type: 'warning',
         }).finally(() => {

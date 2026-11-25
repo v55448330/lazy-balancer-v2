@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "gen:api-messages": "node scripts/gen-api-messages.ts",
     "test": "node --test \"tests/**/*.spec.ts\"",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='tests/**' --test-coverage-lines=80 --test-coverage-branches=91 --test-coverage-functions=88 \"tests/**/*.spec.ts\"",
     "typecheck:src": "vue-tsc -p tsconfig.json --noEmit",
