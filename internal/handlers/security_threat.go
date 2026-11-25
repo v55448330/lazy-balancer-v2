@@ -53,7 +53,7 @@ func (h *Handlers) GetThreatLib(c *gin.Context) {
 		FROM security_threat_sources t
 		WHERE %s ORDER BY t.id`, where), args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取威胁情报库失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.threatLibraryLoadFailed", err))
 		return
 	}
 	defer rows.Close()
@@ -63,7 +63,7 @@ func (h *Handlers) GetThreatLib(c *gin.Context) {
 		var s threatSourceDTO
 		if err := rows.Scan(&s.ID, &s.Name, &s.DisplayName, &s.URL, &s.Format, &s.UpdateEnabled,
 			&s.EntryCount, &s.Version, &s.UpdateStatus, &s.Message, &s.LastChecked, &s.NextUpdate); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取威胁情报库失败", err)})
+			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.threatLibraryLoadFailed", err))
 			return
 		}
 		// 活动态只属执行进程：从节点不运行该任务，行内「更新中」是主端镜像
@@ -76,14 +76,14 @@ func (h *Handlers) GetThreatLib(c *gin.Context) {
 	// 「部分/空列表 + 200」返回——与在总览/事件列表建立的
 	// 「残缺列表不得以 200」口径对齐（Scan 失败分支同响应形）。
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取威胁情报库失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.threatLibraryLoadFailed", err))
 		return
 	}
 	// 与 GetCrawlerLib 共用 loadSystemListIDs：一次预载代替逐源点查；缺行保留
 	// list_id=0，查询/扫描/迭代故障均显式 500。
 	listIDs, err := loadSystemListIDs()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取内置名单失败", err)})
+		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.builtinThreatListLoadFailed", err))
 		return
 	}
 	for i := range sources {

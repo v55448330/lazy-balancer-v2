@@ -1762,7 +1762,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 		err = errors.Join(err, recovery.err())
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail(commitUncertainLabel, err))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + ": " + err.Error()})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, "common.commitResultUncertainWithDetailAsciiColon", err.Error()))
 		return
 	}
 	committed = true

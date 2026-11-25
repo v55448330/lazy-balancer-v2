@@ -5,6 +5,7 @@ package i18n
 // 本文件由各批次的转换片段合并生成；新增批次追加新的 init 块即可。
 func init() {
 	// 组：security
+	Register("common.commitResultUncertainWithDetailAsciiColon", "数据库提交结果不确定（可能已生效，请先核对）: %s", "")
 	Register("security.autoBanConfigReadBackFailed", "回读自动封禁配置失败", "")
 	Register("security.autoBanConfigReadFailed", "读取自动封禁配置失败", "")
 	Register("security.autoBanConfigSaveFailed", "保存自动封禁配置失败", "")
@@ -12,11 +13,13 @@ func init() {
 	Register("security.autoBanRepeatOffenderDeleteFailed", "删除自动封禁累犯记录失败", "")
 	Register("security.autoBanRepeatOffenderReadFailed", "读取自动封禁累犯记录失败", "")
 	Register("security.autoBanRepeatOffenderResetFailed", "重置自动封禁累犯记录失败", "")
+	Register("security.builtinThreatListLoadFailed", "读取内置名单失败", "")
 	Register("security.crsRuleDirUnreadable", "CRS 规则目录不可读", "")
 	Register("security.defaultPolicyCatalogReadFailed", "读取默认策略目录失败", "")
 	Register("security.defaultPolicyCreateFailed", "创建默认策略失败", "")
 	Register("security.libAutoUpdateSaveFailed", "更新失败", "")
 	Register("security.policyBindingCleanupFailed", "清理策略绑定失败", "")
+	Register("security.threatLibraryLoadFailed", "读取威胁情报库失败", "")
 	Register("security.writeResultReadFailed", "读取写入结果失败", "")
 	// 组：notify
 	Register("notify.channelCreateFailed", "创建通知通道失败", "")
