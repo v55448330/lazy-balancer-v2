@@ -133,7 +133,21 @@ func scanMessageKeyUses(packages map[string][]string) (uses []messageKeyUse, che
 			}
 			return "", false
 		}
+		// 枚举显示码（ruleset./task./block_page.）不是消息键：后端按裁定只下发
+		// 语言无关标识，文案由前端词条渲染（web/src/locales），T() 不参与；它们的
+		// 跨栈覆盖由 internal/services/enum_display_keys_guard_test.go 钉住。
+		isEnumDisplayCode := func(key string) bool {
+			for _, prefix := range []string{"ruleset.", "task.", "block_page."} {
+				if strings.HasPrefix(key, prefix) {
+					return true
+				}
+			}
+			return false
+		}
 		record := func(key string, position token.Position) {
+			if isEnumDisplayCode(key) {
+				return
+			}
 			site := site{key, fmtSite(position)}
 			if !seen[site] {
 				seen[site] = true

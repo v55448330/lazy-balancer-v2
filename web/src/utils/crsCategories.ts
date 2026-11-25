@@ -1,43 +1,27 @@
-// CRS 规则分类显示映射:后端 CategorizeCRSFile 产出的 zh 分类码为有限集合,
-// en 用户经词条显示;未登记值回落原文。键=后端 zh 分类码原文。
-const CRS_CATEGORY_KEYS: Record<string, string> = {
-  '初始化': 'init',
-  '初始化/排除': 'initExclusions',
-  '通用异常': 'genericAnomalies',
-  '方法限制': 'methodRestrictions',
-  '爬虫检测': 'crawlerDetection',
-  '协议异常': 'protocolAnomalies',
-  '协议攻击': 'protocolAttacks',
-  'multipart 攻击': 'multipartAbuse',
-  '路径穿越 (LFI)': 'lfi',
-  '远程文件包含 (RFI)': 'rfi',
-  '远程代码执行 (RCE)': 'rce',
-  'PHP 攻击': 'phpAttacks',
-  '通用攻击': 'genericAttacks',
-  'XSS 跨站脚本': 'xss',
-  'SQL 注入': 'sqli',
-  '会话固定': 'sessionFixation',
-  'Java 攻击': 'javaAttacks',
-  '评分拦截': 'scoringThreshold',
-  '响应信息泄露': 'responseInfoDisclosure',
-  '响应 SQL 泄露': 'responseSqlDisclosure',
-  '响应 Java 泄露': 'responseJavaDisclosure',
-  '响应 PHP 泄露': 'responsePhpDisclosure',
-  '响应 IIS 泄露': 'responseIisDisclosure',
-  'Webshell': 'webshell',
-  '响应 Ruby 泄露': 'responseRubyDisclosure',
-  '响应阻断评估': 'responseBlockingEvaluation',
-  '事件关联': 'eventCorrelation',
-  '请求体限制': 'requestBodyRestrictions',
-  '通用排除（CRS 后）': 'genericExclusionsPostCrs',
-  '其他': 'other',
-}
-
+/**
+ * CRS 规则分类显示：后端只下发语言无关的稳定码（internal/services/crs_rule_index.go
+ * 的 CRSCategory*，形如 `ruleset.genericAnomalies`），界面文案由词条提供——
+ * 码去掉 `ruleset.` 前缀即 common.app.crsCategory.* 的词条后缀。
+ *
+ * 未知码（后端新增分类而前端词条未跟上）fail-visible：原样显示码本身并
+ * console.warn，便于定位缺失词条，不做静默回落或臆测文案。
+ */
 import { tSafe } from '../i18n/tSafe.ts'
-import { hasOwn } from './hasOwn'
 
-export const crsCategoryLabel = (raw?: string): string => {
-  if (!raw) return raw || ''
-  const k = hasOwn(CRS_CATEGORY_KEYS, raw) ? CRS_CATEGORY_KEYS[raw] : undefined
-  return k ? tSafe(`common.app.crsCategory.${k}`) : raw
+const CRS_CATEGORY_PREFIX = 'ruleset.'
+
+/** CRS 分类码 → 当前语言的分类标签；空值返回空串。 */
+export const crsCategoryLabel = (code?: string): string => {
+  if (!code) return code || ''
+  if (!code.startsWith(CRS_CATEGORY_PREFIX)) {
+    console.warn(`[crsCategory] 分类值不是稳定码（期望 ${CRS_CATEGORY_PREFIX}*）：${code}`)
+    return code
+  }
+  const key = `common.app.crsCategory.${code.slice(CRS_CATEGORY_PREFIX.length)}`
+  const label = tSafe(key)
+  if (label === key) {
+    console.warn(`[crsCategory] 分类码缺少词条：${code}`)
+    return code
+  }
+  return label
 }

@@ -10,10 +10,12 @@ import assert from 'node:assert/strict'
 
 import { code, member } from './_helpers.ts'
 
-test('TaskMonitor 标签查表前 hasOwn 守卫（constructor/toString 等原型键不得命中）', () => {
+test('TaskMonitor 按后端稳定码渲染（不再以中文任务名为键）', () => {
   const tm = code('src/views/settings/TaskMonitor.vue')
-  assert.match(member(tm, 'const taskDesc ='), /hasOwn\(TASK_NAME_KEYS,/, 'taskDesc 必须先 hasOwn')
-  assert.match(member(tm, 'const taskDisplayName ='), /hasOwn\(TASK_NAME_KEYS,/, 'taskDisplayName 必须先 hasOwn')
+  assert.doesNotMatch(tm, /TASK_NAME_KEYS/, '任务显示名映射已删除——改用后端下发的 name_key')
+  assert.match(member(tm, 'const taskDesc ='), /taskKeySuffix\(task\.name_key\)/, 'taskDesc 必须按 name_key 取词条')
+  assert.match(member(tm, 'const taskDisplayName ='), /taskKeySuffix\(task\.name_key\)/, 'taskDisplayName 必须按 name_key 取词条')
+  assert.match(member(tm, 'const taskDisplayName ='), /console\.warn\(/, '缺词条必须 fail-visible（warn）')
   assert.match(member(tm, 'const categoryLabel ='), /hasOwn\(keys,/, 'categoryLabel 必须先 hasOwn')
 })
 

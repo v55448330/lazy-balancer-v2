@@ -3774,8 +3774,8 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		if backupBooleanEnabled(page["is_builtin"]) {
 			id, idOK := backupInteger(page["id"])
 			validIdentity := false
-			for _, identity := range builtinBlockPageIdentities {
-				if idOK && int(id) == identity.id && name == identity.name {
+			for _, identity := range builtinBlockPageIdentities() {
+				if idOK && int(id) == identity.ID && name == identity.Name {
 					validIdentity = true
 					break
 				}

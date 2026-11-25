@@ -710,6 +710,67 @@ type SecurityBlockPage struct {
 	RuleRefCount int `json:"rule_ref_count"`
 }
 
+// 内置拦截页固定 id（播种身份判据；新增内置页在这里加常量与清单条目）。
+const (
+	// BlockPageDefaultID 默认页（is_default=1，内容由 branding 渲染）。
+	BlockPageDefaultID = 1
+	// BlockPageRatelimitID 429 限流页（备选模板）。
+	BlockPageRatelimitID = 9001
+	// BlockPageMaintenanceID 维护页（备选模板）。
+	BlockPageMaintenanceID = 9002
+	// BlockPageHumanSliderID 滑块人机验证页（{{human_verify_widget}}）。
+	BlockPageHumanSliderID = 9005
+	// BlockPageHumanJSID JS 人机验证页（{{human_js_widget}}）。
+	BlockPageHumanJSID = 9006
+	// BlockPageRatelimitQueueID 排队等待页（{{queue_widget}}，CC 动作=queue 缺省）。
+	BlockPageRatelimitQueueID = 9007
+)
+
+// BuiltinBlockPageIdentity 是一个内置拦截页的身份单源：固定 id、下发前端的
+// 显示键（NameKey）、中文库存名（种子/自愈/审计母本）、渲染变体（branding
+// 渲染器的库存内容形态）。
+type BuiltinBlockPageIdentity struct {
+	ID          int
+	NameKey     string
+	Name        string
+	Description string
+	// Variant 为空表非「备选模板」播种页（仅默认页）：默认页内容由 branding
+	// 渲染，不参与内置备选页播种循环。
+	Variant string
+}
+
+// BuiltinBlockPageIdentities 是内置拦截页身份的唯一清单。
+//
+// NameKey 是语言无关的稳定码：`block_page.` + 前端词条后缀（
+// web/src/locales/{zh,en}/security.ts 的 app.security.blockPages.builtin.<后缀>）。
+// 中文名只作库存母本（审计明细恒中文、播种/自愈判身份），不得作为展示依据。
+var BuiltinBlockPageIdentities = []BuiltinBlockPageIdentity{
+	{BlockPageDefaultID, "block_page.default", "默认拦截页面", "系统默认 403 拦截页面", ""},
+	{BlockPageRatelimitID, "block_page.ratelimit", "限流拦截页面", "系统内置 429 限流拦截页面（备选，手动选用后生效）", "ratelimit"},
+	{BlockPageMaintenanceID, "block_page.maintenance", "系统维护页面", "系统内置维护页面（备选，手动选用后生效）", "maintenance"},
+	{BlockPageHumanSliderID, "block_page.humanVerifySlider", "滑块人机验证页面", "系统内置滑块人机验证挑战页（{{human_verify_widget}} 占位符由 lb_human 替换为滑块组件；策略选择本页后生效）", "human"},
+	{BlockPageHumanJSID, "block_page.humanVerifyJs", "JS 人机验证页面", "系统内置 JS 人机验证挑战页（{{human_js_widget}} 占位符由 lb_human 替换为 JS 验证组件；策略选择本页后生效）", "human_js"},
+	{BlockPageRatelimitQueueID, "block_page.ratelimitQueue", "限流排队等待页", "系统内置限流排队等待页（{{queue_widget}} 占位符由 lb_human 替换为倒计时组件；CC 触发动作=排队时生效）", "queue"},
+}
+
+// BuiltinBlockPageIdentityByID 按固定 id 取内置页身份；非内置 id 返回 false。
+func BuiltinBlockPageIdentityByID(id int) (BuiltinBlockPageIdentity, bool) {
+	for _, identity := range BuiltinBlockPageIdentities {
+		if identity.ID == id {
+			return identity, true
+		}
+	}
+	return BuiltinBlockPageIdentity{}, false
+}
+
+// BuiltinBlockPageDisplayKey 返回内置页显示名稳定码；非内置页返回空串。
+func BuiltinBlockPageDisplayKey(id int) string {
+	if identity, ok := BuiltinBlockPageIdentityByID(id); ok {
+		return identity.NameKey
+	}
+	return ""
+}
+
 // DefaultBlockPageContentType 拦截页默认 （内置三页同此）。
 const DefaultBlockPageContentType = "text/html; charset=utf-8"
 

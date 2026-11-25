@@ -195,15 +195,16 @@ func TestDeleteSecurityBlockPage_rejectsBuiltinPage(t *testing.T) {
 // 指向不存在的 variant 会渲染空串写入内容库存页。两者均无编译期约束，由本
 // 用例做机器门禁。
 func TestBuiltinBlockPageSpecsAndIdentitiesStayInSync(t *testing.T) {
-	variants := make(map[string]bool, len(builtinBlockPageIdentities))
-	for _, bp := range builtinBlockPageIdentities {
-		if _, ok := blockPageSpecs[bp.variant]; !ok {
-			t.Errorf("内置页 %d（%s）的 variant %q 不在 blockPageSpecs 中（会渲染空内容）", bp.id, bp.name, bp.variant)
+	identities := builtinBlockPageIdentities()
+	variants := make(map[string]bool, len(identities))
+	for _, bp := range identities {
+		if _, ok := blockPageSpecs[bp.Variant]; !ok {
+			t.Errorf("内置页 %d（%s）的 variant %q 不在 blockPageSpecs 中（会渲染空内容）", bp.ID, bp.Name, bp.Variant)
 		}
-		if variants[bp.variant] {
-			t.Errorf("内置页 variant %q 重复登记（播种 id 冲突/重复行）", bp.variant)
+		if variants[bp.Variant] {
+			t.Errorf("内置页 variant %q 重复登记（播种 id 冲突/重复行）", bp.Variant)
 		}
-		variants[bp.variant] = true
+		variants[bp.Variant] = true
 	}
 	for variant := range blockPageSpecs {
 		if variant == "default" {
@@ -298,16 +299,18 @@ func TestBuiltinBlockPageSpecs_areEnglishOnly(t *testing.T) {
 	}
 }
 
-// 内置页身份名与库内播种同口径（2026-11-12）：三页统一中文库存名——名称/描述
-// 的多语言由前端按 id 翻译，库里保留身份判据（播种/自愈按库存名归位）。
+// 内置页身份名与库内播种同口径（2026-11-12）：统一中文库存名——名称/描述的
+// 多语言由前端按显示码（models.BuiltinBlockPageIdentities 的 NameKey）渲染，
+// 库里保留身份判据（播种/自愈按库存名归位）。
 func TestBuiltinBlockPageIdentities_useChineseStockNames(t *testing.T) {
 	cjk := regexp.MustCompile(`[\p{Han}]`)
-	if len(builtinBlockPageIdentities) < 3 {
-		t.Fatalf("内置页身份清单数量异常: %d", len(builtinBlockPageIdentities))
+	identities := builtinBlockPageIdentities()
+	if len(identities) < 3 {
+		t.Fatalf("内置页身份清单数量异常: %d", len(identities))
 	}
-	for _, bp := range builtinBlockPageIdentities {
-		if !cjk.MatchString(bp.name) || !cjk.MatchString(bp.desc) {
-			t.Fatalf("内置页 %d 的名称/描述必须与 9001/9002 同族（中文库存名）：name=%q desc=%q", bp.id, bp.name, bp.desc)
+	for _, bp := range identities {
+		if !cjk.MatchString(bp.Name) || !cjk.MatchString(bp.Description) {
+			t.Fatalf("内置页 %d 的名称/描述必须与 9001/9002 同族（中文库存名）：name=%q desc=%q", bp.ID, bp.Name, bp.Description)
 		}
 	}
 }

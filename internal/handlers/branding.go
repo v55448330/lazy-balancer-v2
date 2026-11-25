@@ -727,24 +727,19 @@ func blockPageFooterHTML(text string) string {
 
 var urlLinkRe = regexp.MustCompile(`https?://(?:[^\s"'&]|&amp;)+`)
 
-type builtinBlockPageIdentity struct {
-	id      int
-	name    string
-	desc    string
-	variant string
-}
-
-var builtinBlockPageIdentities = []builtinBlockPageIdentity{
-	// 人机验证挑战页（2026-11-13 用户裁定：命名统一为「<方式>人机验证页面」）：
-	// 9005=滑块（{{human_verify_widget}}）、9006=JS（{{human_js_widget}}）；
-	// 占位符由 lb_human 按策略验证方式替换为真实组件，策略选本页后生效。
-	{9005, "滑块人机验证页面", "系统内置滑块人机验证挑战页（{{human_verify_widget}} 占位符由 lb_human 替换为滑块组件；策略选择本页后生效）", "human"},
-	{9006, "JS 人机验证页面", "系统内置 JS 人机验证挑战页（{{human_js_widget}} 占位符由 lb_human 替换为 JS 验证组件；策略选择本页后生效）", "human_js"},
-	// 排队等待页（CC 触发动作 queue）：{{queue_widget}} 由 lb_human 替换为
-	// 倒计时+自动重试组件；策略选本页后生效，缺省回退本页。
-	{9007, "限流排队等待页", "系统内置限流排队等待页（{{queue_widget}} 占位符由 lb_human 替换为倒计时组件；CC 触发动作=排队时生效）", "queue"},
-	{9001, "限流拦截页面", "系统内置 429 限流拦截页面（备选，手动选用后生效）", "ratelimit"},
-	{9002, "系统维护页面", "系统内置维护页面（备选，手动选用后生效）", "maintenance"},
+// builtinBlockPageIdentities 是待播种/自愈的内置备选页（默认页除外）：身份、
+// 中文库存名与渲染变体全部来自 models.BuiltinBlockPageIdentities 单源——
+// 中文名只作库存母本（审计明细恒中文、自愈按库存名判身份），展示键
+// （NameKey）随列表接口下发，前端按码查词条渲染。
+func builtinBlockPageIdentities() []models.BuiltinBlockPageIdentity {
+	out := make([]models.BuiltinBlockPageIdentity, 0, len(models.BuiltinBlockPageIdentities))
+	for _, identity := range models.BuiltinBlockPageIdentities {
+		if identity.Variant == "" {
+			continue // 默认页（is_default）内容由 branding 渲染，不进备选页播种
+		}
+		out = append(out, identity)
+	}
+	return out
 }
 
 // SeedDefaultBlockPage re-renders the default block page row (is_default=1) from
@@ -785,10 +780,10 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	changed := n > 0
 	// 内置备选页：INSERT OR IGNORE 播种（新库/被删形态），漂移行重写归位——
 	// 标志修复与内容库存同事完成，仅漂移时写（updated_at 不抖动）。
-	for _, bp := range builtinBlockPageIdentities {
-		stock := renderBuiltinBlockPage(cfg, bp.variant)
-		if inserted, err := db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, FALSE, TRUE, datetime('now'), datetime('now'))`, bp.id, bp.name, bp.desc, stock); err != nil {
-			return changed, fmt.Errorf("播种内置拦截页面 %d: %w", bp.id, err)
+	for _, bp := range builtinBlockPageIdentities() {
+		stock := renderBuiltinBlockPage(cfg, bp.Variant)
+		if inserted, err := db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, FALSE, TRUE, datetime('now'), datetime('now'))`, bp.ID, bp.Name, bp.Description, stock); err != nil {
+			return changed, fmt.Errorf("播种内置拦截页面 %d: %w", bp.ID, err)
 		} else if n, _ := inserted.RowsAffected(); n > 0 {
 			// 缺行补回（导入全量替换/旧快照/带外改库）同样是渲染输入变化：缺页
 			// 期间运行配置按回落页渲染，只补库不重应用=回落页持续到下一次配置
@@ -803,9 +798,9 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 		// （正常行）或 name=库存名（备份导入/带外改库丢了标志但仍是内置页——既有
 		// 自愈用例要求该形态归位）。其余（自定义页占 id）一律跳过并 warn。
 		res, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, is_builtin=1, updated_at=datetime('now') WHERE id=? AND (COALESCE(is_builtin,0)=1 OR name=?) AND (COALESCE(name,'') != ? OR COALESCE(description,'') != ? OR COALESCE(content,'') != ? OR COALESCE(content_type,'') != ? OR COALESCE(is_builtin,0) != 1)`,
-			bp.name, bp.desc, stock, models.DefaultBlockPageContentType, bp.id, bp.name, bp.name, bp.desc, stock, models.DefaultBlockPageContentType)
+			bp.Name, bp.Description, stock, models.DefaultBlockPageContentType, bp.ID, bp.Name, bp.Name, bp.Description, stock, models.DefaultBlockPageContentType)
 		if err != nil {
-			return changed, fmt.Errorf("修复内置拦截页面 %d: %w", bp.id, err)
+			return changed, fmt.Errorf("修复内置拦截页面 %d: %w", bp.ID, err)
 		}
 		bn, _ := res.RowsAffected()
 		changed = changed || bn > 0
@@ -813,8 +808,8 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 			// 未命中且该 id 被非内置行（名称亦非库存名）占用 → 明确告警并跳过
 			// （自定义页永不改写）。
 			var occupied int
-			if err := db.DB.QueryRow(`SELECT COALESCE(is_builtin,0) FROM security_block_pages WHERE id=? AND name<>?`, bp.id, bp.name).Scan(&occupied); err == nil && occupied != 1 {
-				services.Logf("warn", "内置拦截页面 %d（%s）的 ID 已被自定义页面占用，跳过播种（不改写自定义页）", bp.id, bp.name)
+			if err := db.DB.QueryRow(`SELECT COALESCE(is_builtin,0) FROM security_block_pages WHERE id=? AND name<>?`, bp.ID, bp.Name).Scan(&occupied); err == nil && occupied != 1 {
+				services.Logf("warn", "内置拦截页面 %d（%s）的 ID 已被自定义页面占用，跳过播种（不改写自定义页）", bp.ID, bp.Name)
 			}
 		}
 	}

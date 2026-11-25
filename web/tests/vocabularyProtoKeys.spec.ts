@@ -28,10 +28,6 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/utils/escape.ts#escapeHtmlTable',
   // 表格锁弹框登记表：键为规则 caddy_id，值是组件实例，不用于标签展示
   'src/views/Rules.vue#lockPopovers',
-  // 任务族显示名映射:键=后端注册 zh 名(查表即返回,无外部键源)
-  'src/views/settings/TaskMonitor.vue#TASK_NAME_KEYS',
-  // CRS 分类显示映射:键=后端 zh 分类码(查表即译,无外部键源)
-  'src/utils/crsCategories.ts#CRS_CATEGORY_KEYS',
   // 触发类型显示映射:键=后端 zh 码(查表即译,无外部键源)
   'src/views/security/SecurityEvents.vue#TRIGGER_TYPE_KEYS',
   'src/components/layout/AppLayout.vue#navLabels',

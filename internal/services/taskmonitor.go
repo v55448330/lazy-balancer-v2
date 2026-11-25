@@ -33,7 +33,11 @@ const (
 
 // TaskInfo 是单任务族的聚合视图。
 type TaskInfo struct {
-	ID             string          `json:"id"`
+	ID string `json:"id"`
+	// NameKey 任务族显示名的稳定码（`task.` + 前端词条后缀，见
+	// taskDisplayKeys）。前端按码查 common.app.taskNames/taskDesc 词条渲染；
+	// 空串=动态任务行（如 cert-job:<id>，名称是业务数据，原样展示）。
+	NameKey        string          `json:"name_key"`
 	Name           string          `json:"name"`
 	Description    string          `json:"description,omitempty"` // 任务作用说明（任务名 hover 提示）
 	Cadence        string          `json:"cadence,omitempty"`     // 运行节奏（如「每 6 小时」；非下次时间）
@@ -73,6 +77,48 @@ type TaskInfo struct {
 	Runs24h                 int  `json:"runs_24h"`
 	Success24h              int  `json:"success_24h"`
 	Fail24h                 int  `json:"fail_24h"`
+}
+
+// taskDisplayKeys 任务族显示名的稳定码表（key=注册 id）。码是接口契约：
+// `task.` 前缀后即前端词条后缀（web/src/locales/{zh,en}/misc.ts 的
+// common.app.taskNames.<后缀> 与 common.app.taskDesc.<后缀>）。后端 Name/
+// Description 字段只作中文母本（任务日志、审计、通知消息），不作展示依据。
+// 注册新任务族必须在此登记（守卫：task_display_key_guard_test.go）。
+var taskDisplayKeys = map[string]string{
+	"config-watchdog":                 "task.driftWatchdog",
+	"maintenance-retention":           "task.retentionCleanup",
+	"crawlerbot-update":               "task.crawlerUpdate",
+	"cert-scan":                       "task.certScanReconcile",
+	"cert-manual-poll":                "task.manualCertSweep",
+	"cert-waiting-ca":                 "task.caRescan",
+	"security-events-ingestion":       "task.secEventCollect",
+	"cert-issuance":                   "task.certIssue",
+	"cluster-sync":                    "task.clusterSync",
+	"threat":                          "task.threatDbUpdate",
+	"crs":                             "task.crsUpdate",
+	"ip2region":                       "task.ip2regionUpdate",
+	"autoban":                         "task.autoban",
+	"auto-backup":                     "task.autoBackup",
+	"startup:config-load":             "task.configLoad",
+	"metrics-collector":               "task.metricsCollect",
+	"threat-rollup-warmer":            "task.rollupWarmup",
+	"caddy-restart-watcher":           "task.caddyWatch",
+	"ratelimit-bucket-sweep":          "task.rateLimitSweep",
+	"apikey-usage-flusher":            "task.apiKeyUsagePersist",
+	"runtime-log-threshold":           "task.logThresholdRefresh",
+	"runtime-tz-refresh":              "task.tzRefresh",
+	"notification-delivery":           "task.notificationDelivery",
+	"notification-daily-report":       "task.notificationDailyReport",
+	"notification-node-stats-report":  "task.notificationNodeStatsReport",
+	"qq-bot-connection":               "task.qqBotConnection",
+	"wx-bot-connection":               "task.wxBotConnection",
+	"notification-delivery-retention": "task.notificationDeliveryRetention",
+	"notification-apikey-expiry":      "task.apikeyExpiryWarning",
+}
+
+// taskDisplayKey 返回任务族显示名稳定码；未登记返回空串（前端回落中文母本名）。
+func taskDisplayKey(taskID string) string {
+	return taskDisplayKeys[taskID]
 }
 
 // zeroRetryCooldown 是非证书任务行的统一下发值：引擎族没有证书重试冷却，
@@ -336,7 +382,7 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 	latestRuns, runStats := te.RunOverview()
 	for _, m := range te.DescribeAll() {
 		ti := TaskInfo{
-			ID: m.ID, Name: m.Name, Description: m.Description,
+			ID: m.ID, NameKey: taskDisplayKey(m.ID), Name: m.Name, Description: m.Description,
 			Category: m.Category, Kind: m.Kind,
 			Controllable: m.Controllable, Cancellable: m.Cancelable, Triggerable: m.CanTrigger,
 			LoopOn: m.LoopOn, BusinessDriven: IsBusinessDrivenTask(m.ID),

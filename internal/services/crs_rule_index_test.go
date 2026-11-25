@@ -85,8 +85,8 @@ func TestGetCRSRuleIndex_parsesAndSortsFixture(t *testing.T) {
 	if e.Msg != "User-Agent: Missing Accept' Header" {
 		t.Fatalf("920120 msg = %q, want unescaped single-quote form", e.Msg)
 	}
-	if e.File != "REQUEST-920-PROTOCOL-ANOMALY.conf" || e.Category != "协议异常" {
-		t.Fatalf("920120 file/category = (%q,%q)", e.File, e.Category)
+	if e.File != "REQUEST-920-PROTOCOL-ANOMALY.conf" || e.Category != CRSCategoryProtocolAnomalies {
+		t.Fatalf("920120 file/category = (%q,%q), want (REQUEST-920-PROTOCOL-ANOMALY.conf, %s)", e.File, e.Category, CRSCategoryProtocolAnomalies)
 	}
 
 	// 单行形态：双引号 msg
@@ -97,8 +97,8 @@ func TestGetCRSRuleIndex_parsesAndSortsFixture(t *testing.T) {
 	if e.Msg != `SQL Injection Attack Detected` {
 		t.Fatalf("942100 msg = %q, want double-quoted content", e.Msg)
 	}
-	if e.Category != "SQL 注入" {
-		t.Fatalf("942100 category = %q, want SQL 注入", e.Category)
+	if e.Category != CRSCategorySQLi {
+		t.Fatalf("942100 category = %q, want %s", e.Category, CRSCategorySQLi)
 	}
 
 	// 注释行内的 id:999999/999998 必须被剔除

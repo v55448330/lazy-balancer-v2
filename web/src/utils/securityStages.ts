@@ -8,6 +8,7 @@ import type { RuleFlowPathRule } from '@/types/rules'
 import { hasOwn } from './hasOwn.ts'
 import { conditionTargetLabel, CUSTOM_RULE_MAX_CONDITIONS } from './customRuleLimits.ts'
 import { normalizeCrsGroups } from './crsGroups.ts'
+import { crsCategoryLabel } from './crsCategories.ts'
 import { toV4Long, toV6BigInt } from './ipAddress.ts'
 import { tSafe as t } from '../i18n/tSafe.ts'
 
@@ -23,6 +24,8 @@ export interface SecurityStageBlockPage {
   id: number
   name: string
   content?: string
+  /** 内置页显示名稳定码（后端下发；自定义页为空）。 */
+  name_key?: string
 }
 
 // 策略摘要（GET /security/policies 返回形状的消费面）
@@ -860,7 +863,7 @@ const crsGroupLabel = (groupCode: string, crsFiles: readonly CrsRuleFileOption[]
   const file = crsFiles.find((r) => parseCrsFilename(r.filename)?.code === groupCode)
   if (!file) return groupCode
   const info = parseCrsFilename(file.filename)
-  return t('common.app.views.stages.crsGroupTag', { phase: info?.phase ?? t('common.app.views.stages.crsPhaseRequest'), code: groupCode, category: file.category })
+  return t('common.app.views.stages.crsGroupTag', { phase: info?.phase ?? t('common.app.views.stages.crsPhaseRequest'), code: groupCode, category: crsCategoryLabel(file.category) })
 }
 
 // 原生 JSON（/security/rules/:id/policy 的 RawMessage 字段）→ 数字 id 数组

@@ -28,18 +28,18 @@ func deleteBuiltinBlockPageRow(t *testing.T, dir string) int {
 	if _, err := SeedDefaultBlockPage(dir); err != nil {
 		t.Fatalf("seed steady state: %v", err)
 	}
-	missing := builtinBlockPageIdentities[0]
-	if _, err := db.DB.Exec(`DELETE FROM security_block_pages WHERE id=?`, missing.id); err != nil {
-		t.Fatalf("delete builtin page %d: %v", missing.id, err)
+	missing := builtinBlockPageIdentities()[0]
+	if _, err := db.DB.Exec(`DELETE FROM security_block_pages WHERE id=?`, missing.ID); err != nil {
+		t.Fatalf("delete builtin page %d: %v", missing.ID, err)
 	}
 	var present int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id=?`, missing.id).Scan(&present); err != nil {
-		t.Fatalf("count builtin page %d: %v", missing.id, err)
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id=?`, missing.ID).Scan(&present); err != nil {
+		t.Fatalf("count builtin page %d: %v", missing.ID, err)
 	}
 	if present != 0 {
-		t.Fatalf("夹具失效：内置页 %d 行未删（用例无法判别）", missing.id)
+		t.Fatalf("夹具失效：内置页 %d 行未删（用例无法判别）", missing.ID)
 	}
-	return missing.id
+	return missing.ID
 }
 
 // 确定性信号：仅插入路径（UPDATE 在库存值上零命中）必须声明 changed。

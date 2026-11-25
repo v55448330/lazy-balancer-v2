@@ -193,7 +193,7 @@ test('关闭定时/循环/常驻调度均二次确认；开启方向不确认', 
   assert.match(toggle, /const needConfirm = !enabled && row\.kind !== 'oneshot'/, '非触发类的关闭方向都确认')
   assert.match(toggle, /const confirm = !needConfirm\s*\? undefined/, '开启方向 confirm=undefined（不弹框）')
   assert.match(toggle, /row\.kind === 'daemon'\s*\? \{ message: t\('app\.settings\.taskMonitor\.stopConfirm'/, '常驻沿用 stopConfirm')
-  assert.match(toggle, /: \{ message: t\('app\.settings\.taskMonitor\.scheduleStopConfirm', \{ name: taskDisplayName\(row\.name\) \}\), title: t\('app\.settings\.taskMonitor\.actions\.scheduleControlTitle'\)/)
+  assert.match(toggle, /: \{ message: t\('app\.settings\.taskMonitor\.scheduleStopConfirm', \{ name: taskDisplayName\(row\) \}\), title: t\('app\.settings\.taskMonitor\.actions\.scheduleControlTitle'\)/)
   const zh = treeOf('zh-CN')
   const en = treeOf('en')
   const zhConfirm = String(at(zh, 'settings.taskMonitor.scheduleStopConfirm'))
@@ -208,13 +208,13 @@ test('关闭定时/循环/常驻调度均二次确认；开启方向不确认', 
 
 test('任务监控：确认框、弹框标题、统计条显示名走任务显示名词条', () => {
   for (const key of ['runConfirm', 'stopConfirm', 'scheduleStopConfirm', 'cancelConfirm', 'restartConfirm']) {
-    assert.match(taskMonitor, new RegExp(`t\\('app\\.settings\\.taskMonitor\\.${key}', \\{ name: taskDisplayName\\(row\\.name\\) \\}\\)`), `${key} 的任务名必须走 taskDisplayName`)
+    assert.match(taskMonitor, new RegExp(`t\\('app\\.settings\\.taskMonitor\\.${key}', \\{ name: taskDisplayName\\(row\\) \\}\\)`), `${key} 的任务名必须走 taskDisplayName`)
   }
   assert.doesNotMatch(taskMonitor, /\{ name: row\.name \}/, '确认框不得直出后端中文名')
-  assert.match(taskMonitor, /logDialogTitle', \{ name: taskDisplayName\(logsTask\?\.name \|\| ''\) \}\)/)
+  assert.match(taskMonitor, /logDialogTitle', \{ name: logsTask \? taskDisplayName\(logsTask\) : '' \}\)/)
   assert.doesNotMatch(taskMonitor, /\{ name: logsTask\?\.name/, '弹框标题不得直出后端中文名')
   assert.match(taskMonitor, /<LogStorageBar :log-key="logsTaskStorageKey" :label="logsStorageLabel" style="margin-right: auto" \/>/)
-  assert.match(taskMonitor, /t\('common\.app\.views\.logStorage\.taskLogName', \{ name: taskDisplayName\(logsTask\.value\.name\) \}\)/)
+  assert.match(taskMonitor, /t\('common\.app\.views\.logStorage\.taskLogName', \{ name: taskDisplayName\(logsTask\.value\) \}\)/)
 })
 
 test('日志统计条：显示名按稳定 key 查词条，不直出后端 name；规则后缀保留；动态行回落', () => {
@@ -314,13 +314,13 @@ test('设置页不再暴露审计文件大小项（后端列保留）', () => {
 test('任务操作成功提示里的任务名走显示名映射（英文界面不混入中文任务名）', () => {
   assert.match(
     taskMonitor,
-    /mfaAwareSuccess\(localizeTaskMessage\(res\.message \?\? '', row\.name\) \|\| options\.successFallback\)/,
+    /mfaAwareSuccess\(localizeTaskMessage\(res\.message \?\? '', row\) \|\| options\.successFallback\)/,
     '成功提示必须先把后端文案里的原始任务名换成显示名',
   )
   const helper = section(taskMonitor, 'const localizeTaskMessage', 'const taskFamilyCount')
-  assert.match(helper, /taskDisplayName\(rawName\)/, '必须复用列表/确认框的同一映射')
-  assert.match(helper, /message\.split\(rawName\)\.join\(display\)/, '按原始任务名整词替换')
-  assert.match(helper, /if \(!rawName\) return message/, '无任务名（证书行用 id）原样返回')
+  assert.match(helper, /taskDisplayName\(task\)/, '必须复用列表/确认框的同一映射')
+  assert.match(helper, /message\.split\(task\.name\)\.join\(display\)/, '按原始任务名整词替换')
+  assert.match(helper, /if \(!task\.name\) return message/, '无任务名（证书行用 id）原样返回')
 })
 
 // ── 操作日志 IP 列头 ──────────────────────────────────────────────────

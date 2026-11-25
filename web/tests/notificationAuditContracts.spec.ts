@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, repoCode, section } from './_helpers.ts'
+import { code, member, repoCode } from './_helpers.ts'
 
 const CHANNEL_CARDS = code('src/views/notifications/ChannelCards.vue')
 const CENTER = code('src/views/notifications/NotificationCenter.vue')
@@ -19,21 +19,22 @@ const TASK_MONITOR = code('src/views/settings/TaskMonitor.vue')
 
 /**
  * 通知任务族：事实源=internal/services/notification_tasks.go 的 Descriptor
- * （Family=="notification"）Name；词条键从 TaskMonitor 的 TASK_NAME_KEYS 映射取，
- * 缺映射即红（硬编码期望表会随后端新增任务静默脱节）。
+ * （Family=="notification"）ID/Name；后端任务显示码表（taskmonitor.go 的
+ * taskDisplayKeys）按注册 id 给出稳定码，前端词条按码后缀渲染——
+ * 缺码/缺词条即红（硬编码期望表会随后端新增任务静默脱节）。
  */
-const notificationTasks = (): { names: string[]; keys: string[] } => {
+const notificationTasks = (): { ids: string[]; keys: string[] } => {
   const go = repoCode('internal/services/notification_tasks.go')
   const blocks = go.split('mustRegisterTask(te, taskengine.Descriptor{').slice(1)
-  const names = blocks
+  const ids = blocks
     .filter((block) => /Family:\s*"notification"/.test(block))
-    .map((block) => block.match(/\bName:\s*"([^"]+)"/)?.[1])
-    .filter((name): name is string => !!name)
-  const table = section(TASK_MONITOR, 'const TASK_NAME_KEYS: Record<string, string> = {', '\n}')
-  const byName = new Map([...table.matchAll(/'([^']+)':\s*'([^']+)'/g)].map((m) => [m[1], m[2]] as const))
-  const missing = names.filter((name) => !byName.has(name))
-  assert.deepEqual(missing, [], `TaskMonitor.TASK_NAME_KEYS 缺通知任务映射: ${missing.join('、')}`)
-  return { names, keys: names.map((name) => byName.get(name) ?? '') }
+    .map((block) => block.match(/\bID:\s*"([^"]+)"/)?.[1])
+    .filter((id): id is string => !!id)
+  const codeTable = repoCode('internal/services/taskmonitor.go')
+  const byID = new Map([...codeTable.matchAll(/"([a-z0-9:-]+)":\s*"task\.([A-Za-z0-9]+)"/g)].map((m) => [m[1], m[2]] as const))
+  const missing = ids.filter((id) => !byID.has(id))
+  assert.deepEqual(missing, [], `taskmonitor.go 的 taskDisplayKeys 缺通知任务映射: ${missing.join('、')}`)
+  return { ids, keys: ids.map((id) => byID.get(id) ?? '') }
 }
 
 test('通道卡保存：editTarget 在首个 await 前捕获，并按捕获目标类型触发自动测试', () => {
@@ -69,8 +70,8 @@ test('事件规则保存：空勾选合法（不拦截），非空确认文案�
 })
 
 test('任务监控：通知任务族映射后端注册名（Go Descriptor 扫描对表，缺/多均红）', () => {
-  const { names, keys } = notificationTasks()
-  assert.ok(names.length >= 6, `Go 通知任务族解析异常（${names.length}）——扫描器失效`)
+  const { ids, keys } = notificationTasks()
+  assert.ok(ids.length >= 6, `Go 通知任务族解析异常（${ids.length}）——扫描器失效`)
   assert.deepEqual(keys, notificationTasks().keys, '重复调用必须稳定')
   assert.equal(new Set(keys).size, keys.length, '通知任务族词条键不得重复')
   for (const key of keys) assert.match(key, /^[a-z][A-Za-z0-9]*$/, `词条键必须是驼峰标识符（${key}）`)

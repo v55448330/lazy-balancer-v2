@@ -90,8 +90,9 @@ export default {
       "default": { "name": "Default Block Page", "desc": "Built-in default 403 block page" },
       "ratelimit": { "name": "Rate-limit Block Page", "desc": "Built-in 429 rate-limit block page (optional; takes effect when selected)" },
       "maintenance": { "name": "Maintenance Page", "desc": "Built-in maintenance page (optional; takes effect when selected)" },
-      "human": { "name": "Slider Human Verification Page", "desc": "Built-in slider human-verification challenge page (includes the slider widget; takes effect when selected)" },
-      "humanJs": { "name": "JS Human Verification Page", "desc": "Built-in JS human-verification challenge page (includes the JS widget; takes effect when selected)" },
+      "humanVerifySlider": { "name": "Slider Human Verification Page", "desc": "Built-in slider human-verification challenge page (includes the slider widget; takes effect when selected)" },
+      "humanVerifyJs": { "name": "JS Human Verification Page", "desc": "Built-in JS human-verification challenge page (includes the JS widget; takes effect when selected)" },
+      "ratelimitQueue": { "name": "Rate-limit Queue Page", "desc": "Built-in rate-limit queue page (includes the countdown/retry widget; applies when the CC trigger action is queue)" },
     },
     "page": {
      "title": "Block pages",

@@ -215,7 +215,7 @@ const { t } = useI18n()
 // 内置页名称/描述按 id 多语言显示（自定义页回退库内原文）
 const pageName = (page: BlockPage | BlockPageLike): string => builtinBlockPageLabel(page, 'name', t)
 const pageDesc = (page: BlockPage | BlockPageLike): string => builtinBlockPageLabel(page, 'desc', t)
-interface BlockPage { id: number; name: string; description: string; content: string; json_content?: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
+interface BlockPage { id: number; name: string; description: string; content: string; json_content?: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number; name_key?: string }
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)

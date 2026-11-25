@@ -1206,7 +1206,7 @@ interface Rule { caddy_id: string; name: string; domain: string; listen_port: nu
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; block_page_id?: number; block_status_code?: number }
 interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
 interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; showPerfTip: boolean }
-interface BlockPage { id: number; name: string; content?: string }
+interface BlockPage { id: number; name: string; content?: string; name_key?: string }
 
 // ── 默认策略弹框（用户裁定 2026-11-20 第五轮）──
 interface DefaultCatalogList { key: string; name: string; desc: string; category: string; status: string }

@@ -120,71 +120,122 @@ func (idx *CRSRuleIndex) RuleIDsByFile() map[string][]string {
 	return out
 }
 
+// CRS 规则分类稳定码（语言无关的接口契约）。后端只下发码，界面文案由前端
+// 按码查词条渲染（web/src/utils/crsCategories.ts：码去 `ruleset.` 前缀即
+// common.app.crsCategory.* 的词条后缀）。新增/改名必须同版本改前端词条。
+const (
+	CRSCategoryProtocolAnomalies        = "ruleset.protocolAnomalies"
+	CRSCategoryProtocolAttacks          = "ruleset.protocolAttacks"
+	CRSCategoryMultipartAbuse           = "ruleset.multipartAbuse"
+	CRSCategoryLFI                      = "ruleset.lfi"
+	CRSCategoryRFI                      = "ruleset.rfi"
+	CRSCategoryRCE                      = "ruleset.rce"
+	CRSCategoryPHPAttacks               = "ruleset.phpAttacks"
+	CRSCategoryGenericAttacks           = "ruleset.genericAttacks"
+	CRSCategoryXSS                      = "ruleset.xss"
+	CRSCategorySQLi                     = "ruleset.sqli"
+	CRSCategorySessionFixation          = "ruleset.sessionFixation"
+	CRSCategoryJavaAttacks              = "ruleset.javaAttacks"
+	CRSCategoryScoringThreshold         = "ruleset.scoringThreshold"
+	CRSCategoryResponseInfoDisclosure   = "ruleset.responseInfoDisclosure"
+	CRSCategoryResponseSQLDisclosure    = "ruleset.responseSqlDisclosure"
+	CRSCategoryResponseJavaDisclosure   = "ruleset.responseJavaDisclosure"
+	CRSCategoryResponsePHPDisclosure    = "ruleset.responsePhpDisclosure"
+	CRSCategoryResponseIISDisclosure    = "ruleset.responseIisDisclosure"
+	CRSCategoryWebshell                 = "ruleset.webshell"
+	CRSCategoryResponseRubyDisclosure   = "ruleset.responseRubyDisclosure"
+	CRSCategoryResponseBlockingEval     = "ruleset.responseBlockingEvaluation"
+	CRSCategoryEventCorrelation         = "ruleset.eventCorrelation"
+	CRSCategoryInitExclusions           = "ruleset.initExclusions"
+	CRSCategoryInit                     = "ruleset.init"
+	CRSCategoryGenericAnomalies         = "ruleset.genericAnomalies"
+	CRSCategoryMethodRestrictions       = "ruleset.methodRestrictions"
+	CRSCategoryCrawlerDetection         = "ruleset.crawlerDetection"
+	CRSCategoryRequestBodyRestrictions  = "ruleset.requestBodyRestrictions"
+	CRSCategoryGenericExclusionsPostCRS = "ruleset.genericExclusionsPostCrs"
+	CRSCategoryOther                    = "ruleset.other"
+)
+
+// CRSCategoryCodes 是分类稳定码全集（守卫测试据此对账前端词条覆盖）。
+var CRSCategoryCodes = []string{
+	CRSCategoryProtocolAnomalies, CRSCategoryProtocolAttacks, CRSCategoryMultipartAbuse,
+	CRSCategoryLFI, CRSCategoryRFI, CRSCategoryRCE, CRSCategoryPHPAttacks,
+	CRSCategoryGenericAttacks, CRSCategoryXSS, CRSCategorySQLi, CRSCategorySessionFixation,
+	CRSCategoryJavaAttacks, CRSCategoryScoringThreshold, CRSCategoryResponseInfoDisclosure,
+	CRSCategoryResponseSQLDisclosure, CRSCategoryResponseJavaDisclosure,
+	CRSCategoryResponsePHPDisclosure, CRSCategoryResponseIISDisclosure, CRSCategoryWebshell,
+	CRSCategoryResponseRubyDisclosure, CRSCategoryResponseBlockingEval,
+	CRSCategoryEventCorrelation, CRSCategoryInitExclusions, CRSCategoryInit,
+	CRSCategoryGenericAnomalies, CRSCategoryMethodRestrictions, CRSCategoryCrawlerDetection,
+	CRSCategoryRequestBodyRestrictions, CRSCategoryGenericExclusionsPostCRS, CRSCategoryOther,
+}
+
 // CategorizeCRSFile 按文件名中的 CRS 组号归类（ListCRSRules 与规则索引共用，
-// 从 handlers 迁入以保证两处口径单一来源）。
+// 从 handlers 迁入以保证两处口径单一来源）。返回稳定码（见 CRSCategory*），
+// 不返回任何展示文案。
 func CategorizeCRSFile(filename string) string {
 	name := strings.ToUpper(filename)
 	switch {
 	case strings.Contains(name, "920-"):
-		return "协议异常"
+		return CRSCategoryProtocolAnomalies
 	case strings.Contains(name, "921-"):
-		return "协议攻击"
+		return CRSCategoryProtocolAttacks
 	case strings.Contains(name, "922-"):
-		return "multipart 攻击"
+		return CRSCategoryMultipartAbuse
 	case strings.Contains(name, "930-"):
-		return "路径穿越 (LFI)"
+		return CRSCategoryLFI
 	case strings.Contains(name, "931-"):
-		return "远程文件包含 (RFI)"
+		return CRSCategoryRFI
 	case strings.Contains(name, "932-"):
-		return "远程代码执行 (RCE)"
+		return CRSCategoryRCE
 	case strings.Contains(name, "933-"):
-		return "PHP 攻击"
+		return CRSCategoryPHPAttacks
 	case strings.Contains(name, "934-"):
-		return "通用攻击"
+		return CRSCategoryGenericAttacks
 	case strings.Contains(name, "941-"):
-		return "XSS 跨站脚本"
+		return CRSCategoryXSS
 	case strings.Contains(name, "942-"):
-		return "SQL 注入"
+		return CRSCategorySQLi
 	case strings.Contains(name, "943-"):
-		return "会话固定"
+		return CRSCategorySessionFixation
 	case strings.Contains(name, "944-"):
-		return "Java 攻击"
+		return CRSCategoryJavaAttacks
 	case strings.Contains(name, "949-"):
-		return "评分拦截"
+		return CRSCategoryScoringThreshold
 	case strings.Contains(name, "950-"):
-		return "响应信息泄露"
+		return CRSCategoryResponseInfoDisclosure
 	case strings.Contains(name, "951-"):
-		return "响应 SQL 泄露"
+		return CRSCategoryResponseSQLDisclosure
 	case strings.Contains(name, "952-"):
-		return "响应 Java 泄露"
+		return CRSCategoryResponseJavaDisclosure
 	case strings.Contains(name, "953-"):
-		return "响应 PHP 泄露"
+		return CRSCategoryResponsePHPDisclosure
 	case strings.Contains(name, "954-"):
-		return "响应 IIS 泄露"
+		return CRSCategoryResponseIISDisclosure
 	case strings.Contains(name, "955-"):
-		return "Webshell"
+		return CRSCategoryWebshell
 	case strings.Contains(name, "956-"):
-		return "响应 Ruby 泄露"
+		return CRSCategoryResponseRubyDisclosure
 	case strings.Contains(name, "959-"):
-		return "响应阻断评估"
+		return CRSCategoryResponseBlockingEval
 	case strings.Contains(name, "980-"):
-		return "事件关联"
+		return CRSCategoryEventCorrelation
 	case strings.Contains(name, "900-"):
-		return "初始化/排除"
+		return CRSCategoryInitExclusions
 	case strings.Contains(name, "901-"):
-		return "初始化"
+		return CRSCategoryInit
 	case strings.Contains(name, "905-"):
-		return "通用异常"
+		return CRSCategoryGenericAnomalies
 	case strings.Contains(name, "911-"):
-		return "方法限制"
+		return CRSCategoryMethodRestrictions
 	case strings.Contains(name, "913-"):
-		return "爬虫检测"
+		return CRSCategoryCrawlerDetection
 	case strings.Contains(name, "915-"):
-		return "请求体限制"
+		return CRSCategoryRequestBodyRestrictions
 	case strings.Contains(name, "999-"):
-		return "通用排除（CRS 后）"
+		return CRSCategoryGenericExclusionsPostCRS
 	default:
-		return "其他"
+		return CRSCategoryOther
 	}
 }
 

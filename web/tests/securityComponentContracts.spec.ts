@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, elementSlice, matchBrace, member, openTags, section } from './_helpers.ts'
+import { code, elementSlice, matchBrace, member, openTags, repoCode, section } from './_helpers.ts'
 
 test('IP 快捷添加统一走共享写入链，只有完成时才收起目标面板', () => {
   const page = code('src/views/security/IPLocationAction.vue')
@@ -121,13 +121,16 @@ test('安全策略可选拦截响应方式（auto/html/json）', () => {
 })
 
 test('内置人机验证页（9005 滑块 / 9006 JS）名称/描述支持中英切换', () => {
+  // 身份/显示码单源在后端（models.BuiltinBlockPageIdentities），前端按码查词条。
+  const go = repoCode('internal/models/security.go')
+  assert.match(go, /"block_page\.humanVerifySlider", "滑块人机验证页面"/, '9005 必须下发 block_page.humanVerifySlider 显示码')
+  assert.match(go, /"block_page\.humanVerifyJs", "JS 人机验证页面"/, '9006 必须下发 block_page.humanVerifyJs 显示码')
   const util = code('src/utils/builtinBlockPages.ts')
-  assert.match(util, /9005:\s*'human'/, '9005 必须映射到 human 词条，否则英文界面回退中文库存名')
-  assert.match(util, /9006:\s*'humanJs'/, '9006 必须映射到 humanJs 词条，否则英文界面回退中文库存名')
+  assert.match(util, /name_key/, '前端必须按 name_key 渲染（不得回退按 id 硬编码映射）')
   const zh = code('src/locales/zh/security.ts')
   const en = code('src/locales/en/security.ts')
-  assert.match(zh, /"human": \{ "name": "滑块人机验证页面"/)
-  assert.match(zh, /"humanJs": \{ "name": "JS 人机验证页面"/)
-  assert.match(en, /"human": \{ "name": "Slider Human Verification Page"/)
-  assert.match(en, /"humanJs": \{ "name": "JS Human Verification Page"/)
+  assert.match(zh, /"humanVerifySlider": \{ "name": "滑块人机验证页面"/)
+  assert.match(zh, /"humanVerifyJs": \{ "name": "JS 人机验证页面"/)
+  assert.match(en, /"humanVerifySlider": \{ "name": "Slider Human Verification Page"/)
+  assert.match(en, /"humanVerifyJs": \{ "name": "JS Human Verification Page"/)
 })

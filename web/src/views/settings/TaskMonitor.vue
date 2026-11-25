@@ -136,11 +136,11 @@
           <template #default="{ row }">
             <el-tooltip :disabled="!row.description" placement="top" :offset="8" :show-after="150" :show-arrow="false" popper-class="tm-name-tip">
               <template #content>
-                <div class="tm-tip-title">{{ taskDisplayName(row.name) }}</div>
+                <div class="tm-tip-title">{{ taskDisplayName(row as TaskInfo) }}</div>
                 <div v-if="row.cadence" class="tm-tip-cadence">{{ t('app.settings.taskMonitor.cadencePrefix') }}{{ cadenceText(row.cadence) }}</div>
-                <div class="tm-tip-desc">{{ row.description }}</div>
+                <div class="tm-tip-desc">{{ taskDesc(row as TaskInfo) }}</div>
               </template>
-              <div class="tm-task-name">{{ taskDisplayName(row.name) }}</div>
+              <div class="tm-task-name">{{ taskDisplayName(row as TaskInfo) }}</div>
             </el-tooltip>
           </template>
         </el-table-column>
@@ -274,7 +274,7 @@
     <el-dialog v-model="detailVisible" width="min(960px, 94vw)">
       <template #header>
         <DialogHeader
-          :icon="detailIcon" :title="detailTask ? taskDisplayName(detailTask.name) : ''"
+          :icon="detailIcon" :title="detailTask ? taskDisplayName(detailTask) : ''"
           :subtitle="detailTask ? `${categoryLabel(detailTask.category)} · ${kindLabel(detailTask.kind)} · ${statusLabel(detailTask.status)}` : ''"
           :tone="detailTone"
         />
@@ -347,7 +347,7 @@
     <!-- 任务日志弹框（与证书日志同款：暗色终端流） -->
     <el-dialog v-model="logsVisible" width="min(960px, 94vw)" destroy-on-close @closed="closeLogs">
       <template #header>
-        <DialogHeader :icon="Timer" :title="t('app.settings.taskMonitor.logDialogTitle', { name: taskDisplayName(logsTask?.name || '') })" :subtitle="t('app.settings.taskMonitor.log.subtitle')" />
+        <DialogHeader :icon="Timer" :title="t('app.settings.taskMonitor.logDialogTitle', { name: logsTask ? taskDisplayName(logsTask) : '' })" :subtitle="t('app.settings.taskMonitor.log.subtitle')" />
       </template>
       <!-- 日志存储统计栏：task:<id> 逐任务真实文件（含 cert-job 动态行）；后端未含该键时组件自隐。
            显示名由本页拼（任务族显示名 + 词条后缀）——后端 name 是中文母本，不能直出。 -->
@@ -411,7 +411,10 @@ const { t } = useI18n()
 
 interface TaskRunInfo { started_at: string; finished_at: string; duration_ms: number; trigger: string; operator?: string; result: string; message?: string }
 interface TaskInfo {
-  id: string; name: string; description?: string; cadence?: string; category: string
+  id: string
+  // 显示名稳定码（`task.<词条后缀>`，后端 taskDisplayKeys 下发）；动态行（cert-job:<id>）为空。
+  name_key?: string
+  name: string; description?: string; cadence?: string; category: string
   kind: 'scheduled' | 'daemon' | 'periodic' | 'oneshot'
   status: string; cancellable: boolean; controllable?: boolean; triggerable?: boolean
   last_run?: TaskRunInfo; next_run_at?: string; runs_24h: number; success_24h: number; fail_24h: number
@@ -670,53 +673,35 @@ const fetchCertQueue = async (signal?: AbortSignal): Promise<CertQueueRead> => {
 // 任务族只数引擎族：cert-job 动态行是逐张证书的签发工作项（上限 100），
 // 计入会让计数随签发记录在 ~30 → ~130 之间漂移（同排 24h 计数已排除它们）。
 
-// i18n:任务族显示名映射(固定任务族集合;动态命名如"ACME 签发 · 域名"保留原文,
-// 其中"ACME 签发"前缀经词条翻译)。zh 名=后端注册名(映射键)。
-const TASK_NAME_KEYS: Record<string, string> = {
-  '自动封禁': 'autoban',
-  '爬虫地址更新': 'crawlerUpdate',
-  'CRS 规则库更新': 'crsUpdate',
-  'IP2Region 地理库更新': 'ip2regionUpdate',
-  '威胁情报库更新': 'threatDbUpdate',
-  '威胁大屏 rollup 预热': 'rollupWarmup',
-  '证书签发': 'certIssue',
-  '手动证书到期巡检': 'manualCertSweep',
-  '证书状态对账': 'certReconcile',
-  '证书续期扫描': 'certRenewScan',
-  'CA 等待补扫': 'caRescan',
-  '自动备份': 'autoBackup',
-  '集群同步': 'clusterSync',
-  'API Key 使用时间落库': 'apiKeyUsagePersist',
-  '审计日志保留清理': 'auditRetention',
-  'Caddy 重启自愈监听': 'caddyWatch',
-  '配置漂移看门狗': 'driftWatchdog',
-  '日志清理与轮转': 'logRotate',
-  '指标采集': 'metricsCollect',
-  '指标历史清理': 'metricsRetention',
-  '孤儿规则指标清理': 'orphanMetrics',
-  '限流桶清扫': 'rateLimitSweep',
-  '运行日志阈值刷新': 'logThresholdRefresh',
-  '时区刷新': 'tzRefresh',
-  '安全事件采集': 'secEventCollect',
-  '安全事件保留清理': 'secEventRetention',
-  // 通知中心任务族（后端 services/notification_tasks.go 注册名；Category=通知）
-  '通知投递': 'notificationDelivery',
-  '通知日报': 'notificationDailyReport',
-  '节点统计上报': 'notificationNodeStatsReport',
-  'QQ 机器人连接': 'qqBotConnection',
-  '微信机器人连接': 'wxBotConnection',
-  '通知投递保留清理': 'notificationDeliveryRetention',
-  'API 密钥临期预警': 'apikeyExpiryWarning',
-  '系统配置载入': 'configLoad',
+// i18n:任务族显示名/描述来自后端下发的稳定码 name_key（`task.<词条后缀>`，
+// 表见 internal/services/taskmonitor.go 的 taskDisplayKeys）——码去前缀即
+// common.app.taskNames/taskDesc 的词条后缀。动态命名行（cert-job:<id>，
+// name_key 为空）保留原文，其中"ACME 签发"前缀经词条翻译。
+
+/** 任务稳定码 → 词条后缀；非稳定码返回 null（fail-visible 由调用处 warn）。 */
+const taskKeySuffix = (nameKey?: string): string | null => {
+  if (!nameKey) return null
+  if (!nameKey.startsWith('task.')) {
+    console.warn(`[task] name_key 不是稳定码（期望 task.*）：${nameKey}`)
+    return null
+  }
+  return nameKey.slice('task.'.length)
 }
 
-// 任务族描述词条映射(后端 description zh;未登记任务族回落原文)
-const taskDesc = (task: { name: string; description?: string }): string => {
-  const k = hasOwn(TASK_NAME_KEYS, task.name) ? TASK_NAME_KEYS[task.name] : undefined
-  if (k) {
-    const key = `common.app.taskDesc.${k}`
+interface TaskNameLike {
+  name: string
+  name_key?: string
+  description?: string
+}
+
+// 任务族描述：按稳定码查词条；缺词条/无码时回落后端中文描述（fail-visible：warn+原文）
+const taskDesc = (task: TaskNameLike): string => {
+  const suffix = taskKeySuffix(task.name_key)
+  if (suffix) {
+    const key = `common.app.taskDesc.${suffix}`
     const v = t(key)
     if (v !== key) return v
+    console.warn(`[task] 任务稳定码缺少描述词条：${task.name_key}`)
   }
   return task.description || ''
 }
@@ -742,24 +727,30 @@ const cadenceText = (cadence?: string): string => {
   return cadence
 }
 
-const taskDisplayName = (name: string): string => {
-  const k = hasOwn(TASK_NAME_KEYS, name) ? TASK_NAME_KEYS[name] : undefined
-  if (k) return t(`common.app.taskNames.${k}`)
-  const m = name.match(/^ACME 签发 · (.+)$/)
+const taskDisplayName = (task: TaskNameLike): string => {
+  const suffix = taskKeySuffix(task.name_key)
+  if (suffix) {
+    const key = `common.app.taskNames.${suffix}`
+    const v = t(key)
+    if (v !== key) return v
+    console.warn(`[task] 任务稳定码缺少名称词条：${task.name_key}`)
+    return task.name_key as string
+  }
+  const m = task.name.match(/^ACME 签发 · (.+)$/)
   if (m) return `${t('common.app.taskNames.acmeIssuePrefix')} · ${m[1]}`
-  return name
+  return task.name
 }
 
 /**
- * 后端成功文案里的任务名是库内中文名（模板其余部分已按 Accept-Language 翻译），
- * 英文界面会混入中文：把消息里出现的原始任务名替换成同一映射的显示名
- * （taskDisplayName，与列表/确认框同源）。未命中（无任务名/证书行用 id）原样返回。
+ * 后端成功文案里的任务名是库内中文母本：英文界面会混入中文——把消息里出现的
+ * 原始任务名替换成同一来源的显示名（taskDisplayName，与列表/确认框同源）。
+ * 未命中（无任务名/证书行用 id）原样返回。
  */
-const localizeTaskMessage = (message: string, rawName: string): string => {
+const localizeTaskMessage = (message: string, task: TaskNameLike): string => {
   if (!message) return ''
-  if (!rawName) return message
-  const display = taskDisplayName(rawName)
-  return display === rawName ? message : message.split(rawName).join(display)
+  if (!task.name) return message
+  const display = taskDisplayName(task)
+  return display === task.name ? message : message.split(task.name).join(display)
 }
 
 const taskFamilyCount = computed(() => tasks.value.filter(t => !isCertJobRow(t.id)).length)
@@ -878,7 +869,7 @@ async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise
       }
     }
     const res = await options.request()
-    mfaAwareSuccess(localizeTaskMessage(res.message ?? '', row.name) || options.successFallback)
+    mfaAwareSuccess(localizeTaskMessage(res.message ?? '', row) || options.successFallback)
     void refreshNow().catch(() => {})
   } catch (error: unknown) {
     // 全局拦截器已 toast；仅记录，避免 unhandled rejection
@@ -907,7 +898,7 @@ const runCooldownReason = (row: TaskInfo): string => {
 }
 
 const onTrigger = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: t('app.settings.taskMonitor.runConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.triggerTitle'), type: 'info', confirmButtonText: t('app.settings.taskMonitor.actions.execute') },
+  confirm: { message: t('app.settings.taskMonitor.runConfirm', { name: taskDisplayName(row) }), title: t('app.settings.taskMonitor.actions.triggerTitle'), type: 'info', confirmButtonText: t('app.settings.taskMonitor.actions.execute') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/trigger`),
   successFallback: t('app.settings.taskMonitor.messages.triggered'),
   failureLabel: 'trigger task',
@@ -926,8 +917,8 @@ const onToggle = async (row: TaskInfo, enabled: boolean): Promise<void> => {
   const confirm = !needConfirm
     ? undefined
     : row.kind === 'daemon'
-      ? { message: t('app.settings.taskMonitor.stopConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
-      : { message: t('app.settings.taskMonitor.scheduleStopConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.scheduleControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
+      ? { message: t('app.settings.taskMonitor.stopConfirm', { name: taskDisplayName(row) }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
+      : { message: t('app.settings.taskMonitor.scheduleStopConfirm', { name: taskDisplayName(row) }), title: t('app.settings.taskMonitor.actions.scheduleControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
   await runTaskAction(row, {
     confirm,
     request: () => request.post<APIResponse>(`/system/tasks/${row.id}/toggle`, { enabled }),
@@ -938,7 +929,7 @@ const onToggle = async (row: TaskInfo, enabled: boolean): Promise<void> => {
 }
 
 const onCancel = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: t('app.settings.taskMonitor.cancelConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.cancelTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.cancelTask') },
+  confirm: { message: t('app.settings.taskMonitor.cancelConfirm', { name: taskDisplayName(row) }), title: t('app.settings.taskMonitor.actions.cancelTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.cancelTask') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/cancel`),
   successFallback: t('app.settings.taskMonitor.messages.cancelSent'),
   failureLabel: 'cancel task',
@@ -946,7 +937,7 @@ const onCancel = (row: TaskInfo): Promise<void> => runTaskAction(row, {
 
 // 常驻行操作列「重启」（control restart——启停已由调度列开关承担）
 const onRestart = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: t('app.settings.taskMonitor.restartConfirm', { name: taskDisplayName(row.name) }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.restart') },
+  confirm: { message: t('app.settings.taskMonitor.restartConfirm', { name: taskDisplayName(row) }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.restart') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/control`, { action: 'restart' }),
   successFallback: t('app.settings.taskMonitor.messages.restarted'),
   failureLabel: 'restart task',
@@ -1007,7 +998,7 @@ const logsTaskStorageKey = computed(() => logsTask.value ? `task:${logsTask.valu
 // 统计条显示名：任务族名走词条（taskDisplayName），后缀词条化——后端下发的
 // name 是 `<中文任务名>日志`，英文界面直出即中文混入。
 const logsStorageLabel = computed(() =>
-  logsTask.value ? t('common.app.views.logStorage.taskLogName', { name: taskDisplayName(logsTask.value.name) }) : '')
+  logsTask.value ? t('common.app.views.logStorage.taskLogName', { name: taskDisplayName(logsTask.value) }) : '')
 const logContainerRef = ref<HTMLElement | null>(null)
 // 日志加载失败显性化（原静默）；轮询收敛
 // useLogTailPolling 单源——补上本页原缺的后台标签页暂停。

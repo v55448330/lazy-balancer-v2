@@ -96,7 +96,7 @@
             <template #empty><el-empty :description="rulesLoadError ? t('common.app.views.secRules.rulesTab.loadFailRetry') : t('common.app.views.secRules.rulesTab.emptyRules')" :image-size="60" /></template>
             <el-table-column prop="filename" :label="t('common.app.views.secRules.rulesTab.colFilename')" min-width="320" show-overflow-tooltip />
             <el-table-column prop="category" :label="t('common.app.views.secRules.common.category')" min-width="210">
-              <template #default="{ row }"><el-tag size="small" effect="plain" type="info">{{ ipListCategoryLabel(row.category) }}</el-tag></template>
+              <template #default="{ row }"><el-tag size="small" effect="plain" type="info">{{ crsCategoryLabel(row.category) }}</el-tag></template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.rulesTab.colSize')" width="100" align="right">
               <template #default="{ row }">{{ formatSize(row.size) }}</template>
@@ -788,6 +788,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, h } from 'vue'
 import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
+import { crsCategoryLabel } from '@/utils/crsCategories'
 import { useI18n } from 'vue-i18n'
 import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled, Link, InfoFilled } from '@element-plus/icons-vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'

@@ -547,14 +547,25 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
-	var pages []models.SecurityBlockPage
+	// 列表行 = 页面行 + 显示名稳定码（仅下发，不接受客户端提交——写入沿用
+	// models.SecurityBlockPage，name_key 由服务端按 id 派生）。
+	type blockPageListItem struct {
+		models.SecurityBlockPage
+		NameKey string `json:"name_key"`
+	}
+	var pages []blockPageListItem
 	for rows.Next() {
 		var p models.SecurityBlockPage
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.JSONContent, &p.ContentType, &p.IsDefault, &p.IsBuiltin, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt, &p.RuleRefCount); err != nil {
 			c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 			return
 		}
-		pages = append(pages, p)
+		// 内置页随行下发显示名稳定码（前端按码查词条渲染）；自定义页为空串，
+		// 界面展示用户填写的名称/描述原文。
+		pages = append(pages, blockPageListItem{
+			SecurityBlockPage: p,
+			NameKey:           models.BuiltinBlockPageDisplayKey(p.ID),
+		})
 	}
 	// 迭代失败显式报错：对齐 ListSecurityPolicies/GetSecurityPolicy
 	// 的既有标准，残缺列表不得以 200 返回。
@@ -563,7 +574,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 		return
 	}
 	if pages == nil {
-		pages = []models.SecurityBlockPage{}
+		pages = []blockPageListItem{}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: pages})
 }
@@ -7154,8 +7165,11 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "security.crsRuleFileReadFailed", entry.Name()))
 			return
 		}
+		// 分类只按稳定码下发（界面文案由前端词条渲染），后端不再持有展示文案，
+		// 因此搜索面收敛为文件名——按「分类中文」搜索的旧行为随枚举键化取消
+		// （前端 placeholder 同步改为「搜索规则文件名」）。
 		cat := services.CategorizeCRSFile(entry.Name())
-		if search != "" && !strings.Contains(strings.ToLower(entry.Name()), search) && !strings.Contains(strings.ToLower(cat), search) {
+		if search != "" && !strings.Contains(strings.ToLower(entry.Name()), search) {
 			continue
 		}
 		allRules = append(allRules, CRSRule{
