@@ -1,6 +1,6 @@
 <template>
   <!-- v2.3.0 OIDC 认证集成:受控弹框(入口在用户列表卡头) -->
-  <el-dialog :model-value="modelValue" width="min(720px, 92vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving"
+  <el-dialog :model-value="modelValue" width="min(760px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving"
     destroy-on-close append-to-body class="oidc-dialog" @update:model-value="emit('update:modelValue', $event)">
     <template #header>
       <DialogHeader :icon="Connection" :title="t('app.settings.oidc.title')"
@@ -114,8 +114,9 @@
           : t('app.settings.oidc.testFail', { error: lastTest.error ?? t('app.settings.oidc.probe.unknownError') })" />
 
     <template #footer>
+      <!-- §26-3：辅助动作（连接测试）在左，右侧「暂停 / 删除 / 主操作」 -->
       <div class="dialog-footer">
-        <el-button :loading="testing" :disabled="isReadOnly || saving" @click="test">{{ t('app.settings.oidc.testBtn') }}</el-button>
+        <el-button class="footer-aux" :loading="testing" :disabled="isReadOnly || saving" @click="test">{{ t('app.settings.oidc.testBtn') }}</el-button>
         <el-button v-if="enabled" plain type="warning" :loading="saving" :disabled="isReadOnly" @click="toggleEnabled(false)">{{ t('app.settings.oidc.pauseBtn') }}</el-button>
         <el-button v-if="configured" plain type="danger" :disabled="saving || isReadOnly" @click="remove">{{ t('app.settings.oidc.deleteBtn') }}</el-button>
         <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="save">{{ enabled ? t('app.settings.oidc.updateBtn') : t('app.settings.oidc.saveEnableBtn') }}</el-button>
@@ -453,12 +454,12 @@ const copy = async (text: string) => {
 .mb12 { margin-bottom: 12px; }
 .oidc-step {
   display: flex; gap: 10px;
-  border: 1px solid var(--el-border-color-lighter); border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter); border-radius: 0;
   padding: 12px; margin-bottom: 14px;
   background: var(--el-fill-color-blank);
 }
 .oidc-step-badge {
-  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+  width: 24px; height: 24px; border-radius: 0; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   background: var(--el-color-primary); color: #fff;
   font-size: 13px; font-weight: 600;
@@ -467,7 +468,8 @@ const copy = async (text: string) => {
 .step-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .cred-form { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
 .cred-row { display: flex; align-items: flex-start; gap: 12px; }
-.cred-row__label { width: 100px; flex-shrink: 0; white-space: nowrap; font-size: 13px; color: var(--el-text-color-regular); line-height: 32px; text-align: right; }
+/* 标签宽 144 档：最长标签「Email domains allow list」24 字符（§26-6） */
+.cred-row__label { width: 144px; flex-shrink: 0; white-space: nowrap; font-size: 13px; color: var(--el-text-color-regular); line-height: 32px; text-align: right; }
 .cred-row__field { flex: 1; min-width: 0; }
 .probe-ok { margin-top: 6px; font-size: 12.5px; color: var(--el-color-success); }
 .probe-err { margin-top: 6px; font-size: 12.5px; color: var(--el-color-danger); }
@@ -479,4 +481,5 @@ const copy = async (text: string) => {
 .reg-value { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--el-color-primary); word-break: break-all; min-width: 0; }
 .mt8 { margin-top: 8px; }
 .dialog-footer { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.footer-aux { margin-right: auto; }
 </style>

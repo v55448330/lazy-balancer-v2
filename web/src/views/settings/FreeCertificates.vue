@@ -18,14 +18,15 @@
           </div>
         </div>
       </template>
-      <el-form :model="global" :label-width="$flw('140px')" :disabled="isReadOnly || savingGlobal">
+      <!-- 英文标签最长 19 字符 → 144 档（§26-6） -->
+      <el-form :model="global" :label-width="$flw('144px')" :disabled="isReadOnly || savingGlobal">
         <el-form-item :label="t('app.settings.freeCerts.acme.email')" required>
           <el-input v-model="global.acme_email" placeholder="your@email.com" style="width: 240px;" />
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.emailHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.acme.emailHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.expiryWarnDays')">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="365" controls-position="right" />
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.expiryWarnHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.acme.expiryWarnHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.renewalTime')">
           <el-input-number v-model="global.cert_renewal_days" :min="1" :max="CERT_RENEWAL_DAYS_MAX" controls-position="right" />
@@ -36,7 +37,7 @@
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.renewalAttempts')">
           <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" controls-position="right" />
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.renewalAttemptsHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.acme.renewalAttemptsHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.caProvider')" required>
           <el-select v-model="global.default_ca_provider_id" style="width: 240px;" :placeholder="t('app.settings.freeCerts.acme.caProviderPlaceholder')">
@@ -44,7 +45,7 @@
                  原口径下存量指向已禁用 CA 时显示裸数字 id 但校验照过，自相矛盾） -->
             <el-option v-for="p in defaultCAProviderOptions" :key="p.id" :label="referencedOptionLabel(p)" :value="p.id" :disabled="!p.enabled" />
           </el-select>
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.caProviderHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.acme.caProviderHint') }}</div>
         </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="savingGlobal" :disabled="isReadOnly || !props.configLoaded" @click="handleSave">
@@ -131,29 +132,28 @@
 
     <el-dialog
       v-model="dialogVisible"
-      width="min(640px, 92vw)"
+      width="min(760px, 94vw)"
       :close-on-click-modal="false"
       :before-close="beforeConfigDialogClose"
       class="dns-config-dialog"
-      top="6vh"
     >
       <template #header>
         <DialogHeader :icon="Connection" :title="editingId ? t('app.settings.freeCerts.dns.editTitle') : t('app.settings.freeCerts.dns.addTitle')" tone="success"
           :subtitle="t('app.settings.freeCerts.dns.formHint')" />
       </template>
-      <!-- label-width 140px：最长官方标签「AccessKey Secret」单行不折行（弹框随宽度增至 640px，输入列不受挤压） -->
-      <el-form :model="form" :label-width="$flw('140px')" class="lb-form" :disabled="savingConfig">
+      <!-- 标签宽 144 档：最长的官方字段名「AccessKey Secret」16 字符，单行不折行（§26-6） -->
+      <el-form :model="form" :label-width="$flw('144px')" class="lb-form" :disabled="savingConfig">
         <el-form-item :label="t('app.settings.freeCerts.dns.name')" required>
-          <el-input v-model="form.name" :placeholder="t('app.settings.freeCerts.dns.namePlaceholder')" maxlength="100" />
+          <el-input v-model="form.name" :placeholder="t('app.settings.freeCerts.dns.namePlaceholder')" maxlength="100" style="width: 320px" />
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.dns.provider')" required>
-          <el-select v-model="form.dns_provider" style="width: 100%" @change="onProviderChange">
+          <el-select v-model="form.dns_provider" style="width: 320px" @change="onProviderChange">
             <el-option v-for="p in providers" :key="p.code" :label="p.name" :value="p.code" />
           </el-select>
           <div class="form-tip-line">{{ t('app.settings.freeCerts.dns.providerHint') }}</div>
         </el-form-item>
         <template v-if="selectedProvider">
-          <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.dns.credentials') }}</el-divider>
+          <DialogSectionHeader :title="t('app.settings.freeCerts.dns.credentials')" />
           <template v-for="field in selectedProvider.credential_fields" :key="field.name">
             <el-form-item :label="field.label" v-if="shouldShowField(field)">
               <el-select
@@ -180,10 +180,10 @@
             </el-form-item>
           </template>
         </template>
-        <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.colStatus') }}</el-divider>
+        <DialogSectionHeader :title="t('app.settings.freeCerts.ca.colStatus')" />
         <el-form-item :label="t('app.settings.freeCerts.ca.enabled')">
           <el-switch v-model="form.enabled" />
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.dns.disableNote') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.dns.disableNote') }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -192,11 +192,11 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="caDialogVisible" width="min(560px, 92vw)" :close-on-click-modal="false" :before-close="beforeCADialogClose" class="ca-config-dialog" top="6vh">
+    <el-dialog v-model="caDialogVisible" width="min(760px, 94vw)" :close-on-click-modal="false" :before-close="beforeCADialogClose" class="ca-config-dialog">
       <template #header>
         <DialogHeader :icon="Postcard" :title="t('app.settings.freeCerts.ca.editTitle')" :subtitle="t('app.settings.freeCerts.ca.editSubtitle')" tone="warning" />
       </template>
-      <el-form :model="caForm" :label-width="$flw('120px')" :disabled="savingCA" class="lb-form">
+      <el-form :model="caForm" :label-width="$flw('112px')" :disabled="savingCA" class="lb-form">
         <el-form-item :label="t('app.settings.freeCerts.ca.colName')">
           <el-input v-model="caForm.name" disabled />
         </el-form-item>
@@ -207,17 +207,17 @@
           <el-input v-model="caForm.directory_url" disabled />
           <div class="form-tip-line">{{ t('app.settings.freeCerts.ca.acmeUrlFixed') }}</div>
         </el-form-item>
-        <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.rateTitle') }}</el-divider>
+        <DialogSectionHeader :title="t('app.settings.freeCerts.ca.rateTitle')" />
         <el-form-item :label="t('app.settings.freeCerts.ca.colMaxConcurrent')">
           <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" controls-position="right" />
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.rateConcurrentHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.ca.rateConcurrentHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.ca.minInterval')">
           <el-input-number v-model="caForm.min_interval_ms" :min="1" :max="60000" :step="1000" controls-position="right" />
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.minIntervalHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.ca.minIntervalHint') }}</div>
         </el-form-item>
         <template v-if="caForm.provider === 'zerossl'">
-          <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.eabTitle') }}</el-divider>
+          <DialogSectionHeader :title="t('app.settings.freeCerts.ca.eabTitle')" />
           <el-form-item label="EAB KID">
             <el-input v-model="caCreds.eab_kid" :placeholder="t('app.settings.freeCerts.ca.eabPlaceholder')" />
             <div class="form-tip-line">
@@ -230,10 +230,10 @@
             <el-input v-model="caCreds.eab_hmac_key" type="password" :placeholder="t('app.settings.freeCerts.ca.eabPlaceholder')" show-password />
           </el-form-item>
         </template>
-        <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.colStatus') }}</el-divider>
+        <DialogSectionHeader :title="t('app.settings.freeCerts.ca.colStatus')" />
         <el-form-item :label="t('app.settings.freeCerts.ca.enabled')">
           <el-switch v-model="caForm.enabled" />
-          <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.disabledNote') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.ca.disabledNote') }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -242,11 +242,11 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="dnsVerifyVisible" width="min(560px, 92vw)" class="dialog-body-inset" :close-on-click-modal="false" @closed="onDnsVerifyClosed">
+    <el-dialog v-model="dnsVerifyVisible" width="min(520px, 94vw)" class="dialog-body-inset" :close-on-click-modal="false" @closed="onDnsVerifyClosed">
       <template #header>
         <DialogHeader :icon="Connection" :title="t('app.settings.freeCerts.dns.verifyCredentialsBtn')" :subtitle="dnsVerifySubtitle" tone="warning" />
       </template>
-      <el-form :label-width="$flw('90px')" @submit.prevent="confirmDnsVerify">
+      <el-form :label-width="$flw('112px')" @submit.prevent="confirmDnsVerify">
         <el-form-item :label="t('app.settings.freeCerts.dns.manageDomainsBtn')" :error="dnsVerifyError">
           <el-input v-model="dnsVerifyDomain" placeholder="example.com" autofocus clearable @keyup.enter="confirmDnsVerify" />
         </el-form-item>
@@ -270,6 +270,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, Connection, Document, OfficeBuilding, Plus, Postcard, Setting } from '@element-plus/icons-vue'
 import CertJobs from './CertJobs.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import { applyCredentialFieldChange, credentialFieldVisible, credentialOptionLabel, defaultCredentialsFor, type CredentialFieldMeta } from '@/utils/dnsProviderFields'
 import { dnsConfigNeedsChallenge, type DnsConfigBaseline } from '@/utils/dnsConfigChallenge'
 import { selectableReferencedOptions, referencedOptionLabel } from '@/utils/caProviderOptions'

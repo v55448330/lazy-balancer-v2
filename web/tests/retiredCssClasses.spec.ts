@@ -48,9 +48,11 @@ test('CaddyGlobalSettings tip-nowrap 退役：类名/注释与实现相反，统
   const card = code('src/views/settings/CaddyGlobalSettings.vue')
   // 旧类名 tip-nowrap 语义相反（实现=允许换行）：模板与样式双侧退役。
   assert.doesNotMatch(card, /tip-nowrap/, 'tip-nowrap 反语义类名必须退役（含样式定义）')
-  // 新类名正向钉：三处行内提示消费 + scoped 定义在场，注释如实描述换行语义。
+  // 新类名正向钉：剩余行内提示消费 + scoped 定义在场，注释如实描述换行语义。
+  // 计数随 DESIGN_SPEC §26-5 下降：超阈值（zh 16 字 / en 40 字符）的同行说明已改
+  // 块级 form-tip-line，只有「MB，超限归档保留 5 份」这一条短后缀仍走行内。
   const hits = card.match(/class="form-tip-inline tip-wrap"/g) ?? []
-  assert.equal(hits.length, 3, '三处行内提示必须挂 tip-wrap')
+  assert.equal(hits.length, 1, '剩余行内提示必须挂 tip-wrap（块级说明不挂）')
   assert.match(card, /\.tip-wrap \{ white-space: normal; overflow-wrap: anywhere; \}/)
   const raw = source('src/views/settings/CaddyGlobalSettings.vue')
   assert.doesNotMatch(raw, /只加 nowrap/, '旧注释「只加 nowrap」与实现相反，必须如实化')

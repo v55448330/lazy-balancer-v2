@@ -140,8 +140,7 @@
 
   <el-dialog
     v-model="logDialogVisible"
-    width="min(1100px, 94vw)"
-    top="5vh"
+    width="min(960px, 94vw)"
     class="cert-log-dialog"
     destroy-on-close
     @opened="onLogDialogOpened"

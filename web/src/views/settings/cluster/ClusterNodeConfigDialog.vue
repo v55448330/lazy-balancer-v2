@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :model-value="visible"
-    width="min(560px, 94vw)"
+    width="min(640px, 94vw)"
     :close-on-click-modal="false"
     :close-on-press-escape="!saving"
     :show-close="!saving"

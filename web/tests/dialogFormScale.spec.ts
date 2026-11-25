@@ -108,9 +108,11 @@ const collectFooters = (): string[] => {
 }
 
 // 当前存量（2026-11-25 基线）。修掉存量后把数字调低；调高即新增违规。
-const BASELINE_DIALOG_WIDTH = 55
-const BASELINE_SECTION_DIVIDER = 9
-const BASELINE_RADIUS = 36
+// 界面统一批次 1（设置类页面与弹框）已按 §26 整改：U1 55→36、U2 9→4、U3 36→30、
+// U4 2 不变（余量全在设置面之外：密钥/规则/安全/通知/连接等页面）。
+const BASELINE_DIALOG_WIDTH = 36
+const BASELINE_SECTION_DIVIDER = 4
+const BASELINE_RADIUS = 30
 const BASELINE_FOOTER_ORDER = 2
 
 test('判别自检：弹框宽度只认五种写法', () => {

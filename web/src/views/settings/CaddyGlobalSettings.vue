@@ -9,8 +9,9 @@
       </div>
     </template>
 
-    <el-form :model="settings" :label-width="$flw('140px')" class="caddy-form" :disabled="formFrozen">
-      <el-divider content-position="left">{{ t('app.settings.caddy.log.title') }}</el-divider>
+    <!-- 英文标签最长 24 字符（Trusted proxy ...）→ 144 档（§26-6） -->
+    <el-form :model="settings" :label-width="$flw('144px')" class="caddy-form" :disabled="formFrozen">
+      <DialogSectionHeader :title="t('app.settings.caddy.log.title')" />
       <el-form-item :label="t('app.settings.caddy.log.level')">
         <el-select v-model="settings.caddy_log_level" :disabled="formFrozen" style="width: 140px">
           <el-option label="debug" value="debug" />
@@ -18,7 +19,7 @@
           <el-option label="warn" value="warn" />
           <el-option label="error" value="error" />
         </el-select>
-        <span class="form-tip-inline">{{ t('app.settings.caddy.log.levelHint') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.log.levelHint') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.log.size')">
         <el-input-number v-model="settings.caddy_log_size_mb" :disabled="formFrozen" :min="100" :max="10240" controls-position="right" class="number-input" />
@@ -27,41 +28,41 @@
       <el-form-item :label="t('app.settings.caddy.log.title')" for="caddy-log-view-static">
         <input type="text" id="caddy-log-view-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
         <el-button size="small" :icon="View" @click="openLogDialog">{{ t('app.settings.caddy.log.viewBtn') }}</el-button>
-        <span class="form-tip-inline">{{ t('app.settings.caddy.log.viewDesc') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.log.viewDesc') }}</div>
       </el-form-item>
 
-      <el-divider content-position="left">{{ t('app.settings.caddy.timeout.title') }}</el-divider>
+      <DialogSectionHeader :title="t('app.settings.caddy.timeout.title')" />
       <el-form-item :label="t('app.settings.caddy.timeout.bodySize')">
         <el-input-number v-model="settings.request_body_max_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-wrap">{{ t('app.settings.caddy.timeout.bodySizeHint') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.timeout.bodySizeHint') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.timeout.read')">
         <el-input-number v-model="settings.http_read_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-wrap">{{ t('app.settings.caddy.timeout.readHint') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.timeout.readHint') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.timeout.write')">
         <el-input-number v-model="settings.http_write_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">{{ t('app.settings.caddy.timeout.writeHint') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.timeout.writeHint') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.timeout.idle')">
         <el-input-number v-model="settings.http_idle_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">{{ t('app.settings.caddy.timeout.idleHint') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.timeout.idleHint') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.timeout.upstreamKeepalive')">
         <el-input-number v-model="settings.upstream_keepalive_timeout" :disabled="formFrozen" :min="0" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">{{ t('app.settings.caddy.timeout.upstreamKeepaliveHint') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.timeout.upstreamKeepaliveHint') }}</div>
       </el-form-item>
 
-      <el-divider content-position="left">{{ t('app.settings.caddy.proxy.title') }}</el-divider>
+      <DialogSectionHeader :title="t('app.settings.caddy.proxy.title')" />
       <ProxyTimeoutFields :value="settings" :inherit-label="t('app.settings.caddy.proxy.caddyDefault')" :disabled="formFrozen" show-suggested @update="updateProxyTimeout" />
 
-      <el-divider content-position="left">{{ t('app.settings.caddy.headers.title') }}</el-divider>
+      <DialogSectionHeader :title="t('app.settings.caddy.headers.title')" />
       <el-form-item label="Server Tokens">
         <el-switch v-model="settings.server_tokens_hidden" :disabled="formFrozen" :active-text="t('app.settings.caddy.on')" :inactive-text="t('app.settings.caddy.off')" />
-        <span class="form-tip-inline">{{ t('app.settings.caddy.headers.hideServerHint') }}</span>
+        <div class="form-tip-line">{{ t('app.settings.caddy.headers.hideServerHint') }}</div>
       </el-form-item>
 
-      <el-divider content-position="left">{{ t('app.settings.caddy.security.title') }}</el-divider>
+      <DialogSectionHeader :title="t('app.settings.caddy.security.title')" />
       <el-form-item :label="t('app.settings.caddy.trust.title')">
         <div class="trusted-toggle">
           <el-switch v-model="settings.trusted_proxy_enabled" :disabled="formFrozen" :active-text="t('app.settings.caddy.on')" :inactive-text="t('app.settings.caddy.off')" />
@@ -148,12 +149,12 @@
         <el-form-item :label="t('app.settings.caddy.trust.strictMode')">
           <el-switch v-model="settings.trusted_proxy_strict" :disabled="formFrozen" :active-text="t('app.settings.caddy.on')" :inactive-text="t('app.settings.caddy.off')" />
           <el-tooltip :content="t('app.settings.caddy.trust.strictOffWarn')" placement="top">
-            <span class="form-tip-inline">{{ t('app.settings.caddy.trust.strictHint') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.caddy.trust.strictHint') }}</div>
           </el-tooltip>
         </el-form-item>
       </template>
 
-      <el-divider content-position="left">{{ t('app.settings.caddy.accessLog.title') }}</el-divider>
+      <DialogSectionHeader :title="t('app.settings.caddy.accessLog.title')" />
       <el-form-item :label="t('app.settings.caddy.accessLog.customFormat')">
         <el-switch v-model="settings.access_log_json" :disabled="formFrozen" :active-text="t('app.settings.caddy.accessLog.customJson')" inactive-text="Caddy JSON" />
         <div class="form-tip-line">{{ t('app.settings.caddy.accessLog.customJsonHint') }}</div>
@@ -190,8 +191,7 @@
 
   <el-dialog
     v-model="logDialogVisible"
-    width="min(1100px, 94vw)"
-    top="5vh"
+    width="min(960px, 94vw)"
     class="log-dialog"
     destroy-on-close
     @opened="onLogDialogOpened"
@@ -224,7 +224,7 @@
 
   <el-dialog
     v-model="saveListDialogVisible"
-    width="min(480px, 92vw)"
+    width="min(520px, 94vw)"
     append-to-body
     :close-on-click-modal="false"
     :close-on-press-escape="!savingList"
@@ -233,16 +233,16 @@
     <template #header>
       <DialogHeader :icon="Tickets" :title="t('app.settings.caddy.list.title')" :subtitle="t('app.settings.caddy.list.subtitle')" />
     </template>
-    <el-form :label-width="$flw('80px')" @submit.prevent :disabled="savingList">
+    <el-form :label-width="$flw('112px')" @submit.prevent :disabled="savingList">
       <el-form-item :label="t('app.settings.caddy.list.source')" for="caddy-trusted-source-static">
         <input type="text" id="caddy-trusted-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
         <span>{{ t('app.settings.caddy.trust.currentInlineRanges', { count: trustedRanges.length }) }}</span>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.list.name')" required>
-        <el-input v-model="saveListForm.name" :placeholder="t('app.settings.caddy.list.name')" maxlength="50" show-word-limit />
+        <el-input v-model="saveListForm.name" :placeholder="t('app.settings.caddy.list.name')" maxlength="50" show-word-limit style="width: 320px" />
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.list.category')">
-        <el-select v-model="saveListForm.category" allow-create filterable default-first-option :placeholder="t('app.settings.caddy.list.categoryPlaceholder')" style="width: 100%">
+        <el-select v-model="saveListForm.category" allow-create filterable default-first-option :placeholder="t('app.settings.caddy.list.categoryPlaceholder')" style="width: 320px">
           <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="ipListCategoryLocalized(c)" :value="c" />
         </el-select>
       </el-form-item>
@@ -261,6 +261,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, Setting, Tickets, View } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'

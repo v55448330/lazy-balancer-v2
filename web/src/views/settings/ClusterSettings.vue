@@ -89,7 +89,7 @@
       @save="updateNodeConfig"
     />
 
-    <el-dialog v-model="tokenDialogVisible" width="min(560px, 92vw)" :close-on-click-modal="false" :before-close="closeTokenDialog" @closed="registerToken = null" class="register-token-dialog">
+    <el-dialog v-model="tokenDialogVisible" width="min(520px, 94vw)" :close-on-click-modal="false" :before-close="closeTokenDialog" @closed="registerToken = null" class="register-token-dialog">
       <template #header>
         <DialogHeader :icon="Key" :title="t('app.settings.cluster.token.title')" :subtitle="t('app.settings.cluster.token.subtitle')" tone="warning" />
       </template>
@@ -103,7 +103,7 @@
       <template #footer><el-button type="primary" @click="tokenDialogVisible = false">{{ t('app.settings.cluster.token.savedBtn') }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="serviceControlDialogVisible" class="service-control-dialog dialog-body-inset" width="min(520px, 92vw)" :close-on-click-modal="false" :close-on-press-escape="!serviceControlLoading" :show-close="!serviceControlLoading">
+    <el-dialog v-model="serviceControlDialogVisible" class="service-control-dialog dialog-body-inset" width="min(640px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!serviceControlLoading" :show-close="!serviceControlLoading">
       <template #header>
         <div class="service-control-header">
           <DialogHeader
@@ -854,7 +854,7 @@ onUnmounted(() => {
 .service-control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
 .service-control-card {
   display: flex; align-items: flex-start; gap: 12px; padding: 14px;
-  border: 1px solid var(--border-color, #dcdfe6); border-radius: 8px;
+  border: 1px solid var(--border-color, #dcdfe6); border-radius: 0;
   cursor: pointer; transition: all 0.2s ease; position: relative; background: var(--bg-primary, #fff);
 }
 .service-control-card:hover { border-color: var(--el-color-primary-light-5, #a0cfff); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }

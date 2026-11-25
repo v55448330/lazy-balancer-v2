@@ -380,7 +380,8 @@ test('任务监控三份轮询请求缺 data 一律抛 TypeError（进入契约�
 
 test('任务详情弹框适配窄屏：优先实时行，退役行保留打开时快照', () => {
   const page = code('src/views/settings/TaskMonitor.vue')
-  assert.match(page, /<el-dialog v-model="detailVisible" width="min\(720px, 92vw\)"/)
+  // 宽度钉 §26-1「复合编辑」档（含历史表格）；视口上限 94vw 是窄屏适配的判据本身。
+  assert.match(page, /<el-dialog v-model="detailVisible" width="min\(960px, 94vw\)"/)
   const block = section(page, 'const detailTask = computed<TaskInfo | null>', 'const history = ref')
   const live = block.indexOf('tasks.value.find(t => t.id === id)')
   const fallback = block.indexOf('?? detailSeed.value')

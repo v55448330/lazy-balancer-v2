@@ -268,7 +268,13 @@ body {
   border: 1px solid var(--el-border-color-lighter, #e4e9f0);
   box-shadow: 0 18px 50px rgb(15 23 42 / 14%), 0 3px 12px rgb(15 23 42 / 6%);
 }
-.el-dialog { padding: 0; }
+/* 弹框顶边一律 6vh（DESIGN_SPEC §26-1）：全局单源，组件不再逐个写 top。
+ * Element 的默认值 15vh 与各弹框自写的 5vh/8vh 均已废止。双类名提高特异性，
+ * 不依赖 Element Plus 样式表的加载先后。 */
+.el-dialog.el-dialog {
+  padding: 0;
+  --el-dialog-margin-top: 6vh;
+}
 
 /* 全站控件直角：按钮/标签/输入/选择/分页/卡片共用同一形状语言。
  * 单选圆点、开关、状态圆点等语义图形不在此范围。 */
@@ -409,7 +415,15 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   border-bottom: 1px solid var(--el-border-color-lighter, #e8edf3);
 }
 .el-dialog__headerbtn { top: 20px; right: 20px; }
-.el-dialog .el-dialog__body { padding: 20px; scrollbar-gutter: stable; }
+/* 弹框体一律限高 + 内部滚动（DESIGN_SPEC §26-2）：页脚始终留在视口内。
+ * 组件自写的 100vh − 300px / 90vh − 130px 一类公式一律删除；需要内部子区域
+ * 各自滚动的弹框（日志终端等）在组件内覆写该子区域的 max-height。 */
+.el-dialog .el-dialog__body {
+  padding: 20px;
+  scrollbar-gutter: stable;
+  max-height: calc(100vh - 260px);
+  overflow-y: auto;
+}
 /* 正文留白标记类：与上方全局三段式正文 padding 同值（20px）的显式声明——
    消费方挂此类表达「标准正文留白」语义；全局规则已覆盖全部弹框，本规则
    不改变渲染，只保证标记类有定义、留白口径单点可查。 */

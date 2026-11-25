@@ -270,8 +270,8 @@
     </el-card>
 
     <!-- 任务详情 -->
-    <!-- 同类弹框均 min(…,92vw)——固定 720px 在窄屏横向溢出。-->
-    <el-dialog v-model="detailVisible" width="min(720px, 92vw)" top="8vh">
+    <!-- 同类弹框均 min(…,94vw)——固定 720px 在窄屏横向溢出。 -->
+    <el-dialog v-model="detailVisible" width="min(960px, 94vw)">
       <template #header>
         <DialogHeader
           :icon="detailIcon" :title="detailTask ? taskDisplayName(detailTask.name) : ''"
@@ -345,7 +345,7 @@
     </el-dialog>
 
     <!-- 任务日志弹框（与证书日志同款：暗色终端流） -->
-    <el-dialog v-model="logsVisible" width="min(1100px, 94vw)" top="5vh" destroy-on-close @closed="closeLogs">
+    <el-dialog v-model="logsVisible" width="min(960px, 94vw)" destroy-on-close @closed="closeLogs">
       <template #header>
         <DialogHeader :icon="Timer" :title="t('app.settings.taskMonitor.logDialogTitle', { name: taskDisplayName(logsTask?.name || '') })" :subtitle="t('app.settings.taskMonitor.log.subtitle')" />
       </template>
@@ -1176,7 +1176,7 @@ const fmtDuration = (ms?: number) => {
 .tm-cq-chip b { font-weight: 700; color: #111827; margin-left: 2px; }
 .tm-c-run { color: #4f8cff !important; } .tm-c-wait { color: #38e1ff !important; }
 .tm-cq-banner-live { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; }
-.tm-cq-domain-chip { font-size: 12px; color: #374151; background: #f3f4f6; border-radius: 999px; padding: 3px 10px; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+.tm-cq-domain-chip { font-size: 12px; color: #374151; background: #f3f4f6; border-radius: 0; padding: 3px 10px; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 .tm-cq-dot { width: 6px; height: 6px; border-radius: 50%; background: #4f8cff; }
 .tm-cq-dot--queued, .tm-cq-dot--pending { background: #fbbf24; }
 .tm-cq-dot--waiting_ca { background: #38e1ff; }
@@ -1184,9 +1184,9 @@ const fmtDuration = (ms?: number) => {
 .tm-cq-more { font-size: 12px; color: #9aa0b5; text-align: center; padding-top: 4px; }
 
 .tm-chart { height: 230px; width: 100%; }
-.tm-skeleton { background: linear-gradient(90deg, rgba(0,0,0,.03) 25%, rgba(0,0,0,.06) 50%, rgba(0,0,0,.03) 75%); background-size: 200% 100%; animation: tm-shimmer 1.2s infinite; border-radius: 8px; }
+.tm-skeleton { background: linear-gradient(90deg, rgba(0,0,0,.03) 25%, rgba(0,0,0,.06) 50%, rgba(0,0,0,.03) 75%); background-size: 200% 100%; animation: tm-shimmer 1.2s infinite; border-radius: 0; }
 @keyframes tm-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-.tm-count { font-size: 12px; color: #6b7280; font-weight: 400; background: #f3f4f6; border-radius: 999px; padding: 1px 8px; }
+.tm-count { font-size: 12px; color: #6b7280; font-weight: 400; background: #f3f4f6; border-radius: 0; padding: 1px 8px; }
 
 /* 表格 */
 :deep(.tm-nowrap-table .cell) { white-space: nowrap; }

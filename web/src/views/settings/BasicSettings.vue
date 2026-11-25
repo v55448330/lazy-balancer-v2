@@ -9,7 +9,7 @@
           </div>
         </div>
       </template>
-        <el-form :model="settings" :label-width="$flw('120px')" class="settings-form" :disabled="formFrozen">
+        <el-form :model="settings" :label-width="$flw('144px')" class="settings-form" :disabled="formFrozen">
           <el-form-item :label="t('app.settings.basic.log.appLogLevel')">
             <el-select v-model="settings.log_level" :disabled="formFrozen" style="width: 140px">
               <el-option label="Debug" value="debug" />
@@ -17,11 +17,11 @@
               <el-option label="Warning" value="warn" />
               <el-option label="Error" value="error" />
             </el-select>
-            <span class="form-tip-inline">{{ t('app.settings.basic.log.appLogLevelHint') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.log.appLogLevelHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.taskLogSize')">
             <el-input-number v-model="settings.task_log_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">{{ t('app.settings.basic.log.taskLogSizeHint') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.log.taskLogSizeHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.runLogSize')">
             <el-input-number v-model="settings.runtime_log_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
@@ -29,9 +29,8 @@
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.auditRetention')">
             <el-input-number v-model="settings.audit_retention_months" :disabled="formFrozen" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <!-- en 文案长独立折行(tip-line);zh 文案短行内贴控件(tip-inline)——2026-11 用户裁定 -->
-            <span v-if="locale.startsWith('zh')" class="form-tip-inline">{{ t('app.settings.basic.log.auditRetentionHint') }}</span>
-            <div v-else class="form-tip-line">{{ t('app.settings.basic.log.auditRetentionHint') }}</div>
+            <!-- 中英均超同行阈值（zh 16 字 / en 40 字符），一律块级说明（§26-5） -->
+            <div class="form-tip-line">{{ t('app.settings.basic.log.auditRetentionHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.secEventRetention')">
             <el-input-number v-model="seRetentionDays" :disabled="formFrozen" :min="1" :max="3650" :step="30" controls-position="right" style="width: 120px;" />
@@ -64,7 +63,7 @@
                 <el-option v-for="item in COUNTRY_SITE_CHOICES" :key="item.key" :label="siteChoiceLabel(item)" :value="item.key" />
               </el-option-group>
             </el-select>
-            <span class="form-tip-inline">{{ t('app.settings.basic.siteCoord', { lat: (settings.server_map_lat ?? 0).toFixed(4), lng: (settings.server_map_lon ?? 0).toFixed(4) }) }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.siteCoord', { lat: (settings.server_map_lat ?? 0).toFixed(4), lng: (settings.server_map_lon ?? 0).toFixed(4) }) }}</div>
             <div class="form-tip-line">{{ t('app.settings.basic.map.siteLocationHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.map.visualMode')" for="radio---3">
@@ -91,8 +90,8 @@
                 :value="option.value"
               />
             </el-select>
-            <span v-if="githubProxyLoaded" class="form-tip-inline">{{ t('app.settings.basic.proxy.hint') }}</span>
-            <span v-else class="form-tip-inline">{{ t('app.settings.basic.proxy.notLoaded') }}</span>
+            <div v-if="githubProxyLoaded" class="form-tip-line">{{ t('app.settings.basic.proxy.hint') }}</div>
+            <div v-else class="form-tip-line">{{ t('app.settings.basic.proxy.notLoaded') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.proxy.accessToken')">
             <el-input
@@ -111,12 +110,12 @@
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.security.mfaLabel')">
             <el-switch v-model="settings.mfa_write_guard" :disabled="formFrozen" />
-            <span class="form-tip-inline">{{ t('app.settings.basic.security.mfaHint') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.security.mfaHint') }}</div>
             <AccessibleLink type="info" underline="never" size="small" class="tip-link" style="margin-left: 6px" @click="mfaScopeVisible = true">{{ t('app.settings.basic.security.mfaScopeLink') }}</AccessibleLink>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.security.lockout')">
             <el-switch v-model="settings.mfa_lockout_enabled" :disabled="formFrozen" />
-            <span class="form-tip-inline">{{ t('app.settings.basic.security.lockoutHint') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.security.lockoutHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.tls.forceLabel')">
             <el-switch v-model="adminTls.enabled" :disabled="formFrozen || !adminTlsLoaded" @change="onAdminTlsToggle" />
@@ -145,7 +144,7 @@
           <el-form-item :label="t('app.settings.basic.appLog.label')" for="app-log-view-static">
             <input type="text" id="app-log-view-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
             <el-button size="small" :icon="View" @click="openAppLogDialog">{{ t('app.settings.basic.appLog.viewBtn') }}</el-button>
-            <span class="form-tip-inline">{{ t('app.settings.basic.appLog.viewHint') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.appLog.viewHint') }}</div>
           </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" :disabled="isReadOnly || !props.configLoaded" @click="handleSave">
@@ -205,12 +204,13 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="adminTlsDialogVisible" class="dialog-body-inset" width="min(560px, 92vw)" destroy-on-close @closed="onAdminTlsDialogClose">
+    <el-dialog v-model="adminTlsDialogVisible" class="dialog-body-inset" width="min(640px, 94vw)" destroy-on-close @closed="onAdminTlsDialogClose">
       <template #header>
         <DialogHeader :icon="Lock" :title="t('app.settings.basic.tls.title')"
           :subtitle="t('app.settings.basic.tls.subtitle')" />
       </template>
-      <el-form :label-width="$flw('110px')">
+      <!-- 标签英文「Certificate source」18 字符，超 14 → 144 档（§26-6） -->
+      <el-form :label-width="$flw('144px')">
         <el-form-item :label="t('app.settings.basic.tls.source')" for="radio---4">
           <input type="text" id="radio---4" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <el-radio-group v-model="adminTlsForm.mode" :aria-label="t('app.settings.basic.tls.source')">
@@ -266,7 +266,7 @@
     </el-dialog>
     <!-- 检查更新弹框：稳定版/测试版分 tab 展示（无更新内容的 tab 随条目隐藏），
          版本号 + 发布说明列表；说明文字一律插值渲染（textContent，禁 v-html）。 -->
-    <el-dialog v-model="updateDialogVisible" class="dialog-body-inset" width="min(560px, 92vw)">
+    <el-dialog v-model="updateDialogVisible" class="dialog-body-inset" width="min(640px, 94vw)">
       <template #header>
         <DialogHeader :icon="RefreshRight" :title="t('app.settings.basic.update.title')" :subtitle="t('app.settings.basic.update.subtitle')" />
       </template>
@@ -308,7 +308,7 @@
     <input ref="tlsCertFileInput" type="file" accept=".crt,.pem,.cer" style="display: none" @change="(e) => onTlsFile(e, 'cert')" />
     <input ref="tlsKeyFileInput" type="file" accept=".key,.pem" style="display: none" @change="(e) => onTlsFile(e, 'key')" />
 
-    <el-dialog v-model="appLogVisible" width="min(1100px, 94vw)" top="5vh" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
+    <el-dialog v-model="appLogVisible" width="min(960px, 94vw)" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
       <template #header>
         <DialogHeader :icon="Document" :title="t('app.settings.basic.appLog.dialogTitle')" :subtitle="t('app.settings.basic.appLog.dialogSubtitle')" />
       </template>
@@ -326,7 +326,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="importDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" @close="onImportDialogClosed">
+    <el-dialog v-model="importDialogVisible" width="min(640px, 94vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" @close="onImportDialogClosed">
       <template #header>
         <DialogHeader :icon="Upload" :title="t('app.settings.basic.import.title')" :subtitle="t('app.settings.basic.import.subtitle')" />
       </template>
@@ -336,7 +336,7 @@
           <span class="import-filename">{{ importFileName }}</span>
           <el-tag v-if="importBackupId !== null" size="small" type="info">{{ t('app.settings.basic.import.serverBackup') }}</el-tag>
         </template>
-        <span v-else class="import-hint">{{ t('app.settings.basic.import.formatsHint') }}</span>
+        <div v-else class="form-tip-line">{{ t('app.settings.basic.import.formatsHint') }}</div>
       </div>
       <input ref="importInput" type="file" accept="application/json,.json,.bak,.lbbak,application/gzip" class="import-input" @change="handleImportFile" />
 
@@ -408,7 +408,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="exportDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset">
+    <el-dialog v-model="exportDialogVisible" width="min(640px, 94vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset">
       <template #header>
         <DialogHeader :icon="Download" :title="t('app.settings.basic.export.title')" :subtitle="t('app.settings.basic.export.subtitle')" />
       </template>
@@ -432,14 +432,15 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="autoBackupVisible" width="min(900px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
+    <el-dialog v-model="autoBackupVisible" width="min(960px, 94vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
       <template #header>
         <DialogHeader :icon="Timer" :title="t('app.settings.basic.autoBackup.title')" :subtitle="t('app.settings.basic.autoBackup.subtitle')" />
       </template>
-      <el-form :label-width="$flw('110px')" class="auto-backup-form">
+      <!-- 英文标签最长 14 字符 → 默认 112 档（§26-6） -->
+      <el-form :label-width="$flw('112px')" class="auto-backup-form">
         <el-form-item :label="t('app.settings.basic.autoBackup.enable')">
           <el-switch v-model="autoBackupForm.enabled" />
-          <span class="form-tip-inline">{{ t('app.settings.basic.autoBackup.enableHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.basic.autoBackup.enableHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.basic.autoBackup.frequency')" for="radio---5">
           <input type="text" id="radio---5" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
@@ -457,11 +458,11 @@
         </el-form-item>
         <el-form-item :label="t('app.settings.basic.autoBackup.time')">
           <el-time-select v-model="autoBackupForm.time" start="00:00" end="23:30" step="00:30" style="width: 120px" />
-          <span class="form-tip-inline">{{ t('app.settings.basic.autoBackup.timeHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.basic.autoBackup.timeHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.basic.autoBackup.keep')">
           <el-input-number v-model="autoBackupForm.keep" :min="1" :max="30" controls-position="right" style="width: 120px" />
-          <span class="form-tip-inline">{{ t('app.settings.basic.autoBackup.keepHint') }}</span>
+          <div class="form-tip-line">{{ t('app.settings.basic.autoBackup.keepHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.basic.autoBackup.scope')" for="auto-backup-range-static">
           <input type="text" id="auto-backup-range-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
@@ -476,7 +477,7 @@
           <div class="auto-backup-chips-actions">
             <el-button size="small" plain @click="autoBackupSections = []">{{ t('app.settings.basic.export.noneBtn') }}</el-button>
             <el-button size="small" plain @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">{{ t('app.settings.basic.export.allBtn') }}</el-button>
-            <el-text type="info" size="small" class="auto-backup-scope-hint">{{ t('app.settings.basic.autoBackup.scopeHint') }}</el-text>
+            <div class="form-tip-line">{{ t('app.settings.basic.autoBackup.scopeHint') }}</div>
           </div>
         </el-form-item>
       </el-form>
@@ -524,13 +525,16 @@
         </div>
       </section>
       <template #footer>
-        <el-button @click="autoBackupVisible = false">{{ t('app.settings.basic.actions.cancel') }}</el-button>
-        <el-button type="primary" plain :loading="autoBackupRunning" :disabled="!autoBackupCanRunNow" :title="t('app.settings.basic.autoBackup.runNowTip')" @click="runAutoBackupNow">
-          {{ t('app.settings.basic.autoBackup.runNow') }}
-        </el-button>
-        <el-button type="primary" :loading="autoBackupSaving" :disabled="!autoBackupSectionsValid || !autoBackupLoaded || autoBackupLoading" @click="saveAutoBackupSettings">
-          {{ t('app.settings.basic.autoBackup.saveSettings') }}
-        </el-button>
+        <!-- §26-3：辅助动作（立即备份）放左侧，右侧「取消 + 主操作」 -->
+        <div class="auto-backup-footer">
+          <el-button plain :loading="autoBackupRunning" :disabled="!autoBackupCanRunNow" :title="t('app.settings.basic.autoBackup.runNowTip')" @click="runAutoBackupNow">
+            {{ t('app.settings.basic.autoBackup.runNow') }}
+          </el-button>
+          <el-button @click="autoBackupVisible = false">{{ t('app.settings.basic.actions.cancel') }}</el-button>
+          <el-button type="primary" :loading="autoBackupSaving" :disabled="!autoBackupSectionsValid || !autoBackupLoaded || autoBackupLoading" @click="saveAutoBackupSettings">
+            {{ t('app.settings.basic.autoBackup.saveSettings') }}
+          </el-button>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -557,6 +561,10 @@
         <div class="mfa-scope-items">{{ listJoin(group.items) }}</div>
       </div>
     </div>
+    <!-- 只读弹框只给「关闭」（§26-3） -->
+    <template #footer>
+      <el-button @click="mfaScopeVisible = false">{{ t('app.settings.basic.actions.close') }}</el-button>
+    </template>
   </el-dialog>
 
   <RestoreResultDialog
@@ -2224,7 +2232,6 @@ const handleSave = async () => {
 .log-viewer pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.7; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; }
 .import-picker { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .import-filename { font-size: 13px; color: var(--el-text-color-primary); }
-.import-hint { font-size: 12px; color: var(--el-text-color-secondary); }
 .import-validating { padding: 24px 0; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
 .import-result { display: flex; flex-direction: column; gap: 12px; }
 .import-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--el-text-color-primary); }
@@ -2254,9 +2261,12 @@ const handleSave = async () => {
 /* 全选/全不选与提示换行置于分类选项下方,左对齐(el-form-item__content 为
  * flex 行,flex-basis:100% 强制换行;2026-09-19 用户样式裁定) */
 .auto-backup-list-section { margin-top: 16px; }
+/* 页脚三段：辅助动作（立即备份）靠左，取消/保存靠右（§26-3） */
+.auto-backup-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.auto-backup-footer > .el-button:first-child { margin-right: auto; }
+.auto-backup-footer .el-button + .el-button { margin-left: 0; }
 .auto-backup-chips-actions { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .auto-backup-chips-actions .el-button + .el-button { margin-left: 0; }
-.auto-backup-scope-hint { margin-left: 0; }
 /* 内容列只显范围标签，单行不换行（明细在 hover tooltip，2026-09-21 用户裁定） */
 .auto-backup-scope-text { white-space: nowrap; }
 .auto-backup-scope-text.is-warning { color: var(--el-color-warning); }
