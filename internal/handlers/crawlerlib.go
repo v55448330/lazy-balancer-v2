@@ -175,7 +175,7 @@ func (h *Handlers) UpdateCrawlerLibFlags(c *gin.Context) {
 	updateLibSourceFlags(c, libSourceFlagsSpec{
 		Table:         "security_crawler_sources",
 		Family:        "爬虫地址库",
-		NotFoundMsg:   "爬虫源不存在",
+		NotFoundKey:   "security.crawlerSourceNotFound",
 		ReadErrMsg:    "读取爬虫源失败",
 		UpdateErrMsg:  "更新失败",
 		ArmFirstSlots: services.ArmCrawlerFirstSlots,

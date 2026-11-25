@@ -78,7 +78,7 @@ func newLibSourceFlagsTestRouter(t *testing.T) (*gin.Engine, *int) {
 		updateLibSourceFlags(c, libSourceFlagsSpec{
 			Table:        "security_crawler_sources",
 			Family:       "爬虫地址库",
-			NotFoundMsg:  "爬虫源不存在",
+			NotFoundKey:  "security.crawlerSourceNotFound",
 			ReadErrMsg:   "读取失败",
 			UpdateErrMsg: "更新失败",
 			ArmFirstSlots: func() {

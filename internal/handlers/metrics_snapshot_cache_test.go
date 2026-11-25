@@ -162,7 +162,7 @@ func TestBuildMetricsDashboard_slowFetchStillReportsCaddyCollectionFailure(t *te
 	})
 	h := &Handlers{cfg: &config.Config{CaddyMetricsURL: "http://127.0.0.1:9/metrics"}}
 	outcome := h.buildMetricsDashboard(context.Background())
-	if outcome.status != http.StatusBadGateway || outcome.message != "采集 Caddy 指标失败" {
+	if outcome.status != http.StatusBadGateway || outcome.key != "metrics.caddyScrapeFailed" {
 		t.Fatalf("outcome=%+v, want 502/采集 Caddy 指标失败", outcome)
 	}
 }

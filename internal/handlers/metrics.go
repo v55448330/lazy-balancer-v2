@@ -81,7 +81,7 @@ func (h *Handlers) GetMetricsOverview(c *gin.Context) {
 type metricsDashboardOutcome struct {
 	payload gin.H
 	status  int
-	message string
+	key     string
 }
 
 var (
@@ -235,7 +235,7 @@ func (h *Handlers) caddyMetricsSnapshot(ctx context.Context, cacheFailure bool) 
 func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 	outcome := h.metricsDashboardCached(c.Request.Context())
 	if outcome.status != 0 {
-		c.JSON(outcome.status, models.APIResponse{Code: outcome.status, Message: outcome.message})
+		c.JSON(outcome.status, apimsg.Envelope(nil, outcome.status, outcome.key))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: outcome.payload})
@@ -299,12 +299,12 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 	body, err := h.caddyMetricsSnapshot(ctx, false)
 	if err != nil {
 		services.Logf("warn", "采集 Caddy 指标失败: %v", err)
-		return metricsDashboardOutcome{status: http.StatusBadGateway, message: "采集 Caddy 指标失败"}
+		return metricsDashboardOutcome{status: http.StatusBadGateway, key: "metrics.caddyScrapeFailed"}
 	}
 	samples, err := parsePrometheusSamples(string(body))
 	if err != nil {
 		services.Logf("warn", "解析 Caddy 指标失败: %v", err)
-		return metricsDashboardOutcome{status: http.StatusBadGateway, message: "采集 Caddy 指标失败"}
+		return metricsDashboardOutcome{status: http.StatusBadGateway, key: "metrics.caddyScrapeFailed"}
 	}
 	metricsIndex := buildPrometheusMetricsIndex(samples)
 
@@ -315,14 +315,14 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 	}
 	database := db.DB
 	if database == nil {
-		return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则指标配置失败"}
+		return metricsDashboardOutcome{status: http.StatusInternalServerError, key: "metrics.ruleConfigReadFailed"}
 	}
 	ruleRows, err := database.QueryContext(ctx, `
 		SELECT caddy_id, COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0), IIF(enabled IN ('1',1),1,0)
 		FROM lb_rules ORDER BY caddy_id`)
 	if err != nil {
 		services.Logf("warn", "指标面板读取规则配置失败（查询 lb_rules）: %v", err)
-		return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则指标配置失败"}
+		return metricsDashboardOutcome{status: http.StatusInternalServerError, key: "metrics.ruleConfigReadFailed"}
 	}
 	defer ruleRows.Close()
 	rules := make([]dashboardRule, 0)
@@ -330,13 +330,13 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 		var rule dashboardRule
 		if err := ruleRows.Scan(&rule.id, &rule.domain, &rule.listenPort, &rule.protocol, &rule.enableTLS, &rule.enabled); err != nil {
 			services.Logf("warn", "指标面板读取规则配置失败（扫描 lb_rules 行）: %v", err)
-			return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则指标配置失败"}
+			return metricsDashboardOutcome{status: http.StatusInternalServerError, key: "metrics.ruleConfigReadFailed"}
 		}
 		rules = append(rules, rule)
 	}
 	if err := ruleRows.Err(); err != nil {
 		services.Logf("warn", "指标面板读取规则配置失败（迭代 lb_rules 行）: %v", err)
-		return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则指标配置失败"}
+		return metricsDashboardOutcome{status: http.StatusInternalServerError, key: "metrics.ruleConfigReadFailed"}
 	}
 
 	upstreamRows, err := database.QueryContext(ctx, `
@@ -344,7 +344,7 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 		FROM upstreams u WHERE `+services.UpstreamEnabledSQLPredicate)
 	if err != nil {
 		services.Logf("warn", "指标面板读取规则上游失败（查询 upstreams）: %v", err)
-		return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则上游失败"}
+		return metricsDashboardOutcome{status: http.StatusInternalServerError, key: "metrics.ruleUpstreamReadFailed"}
 	}
 	defer upstreamRows.Close()
 	upstreamsByRule := make(map[string][]models.Upstream)
@@ -352,13 +352,13 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 		var upstream models.Upstream
 		if err := upstreamRows.Scan(&upstream.RuleID, &upstream.Host, &upstream.Port, &upstream.Enabled); err != nil {
 			services.Logf("warn", "指标面板读取规则上游失败（扫描 upstreams 行）: %v", err)
-			return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则上游失败"}
+			return metricsDashboardOutcome{status: http.StatusInternalServerError, key: "metrics.ruleUpstreamReadFailed"}
 		}
 		upstreamsByRule[upstream.RuleID] = append(upstreamsByRule[upstream.RuleID], upstream)
 	}
 	if err := upstreamRows.Err(); err != nil {
 		services.Logf("warn", "指标面板读取规则上游失败（迭代 upstreams 行）: %v", err)
-		return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则上游失败"}
+		return metricsDashboardOutcome{status: http.StatusInternalServerError, key: "metrics.ruleUpstreamReadFailed"}
 	}
 
 	// Block 标签+4xx 扣除(2026-09-15 用户裁定,方案 B):blocked 来自

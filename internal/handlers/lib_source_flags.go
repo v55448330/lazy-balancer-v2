@@ -24,7 +24,7 @@ import (
 type libSourceFlagsSpec struct {
 	Table         string
 	Family        string
-	NotFoundMsg   string
+	NotFoundKey   string
 	ReadErrMsg    string
 	UpdateErrMsg  string
 	ArmFirstSlots func()
@@ -40,7 +40,7 @@ func requireLibSourceFlagRowUpdated(result sql.Result, c *gin.Context, spec libS
 		return false
 	}
 	if affected == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: spec.NotFoundMsg})
+		c.JSON(http.StatusNotFound, apimsg.Envelope(nil, http.StatusNotFound, spec.NotFoundKey))
 		return false
 	}
 	return true
@@ -94,7 +94,7 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	).Scan(&name, &wasEnabled); err != nil {
 		// 三分支：缺行=404，其余 DB 故障=500（可重试故障不得误报「源不存在」）。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: spec.NotFoundMsg})
+			c.JSON(http.StatusNotFound, apimsg.Envelope(nil, http.StatusNotFound, spec.NotFoundKey))
 		} else {
 			c.JSON(http.StatusInternalServerError, spec.InternalError(spec.ReadErrMsg, err))
 		}

@@ -139,7 +139,7 @@ func (h *Handlers) UpdateThreatSourceFlags(c *gin.Context) {
 	updateLibSourceFlags(c, libSourceFlagsSpec{
 		Table:         "security_threat_sources",
 		Family:        "威胁情报库",
-		NotFoundMsg:   "威胁库源不存在",
+		NotFoundKey:   "security.threatSourceNotFound",
 		ReadErrMsg:    "读取威胁库源失败",
 		UpdateErrMsg:  "更新失败",
 		ArmFirstSlots: services.ArmThreatFirstSlots,
