@@ -6202,6 +6202,8 @@ func failImportAbort(c *gin.Context, session *configImportSession, action, detai
 
 // importFailureDetailKey 是「响应正文即失败原因本身」的共用词条（母本 "%s"）：没有
 // 动作前缀可挂的失败出口只回显原因原文，键化不得改写这句文本。
+// 装配点（failImportTx）直接写字面量：apimsg 槽数对账守卫只认字面量键，常量标识符
+// 会被判「无法对账槽数」，本常量保留给注释/断言口径对齐。
 const importFailureDetailKey = "backup.importFailureDetail"
 
 // importActionKeyed 按动作词（「导入」/「还原」）二选一取响应键：动作词是展示文案的
@@ -6230,7 +6232,7 @@ func importRolledBackArgs(args []any, err error) []any {
 func failImportTx(c *gin.Context, session *configImportSession, action, detail string, cause error, status int, key string, args ...any) error {
 	err := failImportAbort(c, session, action, detail, cause)
 	if key == "" {
-		c.JSON(status, apimsg.Envelope(nil, status, importFailureDetailKey, err.Error()))
+		c.JSON(status, apimsg.Envelope(nil, status, "backup.importFailureDetail", err.Error()))
 		return err
 	}
 	c.JSON(status, apimsg.Envelope(nil, status, key, importRolledBackArgs(args, err)...))
