@@ -2621,12 +2621,12 @@ func migrateDropMergedSyncSwitchColumns() error {
 			// 带 WHERE applied_waf_ref_hash='' 谓词，此形态会整体丢弃遗留哈希/
 			// 版本且无任何痕迹。一次性记账丢弃不可恢复，必须留痕（否则事后
 			// 无法解释该版本为何从未触发过从端补偿重拉）。
-			if key, args, err := discardedLegacyAppliedBookkeeping(); err != nil {
+			if discarded, args, err := discardedLegacyAppliedBookkeeping(); err != nil {
 				return err
-			} else if key != "" {
-				detail, _ := i18n.Text(key, args...)
+			} else if discarded {
+				detail, _ := i18n.Text("audit.migrateLegacyBookkeepingDiscarded", args...)
 				log.Print(detail)
-				recordSystemAudit("启动迁移", "系统配置", key, args...)
+				recordSystemAudit("启动迁移", "系统配置", "audit.migrateLegacyBookkeepingDiscarded", args...)
 			}
 			startupMigrationWriteStatements.Add(1)
 			if _, err := DB.Exec(`DELETE FROM cluster_applied_sections WHERE section IN ('global_config','waf_files')`); err != nil {
@@ -2640,38 +2640,38 @@ func migrateDropMergedSyncSwitchColumns() error {
 // discardedLegacyAppliedBookkeeping 在删除 cluster_applied_sections 中的
 // waf_files/global_config 记账行之前，探测是否真有值被丢弃：搬移 UPDATE 只在
 // 目标列（applied_waf_ref_hash）为空时生效，目标列已非空且遗留行携带不同记账
-// 时，删除等于静默丢弃一次性迁移数据。返回空串表示无丢弃。
+// 时，删除等于静默丢弃一次性迁移数据。返回 false 表示无丢弃。
 // discardedLegacyAppliedBookkeeping 探测「目标列已非空、遗留行却携带不同记账」的
-// 丢弃形态，返回词条键与槽位（无丢弃返回空键）。
-func discardedLegacyAppliedBookkeeping() (string, []any, error) {
+// 丢弃形态，返回是否丢弃与词条槽位（段键由调用点以字面量给出，守卫据此对账）。
+func discardedLegacyAppliedBookkeeping() (bool, []any, error) {
 	var targetHash string
 	var targetVersion int
 	if err := DB.QueryRow(`SELECT COALESCE(applied_waf_ref_hash,''), COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1`).Scan(&targetHash, &targetVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil, nil
+			return false, nil, nil
 		}
-		return "", nil, fmt.Errorf("failed to probe target applied waf bookkeeping: %w", err)
+		return false, nil, fmt.Errorf("failed to probe target applied waf bookkeeping: %w", err)
 	}
 	if targetHash == "" {
-		return "", nil, nil
+		return false, nil, nil
 	}
 	var legacyHash string
 	var legacyVersion int
 	if err := DB.QueryRow(`SELECT COALESCE(hash,''), COALESCE(applied_version,0) FROM cluster_applied_sections WHERE section='waf_files'`).Scan(&legacyHash, &legacyVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil, nil
+			return false, nil, nil
 		}
-		return "", nil, fmt.Errorf("failed to probe legacy applied waf bookkeeping: %w", err)
+		return false, nil, fmt.Errorf("failed to probe legacy applied waf bookkeeping: %w", err)
 	}
 	if legacyHash == "" && legacyVersion == 0 {
-		return "", nil, nil
+		return false, nil, nil
 	}
 	if legacyHash == targetHash && legacyVersion == targetVersion {
 		// 空目标经上方 UPDATE 成功搬移，或新旧本就相同：旧行删除不丢失
 		// 任何记账值，不得把它误记成异值丢弃。
-		return "", nil, nil
+		return false, nil, nil
 	}
-	return "audit.migrateLegacyBookkeepingDiscarded", []any{legacyHash, legacyVersion, targetHash, targetVersion}, nil
+	return true, []any{legacyHash, legacyVersion, targetHash, targetVersion}, nil
 }
 
 // migrateSecurityPolicyCustomOnlyMode(2026-09-09 裁定):WAF 模式四态化后
@@ -2940,10 +2940,9 @@ func migrateTCPRuleStaleDNSServer() error {
 	for _, rule := range stale {
 		ids = append(ids, rule.caddyID)
 	}
-	detail := fmt.Sprintf("存量 TCP 规则携带无效 DNS 服务发现配置（渲染永不消费），已清空 enable_dns_server/dns_server：%d 条；caddy_id：%s",
-		len(stale), formatMigrationRuleIDs(ids))
+	detail, _ := i18n.Text("audit.migrateTcpStaleDnsCleared", len(stale), formatMigrationRuleIDs(ids))
 	log.Print(detail)
-	recordSystemAudit("启动迁移", "系统配置", detail)
+	recordSystemAudit("启动迁移", "系统配置", "audit.migrateTcpStaleDnsCleared", len(stale), formatMigrationRuleIDs(ids))
 	return nil
 }
 
@@ -3194,9 +3193,9 @@ func sanitizeLegacyCustomRulePatternsAt(fingerprint string) error {
 	if disabled > 0 {
 		// 禁用用户规则属于用户可见数据改写，须留痕
 		//（此前只有进程 stdout）。
-		detail := fmt.Sprintf("启动迁移：已禁用 %d 条含非法 pattern 的存量自定义规则（尾部反斜杠/空条件/不可解析 conditions）", disabled)
+		detail, _ := i18n.Text("audit.migrateCustomRulePatternsDisabled", disabled)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "自定义规则", detail)
+		recordSystemAudit("启动迁移", "自定义规则", "audit.migrateCustomRulePatternsDisabled", disabled)
 	}
 	// 收敛完成才置 marker：执行中报错返回时不置位，下次启动重试（与 audit
 	// 侧归一 marker 同口径）。
@@ -3376,14 +3375,14 @@ func migrateCanonicalDomains() error {
 	// 域名归一/证书任务去重都是用户可见数据改写，
 	// 提交成功后聚合留痕。
 	if renamedDomains > 0 {
-		detail := fmt.Sprintf("启动迁移：存量域名归一为规范形（lb_rules/cert_jobs/upstreams）：%d 行", renamedDomains)
+		detail, _ := i18n.Text("audit.migrateDomainCanonicalized", renamedDomains)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "证书配置", detail)
+		recordSystemAudit("启动迁移", "证书配置", "audit.migrateDomainCanonicalized", renamedDomains)
 	}
 	if dedupedJobs > 0 {
-		detail := fmt.Sprintf("启动迁移：cert_jobs 同规则同域重复行已去重（优先保留带证书材料行）：%d 条", dedupedJobs)
+		detail, _ := i18n.Text("audit.migrateCertJobsDeduped", dedupedJobs)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "证书任务", detail)
+		recordSystemAudit("启动迁移", "证书任务", "audit.migrateCertJobsDeduped", dedupedJobs)
 	}
 	return nil
 }
@@ -3408,9 +3407,9 @@ func migrateThreatTrafficSampleUnified() error {
 			if _, err := DB.Exec(`UPDATE global_config SET threat_traffic_sample_n=? WHERE id=1 AND threat_traffic_sample_n=1`, DefaultThreatTrafficSampleN); err != nil {
 				return err
 			}
-			detail := fmt.Sprintf("启动迁移：大屏流量采样全量档已退役，归一为 %d（自适应）", DefaultThreatTrafficSampleN)
+			detail, _ := i18n.Text("audit.migrateThreatTrafficSampleFullRetired", DefaultThreatTrafficSampleN)
 			log.Print(detail)
-			recordSystemAudit("启动迁移", "系统配置", detail)
+			recordSystemAudit("启动迁移", "系统配置", "audit.migrateThreatTrafficSampleFullRetired", DefaultThreatTrafficSampleN)
 		}
 		return nil
 	}
@@ -3432,9 +3431,9 @@ func migrateThreatTrafficSampleUnified() error {
 	}
 	if invalidRows > 0 {
 		// 配置值被改写须留痕（与 retention 回填同口径）。
-		detail := fmt.Sprintf("启动迁移：大屏流量采样列归一为 %d（自适应，全量/旧固定档废除）：%d 行", DefaultThreatTrafficSampleN, invalidRows)
+		detail, _ := i18n.Text("audit.migrateThreatTrafficSampleNormalized", DefaultThreatTrafficSampleN, invalidRows)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "系统配置", detail)
+		recordSystemAudit("启动迁移", "系统配置", "audit.migrateThreatTrafficSampleNormalized", DefaultThreatTrafficSampleN, invalidRows)
 	}
 	return nil
 }
@@ -3503,9 +3502,9 @@ func migrateAutoBackupNodeTopologySection() error {
 		return err
 	}
 	if scopeUpgraded {
-		detail := "启动迁移：自动备份旧默认范围已升级为当前默认范围（含节点拓扑 cluster 分类）"
+		detail, _ := i18n.Text("audit.migrateAutoBackupScopeUpgraded")
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "系统配置", detail)
+		recordSystemAudit("启动迁移", "系统配置", "audit.migrateAutoBackupScopeUpgraded")
 	}
 	return nil
 }
@@ -3518,9 +3517,9 @@ func normalizeUpstreamWeightsMigration() error {
 	if res != nil {
 		if n, _ := res.RowsAffected(); n > 0 {
 			// 上游权重被改写须留痕。
-			detail := fmt.Sprintf("启动迁移：存量上游权重无效值（NULL/<1）归 1：%d 条", n)
+			detail, _ := i18n.Text("audit.migrateUpstreamWeightNormalized", n)
 			log.Print(detail)
-			recordSystemAudit("启动迁移", "负载规则", detail)
+			recordSystemAudit("启动迁移", "负载规则", "audit.migrateUpstreamWeightNormalized", n)
 		}
 	}
 	return nil
@@ -3545,9 +3544,9 @@ func normalizeNtlmTakeoverConsistencyMigration() error {
 	if res != nil {
 		if n, _ := res.RowsAffected(); n > 0 {
 			// 与孤儿 path_rules/上游权重归一同口径：归一用户数据须留痕。
-			detail := fmt.Sprintf("启动迁移：已将 %d 条「ntlm_compatible=1 但接管四列不齐」的规则归一为 ntlm_compatible=0（渲染对该列零感知，运行行为不变）", n)
+			detail, _ := i18n.Text("audit.migrateNtlmTakeoverNormalized", n)
 			log.Print(detail)
-			recordSystemAudit("启动迁移", "负载规则", detail)
+			recordSystemAudit("启动迁移", "负载规则", "audit.migrateNtlmTakeoverNormalized", n)
 		}
 	}
 	return nil
@@ -3599,9 +3598,9 @@ func normalizeForwardAuthConsistencyMigration() error {
 		}
 	}
 	if filled > 0 {
-		detail := fmt.Sprintf("启动迁移：已为 %d 条规则的认证网关空 uri/身份头清单回填默认值", filled)
+		detail, _ := i18n.Text("audit.migrateForwardAuthDefaultsBackfilled", filled)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "负载规则", detail)
+		recordSystemAudit("启动迁移", "负载规则", "audit.migrateForwardAuthDefaultsBackfilled", filled)
 	}
 	res, err = execMigrationWriteIfNeeded(updateWhere("lb_rules", "forward_auth_enabled=0", `forward_auth_enabled=1 AND (
 		TRIM(COALESCE(forward_auth_upstream,''))='' OR protocol<>'http')`))
@@ -3610,9 +3609,9 @@ func normalizeForwardAuthConsistencyMigration() error {
 	}
 	if res != nil {
 		if n, _ := res.RowsAffected(); n > 0 {
-			detail := fmt.Sprintf("启动迁移：已将 %d 条「认证网关开启但网关地址缺失/非 HTTP 规则」的规则归一为关闭（该形态渲染必败，无法构造网关子请求）", n)
+			detail, _ := i18n.Text("audit.migrateForwardAuthInvalidDisabled", n)
 			log.Print(detail)
-			recordSystemAudit("启动迁移", "负载规则", detail)
+			recordSystemAudit("启动迁移", "负载规则", "audit.migrateForwardAuthInvalidDisabled", n)
 		}
 	}
 	return nil
@@ -3645,9 +3644,9 @@ func migrateSecurityEventRetentionDefaults() error {
 	}
 	if invalidRows > 0 {
 		// 旧语义 0=自动 被改写为显式默认，须留痕。
-		detail := fmt.Sprintf("启动迁移：安全事件保留 0/缺省回填为显式默认（%d 天 / %d 行）", DefaultSecurityEventsRetentionDays, DefaultSecurityEventsRowCap)
+		detail, _ := i18n.Text("audit.migrateSecurityEventsRetentionBackfilled", DefaultSecurityEventsRetentionDays, DefaultSecurityEventsRowCap)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "系统配置", detail)
+		recordSystemAudit("启动迁移", "系统配置", "audit.migrateSecurityEventsRetentionBackfilled", DefaultSecurityEventsRetentionDays, DefaultSecurityEventsRowCap)
 	}
 	return nil
 }
@@ -3750,9 +3749,14 @@ func migrateSystemIPListUniqueIndex() error {
 	// 重复行已不存在 → remap 为空 → 引用永不修复，策略永久指向已删 id（渲染期
 	// 该名单条目整体消失：少拦/少放）。事务化后中途失败整体回滚，下次启动重算
 	// remap 仍能修好引用。
-	var dedupeDetail string
-	// deferUniqueIndex 由事务闭包置位、闭包外消费（延期态的审计走一次性
-	// 判据——同一条「延期」详情不得随重启逐字重写）。
+	// 去重结果由事务闭包置位、闭包外消费：明细走「段键 + 槽位」，母本与进程
+	// 日志同源于词条（审计行与 stdout 不再各自拼一份文案）。
+	//   dedupePerformed  真正删过重复行并重写了引用
+	//   unparseableIDs   条目不可解析、被整组保留的行 id（有序）
+	// deferUniqueIndex 延期态（只能人工处置，唯一索引被刻意不建）。
+	var dedupePerformed bool
+	var dedupeKept, dedupeMerged, dedupeSkipped int
+	var unparseableIDs []string
 	var deferUniqueIndex bool
 	err = withWriteTx("system ip list unique index", func(tx *sql.Tx) error {
 		remap, err := planSystemIPListDedupe(tx)
@@ -3799,10 +3803,8 @@ func migrateSystemIPListUniqueIndex() error {
 				if err := rewriteSystemIPListRefs(tx, safeRemap); err != nil {
 					return fmt.Errorf("rewrite system ip list references: %w", err)
 				}
-				dedupeDetail = fmt.Sprintf("启动迁移：security_ip_lists 重复的 system=1 名单行已去重（被引用行优先保留，引用已重写）：%d 条；删除行条目已并入保留行 %d 条（身份重复跳过 %d 条）",
-					len(safeRemap), mergedEntries, skippedEntries)
-			} else {
-				dedupeDetail = "启动迁移：security_ip_lists 去重延期"
+				dedupePerformed = true
+				dedupeKept, dedupeMerged, dedupeSkipped = len(safeRemap), mergedEntries, skippedEntries
 			}
 			if len(unparseableRows) > 0 {
 				sort.Ints(unparseableRows)
@@ -3810,7 +3812,7 @@ func migrateSystemIPListUniqueIndex() error {
 				for _, id := range unparseableRows {
 					ids = append(ids, strconv.Itoa(id))
 				}
-				dedupeDetail += fmt.Sprintf("；%d 行条目形态无法解析，所属重复组已整组保留（行 id：%s，请人工核对）", len(unparseableRows), strings.Join(ids, ","))
+				unparseableIDs = ids
 				log.Printf("WARN: IP 名单去重时有 %d 行条目形态无法解析（行 id：%s），所属重复组已整组保留，唯一索引延期建立，请人工核对", len(unparseableRows), strings.Join(ids, ","))
 			}
 		}
@@ -3835,18 +3837,33 @@ func migrateSystemIPListUniqueIndex() error {
 	if err != nil {
 		return err
 	}
-	if dedupeDetail != "" {
-		log.Print(dedupeDetail)
+	if dedupePerformed || deferUniqueIndex {
 		// 删除整行属用户可见数据改写（重复行可能携带已入库 IP 条目）：与
 		// cert_jobs 去重/域名归一同口径落「全操作审计」，不只留进程 stdout。
 		// 只在事务提交后留痕——回滚的迁移不得留下「已去重」审计。
 		// 延期态只能人工处置且每次启动都重新进入（唯一索引被刻意不建），
-		// 同一条「延期+无法解析行 id」详情只落一条审计；正常去重态是一次性
-		// 数据改写，索引建好后启动即短路，保持原有逐次留痕。
-		if deferUniqueIndex {
-			recordSystemAuditOnce("启动迁移", "IP 名单", dedupeDetail)
-		} else {
-			recordSystemAudit("启动迁移", "IP 名单", dedupeDetail)
+		// 同一条「延期+无法解析行 id」详情只落一条审计（once）；正常去重态是
+		// 一次性数据改写，索引建好后启动即短路，保持原有逐次留痕。
+		unparseable := strings.Join(unparseableIDs, ",")
+		switch {
+		case !dedupePerformed:
+			if len(unparseableIDs) > 0 {
+				detail, _ := i18n.Text("audit.migrateSystemIPListDedupeDeferredUnparseable", len(unparseableIDs), unparseable)
+				log.Print(detail)
+				recordSystemAuditOnce("启动迁移", "IP 名单", "audit.migrateSystemIPListDedupeDeferredUnparseable", len(unparseableIDs), unparseable)
+			} else {
+				detail, _ := i18n.Text("audit.migrateSystemIPListDedupeDeferred")
+				log.Print(detail)
+				recordSystemAuditOnce("启动迁移", "IP 名单", "audit.migrateSystemIPListDedupeDeferred")
+			}
+		case len(unparseableIDs) > 0:
+			detail, _ := i18n.Text("audit.migrateSystemIPListDedupedUnparseable", dedupeKept, dedupeMerged, dedupeSkipped, len(unparseableIDs), unparseable)
+			log.Print(detail)
+			recordSystemAuditOnce("启动迁移", "IP 名单", "audit.migrateSystemIPListDedupedUnparseable", dedupeKept, dedupeMerged, dedupeSkipped, len(unparseableIDs), unparseable)
+		default:
+			detail, _ := i18n.Text("audit.migrateSystemIPListDeduped", dedupeKept, dedupeMerged, dedupeSkipped)
+			log.Print(detail)
+			recordSystemAudit("启动迁移", "IP 名单", "audit.migrateSystemIPListDeduped", dedupeKept, dedupeMerged, dedupeSkipped)
 		}
 	}
 	return nil
@@ -4566,9 +4583,9 @@ func migrateCrawlerSourcesOutOfThreat() error {
 	// 两表都是用户可见表（威胁情报库 / 爬虫地址库）且在集群同步清单内：
 	// 源行「从威胁库消失、在爬虫库出现」必须可追溯，否则管理员无法区分
 	// 「按设计归位」与「配置被吞」。与同族结构搬迁迁移同口径，事务提交后留痕。
-	detail := fmt.Sprintf("启动迁移：早期合并形态的爬虫源 %d 条已迁入爬虫地址库并从威胁情报库移除（googlebot/gptbot/bingbot/so360spider，原开关/版本/状态保留）", pending)
+	detail, _ := i18n.Text("audit.migrateCrawlerSourcesMoved", pending)
 	log.Print(detail)
-	recordSystemAudit("启动迁移", "威胁源", detail)
+	recordSystemAudit("启动迁移", "威胁源", "audit.migrateCrawlerSourcesMoved", pending)
 	return nil
 }
 
@@ -5037,9 +5054,9 @@ func recordNodesDedupeAudit(removed int64) {
 	if removed <= 0 {
 		return
 	}
-	detail := fmt.Sprintf("启动迁移：nodes 去重删除 %d 条重复 (ip_address, port) 行（保留已批准/持令牌/最近上报者）", removed)
+	detail, _ := i18n.Text("audit.migrateNodesDeduped", removed)
 	log.Print("WARN: " + detail)
-	recordSystemAudit("启动迁移", "集群节点", detail)
+	recordSystemAudit("启动迁移", "集群节点", "audit.migrateNodesDeduped", removed)
 }
 
 // ensureDefaultCAProviders 播种内置 CA 提供商（marker 门，一次性）。四条语句
@@ -5129,9 +5146,9 @@ func migrateNodesModeLegacy() error {
 	if affected == 0 {
 		return nil
 	}
-	detail := fmt.Sprintf("启动迁移：nodes.mode 非 slave 的存量行已归一为 slave：%d 条（该列唯一写点恒 slave；不归一会让节点永久退出离线/滞后巡检，且自备份被导入门拒绝）", affected)
+	detail, _ := i18n.Text("audit.migrateNodesModeNormalized", affected)
 	log.Print(detail)
-	recordSystemAudit("启动迁移", "集群节点", detail)
+	recordSystemAudit("启动迁移", "集群节点", "audit.migrateNodesModeNormalized", affected)
 	return nil
 }
 
@@ -5319,8 +5336,7 @@ func migrateOidcIdentityUniqueIndex() error {
 			log.Printf("WARN: 启动迁移：OIDC 重复身份告警指纹读取失败（按未告警继续，同一重复集合可能重报一条审计）: %v", rerr)
 		}
 		if rerr != nil || stored != fingerprint {
-			detail := fmt.Sprintf("启动迁移：users 存在重复 OIDC 身份(%s)，已跳过 u_oidc_identity 唯一索引（同一身份登录可能随机落到重复行之一）；请人工合并重复行后重启", fingerprint)
-			recordSystemAudit("启动迁移", "用户", detail)
+			recordSystemAudit("启动迁移", "用户", "audit.migrateOIDCDupIdentitySkipped", fingerprint)
 			writeOIDCDupIdentityMarker(fingerprint)
 		}
 		return nil
@@ -5678,16 +5694,16 @@ origin_domain TEXT NOT NULL DEFAULT '',
 	}
 
 	if orphanUpstreams > 0 {
-		detail := fmt.Sprintf("lb_rules 主键迁移丢弃 %d 条孤儿 upstream 行（rule_id 无对应规则）", orphanUpstreams)
+		detail, _ := i18n.Text("audit.migrateOrphanUpstreamsDropped", orphanUpstreams)
 		log.Print("WARN: " + detail)
-		recordSystemAudit("启动迁移", "系统配置", detail)
+		recordSystemAudit("启动迁移", "系统配置", "audit.migrateOrphanUpstreamsDropped", orphanUpstreams)
 	}
 	if len(duplicateCaddyIDs) > 0 {
 		// 去重删行必须留痕：这些规则行连同其证书材料/阶段页引用一并消失，
 		// 「规则为何不见了」只能在操作审计里追溯。
-		detail := fmt.Sprintf("lb_rules 主键迁移去重：以下 caddy_id 存在重复行，已保留最近更新者并删除其余行（被删行的上游已合并到保留行） — %s", strings.Join(duplicateCaddyIDs, "、"))
+		detail, _ := i18n.Text("audit.migrateRuleCaddyIDsDeduped", strings.Join(duplicateCaddyIDs, "、"))
 		log.Print("WARN: " + detail)
-		recordSystemAudit("启动迁移", "负载规则", detail)
+		recordSystemAudit("启动迁移", "负载规则", "audit.migrateRuleCaddyIDsDeduped", strings.Join(duplicateCaddyIDs, "、"))
 	}
 	log.Println("Successfully migrated lb_rules to use caddy_id as primary key")
 	return nil
@@ -5840,9 +5856,9 @@ func migrateCertJobsStatusConstraint() error {
 
 	log.Println("cert_jobs status constraint migration completed")
 	if unknownStatusRows > 0 {
-		detail := fmt.Sprintf("cert_jobs 枚举外或 NULL 状态归一到 failed（不再回 queued，避免触发新签发）：%d 行", unknownStatusRows)
+		detail, _ := i18n.Text("audit.migrateCertJobStatusNormalized", unknownStatusRows)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "证书任务", detail)
+		recordSystemAudit("启动迁移", "证书任务", "audit.migrateCertJobStatusNormalized", unknownStatusRows)
 	}
 	return nil
 }
@@ -6016,9 +6032,9 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 	if removed > 0 {
 		// 用户策略绑定被删除须留痕（与 TCP 死字段/跨模式 TLS 残留等姊妹迁移
 		// 同口径：聚合一行 + 事务内实际变更计数）。
-		detail := fmt.Sprintf("存量 TCP 规则上 L4 不支持的策略绑定（CC 防护/WAF 特征）已清理：%d 条（阶段 0/1 绑定保留；删除后同事务推进 cluster_version 让从端收敛）", removed)
+		detail, _ := i18n.Text("audit.migrateTcpPolicyBindingsRemoved", removed)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "安全策略", detail)
+		recordSystemAudit("启动迁移", "安全策略", "audit.migrateTcpPolicyBindingsRemoved", removed)
 	}
 	return nil
 }
@@ -6251,9 +6267,9 @@ func migrateTCPRuleDeadFields() error {
 	if affected > 0 || removedPathRules > 0 || clearedOrigins > 0 {
 		// 用户规则数据被改写须留痕（与 TCP stale DNS / legacy HTTPS /
 		// 孤儿 upstream 三个姊妹迁移同口径，聚合一行+计数）。
-		detail := fmt.Sprintf("存量 TCP 规则 HTTP 专属死字段已清零：%d 条（含路径规则 %d 条、上游回源域名 %d 条；主端库/导出 canonical/从端落库三面同值）", affected, removedPathRules, clearedOrigins)
+		detail, _ := i18n.Text("audit.migrateTcpDeadFieldsCleared", affected, removedPathRules, clearedOrigins)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "系统配置", detail)
+		recordSystemAudit("启动迁移", "系统配置", "audit.migrateTcpDeadFieldsCleared", affected, removedPathRules, clearedOrigins)
 	}
 	return nil
 }
@@ -6323,9 +6339,9 @@ func migrateRuleTLSModeResidue() error {
 	if changed == 0 {
 		return nil
 	}
-	detail := fmt.Sprintf("存量规则跨模式 TLS 残留已清零：%d 处（按实际变更计数；非 manual 源不保留证书材料、非 acme_dns 源不保留 CA 引用、manual 源不保留 ACME 配置引用）", changed)
+	detail, _ := i18n.Text("audit.migrateRuleTLSResidueCleared", changed)
 	log.Print(detail)
-	recordSystemAudit("启动迁移", "系统配置", detail)
+	recordSystemAudit("启动迁移", "系统配置", "audit.migrateRuleTLSResidueCleared", changed)
 	return nil
 }
 
@@ -6716,9 +6732,9 @@ func migratePolicyStagesV1() error {
 		return err
 	}
 	if changed > 0 {
-		detail := fmt.Sprintf("启动迁移：阶段合并（人机并入 CC、WAF 重编号）共改写 %d 条", changed)
+		detail, _ := i18n.Text("audit.migratePolicyStageMerged", changed)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "安全策略", detail)
+		recordSystemAudit("启动迁移", "安全策略", "audit.migratePolicyStageMerged", changed)
 	}
 	return nil
 }
@@ -6801,9 +6817,9 @@ func repairPolicyStageMergeV2() error {
 	}
 	// 逐条留痕（v1 只留聚合计数，被删/改型行无法对账——本次补上逐条审计）。
 	for _, v := range victims {
-		detail := fmt.Sprintf("启动迁移：阶段合并修复——策略「%s」(#%d) 由 stage2 还原为 stage3（v1 误把存量 WAF 当人机改型；字段未改写）", v.name, v.id)
+		detail, _ := i18n.Text("audit.migratePolicyStageMergeRepaired", v.name, v.id)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "安全策略", detail)
+		recordSystemAudit("启动迁移", "安全策略", "audit.migratePolicyStageMergeRepaired", v.name, v.id)
 	}
 	return nil
 }

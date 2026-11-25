@@ -31,14 +31,14 @@ var auditDetailKeyArgIndex = map[string]int{
 	"recordSystemAuditOnce": 2,
 }
 
-// systemAuditUnkeyedBaseline 是「启动迁移系统审计尚未键化」的存量条数（棘轮：
-// 只减不增）。这批事件发生在审计库就绪前的启动迁移阶段，文案是带计数的长诊断
-// 句，按批次逐条补键；新增写点必须带字面量键，否则本条即红。
-const systemAuditUnkeyedBaseline = 30
+// 启动迁移系统审计的键化判据是「零未键化」：recordSystemAudit /
+// recordSystemAuditOnce 的明细键必须是字符串字面量并在 i18n 目录登记。这批事件
+// 发生在审计库就绪前的启动迁移阶段，历史形态是整段 fmt 拼出的中文诊断句
+// （detail / dedupeDetail 变量）——变量无法对账登记，英文界面也只能落到中文
+// 原文，故一律按未键化报红（含逐条点名），不设存量基线。
 
 func scanAuditDetailKeySites(t *testing.T) (sites int, problems []string) {
 	t.Helper()
-	unkeyedSystem := 0
 	root, err := filepath.Abs(filepath.Join("..", "..", "internal"))
 	if err != nil {
 		t.Fatalf("resolve internal dir: %v", err)
@@ -70,23 +70,24 @@ func scanAuditDetailKeySites(t *testing.T) (sites int, problems []string) {
 				return true
 			}
 			// 豁免：键由「已登记事实」携带的形态——importWarning 等结构体的
-			// key 字段（事实产出点登记键，消费点原样透传），以及
-			// AuditTextDetail 对 AuditTextPart 的单层包装。
+			// key 字段（事实产出点登记键，消费点原样透传）。
 			if sel, ok := call.Args[index].(*ast.SelectorExpr); ok && sel.Sel.Name == "key" {
-				return true
-			}
-			if _, ok := call.Args[index].(*ast.Ident); ok {
-				// 豁免：私有构造器把「键」作为参数接收（brandingReloadDetail 的
-				// field(key,…)、AuditTextDetail 的包装）——字面量在调用点传入，
-				// 由本守卫对调用点的元数扫描不到。这类构造器在包内私有，新增
-				// 调用点同样只从字面量取键（审计覆盖面靠调用点守卫兜住）。
 				return true
 			}
 			sites++
 			lit, ok := call.Args[index].(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING {
 				if name == "recordSystemAudit" || name == "recordSystemAuditOnce" {
-					unkeyedSystem++
+					// 启动审计零未键化：键必须是字面量，变量（detail/dedupeDetail
+					// 之类的整段拼串）无法对账登记，英文界面必落中文原文。
+					problems = append(problems, rel+":"+strconv.Itoa(fset.Position(call.Pos()).Line)+": "+name+" 的明细键必须是字符串字面量（启动审计不得传整段纯文本变量）")
+					return true
+				}
+				if _, ok := call.Args[index].(*ast.Ident); ok {
+					// 豁免：私有构造器把「键」作为参数接收（brandingReloadDetail 的
+					// field(key,…)、AuditTextDetail 的包装）——字面量在调用点传入，
+					// 由本守卫对调用点的元数扫描不到。这类构造器在包内私有，新增
+					// 调用点同样只从字面量取键（审计覆盖面靠调用点守卫兜住）。
 					return true
 				}
 				problems = append(problems, rel+":"+strconv.Itoa(fset.Position(call.Pos()).Line)+": "+name+" 的键不是字符串字面量")
@@ -114,10 +115,6 @@ func scanAuditDetailKeySites(t *testing.T) (sites int, problems []string) {
 	if sites < 300 {
 		t.Fatalf("明细段写点只扫到 %d 处（扫描面异常，守卫会假绿）", sites)
 	}
-	if unkeyedSystem > systemAuditUnkeyedBaseline {
-		problems = append(problems, "启动迁移系统审计未键化条数 "+strconv.Itoa(unkeyedSystem)+" 超过基线 "+strconv.Itoa(systemAuditUnkeyedBaseline)+"（只减不增）")
-	}
-	t.Logf("启动迁移系统审计未键化存量 %d 条（基线 %d，只减不增）", unkeyedSystem, systemAuditUnkeyedBaseline)
 	return sites, problems
 }
 

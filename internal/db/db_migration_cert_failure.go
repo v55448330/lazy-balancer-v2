@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	gosqlite "github.com/glebarez/go-sqlite"
+
+	"lazy-balancer-v2/internal/i18n"
 )
 
 // certCooldownExpiredNote 追加到「冷却窗口已过期」失败行 message 的终态标记。
@@ -155,9 +157,9 @@ func migrateCertJobsWaitingCA() error {
 		return fmt.Errorf("failed to migrate waiting_ca certificate jobs: %w", err)
 	}
 	if normalized > 0 {
-		detail := fmt.Sprintf("启动迁移：证书任务失败语义统一，存量 waiting_ca 行转为 failed（保留消息/重试次数/退避窗口）：%d 条", normalized)
+		detail, _ := i18n.Text("audit.migrateCertJobWaitingCANormalized", normalized)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "证书任务", detail)
+		recordSystemAudit("启动迁移", "证书任务", "audit.migrateCertJobWaitingCANormalized", normalized)
 	}
 	// 追加按标记去重（AnnotateExpiredCooldownMessages 单源，与导入 finish
 	// 共用），收敛库上二次启动零命中。
@@ -166,9 +168,9 @@ func migrateCertJobsWaitingCA() error {
 		return err
 	}
 	if annotated > 0 {
-		detail := fmt.Sprintf("启动迁移：%d 条失败证书任务的冷却窗口已过期，message 追加终态说明「%s」", annotated, certCooldownExpiredNote)
+		detail, _ := i18n.Text("audit.migrateCertJobCooldownAnnotated", annotated, certCooldownExpiredNote)
 		log.Print(detail)
-		recordSystemAudit("启动迁移", "证书任务", detail)
+		recordSystemAudit("启动迁移", "证书任务", "audit.migrateCertJobCooldownAnnotated", annotated, certCooldownExpiredNote)
 	}
 	return nil
 }

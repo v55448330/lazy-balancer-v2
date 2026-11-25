@@ -76,5 +76,31 @@
       ]
     ],
     "zh": "结果：brand_new_code"
+  },
+  {
+    "name": "启动迁移：IP 名单去重（含不可解析行）",
+    "key": "audit.migrateSystemIPListDedupedUnparseable",
+    "params": [
+      [
+        "3",
+        "7",
+        "2",
+        "1",
+        "41"
+      ]
+    ],
+    "zh": "启动迁移：security_ip_lists 重复的 system=1 名单行已去重（被引用行优先保留，引用已重写）：3 条；删除行条目已并入保留行 7 条（身份重复跳过 2 条）；1 行条目形态无法解析，所属重复组已整组保留（行 id：41，请人工核对）"
+  },
+  {
+    "name": "启动迁移：TCP 死字段清零",
+    "key": "audit.migrateTcpDeadFieldsCleared",
+    "params": [
+      [
+        "4",
+        "1",
+        "2"
+      ]
+    ],
+    "zh": "存量 TCP 规则 HTTP 专属死字段已清零：4 条（含路径规则 1 条、上游回源域名 2 条；主端库/导出 canonical/从端落库三面同值）"
   }
 ]
