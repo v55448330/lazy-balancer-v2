@@ -1065,7 +1065,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "IP 地址列表不存在") {
+	if !rowsAffectedOrRespond(c, result, "security.ipListNotFound") {
 		return
 	}
 	// 整表保存的条目差集处置（req.Entries != nil 才有新输入）：
@@ -1276,7 +1276,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "IP 地址列表不存在") {
+	if !rowsAffectedOrRespond(c, result, "security.ipListNotFound") {
 		return
 	}
 	entryCountLabel := "条目数未知"

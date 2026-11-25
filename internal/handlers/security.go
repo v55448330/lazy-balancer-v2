@@ -436,7 +436,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "规则不存在") {
+	if !rowsAffectedOrRespond(c, result, "rule.ruleNotFound") {
 		return
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
@@ -515,7 +515,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "规则不存在") {
+	if !rowsAffectedOrRespond(c, result, "rule.ruleNotFound") {
 		return
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
@@ -721,7 +721,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "拦截页面不存在") {
+	if !rowsAffectedOrRespond(c, result, "security.blockPageNotFound") {
 		return
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
@@ -803,7 +803,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "拦截页面不存在") {
+	if !rowsAffectedOrRespond(c, result, "security.blockPageNotFound") {
 		return
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
@@ -2539,7 +2539,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "策略不存在") {
+	if !rowsAffectedOrRespond(c, result, "security.policyNotFound") {
 		return
 	}
 	// 缺省（nil）提交按合并后内容重推断 policy_type（类型与内容不漂移；
@@ -2839,7 +2839,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "common.serverInternalError", err))
 		return
 	}
-	if !rowsAffectedOrRespond(c, result, "策略不存在") {
+	if !rowsAffectedOrRespond(c, result, "security.policyNotFound") {
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM security_policy_bindings WHERE policy_id=?", id); err != nil {
@@ -7258,14 +7258,15 @@ func parsePositiveNumericID(raw string) (int64, bool) {
 // 返回错误时必须显式 500——此前 8 处 `if rows, _ := result.RowsAffected(); rows
 // == 0` 把驱动层错误吞成「0 行」，真实故障被误报为 404（重试语义误导）。
 // 返回 false 表示已写出响应，调用方直接 return。
-func rowsAffectedOrRespond(c *gin.Context, result sql.Result, notFoundMsg string) bool {
+func rowsAffectedOrRespond(c *gin.Context, result sql.Result, notFoundKey string) bool {
 	rows, err := result.RowsAffected()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.writeResultReadFailed", err))
 		return false
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: notFoundMsg})
+		// 404 走键化信封：中文母本与原字面量同源，前端据 message_key 渲染。
+		c.JSON(http.StatusNotFound, apimsg.Envelope(nil, http.StatusNotFound, notFoundKey))
 		return false
 	}
 	return true
