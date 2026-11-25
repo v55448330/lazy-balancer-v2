@@ -6,6 +6,7 @@ package handlers
 
 import (
 	"fmt"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"strconv"
 	"time"
@@ -85,8 +86,8 @@ func (h *Handlers) DisconnectMCPSession(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "断开", "MCP 会话",
-		"会话 "+sessionID+"（用户 #"+strconv.FormatInt(ownerUserID, 10)+
-			"，Key #"+strconv.FormatInt(ownerKeyID, 10)+"）强制断开")
+		services.AuditRawDetail("会话 "+sessionID+"（用户 #"+strconv.FormatInt(ownerUserID, 10)+
+			"，Key #"+strconv.FormatInt(ownerKeyID, 10)+"）强制断开") /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtMCPDisconnected, Fields: map[string]string{"1": c.GetString("username"), "2": fmt.Sprintf("会话 #%s", c.Param("id"))}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "apikey.mcpSessionDisconnected"))
 }

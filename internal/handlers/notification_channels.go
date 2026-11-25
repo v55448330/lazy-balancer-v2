@@ -505,7 +505,7 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	if owner != uid {
 		subject = "管理员修改用户" + subject
 	}
-	recordAudit(c, "修改", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
+	recordAudit(c, "修改", "通知通道", services.FormatAuditDetail(services.AuditRawPart(subject) /* audit-detail raw */, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": auditName}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
@@ -545,7 +545,7 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 	if owner != uid {
 		subject = "管理员删除用户" + subject
 	}
-	recordAudit(c, "删除", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
+	recordAudit(c, "删除", "通知通道", services.FormatAuditDetail(services.AuditRawPart(subject) /* audit-detail raw */, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtNotifyChannelChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除", "3": auditName}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
@@ -587,9 +587,9 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 		subject = "管理员测试用户" + subject
 	}
 	if ok {
-		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
+		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(services.AuditRawPart(subject) /* audit-detail raw */, services.AuditResultPart("success")))
 	} else {
-		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(subject, services.AuditResultPart("failed")))
+		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(services.AuditRawPart(subject) /* audit-detail raw */, services.AuditResultPart("failed")))
 	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "notify.testMessageSendFailed", err.Error()))

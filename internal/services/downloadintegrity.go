@@ -35,7 +35,7 @@ var downloadIntegrityMu sync.Mutex
 type downloadIntegrityAudit struct {
 	action   string
 	resource string
-	detail   string
+	detail   AuditDetail
 }
 
 // recordDownloadIntegrityAudits 落库锁内收集的审计记录（调用方必须已解锁）。
@@ -91,7 +91,7 @@ func verifyDownloadIntegrity(source, destPath, resource string) (downloadIntegri
 		audits = append(audits, downloadIntegrityAudit{
 			action:   "校验阻断",
 			resource: resource,
-			detail:   FormatAuditDetail(fmt.Sprintf("来源 %s 的下载内容与上次记录不一致（size %d→%d，sha256 %s→%s），已阻断安装并保留旧基线", source, prev.Size, info.Size(), prev.SHA256, digest)),
+			detail:   FormatAuditDetail(AuditTextPart("audit.downloadIntegrityMismatch", source, prev.Size, info.Size(), prev.SHA256, digest)),
 		})
 		downloadIntegrityMu.Unlock()
 		Logf("error", "download integrity mismatch for %s: size %d→%d, sha256 %s→%s（与上次记录不一致，已阻断安装并保留旧基线；如确认上游更新合法，删除 %s 中该来源条目后重试）", source, prev.Size, info.Size(), prev.SHA256, digest, downloadIntegrityPath)
@@ -180,13 +180,13 @@ func loadDownloadIntegrityRecords() (map[string]downloadIntegrityRecord, []downl
 			return map[string]downloadIntegrityRecord{}, []downloadIntegrityAudit{{
 				action:   "下载校验",
 				resource: "完整性记录",
-				detail:   FormatAuditDetail(fmt.Sprintf("记录文件 %s 解析失败，隔离为 %s 失败：%v", downloadIntegrityPath, quarantined, err)),
+				detail:   FormatAuditDetail(AuditTextPart("audit.recordFileQuarantineFailed", downloadIntegrityPath, quarantined, err)),
 			}}, []string{fmt.Sprintf("download integrity: records file %s is corrupt, quarantine rename to %s failed: %v（原文件保留，直接重建基线）", downloadIntegrityPath, quarantined, err)}, nil
 		}
 		return map[string]downloadIntegrityRecord{}, []downloadIntegrityAudit{{
 			action:   "下载校验",
 			resource: "完整性记录",
-			detail:   FormatAuditDetail(fmt.Sprintf("记录文件 %s 解析失败，已隔离为 %s 并重建基线", downloadIntegrityPath, quarantined)),
+			detail:   FormatAuditDetail(AuditTextPart("audit.recordFileQuarantined", downloadIntegrityPath, quarantined)),
 		}}, []string{fmt.Sprintf("download integrity: records file %s is corrupt, quarantined to %s and baselines rebuilt", downloadIntegrityPath, quarantined)}, nil
 	}
 	if records == nil {

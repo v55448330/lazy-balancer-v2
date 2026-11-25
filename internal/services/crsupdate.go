@@ -461,16 +461,7 @@ func (m *CRSUpdateManager) runWithContext(runCtx context.Context, trigger string
 	// 结果审计已撤（审计单记——曾是 defer+内联双记）。
 	defer func() {
 		snap := m.StatusSnapshot()
-		// 状态中文归一（曾混英文 status token，与 threat 族口径不一）
-		statusLabel := map[string]string{
-			string(CRSStatusSuccess): "成功", string(CRSStatusFailed): "失败",
-			string(CRSStatusSkipped): "跳过", string(CRSStatusCancelled): "已取消",
-			string(CRSStatusIdle): "空闲", string(CRSStatusChecking): "检测中",
-		}[snap.Status]
-		if statusLabel == "" {
-			statusLabel = snap.Status
-		}
-		detail := fmt.Sprintf("更新%s（触发：%s）%s", statusLabel, trigger, snap.Message)
+		detail := libUpdateAuditDetail(snap.Status, trigger, snap.Message)
 		switch snap.Status {
 		case string(CRSStatusFailed):
 			RecordAuditLog(operator, "更新失败", "CRS规则库", detail, "")

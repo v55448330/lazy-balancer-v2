@@ -707,10 +707,10 @@ func emitConfigDriftEvent(event *configDriftEvent) {
 		return
 	case event.recovered:
 		Logf("info", "配置一致性看门狗：运行配置与规则数据已恢复一致")
-		RecordAuditLog("system", "配置恢复", "Caddy配置", "运行配置与规则数据已恢复一致", "")
+		RecordAuditLog("system", "配置恢复", "Caddy配置", AuditRawDetail("运行配置与规则数据已恢复一致") /* audit-detail raw */, "")
 	default:
 		Logf("error", "配置一致性看门狗：%s", event.detail)
-		RecordAuditLog("system", "配置漂移", "Caddy配置", event.detail, "")
+		RecordAuditLog("system", "配置漂移", "Caddy配置", AuditRawDetail(event.detail) /* audit-detail raw */, "")
 	}
 }
 

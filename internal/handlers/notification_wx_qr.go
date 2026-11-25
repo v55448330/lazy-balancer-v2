@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"context"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"time"
 
@@ -43,7 +44,7 @@ func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 	if confirmed {
 		// 登录确认即凭据就绪（首登落全局/二登待通道钉住）——产码 start 不记
 		// （一次登录一次审计）。
-		recordAudit(c, "绑定", "通知设置", "微信机器人扫码登录成功")
+		recordAudit(c, "绑定", "通知设置", services.AuditRawDetail("微信机器人扫码登录成功") /* audit-detail raw */)
 	}
 	data := gin.H{"status": status, "confirmed": confirmed}
 	if confirmed {

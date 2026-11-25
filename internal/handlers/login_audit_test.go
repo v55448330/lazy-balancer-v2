@@ -62,7 +62,7 @@ func TestLogin_successAuditDetailContainsUsername(t *testing.T) {
 	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='登录成功' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
-	if !strings.Contains(detail, services.AuditUserPart(userID, "zhang")) {
+	if !strings.Contains(detail, services.AuditUserPart(userID, "zhang").Text()) {
 		t.Errorf("login success detail=%q, want 完整用户标识 %q", detail, services.AuditUserPart(userID, "zhang"))
 	}
 }
@@ -94,7 +94,7 @@ func TestLogin_lockedAuditDetailContainsUsername(t *testing.T) {
 	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE detail LIKE '%已锁定%' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
-	if !strings.Contains(detail, services.AuditUserPart(userID, "zhang")) {
+	if !strings.Contains(detail, services.AuditUserPart(userID, "zhang").Text()) {
 		t.Errorf("locked detail=%q, want 完整用户标识 %q", detail, services.AuditUserPart(userID, "zhang"))
 	}
 }

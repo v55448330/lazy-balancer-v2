@@ -677,7 +677,7 @@ func TestFlushSystemAuditLogs_writesBufferedEntriesToAuditDB(t *testing.T) {
 		username VARCHAR(100),
 		action VARCHAR(50) NOT NULL,
 		resource VARCHAR(100),
-		detail TEXT,
+		detail TEXT, detail_key TEXT, detail_params TEXT,
 		ip_address VARCHAR(45),
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
@@ -723,7 +723,7 @@ func TestFlushSystemAuditLogs_retainsEntriesOnInsertFailure(t *testing.T) {
 		username VARCHAR(100),
 		action VARCHAR(50) NOT NULL,
 		resource VARCHAR(100),
-		detail TEXT,
+		detail TEXT, detail_key TEXT, detail_params TEXT,
 		ip_address VARCHAR(45),
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -3917,7 +3917,7 @@ func TestMigrateSystemIPListUniqueIndex_recordsAuditForDedupedRows(t *testing.T)
 		username VARCHAR(100),
 		action VARCHAR(50) NOT NULL,
 		resource VARCHAR(100),
-		detail TEXT,
+		detail TEXT, detail_key TEXT, detail_params TEXT,
 		ip_address VARCHAR(45),
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {

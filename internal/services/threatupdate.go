@@ -353,13 +353,11 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 		outcome := m.lastTaskOutcome
 		emptySources := m.lastRunEmptySources
 		m.mu.Unlock()
-		detail := fmt.Sprintf("更新%s（触发：%s）", map[string]string{
-			"success": "成功", "failed": "失败", "cancelled": "已取消", "skipped": "跳过",
-		}[outcome], trigger)
+		detail := libUpdateAuditDetail(outcome, trigger, "")
 		if emptySources && outcome == "success" {
 			// 零到期源的语义单源：动作「更新」（与常态成功轮同族），detail
 			// 声明空轮事实——此前该轮 detail 只有「成功」，与真更新轮不可区分。
-			detail = fmt.Sprintf("无到期源，本轮无更新（触发：%s）", trigger)
+			detail = libUpdateNothingDueDetail(trigger)
 		}
 		switch outcome {
 		case "failed":
@@ -1026,11 +1024,11 @@ func writeThreatSystemList(source string, entries []string) (bool, error) {
 			var userOwned int
 			if uerr := db.DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists WHERE name=? AND COALESCE(system,0)=0`, name).Scan(&userOwned); uerr == nil && userOwned > 0 {
 				Logf("warn", "威胁情报库: 内置名单 %q 已补建，但存在同名用户自建列表——请重命名用户列表以消除选择器歧义", name)
-				RecordAuditLog("system", "重建", "威胁情报库", fmt.Sprintf("内置名单 %s 已补建（存在同名用户列表，建议重命名用户列表）", name), "")
+				RecordAuditLog("system", "重建", "威胁情报库", AuditRawDetail(fmt.Sprintf("内置名单 %s 已补建（存在同名用户列表，建议重命名用户列表）", name)) /* audit-detail raw */, "")
 			}
 			// 补建产生新 id
 			Logf("warn", "威胁情报库: 内置名单 %q 已重建为新 id，原策略引用已失效，需重新绑定", name)
-			RecordAuditLog("system", "重建", "威胁情报库", fmt.Sprintf("内置名单 %s 重建为新 id，原策略引用已失效，需重新绑定", name), "")
+			RecordAuditLog("system", "重建", "威胁情报库", AuditRawDetail(fmt.Sprintf("内置名单 %s 重建为新 id，原策略引用已失效，需重新绑定", name)) /* audit-detail raw */, "")
 		}
 	} else {
 		if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries='', updated_at=datetime('now') WHERE name=? AND system=1`, name); err != nil {

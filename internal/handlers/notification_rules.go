@@ -636,7 +636,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 	if uid != contextUserID(c) {
 		proxy = "管理员代管用户 " + strconv.FormatInt(uid, 10)
 	}
-	recordAudit(c, "修改", "通知规则", services.FormatAuditDetail(proxy, "规则「"+ruleTitle+"」", services.AuditResultPart("success")))
+	recordAudit(c, "修改", "通知规则", services.FormatAuditDetail(services.AuditRawPart(proxy) /* audit-detail raw */, services.AuditTextPart("audit.ruleQuoted", ruleTitle), services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtNotifyRuleChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新", "3": ruleTitle}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
@@ -697,11 +697,11 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 		proxy = "管理员代管用户 " + strconv.FormatInt(uid, 10)
 	}
 	if err := notify.EnqueueTestDelivery(uid, eventType); err != nil {
-		recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(proxy, "规则「"+group+"」", services.AuditResultPart("failed")))
+		recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(services.AuditRawPart(proxy) /* audit-detail raw */, services.AuditTextPart("audit.ruleQuoted", group), services.AuditResultPart("failed")))
 		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "notify.testMessageEnqueueFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
-	recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(proxy, "规则「"+group+"」", services.AuditResultPart("success")))
+	recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(services.AuditRawPart(proxy) /* audit-detail raw */, services.AuditTextPart("audit.ruleQuoted", group), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "notify.testMessageQueued"))
 }
 

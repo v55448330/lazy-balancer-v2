@@ -6,6 +6,7 @@ package handlers
 // 据 phase 决定。审计：注册/确认属绑定动作，handler 显式留痕（Explicit）。
 
 import (
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -41,7 +42,7 @@ func (h *Handlers) PostBindSession(c *gin.Context) {
 		qqTaskMu.Unlock()
 	}
 	notify.StartBindSessionWithCred(uid, req.Type, req.ScannerID, req.BotKey, secret)
-	recordAudit(c, "绑定", "通知通道", "发起绑定会话（"+req.Type+"，待发送绑定测试）")
+	recordAudit(c, "绑定", "通知通道", services.AuditRawDetail("发起绑定会话（"+req.Type+"，待发送绑定测试）") /* audit-detail raw */)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"phase":     "awaiting_message",
 		"connected": notify.BindSessionConnected(req.Type, req.BotKey),
@@ -76,6 +77,6 @@ func (h *Handlers) DeleteBindSession(c *gin.Context) {
 		qqTaskMu.Unlock()
 	}
 	notify.AbortBindSession(uid, typ, scannerID, botKey)
-	recordAudit(c, "绑定", "通知通道", "取消绑定会话（"+typ+"）")
+	recordAudit(c, "绑定", "通知通道", services.AuditRawDetail("取消绑定会话（"+typ+"）") /* audit-detail raw */)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }

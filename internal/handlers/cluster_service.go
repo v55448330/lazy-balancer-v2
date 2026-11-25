@@ -55,30 +55,30 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 	// 特权服务控制的所有失败早退（编号非法/体解析失败/
 	// 动作不支持/票据签发失败）此前零审计，越权探测与故障签发在操作日志中不可见。
 	// 统一经 recordAudit 留痕「失败」；动作串经 registerAuditField 截断去控制字符。
-	auditFailure := func(nodeID int, detail string) {
+	auditFailure := func(nodeID int, detail services.AuditPart) {
 		// 路径参数未清洗：已认证管理员可经 %0A 等注入换行/控制字符伪造审计
 		// 段落。与 action/operator 同源走 registerAuditField（去控制字符 +
 		// 128B 截断），可打印原值保留供取证。
-		nodePart := "节点 " + registerAuditField(c.Param("id"))
+		nodePart := services.AuditTextPart("audit.nodeField", registerAuditField(c.Param("id")))
 		if nodeID > 0 {
-			nodePart = fmt.Sprintf("节点 %d", nodeID)
+			nodePart = services.AuditTextPart("audit.nodeNumber", nodeID)
 		}
-		recordAudit(c, "服务控制", "节点服务", services.FormatAuditDetail(nodePart, detail, "结果：失败"))
+		recordAudit(c, "服务控制", "节点服务", services.FormatAuditDetail(nodePart, detail, services.AuditTextPart("audit.resultFailure")))
 	}
 	nodeID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || nodeID <= 0 {
-		auditFailure(nodeID, "节点编号无效")
+		auditFailure(nodeID, services.AuditTextPart("audit.nodeIdInvalidSentence"))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
 	var req models.ClusterNodeServiceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		auditFailure(nodeID, "请求格式错误")
+		auditFailure(nodeID, services.AuditTextPart("audit.requestFormatInvalid"))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "common.malformedRequest", err))
 		return
 	}
 	if !models.IsValidClusterServiceAction(req.Action) {
-		auditFailure(nodeID, "动作："+registerAuditField(req.Action)+"（不支持）")
+		auditFailure(nodeID, services.AuditTextPart("audit.serviceActionUnsupported", services.AuditRawPart(registerAuditField(req.Action))))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.unsupportedServiceControlAction", nil))
 		return
 	}
@@ -87,7 +87,7 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 		// 服务层降级竞态：handler 角色门通过后节点簿记已降级——与 requireMaster
 		// 门同源 403（携带 X-LB-Error-Code），不得折叠成 404/500。
 		if errors.Is(err, services.ErrNotMasterNode) {
-			auditFailure(nodeID, "签发票据失败（动作："+registerAuditField(req.Action)+"）")
+			auditFailure(nodeID, services.AuditTextPart("audit.serviceTicketIssueFailed", services.AuditRawPart(registerAuditField(req.Action))))
 			clusterMasterForbidden(c, err)
 			return
 		}
@@ -105,7 +105,7 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 			// ErrInvalidServiceAction 不可达：handler 已在入口对非法动作先行 400
 			// （服务层校验是同一谓词首语句），此处无需 400 分支。
 		}
-		auditFailure(nodeID, "签发票据失败（动作："+registerAuditField(req.Action)+"）")
+		auditFailure(nodeID, services.AuditTextPart("audit.serviceTicketIssueFailed", services.AuditRawPart(registerAuditField(req.Action))))
 		emitClusterError(c, status, message, key, err)
 		return
 	}
@@ -116,7 +116,7 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 	}
 	recordAudit(c, "服务控制", "节点服务", services.FormatAuditDetail(
 		// 补节点 ID(nodes.name 无 UNIQUE,仅名无法定位行)。
-		fmt.Sprintf("节点 %d（%s）", nodeID, issued.NodeName), "操作："+req.Action, "结果："+result))
+		services.AuditTextPart("audit.nodeNumberWithHost", nodeID, issued.NodeName), services.AuditTextPart("audit.operation", req.Action), services.AuditTextPart("audit.resultRaw", result)))
 	if err != nil {
 		var rejected *clusterServiceControlRejection
 		if errors.As(err, &rejected) {
@@ -365,7 +365,7 @@ func recordClusterServiceControlAuditBy(c *gin.Context, action, result, operator
 		op = "主节点"
 	}
 	services.RecordAuditLog(op, "服务控制", "节点服务",
-		services.FormatAuditDetail("来源：主节点", "操作："+registerAuditField(action), "结果："+services.RedactCaddyAdminEndpoint(result)), c.ClientIP())
+		services.FormatAuditDetail(services.AuditTextPart("audit.sourceMasterNode"), services.AuditTextPart("audit.operation", registerAuditField(action)), services.AuditTextPart("audit.resultRaw", services.RedactCaddyAdminEndpoint(result))), c.ClientIP())
 }
 
 // currentUsername 从 gin context 取 JWT/API Key 中间件注入的操作人用户名。

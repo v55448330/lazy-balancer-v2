@@ -261,7 +261,7 @@ func TestLogin_last_login_failure_keeps_session_and_logs(t *testing.T) {
 	}
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		username TEXT, action TEXT, resource TEXT, detail TEXT, ip_address TEXT,
+		username TEXT, action TEXT, resource TEXT, detail TEXT, detail_key TEXT, detail_params TEXT, ip_address TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`); err != nil {
 		t.Fatalf("create audit table: %v", err)
 	}

@@ -1162,7 +1162,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 	// 未启用同样发生在导航链上，返回裸 JSON 会让浏览器停在一个 JSON 页面。
 	fail := func(msg, auditDetail string) {
 		if auditDetail != "" {
-			services.RecordAuditLog("oidc-user", "认证拒绝", "用户认证", services.FormatAuditDetail(auditDetail, services.AuditResultPart("failure")), c.ClientIP())
+			services.RecordAuditLog("oidc-user", "认证拒绝", "用户认证", services.FormatAuditDetail(services.AuditRawPart(auditDetail) /* audit-detail raw */, services.AuditResultPart("failure")), c.ClientIP())
 		}
 		c.Redirect(http.StatusFound, requestOrigin(c)+"/#/oidc/callback?error="+url.QueryEscape(msg))
 	}
@@ -1297,7 +1297,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 	switch {
 	case err == nil:
 		if ident.isEnabled != 1 {
-			services.RecordAuditLog(ident.username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s(账号已禁用)", services.AuditUserPart(ident.id, ident.username)), services.AuditResultPart("failure")), c.ClientIP())
+			services.RecordAuditLog(ident.username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditTextPart("audit.oidcLoginDisabled", services.AuditUserPart(ident.id, ident.username)), services.AuditResultPart("failure")), c.ClientIP())
 			fail("账号已被禁用", "")
 			return
 		}
@@ -1342,12 +1342,12 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 			return
 		}
 		if ident.isEnabled != 1 {
-			services.RecordAuditLog(ident.username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s(账号已禁用)", services.AuditUserPart(ident.id, ident.username)), services.AuditResultPart("failure")), c.ClientIP())
+			services.RecordAuditLog(ident.username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditTextPart("audit.oidcLoginDisabled", services.AuditUserPart(ident.id, ident.username)), services.AuditResultPart("failure")), c.ClientIP())
 			fail("账号已被禁用", "")
 			return
 		}
 		if created {
-			services.RecordAuditLog(ident.username, "创建", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 首次登录自动开户(%s)", cfg.Issuer), services.AuditResultPart("success")), c.ClientIP())
+			services.RecordAuditLog(ident.username, "创建", "用户认证", services.FormatAuditDetail(services.AuditTextPart("audit.oidcFirstLoginProvisioned", cfg.Issuer), services.AuditResultPart("success")), c.ClientIP())
 		}
 	default:
 		fail("查询用户失败", "")
@@ -1362,7 +1362,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		fail("签发登录令牌失败", "")
 		return
 	}
-	services.RecordAuditLog(username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s", services.AuditUserPart(userID, username)), services.AuditResultPart("success")), c.ClientIP())
+	services.RecordAuditLog(username, "登录成功", "用户认证", services.FormatAuditDetail(services.AuditTextPart("audit.oidcLogin", services.AuditUserPart(userID, username)), services.AuditResultPart("success")), c.ClientIP())
 	notify.Publish(notify.Event{Type: notify.EvtLoginSuccess,
 		Fields: map[string]string{"1": username, "2": time.Now().Format("2006-01-02 15:04:05"), "3": c.ClientIP()}})
 	// 与密码登录同序同源（touchLastLogin 单源）：成功审计已在上方落库，
@@ -1555,18 +1555,18 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	if len(migration.conflicts) > 0 {
 		services.Logf("warn", "OIDC 设置保存被拒绝：服务地址归一后与既有身份行冲突（%d 个 subject）", len(migration.conflicts))
 		recordAudit(c, "更新失败", "OIDC 配置", services.FormatAuditDetail(
-			"服务地址归一与既有身份行冲突", "subject："+strings.Join(migration.conflicts, "、"), services.AuditResultPart("failure")))
+			services.AuditTextPart("audit.oidcIssuerNormalizeConflict"), services.AuditTextPart("audit.subjectList", strings.Join(migration.conflicts, "、")), services.AuditResultPart("failure")))
 		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "auth.oidcNormalizedIssuerIdentityConflict", len(migration.conflicts)).WithData(gin.H{"conflicts": migration.conflicts}))
 		return
 	}
 	detail := oidcConfigUpdateAuditDetail(before, cfg)
 	if text := migration.auditText(); text != "" {
-		detail = services.FormatAuditDetail(detail, text)
+		detail = services.AppendAuditDetail(detail, services.AuditRawPart(text) /* audit-detail raw */)
 	}
 	if staleIdentityRows > 0 {
-		detail = services.FormatAuditDetail(detail, fmt.Sprintf("服务地址变更：存量身份行 %d 条不再可达", staleIdentityRows))
+		detail = services.AppendAuditDetail(detail, services.AuditTextPart("audit.oidcIssuerChangedUnreachable", staleIdentityRows))
 	}
-	recordAudit(c, "更新", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
+	recordAudit(c, "更新", "OIDC 配置", services.AppendAuditDetail(detail, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtOIDCChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新"}})
 	response := apimsg.Envelope(c, 0, "auth.oidcConfigSaved")
 	if reportStaleIdentities {
@@ -1579,55 +1579,58 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 // 该端点为 AuditPolicyExplicit，中间件不补字段——此前详情仅有「认证集成 成功」，
 // 启用/禁用、issuer、client_id 的任何变更在审计中不可区分。secret 只记
 // 「已更换/已清除」，绝不落值（对齐 config_changes.go GitHub token 口径）。
-func oidcConfigUpdateAuditDetail(before, after OIDCConfig) string {
-	changed := make([]string, 0, 5)
-	enabledText := func(v bool) string {
+// oidcConfigUpdateAuditDetail 是 OIDC 配置更新的审计明细：字段变化逐段登记
+// （标签与「启用/禁用」「（空）」等取值文案都是词条，值本身作为槽位），
+// 无变化时只报「无字段变化」。
+func oidcConfigUpdateAuditDetail(before, after OIDCConfig) services.AuditDetail {
+	enabledText := func(v bool) services.AuditPart {
 		if v {
-			return "启用"
+			return services.AuditTextPart("audit.oidcEnabled")
 		}
-		return "禁用"
+		return services.AuditTextPart("audit.oidcDisabled")
 	}
-	shown := func(v string) string {
+	shown := func(v string) services.AuditPart {
 		if v == "" {
-			return "（空）"
+			return services.AuditTextPart("audit.oidcEmptyValue")
 		}
-		return v
+		return services.AuditRawPart(v)
 	}
+	listText := func(v []string) services.AuditPart {
+		if len(v) == 0 {
+			return services.AuditTextPart("audit.oidcNoRestriction")
+		}
+		return services.AuditRawPart(strings.Join(v, ","))
+	}
+	changed := make([]services.AuditPart, 0, 5)
 	if before.Enabled != after.Enabled {
-		changed = append(changed, "启用状态："+enabledText(before.Enabled)+"→"+enabledText(after.Enabled))
+		changed = append(changed, services.AuditTextPart("audit.oidcEnabledChanged", enabledText(before.Enabled), enabledText(after.Enabled)))
 	}
 	if before.Issuer != after.Issuer {
-		changed = append(changed, "服务地址："+shown(before.Issuer)+"→"+shown(after.Issuer))
+		changed = append(changed, services.AuditTextPart("audit.oidcIssuerChanged", shown(before.Issuer), shown(after.Issuer)))
 	}
 	if before.ClientID != after.ClientID {
-		changed = append(changed, "Client ID："+shown(before.ClientID)+"→"+shown(after.ClientID))
+		changed = append(changed, services.AuditTextPart("audit.oidcClientIdChanged", shown(before.ClientID), shown(after.ClientID)))
 	}
 	if before.ClientSecret != after.ClientSecret {
 		if after.ClientSecret == "" {
-			changed = append(changed, "Client Secret：已清除")
+			changed = append(changed, services.AuditTextPart("audit.oidcClientSecretCleared"))
 		} else {
-			changed = append(changed, "Client Secret：已更换")
+			changed = append(changed, services.AuditTextPart("audit.oidcClientSecretReplaced"))
 		}
 	}
 	if before.DisplayName != after.DisplayName {
-		changed = append(changed, "展示名称："+shown(before.DisplayName)+"→"+shown(after.DisplayName))
-	}
-	listText := func(v []string) string {
-		if len(v) == 0 {
-			return "（不限制）"
-		}
-		return strings.Join(v, ",")
+		changed = append(changed, services.AuditTextPart("audit.oidcDisplayNameChanged", shown(before.DisplayName), shown(after.DisplayName)))
 	}
 	if !slices.Equal(before.AllowedEmailDomains, after.AllowedEmailDomains) {
-		changed = append(changed, "允许的 email 域："+listText(before.AllowedEmailDomains)+"→"+listText(after.AllowedEmailDomains))
+		changed = append(changed, services.AuditTextPart("audit.oidcAllowedEmailDomainsChanged", listText(before.AllowedEmailDomains), listText(after.AllowedEmailDomains)))
 	}
 	if !slices.Equal(before.AllowedGroups, after.AllowedGroups) {
-		changed = append(changed, "允许的组："+listText(before.AllowedGroups)+"→"+listText(after.AllowedGroups))
+		changed = append(changed, services.AuditTextPart("audit.oidcAllowedGroupsChanged", listText(before.AllowedGroups), listText(after.AllowedGroups)))
 	}
 	if len(changed) == 0 {
-		return "认证集成（无字段变化）"
+		return services.AuditTextDetail("audit.oidcNoFieldChanged")
 	}
-	return "认证集成（" + strings.Join(changed, "；") + "）"
+	return services.FormatAuditDetail(services.AuditTextPart("audit.oidcChangedFields", changed))
 }
 
 // OIDCSettingsTest POST /settings/oidc/test(admin)——完整发现+JWKS 探测。
@@ -1681,7 +1684,7 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 	oidcProviderInvalidate(issuer) // 测试总是新鲜发现,不喂缓存
 	p, err := oidcProvider(issuer)
 	if err != nil {
-		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(issuer, services.AuditResultPart("failure")))
+		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(services.AuditRawPart(issuer) /* audit-detail raw */, services.AuditResultPart("failure")))
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"ok": false, "error": oidcTestFailureText(err)}})
 		return
 	}
@@ -1695,7 +1698,7 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 		JWKSURI string   `json:"jwks_uri"`
 	}
 	if err := p.Claims(&providerClaims); err != nil {
-		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(issuer, services.AuditResultPart("failure")))
+		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(services.AuditRawPart(issuer) /* audit-detail raw */, services.AuditResultPart("failure")))
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"ok": false, "error": "读取发现文档失败: " + err.Error()}})
 		return
 	}
@@ -1707,7 +1710,7 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 		}
 	}
 	if jwksErr != nil {
-		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(fmt.Sprintf("%s(%s)", name, issuer), services.AuditResultPart("failure")))
+		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(services.AuditTextPart("audit.nameWithParenthesis", name, issuer), services.AuditResultPart("failure")))
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"ok": false, "error": "JWKS 探测失败: " + jwksErr.Error()}})
 		return
 	}
@@ -1729,7 +1732,7 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 	}
 	credentialsChecked, credErr := probeClientCredentials(p.Endpoint().TokenURL, clientID, clientSecret, issuer)
 	if credErr != nil {
-		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(fmt.Sprintf("%s(%s)", name, issuer), services.AuditResultPart("failure")))
+		recordAudit(c, "测试失败", "OIDC 配置", services.FormatAuditDetail(services.AuditTextPart("audit.nameWithParenthesis", name, issuer), services.AuditResultPart("failure")))
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"ok": false, "error": credErr.Error()}})
 		return
 	}
@@ -1737,7 +1740,7 @@ func (h *Handlers) OIDCSettingsTest(c *gin.Context) {
 	if credentialsChecked {
 		detail += " 凭证校验通过"
 	}
-	recordAudit(c, "测试成功", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
+	recordAudit(c, "测试成功", "OIDC 配置", services.FormatAuditDetail(services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"ok": true, "issuer": providerClaims.Issuer, "provider_name": name,
 		"authorization_endpoint": p.Endpoint().AuthURL,
@@ -1887,29 +1890,29 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 	}
 	// 删除留痕「删除前的字段值」（secret 只记是否配置），供取证
 	// 重建被抹除的接入参数。
-	detail := "认证集成"
+	detail := services.AuditTextDetail("audit.oidcIntegration")
 	if cfgErr == nil {
-		yn := func(v string) string {
+		yn := func(v string) services.AuditPart {
 			if v == "" {
-				return "（空）"
+				return services.AuditTextPart("audit.oidcEmptyValue")
 			}
-			return v
+			return services.AuditRawPart(v)
 		}
-		secretState := "未配置"
+		secretState := services.AuditTextPart("audit.oidcSecretNotConfigured")
 		if cfg.ClientSecret != "" {
-			secretState = "已配置"
+			secretState = services.AuditTextPart("audit.oidcSecretConfigured")
 		}
-		enabledState := "禁用"
+		enabledState := services.AuditTextPart("audit.oidcDisabled")
 		if cfg.Enabled {
-			enabledState = "启用"
+			enabledState = services.AuditTextPart("audit.oidcEnabled")
 		}
-		detail += fmt.Sprintf("（删除前：服务地址 %s；Client ID %s；Client Secret %s；启用状态 %s）",
-			yn(cfg.Issuer), yn(cfg.ClientID), secretState, enabledState)
+		detail = services.AppendAuditDetail(detail, services.AuditTextPart("audit.oidcDeletedSnapshot",
+			yn(cfg.Issuer), yn(cfg.ClientID), secretState, enabledState))
 	}
 	if oidcIdentityRows > 0 {
-		detail = services.FormatAuditDetail(detail, fmt.Sprintf("存量 OIDC 身份行 %d 条已不可登录", oidcIdentityRows))
+		detail = services.AppendAuditDetail(detail, services.AuditTextPart("audit.oidcIdentitiesLockedOut", oidcIdentityRows))
 	}
-	recordAudit(c, "删除", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
+	recordAudit(c, "删除", "OIDC 配置", services.AppendAuditDetail(detail, services.AuditResultPart("success")))
 	messageKey := "auth.oidcConfigDeleted"
 	var messageArgs []any
 	if oidcIdentityRows > 0 {

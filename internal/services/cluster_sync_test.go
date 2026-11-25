@@ -2159,8 +2159,8 @@ func TestSyncFailureAudit_throttlesIdenticalFailuresAndRerecords(t *testing.T) {
 
 	// When：同一失败内容记录三次
 	record := func(detail string) {
-		if sync.syncFailureAuditDue("同步失败", "集群同步", detail) {
-			RecordAuditLog("system", "同步失败", "集群同步", detail, "")
+		if sync.syncFailureAuditDue("同步失败", "集群同步", AuditRawDetail(detail)) {
+			RecordAuditLog("system", "同步失败", "集群同步", AuditRawDetail(detail), "")
 		}
 	}
 	for range 3 {
@@ -2185,11 +2185,11 @@ func TestSyncFailureAudit_throttlesIdenticalFailuresAndRerecords(t *testing.T) {
 	}
 
 	// 类别隔离：安全数据/重载失败不与被抑制的集群同步内容互相吞并
-	if sync.syncFailureAuditDue("同步失败", "安全数据", "拉取安全数据失败: x") {
-		RecordAuditLog("system", "同步失败", "安全数据", "拉取安全数据失败: x", "")
+	if sync.syncFailureAuditDue("同步失败", "安全数据", AuditRawDetail("拉取安全数据失败: x")) {
+		RecordAuditLog("system", "同步失败", "安全数据", AuditRawDetail("拉取安全数据失败: x"), "")
 	}
-	if sync.syncFailureAuditDue("重载失败", "Caddy服务", "同步应用后自动重载失败: y") {
-		RecordAuditLog("system", "重载失败", "Caddy服务", "同步应用后自动重载失败: y", "")
+	if sync.syncFailureAuditDue("重载失败", "Caddy服务", AuditRawDetail("同步应用后自动重载失败: y")) {
+		RecordAuditLog("system", "重载失败", "Caddy服务", AuditRawDetail("同步应用后自动重载失败: y"), "")
 	}
 	if got := countAuditRows(t, auditDB, "同步失败", "安全数据"); got != 1 {
 		t.Fatalf("security data failure rows=%d, want 1", got)
@@ -2207,14 +2207,14 @@ func TestSyncFailureAudit_throttlesAlternatingCategoriesIndependently(t *testing
 	t.Cleanup(func() { unregisterSyncDrainer(sync) })
 	auditDB := db.AuditDB
 
-	record := func(action, category, detail string) {
+	record := func(action, category string, detail AuditDetail) {
 		if sync.syncFailureAuditDue(action, category, detail) {
 			RecordAuditLog("system", action, category, detail, "")
 		}
 	}
 	for range 3 {
-		record("同步失败", "安全数据", "拉取安全数据失败: x")
-		record("重载失败", "Caddy服务", "同步应用后自动重载失败: y")
+		record("同步失败", "安全数据", AuditRawDetail("拉取安全数据失败: x"))
+		record("重载失败", "Caddy服务", AuditRawDetail("同步应用后自动重载失败: y"))
 	}
 	if got := countAuditRows(t, auditDB, "同步失败", "安全数据"); got != 1 {
 		t.Fatalf("alternating security data failures wrote %d audit rows, want 1", got)
@@ -2224,7 +2224,7 @@ func TestSyncFailureAudit_throttlesAlternatingCategoriesIndependently(t *testing
 	}
 
 	// 同类别内容变化仍重记（节流只抑制同一失败内容）。
-	record("同步失败", "安全数据", "拉取安全数据失败: y")
+	record("同步失败", "安全数据", AuditRawDetail("拉取安全数据失败: y"))
 	if got := countAuditRows(t, auditDB, "同步失败", "安全数据"); got != 2 {
 		t.Fatalf("changed security data failure rows=%d, want 2", got)
 	}

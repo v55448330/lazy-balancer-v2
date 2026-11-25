@@ -1944,15 +1944,15 @@ func recordJobFailure(jobID int, fromSet []string, message, errorCode string, re
 	// NULL、自动重试停止）=任务日志升为 ERROR 并以 max_attempts 结果码单列，
 	// 审计动作维持「签发限流」（用户裁定）；其余=签发失败（ERROR）。
 	level := "ERROR"
-	auditDetail := []string{AuditJobPart(jobID), AuditResultPart("failed")}
+	auditDetail := []AuditPart{AuditJobPart(jobID), AuditResultPart("failed")}
 	if errorCode == "429" {
 		if window > 0 {
 			level = "WARN"
-			auditDetail = []string{AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts),
-				fmt.Sprintf("恢复时间：%s", time.Now().Add(window).In(CurrentLocation()).Format("2006-01-02 15:04:05"))}
+			auditDetail = []AuditPart{AuditJobPart(jobID), AuditTextPart("audit.caThrottleAttempt", attempts),
+				AuditTextPart("audit.caThrottleRecoveryAt", time.Now().Add(window).In(CurrentLocation()).Format("2006-01-02 15:04:05"))}
 		} else {
 			// 达上限：level 保持默认 ERROR，仅把明细换成 max_attempts 结果码。
-			auditDetail = []string{AuditJobPart(jobID), AuditResultPart("max_attempts")}
+			auditDetail = []AuditPart{AuditJobPart(jobID), AuditResultPart("max_attempts")}
 		}
 	}
 	WriteCertJobLog(jobID, level, "failed", message)

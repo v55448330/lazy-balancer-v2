@@ -1646,7 +1646,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 				// 未提交条目重写投影，磁盘回退到已提交态（证书物化内容本即已提交
 				// PEM，物化无需撤销；见 RollbackIPListProjectionsToCommittedInLock 披露）。
 				h.caddyService.RollbackIPListProjectionsToCommittedInLock()
-				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 校验未通过", applyErr))
+				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(services.AuditTextPart("audit.caddyConfigCheckFailed"), applyErr))
 				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.caddyValidationFailedNotSaved", f.Resource, applyErr.Error()))
 				return true
 			}
@@ -1659,7 +1659,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 				// 本条 apply 已失败，不得补「重载」审计。
 				h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 				joined := errors.Join(err, recovery.err())
-				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(commitUncertainLabel, joined))
+				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(services.AuditTextPart("audit.commitUncertain"), joined))
 				c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", joined.Error()))
 				return true
 			}
@@ -1668,8 +1668,8 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			// 未保存 → 重复提交。200 响应与 finishTxApply 同口径经
 			// RedactCaddyAdminEndpoint 脱敏（/load 传输错误携带 admin 地址）。
 			h.recordCaddyApplySavedNotLive(applyErr)
-			recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
-			recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
+			recordAudit(c, f.AuditAction, f.Resource, services.AuditRawDetail(f.AuditDetail) /* audit-detail raw */)
+			recordAudit(c, "重载失败", "Caddy服务", services.AuditRawDetail(services.RedactCaddyAdminEndpoint(applyErr.Error())) /* audit-detail raw */)
 			// 退化提交（DB 已提交）与 finishTxApply 成功分支同口径发布事件。
 			publishTxApplyNotify(f)
 			services.Logf("warn", "IP 名单热路径：%s（#%d）投影已重写，证书物化触发的强制重载失败: %v", f.Resource, listID, applyErr)
@@ -1683,17 +1683,17 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 		if err := commitIPListTx(tx); err != nil {
 			recovery := h.recoverCommittedViewAfterCommitFailure(tx)
 			// 强制 /load 已真实成功——「触发重载必须留痕」不因 commit 失败豁免。
-			recordAudit(c, "重载", "Caddy服务", services.FormatAuditDetail("IP 名单热路径证书物化，强制重载收敛", services.AuditResultPart("success")))
+			recordAudit(c, "重载", "Caddy服务", services.FormatAuditDetail(services.AuditTextPart("audit.hotPathCertMaterialized"), services.AuditResultPart("success")))
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 			joined := errors.Join(err, recovery.err())
-			recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(commitUncertainLabel, joined))
+			recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(services.AuditTextPart("audit.commitUncertain"), joined))
 			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", joined.Error()))
 			return true
 		}
 		h.caddyService.PersistLastGoodBytesInLock(appliedConfig)
 		h.recordCaddyApplyResult(nil)
-		recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
-		recordAudit(c, "重载", "Caddy服务", services.FormatAuditDetail("IP 名单热路径证书物化，强制重载收敛", services.AuditResultPart("success")))
+		recordAudit(c, f.AuditAction, f.Resource, services.AuditRawDetail(f.AuditDetail) /* audit-detail raw */)
+		recordAudit(c, "重载", "Caddy服务", services.FormatAuditDetail(services.AuditTextPart("audit.hotPathCertMaterialized"), services.AuditResultPart("success")))
 		publishTxApplyNotify(f)
 		services.Logf("info", "IP 名单热路径：%s（#%d）投影文件已重写；本轮渲染物化了证书文件，已强制重载收敛", f.Resource, listID)
 		status := f.SuccessStatus
@@ -1713,12 +1713,12 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 		// 且泄漏事务无人释放。
 		rollbackLeakedTx()
 		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
-		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, err.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(services.AuditRawPart(commitUncertainLabel) /* audit-detail raw */, services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", err.Error()))
 		return true
 	}
 	h.recordCaddyApplyResult(nil) // 比对证实运行配置=已提交 DB 视图，清除既往失败标记
-	recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
+	recordAudit(c, f.AuditAction, f.Resource, services.AuditRawDetail(f.AuditDetail) /* audit-detail raw */)
 	publishTxApplyNotify(f)
 	services.Logf("info", "IP 名单热路径：%s（#%d）投影文件已重写，零 Caddy 重载（匹配器 ≤1s 热感知生效）", f.Resource, listID)
 	status := f.SuccessStatus

@@ -271,7 +271,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	if owner != uid {
 		subject = "管理员" + subject
 	}
-	recordAudit(c, "重发", "通知投递", services.FormatAuditDetail(subject, services.AuditResultPart("success")))
+	recordAudit(c, "重发", "通知投递", services.FormatAuditDetail(services.AuditRawPart(subject) /* audit-detail raw */, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "notify.resendAccepted"))
 }
 

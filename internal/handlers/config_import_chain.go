@@ -65,6 +65,31 @@ func (warning importWarning) render(lang string) string {
 	return fmt.Sprintf(i18n.T(lang, warning.key), args...)
 }
 
+// auditPart 把告警事实转成审计明细段（同一条词条键，审计与响应同源）。
+func (warning importWarning) auditPart() services.AuditPart {
+	args := make([]any, len(warning.args))
+	for index, arg := range warning.args {
+		if nested, ok := arg.(importWarning); ok {
+			args[index] = nested.auditPart()
+			continue
+		}
+		args[index] = arg
+	}
+	return services.AuditTextPart(warning.key, args...)
+}
+
+// auditParts 把告警集合转成审计段列表（槽位里的嵌套告警同步展开）。
+func (list importWarnings) auditParts() []services.AuditPart {
+	if len(list) == 0 {
+		return nil
+	}
+	parts := make([]services.AuditPart, 0, len(list))
+	for _, warning := range list {
+		parts = append(parts, warning.auditPart())
+	}
+	return parts
+}
+
 // importWarnings 告警集合。
 type importWarnings []importWarning
 

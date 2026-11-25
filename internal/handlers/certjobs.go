@@ -459,8 +459,8 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		}
 		return
 	}
-	auditFailureWithRule := func(result string, detail ...string) {
-		parts := append([]string{services.AuditJobPart(id), services.AuditRulePart(ruleID)}, detail...)
+	auditFailureWithRule := func(result string, detail ...services.AuditPart) {
+		parts := append([]services.AuditPart{services.AuditJobPart(id), services.AuditRulePart(ruleID)}, detail...)
 		parts = append(parts, services.AuditResultPart(result))
 		recordAudit(c, "重试失败", "证书任务", services.FormatAuditDetail(parts...))
 	}
@@ -548,7 +548,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 		return
 	} else if rescheduled {
-		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status), services.AuditResultPart("deployment_retry")))
+		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), services.AuditRawPart(domain) /* audit-detail raw */, services.AuditTextPart("audit.previousState", status), services.AuditResultPart("deployment_retry")))
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Deployment retry triggered"})
 		return
 	}
@@ -581,7 +581,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	})
 	if err != nil {
 		if changed && cooldownActive && forceRetry {
-			auditFailureWithRule("enqueue_failed", "手动越过 CA 冷却")
+			auditFailureWithRule("enqueue_failed", services.AuditTextPart("audit.manualCaCooldownOverride"))
 		} else {
 			auditFailureWithRule("enqueue_failed")
 		}
@@ -591,7 +591,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 			// 独立行对称；CA-force 族 changed+err 留痕同口径）。
 			recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
 				services.AuditJobPart(id), services.AuditRulePart(ruleID),
-				"手动重签越过失败冷却", services.AuditResultPart("cooldown_override")))
+				services.AuditTextPart("audit.manualReissueCooldownOverride"), services.AuditResultPart("cooldown_override")))
 		}
 		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.jobRequeueFailed", err)
 		return
@@ -636,10 +636,10 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// 绕过单点唤醒，任务滞留至 cert-scan 周期至多 6h）。
 	// 入队成功即真实工作，唤醒入口不重查活跃态（队列可能已快速失败）。
 	services.WakeCertWaitingCAForEnqueuedJob()
-	auditParts := []string{services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status)}
+	auditParts := []services.AuditPart{services.AuditJobPart(id), services.AuditRulePart(ruleID), services.AuditRawPart(domain), services.AuditTextPart("audit.previousState", status)}
 	if cooldownActive && forceRetry {
 		// 越过冷却必须可见（运维逃生通道的留痕义务）；冷却已到期时不记。
-		auditParts = append(auditParts, "手动越过 CA 冷却")
+		auditParts = append(auditParts, services.AuditTextPart("audit.manualCaCooldownOverride"))
 	}
 	if failedCooldownOverride {
 		// 通用失败冷却越冷（failed 行豁免）——入队实际发生才留痕（延迟到
@@ -647,11 +647,11 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		// 钉测同格式（结果：越过失败冷却），与 queued 行分列。
 		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
 			services.AuditJobPart(id), services.AuditRulePart(ruleID),
-			"手动重签越过失败冷却", cooldownMessage, services.AuditResultPart("cooldown_override")))
+			services.AuditTextPart("audit.manualReissueCooldownOverride"), services.AuditRawPart(cooldownMessage) /* audit-detail raw */, services.AuditResultPart("cooldown_override")))
 	}
 	if renewalAttempts > 0 {
 		// 重试会把 renewal_attempts 归零（最大重试预算对人工操作重新计）——留痕
-		auditParts = append(auditParts, fmt.Sprintf("重试预算已重置（原重试次数 %d）", renewalAttempts))
+		auditParts = append(auditParts, services.AuditTextPart("audit.retryBudgetReset", renewalAttempts))
 	}
 	auditParts = append(auditParts, services.AuditResultPart("queued"))
 	recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(auditParts...))
@@ -1148,7 +1148,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
 		return
 	}
-	auditParts := []string{services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status)}
+	auditParts := []services.AuditPart{services.AuditJobPart(id), services.AuditRulePart(ruleID), services.AuditRawPart(domain), services.AuditTextPart("audit.previousState", status)}
 	if rowsAffected < 0 {
 		auditParts = append(auditParts, services.AuditResultPart("deleted_unverified"))
 	}

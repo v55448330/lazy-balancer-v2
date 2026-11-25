@@ -113,7 +113,7 @@ func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	recordAudit(c, "更新", "威胁情报库", "自动更新总开关："+enabledStateLabel(autoUpdate))
+	recordAudit(c, "更新", "威胁情报库", services.AuditRawDetail("自动更新总开关："+enabledStateLabel(autoUpdate)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "威胁情报库", "3": "更新了设置"}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }
@@ -126,7 +126,7 @@ func (h *Handlers) UpdateThreatSchedule(c *gin.Context) {
 	if !ok {
 		return
 	}
-	recordAudit(c, "更新", "威胁情报库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
+	recordAudit(c, "更新", "威胁情报库", services.AuditRawDetail(fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "威胁情报库", "3": "更新了设置"}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }

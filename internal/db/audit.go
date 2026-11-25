@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"lazy-balancer-v2/internal/i18n"
 )
 
 const AuditDBFilename = "lazy-balancer-audit.db"
@@ -46,6 +49,8 @@ func InitializeAuditDB(dataDir string) error {
 			action VARCHAR(50) NOT NULL,
 			resource VARCHAR(100),
 			detail TEXT,
+			detail_key TEXT,
+			detail_params TEXT,
 			ip_address VARCHAR(45),
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
@@ -58,6 +63,10 @@ func InitializeAuditDB(dataDir string) error {
 	`); err != nil {
 		auditDB.Close()
 		return fmt.Errorf("failed to create audit schema: %w", err)
+	}
+	if err := ensureAuditLogDetailColumns(auditDB); err != nil {
+		auditDB.Close()
+		return err
 	}
 	if err := secureSQLiteArtifacts(path); err != nil {
 		auditDB.Close()
@@ -81,6 +90,74 @@ func InitializeAuditDB(dataDir string) error {
 	migrateAuditVocabulary()
 	flushSystemAuditLogs()
 	return nil
+}
+
+// auditDetailKeyColumn/auditDetailParamsColumn 是键化明细的两列（方案 C 第 2/3 步，
+// 2026-11-25 用户批准）。两列可空、无默认：历史行保持 NULL（只读展示 detail 文本
+// 并按其原文检索），新行写「段键（"|" 连接）+ JSON 二维参数数组」。
+const (
+	auditDetailKeyColumn    = "detail_key"
+	auditDetailParamsColumn = "detail_params"
+)
+
+// ensureAuditLogDetailColumns 给存量审计库补两列。
+//
+// audit_log 在独立审计库（lazy-balancer-audit.db），不属主库 newColumnsRegistry
+// 通道——那份登记只作用于主库句柄（ensureNewColumns 硬编码包级 DB）。审计库的
+// 补列与 fresh DDL 因此收敛在本文件，两边形状由
+// TestAuditLogDetailColumns_freshAndUpgradeConverge 钉住（两列 TEXT、可空、
+// 无默认）。
+func ensureAuditLogDetailColumns(auditDB *sql.DB) error {
+	rows, err := auditDB.Query("SELECT name FROM pragma_table_info('audit_log')")
+	if err != nil {
+		return fmt.Errorf("failed to inspect audit_log columns: %w", err)
+	}
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan audit_log column: %w", err)
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate audit_log columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close audit_log column rows: %w", err)
+	}
+	for _, column := range []string{auditDetailKeyColumn, auditDetailParamsColumn} {
+		if _, ok := existing[column]; ok {
+			continue
+		}
+		if _, err := auditDB.Exec("ALTER TABLE audit_log ADD COLUMN " + column + " TEXT"); err != nil {
+			return fmt.Errorf("failed to add audit_log.%s: %w", column, err)
+		}
+	}
+	return nil
+}
+
+// auditDetailKeyValue/auditDetailParamsValue 把明细的键化部分转成落库值：
+// 未键化的行（历史形态与启动迁移里的纯文本事件）两列都写 NULL，读侧按
+// 「detail_key 为空 → 按 detail 原文展示与检索」二分。
+func auditDetailKeyValue(key string) any {
+	if key == "" {
+		return nil
+	}
+	return key
+}
+
+func auditDetailParamsValue(params [][]string) (any, error) {
+	if len(params) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode audit detail params: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // 操作日志词汇标准：操作标签 ≤4 词、事件对象 ≤5 词
@@ -255,9 +332,14 @@ func migrateAuditVocabulary() {
 type systemAuditEntry struct {
 	action   string
 	resource string
-	detail   string
+	// key/params 是键化明细（段键 + 每段槽位）；detail 是同一明细的中文母本。
+	// 键为空表示纯文本事件（历史形态），落库时 detail_key/detail_params 为 NULL。
+	key    string
+	params [][]string
+	detail string
 	// once 标记「同详情全生命周期只落一条」的一次性判据：flush 时 audit_log
-	// 已有逐字相同的系统审计即跳过。用于只能人工处置的启动迁移僵持态——
+	// 已有同一判据的系统审计即跳过（键化行比 detail_key+detail_params，
+	// 历史形态比 detail 文本）。用于只能人工处置的启动迁移僵持态——
 	// 该状态每次启动都重新进入，不设判据会逐字重写同一条审计，audit_log 随
 	// 重启线性增长；详情里的行 id/指纹集合变化（新脏数据）自然产生新详情并重报。
 	once bool
@@ -272,27 +354,46 @@ var systemAuditBuffer struct {
 // 告警，避免内存无界增长。
 const systemAuditBufferCap = 10000
 
-func recordSystemAudit(action, resource, detail string) {
+// recordSystemAudit 登记一条带词条键的启动期系统审计：母本按词条模板渲染
+// （i18n.Text 与 services 的明细渲染同源），参数按槽位落 detail_params。
+func recordSystemAudit(action, resource, key string, args ...any) {
+	text, params := i18n.Text(key, args...)
 	systemAuditBuffer.mu.Lock()
 	defer systemAuditBuffer.mu.Unlock()
-	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{action: action, resource: resource, detail: detail})
+	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{
+		action: action, resource: resource, key: key, params: [][]string{params}, detail: text,
+	})
 	trimSystemAuditBufferLocked()
 }
 
-func recordSystemAuditOnce(action, resource, detail string) {
+func recordSystemAuditOnce(action, resource, key string, args ...any) {
+	text, params := i18n.Text(key, args...)
 	systemAuditBuffer.mu.Lock()
 	defer systemAuditBuffer.mu.Unlock()
-	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{action, resource, detail, true})
+	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{
+		action: action, resource: resource, key: key, params: [][]string{params}, detail: text, once: true,
+	})
 	trimSystemAuditBufferLocked()
 }
 
-// systemAuditAlreadyRecorded 报告 audit_log 是否已有一条逐字相同的系统审计
-// （username='system'）。查询失败按「未记录」处理（fail-open：最多多留一条
+// systemAuditAlreadyRecorded 报告 audit_log 是否已有一条判据相同的系统审计
+// （username='system'）：键化行比 detail_key + detail_params（JSON 编码逐字相等），
+// 历史形态行比 detail 文本。查询失败按「未记录」处理（fail-open：最多多留一条
 // 审计，不影响正确性）；action 列有索引，同 action 的系统审计量级极小，
 // 逐字比对成本可忽略。
 func systemAuditAlreadyRecorded(entry systemAuditEntry) bool {
 	var one int
-	err := AuditDB.QueryRow(`SELECT 1 FROM audit_log WHERE username='system' AND action=? AND resource=? AND detail=? LIMIT 1`,
+	var err error
+	if entry.key != "" {
+		paramsValue, encodeErr := auditDetailParamsValue(entry.params)
+		if encodeErr != nil {
+			return false
+		}
+		err = AuditDB.QueryRow(`SELECT 1 FROM audit_log WHERE username='system' AND action=? AND resource=? AND `+auditDetailKeyColumn+`=? AND `+auditDetailParamsColumn+`=? LIMIT 1`,
+			entry.action, entry.resource, entry.key, paramsValue).Scan(&one)
+		return err == nil
+	}
+	err = AuditDB.QueryRow(`SELECT 1 FROM audit_log WHERE username='system' AND action=? AND resource=? AND detail=? LIMIT 1`,
 		entry.action, entry.resource, entry.detail).Scan(&one)
 	return err == nil
 }
@@ -340,8 +441,14 @@ func flushSystemAuditLogs() {
 		if entry.once && systemAuditAlreadyRecorded(entry) {
 			continue
 		}
-		if _, err := AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES ('system', ?, ?, ?, '')",
-			entry.action, entry.resource, entry.detail); err != nil {
+		paramsValue, encodeErr := auditDetailParamsValue(entry.params)
+		if encodeErr != nil {
+			log.Printf("system audit log write failed: %v", encodeErr)
+			failed = append(failed, entry)
+			continue
+		}
+		if _, err := AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, "+auditDetailKeyColumn+", "+auditDetailParamsColumn+", ip_address) VALUES ('system', ?, ?, ?, ?, ?, '')",
+			entry.action, entry.resource, entry.detail, auditDetailKeyValue(entry.key), paramsValue); err != nil {
 			log.Printf("system audit log write failed: %v", err)
 			failed = append(failed, entry)
 		}
@@ -489,9 +596,9 @@ func migrateLegacyAuditLogs(mainDB *sql.DB, auditPath string) error {
 		// DROP，冲突行留作人工核对依据）+ WARN 日志 + 系统审计留痕（审计页
 		// 可见，每次启动一条直至人工处理）；无冲突行已由上方 INSERT OR
 		// IGNORE 并入（幂等，不覆盖目标库既有行）。
-		detail := fmt.Sprintf("启动迁移：旧审计表与审计库存在 %d 行冲突，已跳过迁移并保留主库 audit_log 表（冲突行需人工核对；确认后可手动删除主库 audit_log 表完成迁移）", mismatch)
+		detail, _ := i18n.Text("audit.migrateLegacyAuditConflictSkipped", mismatch)
 		log.Print("WARN: " + detail)
-		recordSystemAudit("启动迁移", "操作日志", detail)
+		recordSystemAudit("启动迁移", "操作日志", "audit.migrateLegacyAuditConflictSkipped", mismatch)
 		writeAuditMigrationState(auditLegacyConflictMarkerName, fingerprint)
 		return nil
 	}
@@ -503,9 +610,9 @@ func migrateLegacyAuditLogs(mainDB *sql.DB, auditPath string) error {
 		// 让服务无法启动，而数据事实上已迁移安全。降级为 WARN + 系统审计
 		// 留痕并保留旧表：下次启动的复制路径 INSERT OR IGNORE 幂等，
 		// mismatch 仍为 0，DROP 自然重试。
-		detail := fmt.Sprintf("启动迁移：旧审计表已迁移完成但删除失败，已保留主库 audit_log 表待下次启动重试（%v）", err)
+		detail, _ := i18n.Text("audit.migrateLegacyAuditDropFailed", err)
 		log.Print("WARN: " + detail)
-		recordSystemAudit("启动迁移", "操作日志", detail)
+		recordSystemAudit("启动迁移", "操作日志", "audit.migrateLegacyAuditDropFailed", err)
 		return nil
 	}
 	return nil

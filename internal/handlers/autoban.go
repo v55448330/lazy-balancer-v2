@@ -74,11 +74,11 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	// 启用与调度是同一字段的两面（保存即联动调度启停），只产出一个状态位并
 	// 括注联动关系——旧文案「启用：开；调度：开启」两个同义布尔易被误读为
 	// 独立状态。
-	recordAudit(c, "更新", "自动封禁", fmt.Sprintf("启用：%s（调度随之启停）；阈值：%d 次/%d 分钟；时长：%s；口径：%s；模式：%s；计数：%s",
+	recordAudit(c, "更新", "自动封禁", services.AuditRawDetail(fmt.Sprintf("启用：%s（调度随之启停）；阈值：%d 次/%d 分钟；时长：%s；口径：%s；模式：%s；计数：%s",
 		boolOnOff(req.Enabled), req.Threshold, req.WindowMinutes,
 		services.AutobanDurationLabel(req.Duration), autobanScopeText(req.Scope),
 		map[bool]string{true: "观察", false: "正式"}[req.DryRun],
-		autobanCountingModeText(req)))
+		autobanCountingModeText(req))) /* audit-detail raw */)
 	updated, err := services.GetAutobanConfig()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanConfigReadBackFailed", err))
@@ -93,6 +93,15 @@ func boolOnOff(b bool) string {
 		return "开"
 	}
 	return "关"
+}
+
+// boolOnOffPart 是「开/关」状态的词条段形态（审计明细按段渲染，英文界面取
+// 对应译文）。文本侧 boolOnOff 仍供日志/响应使用。
+func boolOnOffPart(b bool) services.AuditPart {
+	if b {
+		return services.AuditTextPart("audit.switchOn")
+	}
+	return services.AuditTextPart("audit.switchOff")
 }
 
 func autobanScopeText(scope string) string {
@@ -264,7 +273,7 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	// 移除=主动处置：清计数桶+观察建议（纯内存，与加名单中断同口径），
 	// 否则旧计数仍在下一轮达阈值立即重封，「移除打断累犯」被撤销。
 	services.AutobanForgetIPs([]string{identity})
-	recordAudit(c, "删除", "累犯记录", fmt.Sprintf("移除累犯身份 %s（打断累犯流程：清计数桶与观察建议，下次达阈值按首次档起算；已生效封禁条目不受影响）", identity))
+	recordAudit(c, "删除", "累犯记录", services.AuditRawDetail(fmt.Sprintf("移除累犯身份 %s（打断累犯流程：清计数桶与观察建议，下次达阈值按首次档起算；已生效封禁条目不受影响）", identity)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "移除了累犯前科"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
@@ -287,7 +296,7 @@ func (h *Handlers) ResetAutobanRecidivism(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.autoBanRepeatOffenderResetFailed", err))
 		return
 	}
-	recordAudit(c, "重置", "累犯记录", "清空全部自动封禁累犯升级历史与窗口计数（下次达阈值按首次档起算；已生效封禁条目不受影响）")
+	recordAudit(c, "重置", "累犯记录", services.AuditRawDetail("清空全部自动封禁累犯升级历史与窗口计数（下次达阈值按首次档起算；已生效封禁条目不受影响）") /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "重置了累犯前科"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }

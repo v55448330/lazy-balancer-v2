@@ -44,10 +44,10 @@ func StartupBrandingLog(dataDir string) {
 		return label + "：自定义「" + value + "」"
 	}
 	detail := services.FormatAuditDetail(
-		field("产品名", cfg.AppName, defaultBranding.AppName),
-		field("页脚", cfg.FooterText, ""),
-		field("空主机头文案", cfg.LandingText, ""),
-		field("版本覆盖", cfg.Version, ""),
+		services.AuditRawPart(field("产品名", cfg.AppName, defaultBranding.AppName)),
+		services.AuditRawPart(field("页脚", cfg.FooterText, "")),
+		services.AuditRawPart(field("空主机头文案", cfg.LandingText, "")),
+		services.AuditRawPart(field("版本覆盖", cfg.Version, "")),
 	)
 	services.Logf("info", "启动：品牌配置载入完成（%s）", detail)
 	services.RecordAuditLog("system", "载入", "品牌配置", detail, "")
@@ -217,7 +217,7 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	// 单写锁，锁内做 DB 写会让公开 GET /branding 在审计库慢写时阻塞全部
 	// branding 读者（/system/info、拦截页播种同族）。锁内只做
 	// stat+读文件+解析+替换快照，锁外写留痕。
-	reloadDetail := ""
+	var reloadDetail services.AuditDetail
 	if prevLoaded && cfg != prev {
 		reloadDetail = brandingReloadDetail(prev, cfg)
 	}
@@ -230,11 +230,11 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	}
 	brandingStore.mu.Unlock()
 
-	if reloadDetail != "" {
+	if !reloadDetail.IsZero() {
 		if brandingReloadAuditHook != nil {
 			brandingReloadAuditHook()
 		}
-		services.Logf("info", "品牌配置已热重载（%s）", reloadDetail)
+		services.Logf("info", "品牌配置已热重载（%s）", reloadDetail.Text())
 		services.RecordAuditLog("system", "重载", "品牌配置", reloadDetail, "")
 	}
 	return cfg
@@ -245,29 +245,29 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 var brandingReloadAuditHook func()
 
 // brandingReloadDetail 生成热重载审计的逐字段旧→新摘要(仅列变化字段)。
-func brandingReloadDetail(prev, next brandingConfig) string {
-	field := func(label, o, n string) string {
+func brandingReloadDetail(prev, next brandingConfig) services.AuditDetail {
+	show := func(v string) services.AuditPart {
+		if v == "" {
+			return services.AuditTextPart("audit.brandingDefaultValue")
+		}
+		return services.AuditTextPart("audit.quotedValue", v)
+	}
+	field := func(key, o, n string) services.AuditPart {
 		if o == n {
-			return ""
+			return services.AuditPart{}
 		}
-		show := func(v string) string {
-			if v == "" {
-				return "默认"
-			}
-			return "「" + v + "」"
-		}
-		return label + "：" + show(o) + "→" + show(n)
+		return services.AuditTextPart(key, show(o), show(n))
 	}
-	parts := []string{
-		field("产品名", prev.AppName, next.AppName),
-		field("页脚", prev.FooterText, next.FooterText),
-		field("空主机头文案", prev.LandingText, next.LandingText),
-		field("版本覆盖", prev.Version, next.Version),
+	parts := []services.AuditPart{
+		field("audit.brandingAppNameChanged", prev.AppName, next.AppName),
+		field("audit.brandingFooterChanged", prev.FooterText, next.FooterText),
+		field("audit.brandingLandingTextChanged", prev.LandingText, next.LandingText),
+		field("audit.brandingVersionChanged", prev.Version, next.Version),
 	}
-	filtered := parts[:0]
-	for _, p := range parts {
-		if p != "" {
-			filtered = append(filtered, p)
+	filtered := make([]services.AuditPart, 0, len(parts))
+	for _, part := range parts {
+		if part.Key() != "" {
+			filtered = append(filtered, part)
 		}
 	}
 	// filtered 恒非空(调用点 cfg!=prev 蕴含 4 字段至少一个不等,

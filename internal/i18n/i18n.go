@@ -6,6 +6,7 @@
 package i18n
 
 import (
+	"fmt"
 	"math"
 	"regexp"
 	"sort"
@@ -163,6 +164,24 @@ func T(lang, key string) string {
 		return v[1]
 	}
 	return v[0]
+}
+
+// Text 按词条模板渲染中文母本，并返回逐个槽位格式化后的参数。
+//
+// 两路输出必须同源：中文母本用 fmt 动词渲染，参数落库为字符串（审计明细
+// detail_params）后由前端按同一模板重装——两边各自格式化会出现「母本 %d 渲染成
+// 数字、参数 %s 存成文本」这类不一致。未登记的键按 T 的口径原样返回、参数照常
+// 格式化（fail-visible，便于定位漏登记）。
+func Text(key string, args ...any) (string, []string) {
+	template := T(ZH, key)
+	params := make([]string, len(args))
+	for index, arg := range args {
+		params[index] = fmt.Sprint(arg)
+	}
+	if len(args) == 0 {
+		return template, params
+	}
+	return fmt.Sprintf(template, args...), params
 }
 
 // RegisterErrTpl 登记服务层中文错误模板(仅 %s 占位——matchTpl 只按 %s 切分

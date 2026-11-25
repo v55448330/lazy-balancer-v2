@@ -997,7 +997,7 @@ func (recovery *importQueueRecovery) finish() error {
 	if normalized > 0 {
 		detail := fmt.Sprintf("备份携带 %d 条 waiting_ca 证书任务，已按失败语义统一保窗归一为 failed（保留消息/重试次数/退避窗口）", normalized)
 		services.Logf("info", "配置导入/还原：%s", detail)
-		services.RecordAuditLog("system", "导入归一", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), detail), "")
+		services.RecordAuditLog("system", "导入归一", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), services.AuditRawPart(detail) /* audit-detail raw */), "")
 	}
 	// 归一后与启动迁移同口径：冷却窗口已过期的 failed 行 message 追加终态
 	// 注记（db.AnnotateExpiredCooldownMessages 单源）——导入路径不经过启动
@@ -1018,7 +1018,7 @@ func (recovery *importQueueRecovery) finish() error {
 	if annotated > 0 {
 		detail := fmt.Sprintf("备份带入 %d 条冷却窗口已过期的失败证书任务，message 已追加终态说明（冷却已过期，可直接重试）", annotated)
 		services.Logf("info", "配置导入/还原：%s", detail)
-		services.RecordAuditLog("system", "导入注记", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), detail), "")
+		services.RecordAuditLog("system", "导入注记", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), services.AuditRawPart(detail) /* audit-detail raw */), "")
 	}
 	if recovery.hold {
 		recovery.hold = false
@@ -6029,7 +6029,7 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	if includesWafFiles {
 		detail = "导出为完整备份（lbbak，含规则库文件、凭证与证书材料；通知中心配置不随备份），请妥善保管"
 	}
-	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(countsSummary, detail, services.AuditResultPart("success")))
+	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(services.AuditRawPart(countsSummary) /* audit-detail raw */, services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("success")))
 	writeLbbakResponse(c, payload)
 }
 
@@ -6195,7 +6195,7 @@ func failImportAbort(c *gin.Context, session *configImportSession, action, detai
 	if detailPrefix != "" {
 		detail = detailPrefix + ": " + causeDetail
 	}
-	recordAudit(c, action+"失败", "配置备份", detail)
+	recordAudit(c, action+"失败", "配置备份", services.AuditRawDetail(detail))
 	notifyImportOutcome(c, action, false, detail)
 	return err
 }
@@ -6274,7 +6274,7 @@ func rowsAffectedOrUnknown(result sql.Result, action, what string) (int64, bool)
 // 响应、审计与通知同源（都取键的中文母本 resp.Message）：键化前后审计明细逐字不变。
 func failImportValidation(c *gin.Context, action, key string, args ...any) {
 	resp := apimsg.Envelope(nil, http.StatusBadRequest, key, args...)
-	recordAudit(c, action+"失败", "配置备份", resp.Message)
+	recordAudit(c, action+"失败", "配置备份", services.AuditRawDetail(resp.Message) /* audit-detail raw */)
 	notifyImportOutcome(c, action, false, resp.Message)
 	c.JSON(http.StatusBadRequest, resp)
 }
@@ -6401,22 +6401,22 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if chain.UsedLegacyChecksum {
 		// 旧格式校验和仅覆盖数据表、不含全局配置区，完整性保障较弱，
 		// 显式记审计警告以便追溯（预览端点只读不落审计，避免 UI 选择文件即刷屏）。
-		recordAudit(c, action+"警告", "配置备份", "使用旧格式校验和（仅覆盖数据表，不含全局配置）验证备份完整性，建议升级后重新导出备份")
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("使用旧格式校验和（仅覆盖数据表，不含全局配置）验证备份完整性，建议升级后重新导出备份") /* audit-detail raw */)
 	}
 	if chain.NoIntegrityChecksum {
 		// 完全没有校验和的史前 v1 备份比「仅数据表校验和」更弱：后者尚有旧格式
 		// 警告，前者此前零披露。导入行为不变（结构门全部执行），只补可观测性。
-		recordAudit(c, action+"警告", "配置备份", warningNoIntegrityChecksum)
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warningNoIntegrityChecksum))
 	}
 	// 版本表随文件缺失剔除的审计留痕（预览侧同一事实以响应 warning 呈现）。
 	if wafMetadataSkipped {
-		recordAudit(c, action+"警告", "配置备份", warningWafMetadataSkipped)
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warningWafMetadataSkipped))
 	}
 	if wafCRSMetadataSkipped {
-		recordAudit(c, action+"警告", "配置备份", warningWafCRSMetadataSkipped)
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warningWafCRSMetadataSkipped))
 	}
 	if wafXdbMetadataSkipped {
-		recordAudit(c, action+"警告", "配置备份", warningWafXdbMetadataSkipped)
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warningWafXdbMetadataSkipped))
 	}
 	// 全局配置数值归一（整型钳制表 + request_body_max_size_mb 专用归一）
 	// 已在链内完成——预览与导入共用同一归一点与同一组文案，此处只消费事实。
@@ -6431,12 +6431,12 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 备份 users 表缺席时,本地用户根本未被触碰——不告警不吊销。
 	if importUsername != "" && sectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], importUsername) {
 		operatorReplaced = true
-		recordAudit(c, action+"警告", "配置备份", "备份不含当前操作账户——系统数据将被替换，"+action+"后请使用备份内的管理员账户登录")
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("备份不含当前操作账户——系统数据将被替换，"+action+"后请使用备份内的管理员账户登录") /* audit-detail raw */)
 	}
 	// 反向:导规则不导 cert 配置且备份从未携带 cert 表时,上方 TLS
 	// 形态软校验已计数悬挂引用——降级警告进审计(与同格,不阻断)。
 	if acmeDanglingImported > 0 {
-		recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂(引用未随备份导入且现有配置缺失)——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingImported))
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂(引用未随备份导入且现有配置缺失)——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingImported)) /* audit-detail raw */)
 	}
 	// 「系统数据」替换 ACME 配置表时,live 启用规则的引用可能悬挂
 	// (与删除 409 守卫同果)——预检并降级警告(不阻断,尊重用户选择)。
@@ -6567,7 +6567,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		services.Logf("warn", "配置导入：锁内 ACME 引用悬挂统计失败: %v", acmeDanglingCountErr)
 	}
 	if acmeDanglingRules > 0 {
-		recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingRules))
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingRules)) /* audit-detail raw */)
 	}
 	// 「系统数据」替换 CA 提供商（或证书配置）而证书任务未随包时，live
 	// cert_jobs 的显式 provider 引用不重验：备份里同 id 提供商可为 disabled
@@ -6581,7 +6581,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	// 文案单源（与预览 warnings 同一实现），动作前缀只标明本次操作。
 	for _, warning := range certJobProviderDanglingWarnings(certJobProviderDisabled, certJobProviderMissing) {
-		recordAudit(c, action+"警告", "配置备份", warning.render(i18n.ZH))
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warning.render(i18n.ZH)) /* audit-detail raw */)
 	}
 	// 初检读取 live 的三项合并校验在锁内重跑（任何写之前）。
 	if err := revalidateImportLiveDependencies(ctx, tx, &backup, sectionTables); err != nil {
@@ -6816,13 +6816,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		} else if n, known := rowsAffectedOrUnknown(result, action, "off→custom_only 归一计数"); !known {
 			// 归一 SQL 已成功、条数未知：语义变更仍已发生，必须留痕（不得
 			// 因计数失败而静默——那是「自定义规则从全关变生效」的披露通道）。
-			recordAudit(c, action+"警告", "配置备份", action+"后 WAF 模式为 off 且挂启用自定义规则的策略已按旧语义归一为 custom_only（自定义规则开始生效；受影响条数读取失败）")
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(action+"后 WAF 模式为 off 且挂启用自定义规则的策略已按旧语义归一为 custom_only（自定义规则开始生效；受影响条数读取失败）") /* audit-detail raw */)
 		} else if n > 0 {
 			customOnlyNormalized = n
 			services.Logf("info", "配置导入：%d 个 mode=off 且挂启用自定义规则的策略已归一为 custom_only（旧语义兼容）", n)
 			// 注释承诺的「留审计提示」在此落地：归一改变运行态语义（自定义
 			// 规则从全关变生效），必须在操作审计与响应 warnings 双通道可见。
-			recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 个 WAF 模式为 off 且挂启用自定义规则的策略已按旧语义归一为 custom_only（自定义规则开始生效）", n))
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(fmt.Sprintf(action+"后 %d 个 WAF 模式为 off 且挂启用自定义规则的策略已按旧语义归一为 custom_only（自定义规则开始生效）", n)) /* audit-detail raw */)
 		}
 	}
 	// 备份可能携带 ≥2 个 is_default=1 的拦截页。restoreTable
@@ -6840,7 +6840,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if _, blockPagesReplaced := backup.Tables["security_block_pages"]; blockPagesReplaced {
 		stockBlockPage := renderDefaultBlockPage(loadBrandingConfig(h.cfg.DataDir))
 		if _, err := tx.ExecContext(ctx, `WITH demoted AS (SELECT id, content FROM security_block_pages WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)) UPDATE security_block_pages SET content=(SELECT content FROM demoted WHERE content NOT IN ('', ?) ORDER BY id DESC LIMIT 1) WHERE id=(SELECT MIN(id) FROM security_block_pages WHERE is_default=1) AND content IN ('', ?) AND EXISTS (SELECT 1 FROM demoted WHERE content NOT IN ('', ?))`, stockBlockPage, stockBlockPage, stockBlockPage); err != nil {
-			recordAudit(c, action+"警告", "配置备份", "默认拦截页面内容提升失败: "+err.Error())
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("默认拦截页面内容提升失败: "+err.Error()) /* audit-detail raw */)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
 			err = failImportTx(c, session, action, "降级多余的默认拦截页失败", err, http.StatusInternalServerError, "backup.blockPageDowngradeFailedRolledBack")
@@ -6850,18 +6850,18 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 导入（拦截响应短暂退化，由后续 SeedDefaultBlockPage/branding 触发自愈）。
 		var hasDefaultBlockPage int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&hasDefaultBlockPage); err != nil {
-			recordAudit(c, action+"警告", "配置备份", "默认拦截页面计数失败: "+err.Error())
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("默认拦截页面计数失败: "+err.Error()) /* audit-detail raw */)
 		} else if hasDefaultBlockPage == 0 {
 			result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`)
 			if err != nil {
-				recordAudit(c, action+"警告", "配置备份", "默认拦截页面重播种失败: "+err.Error())
+				recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("默认拦截页面重播种失败: "+err.Error()) /* audit-detail raw */)
 			} else if affected, known := rowsAffectedOrUnknown(result, action, "默认拦截页面重播种计数"); !known {
 				// 未知不等于 0：不得报「未生效」（实际可能已插入）。
 			} else if affected == 0 {
 				// 备份携带 id=1 的非默认行时 OR IGNORE 因 PK 冲突静默
 				// no-op，导入后仍旧零默认页且无任何 error——告警机制不会
 				// 触发，此处显式补记警告以便追溯。
-				recordAudit(c, action+"警告", "配置备份", "默认拦截页面重播种未生效（id=1 已存在）")
+				recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("默认拦截页面重播种未生效（id=1 已存在）") /* audit-detail raw */)
 			} else {
 				reseedBlockPageNeeded = true
 			}
@@ -7095,7 +7095,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		}
 		for _, warning := range warnings {
 			wafApply.Warnings = append(wafApply.Warnings, warning)
-			recordAudit(c, action+"警告", "配置备份", warning.render(i18n.ZH))
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warning.render(i18n.ZH)) /* audit-detail raw */)
 		}
 	}
 	// 摘要必须在 WAF 版本表按落盘结果丢弃之后重算，否则响应仍宣称已导入
@@ -7129,7 +7129,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			// 数据库已提交。queue 恢复失败属于部分失败，必须继续
 			// 全部提交后收敛（缓存失效/哨兵清理/驱动同步），最后再返回 500。
 			queueRecoveryErr = err
-			recordAudit(c, "部分失败", "配置备份", importFailureAuditDetail(err))
+			recordAudit(c, "部分失败", "配置备份", services.AuditRawDetail(importFailureAuditDetail(err)) /* audit-detail raw */)
 		} else {
 			status := http.StatusInternalServerError
 			// 消息正文与审计 detail 同源（阶段描述+真实错误）：err.Error() 自带
@@ -7141,7 +7141,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 				key = importActionKeyed(action, "backup.importCaddyRejectedNotExecuted", "backup.restoreCaddyRejectedNotExecuted")
 			}
 			auditAction := action + "失败"
-			recordAudit(c, auditAction, "配置备份", detail)
+			recordAudit(c, auditAction, "配置备份", services.AuditRawDetail(detail))
 			notifyImportOutcome(c, action, false, detail)
 			respondAfterWafFailure(status, key, detail)
 			return
@@ -7150,7 +7150,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if wafApply.SecurityDataApplied {
 		// 文件落盘发生在事务内，但成功审计必须等数据库提交确定成功；
 		// 否则 Caddy/Commit 失败回滚文件后会留下与实际终态相反的成功记录。
-		recordAudit(c, action, "安全数据", services.FormatAuditDetail("规则库数据库(随备份还原/导入)", services.AuditResultPart("success")))
+		recordAudit(c, action, "安全数据", services.FormatAuditDetail(services.AuditTextPart("audit.rulesetDbSection"), services.AuditResultPart("success")))
 	}
 	// branding_json 只是文件镜像。提交成功后把备份值物化到
 	// branding.json，再刷新镜像与默认页面；否则下一次镜像会把 DB 回写成旧文件。
@@ -7159,16 +7159,16 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		if raw, carried := backup.Config["branding_json"]; carried {
 			if _, err := services.MaterializeBranding(h.cfg.DataDir, backupString(raw)); err != nil {
 				brandingWarning = importWarn("backup.importBrandingFileRestoreFailed", err)
-				recordAudit(c, action+"警告", "配置备份", brandingWarning.render(i18n.ZH))
+				recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(brandingWarning.render(i18n.ZH)) /* audit-detail raw */)
 				// 文件仍是唯一事实源：立即把 DB 镜像回本地文件，避免留下分叉。
 				if _, mirrorErr := services.RefreshBrandingMirror(h.cfg.DataDir); mirrorErr != nil {
-					recordAudit(c, action+"警告", "配置备份", "品牌镜像回读失败: "+mirrorErr.Error())
+					recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("品牌镜像回读失败: "+mirrorErr.Error()) /* audit-detail raw */)
 				}
 			} else {
 				reseedBlockPageNeeded = true
 				if _, err := services.RefreshBrandingMirror(h.cfg.DataDir); err != nil {
 					brandingWarning = importWarn("backup.importBrandingMirrorRefreshFailed", err)
-					recordAudit(c, action+"警告", "配置备份", brandingWarning.render(i18n.ZH))
+					recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(brandingWarning.render(i18n.ZH)) /* audit-detail raw */)
 				}
 			}
 		}
@@ -7193,7 +7193,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 拦截页 reseed 同位、同「提交成功后收敛」语义；幂等（已存在零写入），
 		// 失败仅告警不影响已提交导入。
 		if err := db.SeedSystemIPLists(db.DB); err != nil {
-			recordAudit(c, action+"警告", "配置备份", "内置系统名单补播失败: "+err.Error())
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("内置系统名单补播失败: "+err.Error()) /* audit-detail raw */)
 		}
 		services.ResetAutobanCounters()
 	}
@@ -7252,17 +7252,17 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 返回值不再丢弃——渲染出错，或未生效且表内仍无默认页时记警告。
 		seeded, seedErr := SeedDefaultBlockPage(h.cfg.DataDir)
 		if seedErr != nil {
-			recordAudit(c, action+"警告", "配置备份", "默认拦截页面内容渲染失败: "+seedErr.Error())
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("默认拦截页面内容渲染失败: "+seedErr.Error()) /* audit-detail raw */)
 		} else if !seeded {
 			var defaultCount int
 			if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&defaultCount); err == nil && defaultCount == 0 {
-				recordAudit(c, action+"警告", "配置备份", "默认拦截页面重播种后仍无默认页")
+				recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("默认拦截页面重播种后仍无默认页") /* audit-detail raw */)
 			}
 		}
 		note := h.caddyApplyNoteLocked()
 		if note != "" {
 			reseedApplyFailed = true
-			recordAudit(c, action+"警告", "配置备份", "默认拦截页面重新播种后"+note)
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("默认拦截页面重新播种后"+note) /* audit-detail raw */)
 		}
 	}
 	// human_secret 运行配置收敛：事务内应用读的是已提交库旧值（WAL 下未提交
@@ -7275,7 +7275,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		note := h.caddyApplyNoteLocked()
 		if note != "" {
 			reseedApplyFailed = true
-			recordAudit(c, action+"警告", "配置备份", "人机密钥收敛重载失败"+note)
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("人机密钥收敛重载失败"+note) /* audit-detail raw */)
 		}
 	}
 
@@ -7301,7 +7301,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		services.Logf("warn", "导入后读取管理面板 HTTPS 配置失败，跳过重启判定: %v", tlsErr)
 	} else if services.RuntimeAdminTLSChanged(adminTLS) {
 		adminTLSRestartWarning = importWarn(importActionKey(action, "backup.importAdminTlsRestartRequired", "backup.restoreAdminTlsRestartRequired"))
-		recordAudit(c, action+"警告", "配置备份", adminTLSRestartWarning.render(i18n.ZH))
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(adminTLSRestartWarning.render(i18n.ZH)) /* audit-detail raw */)
 	}
 	// off→on 且水位线为空/陈旧（>1 分钟）→ 置 now，避免导入后立即
 	// 补跑停用期首轮。直接写列而非 SetAutoBackupEnabled（后者会二次 StartLoop）。
@@ -7326,53 +7326,53 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	if filename != "" {
 		auditSource = "服务器备份 " + filename + "（覆盖" + action + "）"
 	}
-	auditParts := []string{"来源：" + auditSource, counts}
-	auditParts = append(auditParts, configClampNotes.render(i18n.ZH)...)
-	auditParts = append(auditParts, autobanClampNotes.render(i18n.ZH)...)
+	auditParts := []services.AuditPart{services.AuditRawPart("来源：" + auditSource), services.AuditRawPart(counts)}
+	auditParts = append(auditParts, configClampNotes.auditParts()...)
+	auditParts = append(auditParts, autobanClampNotes.auditParts()...)
 	if autobanRuntimeNote != "" {
 		// 自动封禁运行期收敛（清桶/禁用收尾/调度联动）是导入的可感知副作用，
 		// 必须与响应 warnings 同源留痕（此前只在 PUT 保存路径有审计）。
-		auditParts = append(auditParts, autobanRuntimeNote)
+		auditParts = append(auditParts, services.AuditRawPart(autobanRuntimeNote))
 	}
 	if len(skipWarnings) > 0 {
 		// 列表现含空域名规则与空内容拦截页两类跳过，标签泛化。
-		auditParts = append(auditParts, "跳过警告："+strings.Join(skipWarnings.render(i18n.ZH), "；"))
+		auditParts = append(auditParts, services.AuditRawPart("跳过警告："+strings.Join(skipWarnings.render(i18n.ZH), "；")))
 	}
 	if len(importCertWarnings) > 0 {
 		// 证书链/域名警告随成功审计留痕(不阻断)。
-		auditParts = append(auditParts, "证书警告："+strings.Join(importCertWarnings.render(i18n.ZH), "；"))
+		auditParts = append(auditParts, services.AuditRawPart("证书警告："+strings.Join(importCertWarnings.render(i18n.ZH), "；")))
 	}
 	if len(certJobProviderWarnings) > 0 {
 		// 证书任务 CA 提供商归一（ca_provider_id 就地写回 0）会改变无人值守
 		// 签发路径，必须与响应 warnings 双通道留痕（同 custom_only 归一）。
-		auditParts = append(auditParts, "证书任务提供商归一："+strings.Join(certJobProviderWarnings.render(i18n.ZH), "；"))
+		auditParts = append(auditParts, services.AuditRawPart("证书任务提供商归一："+strings.Join(certJobProviderWarnings.render(i18n.ZH), "；")))
 	}
 	if len(disabledConflicts) > 0 {
-		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
+		auditParts = append(auditParts, services.AuditRawPart("冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts)))
 	}
 	if len(pendingDeletedNodePins) > 0 {
-		auditParts = append(auditParts, fmt.Sprintf("清理已删除节点 %d 个的证书指纹钉与分区上报缓存（导入收尾执行）", len(pendingDeletedNodePins)))
+		auditParts = append(auditParts, services.AuditRawPart(fmt.Sprintf("清理已删除节点 %d 个的证书指纹钉与分区上报缓存（导入收尾执行）", len(pendingDeletedNodePins))))
 	}
 	if ignoredNodeTokens > 0 {
-		auditParts = append(auditParts, fmt.Sprintf("%d 个节点的备份令牌被忽略（已保留本地令牌与审批状态）", ignoredNodeTokens))
+		auditParts = append(auditParts, services.AuditRawPart(fmt.Sprintf("%d 个节点的备份令牌被忽略（已保留本地令牌与审批状态）", ignoredNodeTokens)))
 	}
 	if attributionMismatches > 0 {
-		auditParts = append(auditParts, fmt.Sprintf("%d 条记录的归属用户与导入用户集不一致（未改写归属字段）", attributionMismatches))
+		auditParts = append(auditParts, services.AuditRawPart(fmt.Sprintf("%d 条记录的归属用户与导入用户集不一致（未改写归属字段）", attributionMismatches)))
 	}
 	if prunedBindings > 0 {
-		auditParts = append(auditParts, fmt.Sprintf("清理悬挂安全策略绑定：%d 条", prunedBindings))
+		auditParts = append(auditParts, services.AuditRawPart(fmt.Sprintf("清理悬挂安全策略绑定：%d 条", prunedBindings)))
 	}
 	if operatorReplaced {
-		auditParts = append(auditParts, "操作者账户已被备份替换,请使用备份内管理员登录")
+		auditParts = append(auditParts, services.AuditRawPart("操作者账户已被备份替换,请使用备份内管理员登录"))
 	}
 	if warning := backupProductVersionWarning(backup.Meta, h.cfg.Version); !warning.isZero() {
-		auditParts = append(auditParts, "版本兼容警告："+warning.render(i18n.ZH))
+		auditParts = append(auditParts, services.AuditRawPart("版本兼容警告："+warning.render(i18n.ZH)))
 	}
 	if queueRecoveryErr == nil {
 		auditParts = append(auditParts, services.AuditResultPart("success"))
 		recordAudit(c, action, "配置备份", services.FormatAuditDetail(auditParts...))
 	}
-	recordAudit(c, "重载", "Caddy服务", action+"配置后自动重载")
+	recordAudit(c, "重载", "Caddy服务", services.AuditRawDetail(action+"配置后自动重载") /* audit-detail raw */)
 	// 2026-09-07：导入成功后清除陈旧 caddy_apply_error
 	// ——但 reseed 失败时不清（reseed 的 caddyApplyNoteLocked 可能刚写入
 	// 失败标记，无条件清除会把真实失败横幅抹掉）。
@@ -7432,7 +7432,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 兼容），但响应与审计必须可见「内容未经完整性校验」。
 	if len(lbbakUnregisteredThreat) > 0 {
 		unregisteredLanded := lbbakFiles != nil && sectionTables["security_crs_version"]
-		recordAudit(c, action+"警告", "配置备份", unregisteredThreatWarning(i18n.ZH, lbbakUnregisteredThreat, unregisteredLanded))
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(unregisteredThreatWarning(i18n.ZH, lbbakUnregisteredThreat, unregisteredLanded)) /* audit-detail raw */)
 		responseWarnings = append(append([]string{}, responseWarnings...), unregisteredThreatWarning(lang, lbbakUnregisteredThreat, unregisteredLanded))
 	}
 	if len(wafApply.Warnings) > 0 {
@@ -7447,7 +7447,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 否则事后只能看到「OIDC 忽然关闭」而无从追溯来源。
 		detail := "备份未携带 OIDC 配置——现有 OIDC 配置已随备份收敛清空（用户数据按备份替换，避免「OIDC 启用但零用户」不一致状态）"
 		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, "backup.importOidcConfigClearedToMatchBackup"))
-		recordAudit(c, action+"警告", "配置备份", detail)
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(detail))
 	}
 	if revokedSessions && !operatorReplaced {
 		responseWarnings = append(append([]string{}, responseWarnings...), apimsg.T(c, importActionKey(action, "backup.importSystemDataSessionsRevoked", "backup.restoreSystemDataSessionsRevoked")))
@@ -7473,7 +7473,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 文案单源在 importQueueRecovery.stalledWarning；操作审计同文留痕。
 	if stalledDetail := session.recovery.stalledWarning(); !stalledDetail.isZero() {
 		responseWarnings = append(append([]string{}, responseWarnings...), stalledDetail.render(lang))
-		recordAudit(c, action+"警告", "配置备份", stalledDetail.render(i18n.ZH))
+		recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(stalledDetail.render(i18n.ZH)) /* audit-detail raw */)
 	}
 	if !adminTLSRestartWarning.isZero() {
 		responseWarnings = append(append([]string{}, responseWarnings...), adminTLSRestartWarning.render(lang))
@@ -7511,7 +7511,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	_, ipListsReplaced := backup.Tables["security_ip_lists"]
 	if crawlerSourcesReplaced || ipListsReplaced {
 		if err := services.RestoreCrawlerIPListSnapshot(); err != nil {
-			recordAudit(c, action+"警告", "配置备份", "爬虫运行快照重建失败（重启或下次更新后重试）: "+err.Error())
+			recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail("爬虫运行快照重建失败（重启或下次更新后重试）: "+err.Error()) /* audit-detail raw */)
 			responseWarnings = append(append([]string{}, responseWarnings...), apimsg.Tf(c, "backup.importCrawlerRuntimeSnapshotRebuildFailed", err))
 		}
 	}

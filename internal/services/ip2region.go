@@ -208,7 +208,7 @@ func InitIP2Region() {
 				return
 			}
 			readOnlyDist = true
-			RecordAuditLog("system", "更新", "IP数据库", "启动时 live IP 库缺失且本节点非主节点，按镜像内置库只读装载（不覆盖 live 文件/版本行）", "")
+			RecordAuditLog("system", "更新", "IP数据库", AuditRawDetail("启动时 live IP 库缺失且本节点非主节点，按镜像内置库只读装载（不覆盖 live 文件/版本行）") /* audit-detail raw */, "")
 		} else if err := copyFile(ip2regionDistPath, ip2regionLivePath); err != nil {
 			// 主节点判定可写却写失败（/app/data 只读、磁盘满、权限变更）：
 			// 与从节点分支同一降级——只读装载镜像库，面板归属地/库状态保持
@@ -220,7 +220,7 @@ func InitIP2Region() {
 				return
 			}
 			readOnlyDist = true
-			RecordAuditLog("system", "更新", "IP数据库", "启动时主节点 live IP 库写入失败，按镜像内置库只读装载（live 文件/版本行未写，GeoIP 库待修复）", "")
+			RecordAuditLog("system", "更新", "IP数据库", AuditRawDetail("启动时主节点 live IP 库写入失败，按镜像内置库只读装载（live 文件/版本行未写，GeoIP 库待修复）") /* audit-detail raw */, "")
 		}
 	}
 	if searcher == nil {
@@ -238,7 +238,7 @@ func InitIP2Region() {
 					// 从节点同样不覆盖 live（集群同步自愈），只读装载镜像库。
 					if searcher = loadIP2RegionDistReadOnly("损坏 live 库且非主节点（或角色不可证实）"); searcher != nil {
 						readOnlyDist = true
-						RecordAuditLog("system", "更新", "IP数据库", "启动检测到 IP 数据库文件损坏且本节点非主节点，按镜像内置库只读装载（不覆盖 live 文件/版本行）", "")
+						RecordAuditLog("system", "更新", "IP数据库", AuditRawDetail("启动检测到 IP 数据库文件损坏且本节点非主节点，按镜像内置库只读装载（不覆盖 live 文件/版本行）") /* audit-detail raw */, "")
 					}
 				} else if cErr := copyFile(ip2regionDistPath, ip2regionLivePath); cErr != nil {
 					// 主节点写 live 失败：与从节点分支同一只读降级（写失败已
@@ -246,14 +246,14 @@ func InitIP2Region() {
 					Logf("error", "ip2region: 损坏 live 库的 dist 回退拷贝失败: %v", cErr)
 					if searcher = loadIP2RegionDistReadOnly("损坏 live 库且主节点回退拷贝失败"); searcher != nil {
 						readOnlyDist = true
-						RecordAuditLog("system", "更新", "IP数据库", "启动检测到 IP 数据库文件损坏且镜像库回退拷贝失败，按镜像内置库只读装载（live 文件/版本行未写，待修复）", "")
+						RecordAuditLog("system", "更新", "IP数据库", AuditRawDetail("启动检测到 IP 数据库文件损坏且镜像库回退拷贝失败，按镜像内置库只读装载（live 文件/版本行未写，待修复）") /* audit-detail raw */, "")
 					}
 				} else if fallback, oErr := openValidatedIP2RegionSearcher(ip2regionLivePath); oErr != nil {
 					Logf("error", "ip2region: dist 回退库装载失败: %v", oErr)
 				} else {
 					searcher = fallback
 					Logf("warn", "ip2region: 损坏的 live 库已回退为镜像内置库（标记 bundled，待下次成功更新自愈）")
-					RecordAuditLog("system", "更新", "IP数据库", "启动检测到 IP 数据库文件损坏不可装载，已回退镜像内置库（待下次成功更新恢复）", "")
+					RecordAuditLog("system", "更新", "IP数据库", AuditRawDetail("启动检测到 IP 数据库文件损坏不可装载，已回退镜像内置库（待下次成功更新恢复）") /* audit-detail raw */, "")
 					// 版本行/sidecar 只在主节点写：从节点由集群同步治理（见
 					// ip2RegionStartupRepairWritesAllowed）；审计照记（节点本地面）。
 					if writesAllowed {
@@ -358,7 +358,7 @@ func InitIP2Region() {
 					Logf("error", "ip2region: IPv6 库 dist 播种失败（待下次成功更新恢复）: %v", err)
 				} else {
 					Logf("info", "ip2region: IPv6 库已从镜像内置副本播种到 %s", ip2regionV6LivePath)
-					RecordAuditLog("system", "更新", "IP数据库", "启动时 live IPv6 库缺失，已按镜像内置副本播种", "")
+					RecordAuditLog("system", "更新", "IP数据库", AuditRawDetail("启动时 live IPv6 库缺失，已按镜像内置副本播种") /* audit-detail raw */, "")
 				}
 			}
 		}

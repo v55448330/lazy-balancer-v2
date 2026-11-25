@@ -2134,9 +2134,9 @@ func AutobanDisableFlush() {
 	CaddyOpLock.Lock()
 	out, err := autobanMergeEntries(cfg, nil)
 	if err != nil {
-		msg := fmt.Sprintf("禁用收尾到期条目清理失败: %v", err)
+		msg := auditText("audit.autobanDisableFlushCleanupFailed", err)
 		Logf("error", "自动封禁%s", msg)
-		RecordAuditLog("system", "写入失败", "自动封禁", FormatAuditDetail(msg, AuditResultPart("failed")), "")
+		RecordAuditLog("system", "写入失败", "自动封禁", FormatAuditDetail(AuditTextPart("audit.autobanDisableFlushCleanupFailed", err), AuditResultPart("failed")), "")
 	} else {
 		autobanApplyMergeOutcomeLocked("自动封禁禁用收尾", out, func() {
 			// 禁用收尾 candidates=nil 仍可触发挤出；容量与解封审计保持先于收敛。
@@ -2339,7 +2339,7 @@ func autobanReportCapacityOutcome(scope string, out autobanMergeOutcome) {
 	TaskLogfWarn(AutobanTaskID, "capacity", "自动封禁名单容量收敛%s：挤出 %d、丢弃 %d（上限 %d）%s",
 		scope, out.Evicted, out.DroppedNew, AutobanListEntryCap, suffix)
 	RecordAuditLog("system", "容量收敛", "IP 地址列表",
-		fmt.Sprintf("自动封禁容量收敛%s：挤出 %d、丢弃 %d（上限 %d）%s", scope, out.Evicted, out.DroppedNew, AutobanListEntryCap, suffix), "")
+		AuditRawDetail(fmt.Sprintf("自动封禁容量收敛%s：挤出 %d、丢弃 %d（上限 %d）%s", scope, out.Evicted, out.DroppedNew, AutobanListEntryCap, suffix)) /* audit-detail raw */, "")
 }
 
 // autobanAuditBanned 逐 IP「自动封禁」审计（Run 轮：降级窗口外、名单已收敛）。
@@ -2363,17 +2363,17 @@ func autobanAuditBanned(cfg AutobanConfig, out autobanMergeOutcome) {
 			durationLabel = autobanEscalationDurationLabel(out.BannedDurations[i])
 		}
 		RecordAuditLog("system", AutobanAuditAction, "IP 地址列表",
-			FormatAuditDetail("IP："+ip,
-				autobanHitDetail(cfg),
-				"时长："+AutobanDurationLabel(durationLabel),
+			FormatAuditDetail(AuditTextPart("audit.ipAddress", ip),
+				AuditRawPart(autobanHitDetail(cfg)),
+				AuditTextPart("audit.duration", AutobanDurationLabel(durationLabel)),
 				AuditResultPart("success")), "")
 		// 逐 IP 封禁通知（与审计同限；发出即武装该 IP 的 CC 级联抑制窗）。
 		notify.PublishAutobanTriggered(ip, autobanHitDetail(cfg)+"，时长："+AutobanDurationLabel(durationLabel))
 	}
 	if omitted > 0 {
 		RecordAuditLog("system", AutobanAuditAction, "IP 地址列表",
-			fmt.Sprintf("%s%d 个 IP 省略逐条记录（本轮共 %d 个 IP，逐条上限 %d；完整名单见预置 IP 列表）",
-				autobanAuditSummaryPrefix, omitted, len(banned)+omitted, autobanAuditPerRoundCap), "")
+			AuditRawDetail(fmt.Sprintf("%s%d 个 IP 省略逐条记录（本轮共 %d 个 IP，逐条上限 %d；完整名单见预置 IP 列表）",
+				autobanAuditSummaryPrefix, omitted, len(banned)+omitted, autobanAuditPerRoundCap)), /* audit-detail raw */ "")
 	}
 }
 
@@ -2443,12 +2443,12 @@ func autobanAuditUnbanGroup(ips []string, line func(total int, joined string) st
 		if end > len(ips) {
 			end = len(ips)
 		}
-		RecordAuditLog("system", "自动解封", "IP 地址列表", line(len(ips), strings.Join(ips[start:end], "、")), "")
+		RecordAuditLog("system", "自动解封", "IP 地址列表", AuditRawDetail(line(len(ips), strings.Join(ips[start:end], "、"))) /* audit-detail raw */, "")
 	}
 	if omitted > 0 {
 		RecordAuditLog("system", "自动解封", "IP 地址列表",
-			fmt.Sprintf("%s%d 个 IP 省略逐条记录（本轮共 %d 个，逐条上限 %d）",
-				autobanAuditSummaryPrefix, omitted, len(ips)+omitted, autobanAuditPerRoundCap), "")
+			AuditRawDetail(fmt.Sprintf("%s%d 个 IP 省略逐条记录（本轮共 %d 个，逐条上限 %d）",
+				autobanAuditSummaryPrefix, omitted, len(ips)+omitted, autobanAuditPerRoundCap)), /* audit-detail raw */ "")
 	}
 }
 

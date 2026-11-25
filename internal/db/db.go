@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/accesslog"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 
 	_ "github.com/glebarez/sqlite"
@@ -1731,9 +1732,9 @@ func runMigrations() error {
 	if strategyResult != nil {
 		if n, _ := strategyResult.RowsAffected(); n > 0 {
 			// 用户规则配置被改写须留痕。
-			detail := fmt.Sprintf("启动迁移：存量规则负载策略 round_robin 归一为 weighted_round_robin：%d 条", n)
+			detail, _ := i18n.Text("audit.migrateRuleStrategyNormalized", n)
 			log.Print(detail)
-			recordSystemAudit("启动迁移", "负载规则", detail)
+			recordSystemAudit("启动迁移", "负载规则", "audit.migrateRuleStrategyNormalized", n)
 		}
 	}
 
@@ -1942,9 +1943,9 @@ func runMigrations() error {
 	if orphanPathResult != nil {
 		if n, _ := orphanPathResult.RowsAffected(); n > 0 {
 			// 删除用户数据须留痕（与孤儿 upstream 审计同口径）。
-			detail := fmt.Sprintf("启动迁移：已清理 %d 条孤儿 path_rules 行（rule_id 无对应规则）", n)
+			detail, _ := i18n.Text("audit.migrateOrphanPathRulesCleaned", n)
 			log.Print(detail)
-			recordSystemAudit("启动迁移", "负载规则", detail)
+			recordSystemAudit("启动迁移", "负载规则", "audit.migrateOrphanPathRulesCleaned", n)
 		}
 	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix,key_hash)"); err != nil {
@@ -2620,11 +2621,12 @@ func migrateDropMergedSyncSwitchColumns() error {
 			// 带 WHERE applied_waf_ref_hash='' 谓词，此形态会整体丢弃遗留哈希/
 			// 版本且无任何痕迹。一次性记账丢弃不可恢复，必须留痕（否则事后
 			// 无法解释该版本为何从未触发过从端补偿重拉）。
-			if discarded, err := discardedLegacyAppliedBookkeeping(); err != nil {
+			if key, args, err := discardedLegacyAppliedBookkeeping(); err != nil {
 				return err
-			} else if discarded != "" {
-				log.Print(discarded)
-				recordSystemAudit("启动迁移", "系统配置", discarded)
+			} else if key != "" {
+				detail, _ := i18n.Text(key, args...)
+				log.Print(detail)
+				recordSystemAudit("启动迁移", "系统配置", key, args...)
 			}
 			startupMigrationWriteStatements.Add(1)
 			if _, err := DB.Exec(`DELETE FROM cluster_applied_sections WHERE section IN ('global_config','waf_files')`); err != nil {
@@ -2639,36 +2641,37 @@ func migrateDropMergedSyncSwitchColumns() error {
 // waf_files/global_config 记账行之前，探测是否真有值被丢弃：搬移 UPDATE 只在
 // 目标列（applied_waf_ref_hash）为空时生效，目标列已非空且遗留行携带不同记账
 // 时，删除等于静默丢弃一次性迁移数据。返回空串表示无丢弃。
-func discardedLegacyAppliedBookkeeping() (string, error) {
+// discardedLegacyAppliedBookkeeping 探测「目标列已非空、遗留行却携带不同记账」的
+// 丢弃形态，返回词条键与槽位（无丢弃返回空键）。
+func discardedLegacyAppliedBookkeeping() (string, []any, error) {
 	var targetHash string
 	var targetVersion int
 	if err := DB.QueryRow(`SELECT COALESCE(applied_waf_ref_hash,''), COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1`).Scan(&targetHash, &targetVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
+			return "", nil, nil
 		}
-		return "", fmt.Errorf("failed to probe target applied waf bookkeeping: %w", err)
+		return "", nil, fmt.Errorf("failed to probe target applied waf bookkeeping: %w", err)
 	}
 	if targetHash == "" {
-		return "", nil
+		return "", nil, nil
 	}
 	var legacyHash string
 	var legacyVersion int
 	if err := DB.QueryRow(`SELECT COALESCE(hash,''), COALESCE(applied_version,0) FROM cluster_applied_sections WHERE section='waf_files'`).Scan(&legacyHash, &legacyVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
+			return "", nil, nil
 		}
-		return "", fmt.Errorf("failed to probe legacy applied waf bookkeeping: %w", err)
+		return "", nil, fmt.Errorf("failed to probe legacy applied waf bookkeeping: %w", err)
 	}
 	if legacyHash == "" && legacyVersion == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	if legacyHash == targetHash && legacyVersion == targetVersion {
 		// 空目标经上方 UPDATE 成功搬移，或新旧本就相同：旧行删除不丢失
 		// 任何记账值，不得把它误记成异值丢弃。
-		return "", nil
+		return "", nil, nil
 	}
-	return fmt.Sprintf("启动迁移：丢弃遗留文件态应用记账（目标列已非空，搬移谓词不成立）——遗留 hash=%s version=%d，保留目标 hash=%s version=%d",
-		legacyHash, legacyVersion, targetHash, targetVersion), nil
+	return "audit.migrateLegacyBookkeepingDiscarded", []any{legacyHash, legacyVersion, targetHash, targetVersion}, nil
 }
 
 // migrateSecurityPolicyCustomOnlyMode(2026-09-09 裁定):WAF 模式四态化后
@@ -2728,9 +2731,9 @@ func migrateSecurityPolicyCustomOnlyMode() error {
 	}
 	// 用户策略数据被改写须留痕（与 TCP 死字段/跨模式 TLS 残留等姊妹迁移同
 	// 口径：聚合一行 + 实际变更计数）。
-	detail := fmt.Sprintf("存量 WAF 策略 mode=off 且挂启用自定义规则已迁移为 custom_only：%d 条（行为不变；一次性门已置位，迁移后主动保存的 off 不再被改写）", changed)
+	detail, _ := i18n.Text("audit.migrateWafCustomOnlyNormalized", changed)
 	log.Print(detail)
-	recordSystemAudit("启动迁移", "安全策略", detail)
+	recordSystemAudit("启动迁移", "安全策略", "audit.migrateWafCustomOnlyNormalized", changed)
 	return nil
 }
 
@@ -2847,10 +2850,9 @@ func migrateLegacyHTTPSProtocol() error {
 		}
 		ids = append(ids, rule.caddyID)
 	}
-	detail := fmt.Sprintf("存量 https 协议规则已迁移：%d 条（有证书归 http+TLS %d 条，无可用证书归普通 HTTP %d 条）；caddy_id：%s",
-		len(legacy), certCount, len(legacy)-certCount, formatMigrationRuleIDs(ids))
+	detail, _ := i18n.Text("audit.migrateHttpsRulesMigrated", len(legacy), certCount, len(legacy)-certCount, formatMigrationRuleIDs(ids))
 	log.Print(detail)
-	recordSystemAudit("启动迁移", "系统配置", detail)
+	recordSystemAudit("启动迁移", "系统配置", "audit.migrateHttpsRulesMigrated", len(legacy), certCount, len(legacy)-certCount, formatMigrationRuleIDs(ids))
 	return nil
 }
 

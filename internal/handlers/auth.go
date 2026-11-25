@@ -197,7 +197,7 @@ func (h *Handlers) Login(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		services.RecordAuditLog("", "登录失败", "用户认证", services.AuditResultPart("invalid_request"), c.ClientIP())
+		services.RecordAuditLog("", "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("invalid_request")) /* audit-detail raw */, c.ClientIP())
 		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
 		return
 	}
@@ -215,13 +215,13 @@ func (h *Handlers) Login(c *gin.Context) {
 		// 对不存在的用户名也执行一次注定失败的 bcrypt 比较（结果刻意
 		// 丢弃，只取等时副作用），消除与「密码错误」路径的时序差后返回同形 401。
 		_ = loginDummyCompare(loginDummyBcryptHash, []byte(req.Password))
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("invalid_credentials")) /* audit-detail raw */, c.ClientIP())
 		notifyLoginFailed(req.Username, "认证失败", c.ClientIP())
 		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.invalidCredentials"))
 		return
 	}
 	if err != nil {
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
 		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
 		return
 	}
@@ -231,13 +231,13 @@ func (h *Handlers) Login(c *gin.Context) {
 	locked, lockErr := loginLockedNow(loginLockedUntil)
 	if lockErr != nil {
 		// 开关读取失败 fail-closed——不进入认证流程。
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
 		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
 		return
 	}
 	if locked {
 		_ = bcrypt.CompareHashAndPassword(loginCompareHash(passwordHash), []byte(req.Password))
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账户已锁定"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditTextPart("audit.accountLocked")), c.ClientIP())
 		notifyLoginFailed(req.Username, "账户已锁定", c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, apimsg.Envelope(c, 429, "auth.accountLocked", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())))
 		return
@@ -253,13 +253,13 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 	if compareErr != nil {
 		recordLoginFailure(user.ID)
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("invalid_credentials")) /* audit-detail raw */, c.ClientIP())
 		notifyLoginFailed(req.Username, "认证失败", c.ClientIP())
 		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.invalidCredentials"))
 		return
 	}
 	if !user.IsEnabled {
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账号已禁用"), c.ClientIP())
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditTextPart("audit.accountDisabled")), c.ClientIP())
 		notifyLoginFailed(req.Username, "账号已禁用", c.ClientIP())
 		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "auth.loginAccountDisabled"))
 		return
@@ -280,7 +280,7 @@ func (h *Handlers) Login(c *gin.Context) {
 			// 分支及 MFAVerifyLogin 的三处故障留痕同口径，否则「密码正确却
 			// 拿不到挑战」在审计里完全不可见。
 			services.Logf("error", "登录: 签发 MFA 挑战失败: user_id=%d: %v", user.ID, ierr)
-			services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+			services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
 			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.mfaChallengeIssueFailed"))
 			return
 		}
@@ -415,7 +415,7 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 	// auth_provider=oidc 混合行，也不能获得 OIDC 的 MFA 写门豁免。
 	tokenString, _, err := signSessionJWT(h.cfg.JWTSecret, user.ID, user.Username, user.Role, passwordVersion, mfaTs, authMethod)
 	if err != nil {
-		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
 		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.loginTokenIssueFailed"))
 		return
 	}
@@ -473,11 +473,11 @@ func (h *Handlers) Logout(c *gin.Context) {
 	}
 	if _, err := db.DB.ExecContext(c.Request.Context(), "INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", revocationHash, models.FormatRevokedTokenTime(expiresAtTime)); err != nil {
 		services.Logf("error", "登出吊销会话失败（令牌尚未吊销）: username=%s: %v", usernameStr, err)
-		services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("failure"), c.ClientIP())
+		services.RecordAuditLog(usernameStr, "登出", "用户认证", services.FormatAuditDetail(services.AuditResultPart("failure")) /* audit-detail raw */, c.ClientIP())
 		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.logoutFailed"))
 		return
 	}
-	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("success"), c.ClientIP())
+	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.FormatAuditDetail(services.AuditResultPart("success")) /* audit-detail raw */, c.ClientIP())
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "auth.loggedOut"))
 }
 
@@ -766,9 +766,9 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	committed = true
 
 	if len(changed) == 0 {
-		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "无修改"))
+		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditTextPart("audit.noChanges")))
 	} else {
-		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditTextPart("audit.changeSummary", strings.Join(changed, "、"))))
 		// 密码变更属自助安全动作（昵称变更不是）——提交成功才发通知。
 		if passwordHash != "" {
 			notify.Publish(notify.Event{Type: notify.EvtPasswordChanged,
@@ -885,6 +885,6 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
-	services.RecordAuditLog(req.Username, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), "首个管理员，系统初始化"), c.ClientIP())
+	services.RecordAuditLog(req.Username, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), services.AuditTextPart("audit.firstAdminInit")), c.ClientIP())
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "auth.initialAdminCreated"))
 }

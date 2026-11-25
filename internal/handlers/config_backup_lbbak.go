@@ -423,7 +423,7 @@ type lbbakWafApplyResult struct {
 func (result *lbbakWafApplyResult) warn(c *gin.Context, action, key string, args ...any) {
 	warning := importWarn(key, args...)
 	result.Warnings = append(result.Warnings, warning)
-	recordAudit(c, action+"警告", "配置备份", warning.render(i18n.ZH))
+	recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warning.render(i18n.ZH)) /* audit-detail raw */)
 }
 
 // validateLbbakXdbPayload 把待落盘 xdb 写到临时文件后用运行时同一条装载路径

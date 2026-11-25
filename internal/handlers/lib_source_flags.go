@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"strconv"
 
@@ -141,7 +142,7 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	if transitionDisabledToEnabled && spec.ArmFirstSlots != nil {
 		spec.ArmFirstSlots()
 	}
-	recordAudit(c, "更新", spec.Family, fmt.Sprintf("%s 更新开关：%s", name, enabledStateLabel(*body.UpdateEnabled)))
+	recordAudit(c, "更新", spec.Family, services.AuditRawDetail(fmt.Sprintf("%s 更新开关：%s", name, enabledStateLabel(*body.UpdateEnabled))) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": spec.Family, "3": "更新了源开关"}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }

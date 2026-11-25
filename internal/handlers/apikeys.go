@@ -202,7 +202,7 @@ func deleteAPIKey(c *gin.Context, scopedUserID int) {
 		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "apikey.notFound"))
 		return
 	}
-	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
+	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(services.AuditTextPart("audit.apiKeyNumber", id), services.AuditRawPart(name) /* audit-detail raw */))
 	notify.Publish(notify.Event{Type: notify.EvtAPIKeyDeleted,
 		Fields: map[string]string{"1": c.GetString("username"), "2": name}})
 	purgeAPIKeyWhitelistCache(id)
@@ -389,14 +389,14 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	// 不可见，「可写 + MCP 开启 + 白名单」的高权授予与只读 Key 审计文案相同。
 	// 不落完整密钥（明文仅在创建响应出现一次）。
 	recordAudit(c, "创建", "API密钥", services.FormatAuditDetail(
-		fmt.Sprintf("密钥 %d", id),
-		req.Name,
-		"过期："+apiKeyExpiryLabel(expires),
-		"API 权限："+map[bool]string{true: "只读", false: "可写"}[apiRO],
-		"MCP 权限："+map[bool]string{true: "只读", false: "可写"}[mcpRO],
-		"API："+boolOnOff(apiEnabled),
-		"MCP："+boolOnOff(req.MCPEnabled),
-		fmt.Sprintf("IP 白名单（约束全部 REST 与 MCP）：%d 条", len(whitelist)),
+		services.AuditTextPart("audit.apiKeyNumber", id),
+		services.AuditRawPart(req.Name),
+		services.AuditTextPart("audit.expiryAt", apiKeyExpiryLabel(expires)),
+		services.AuditRawPart("API 权限："+map[bool]string{true: "只读", false: "可写"}[apiRO]), /* audit-detail manual */
+		services.AuditRawPart("MCP 权限："+map[bool]string{true: "只读", false: "可写"}[mcpRO]), /* audit-detail manual */
+		services.AuditRawPart("API："+boolOnOff(apiEnabled)),                              /* audit-detail manual */
+		services.AuditRawPart("MCP："+boolOnOff(req.MCPEnabled)),                          /* audit-detail manual */
+		services.AuditTextPart("audit.ipWhitelistCount", len(whitelist)),
 	))
 	notify.Publish(notify.Event{Type: notify.EvtAPIKeyCreated,
 		Fields: map[string]string{"1": c.GetString("username"), "2": req.Name}})
@@ -679,42 +679,42 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	committed = true
 	// 更新审计记真 delta——启用态/MCP/只读/白名单/过期时间是安全
 	// 相关变更，此前四个字段零留痕（同族先例：安全策略）。
-	auditDetail := services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name)
-	changes := make([]string, 0, 4)
+	auditDetail := services.FormatAuditDetail(services.AuditTextPart("audit.apiKeyNumber", id), services.AuditRawPart(name) /* audit-detail raw */)
+	changes := make([]services.AuditPart, 0, 4)
 	if req.IsEnabled != nil && *req.IsEnabled != (beforeEnabled == 1) {
-		changes = append(changes, "启用状态："+boolOnOff(beforeEnabled == 1)+"→"+boolOnOff(*req.IsEnabled))
+		changes = append(changes, services.AuditTextPart("audit.apiKeyEnabledChanged", boolOnOffPart(beforeEnabled == 1), boolOnOffPart(*req.IsEnabled)))
 	}
 	if req.MCPEnabled != nil && *req.MCPEnabled != (beforeMCPEnabled == 1) {
-		changes = append(changes, "MCP："+boolOnOff(beforeMCPEnabled == 1)+"→"+boolOnOff(*req.MCPEnabled))
+		changes = append(changes, services.AuditTextPart("audit.apiKeyMcpChanged", boolOnOffPart(beforeMCPEnabled == 1), boolOnOffPart(*req.MCPEnabled)))
 	}
 	if req.APIEnabled != nil && *req.APIEnabled != (beforeAPIEnabled == 1) {
-		changes = append(changes, "API："+boolOnOff(beforeAPIEnabled == 1)+"→"+boolOnOff(*req.APIEnabled))
+		changes = append(changes, services.AuditTextPart("audit.apiKeyApiChanged", boolOnOffPart(beforeAPIEnabled == 1), boolOnOffPart(*req.APIEnabled)))
 	}
 	if req.APIReadOnly != nil && *req.APIReadOnly != (beforeAPIReadOnly == 1) {
-		changes = append(changes, "API 只读："+boolOnOff(beforeAPIReadOnly == 1)+"→"+boolOnOff(*req.APIReadOnly))
+		changes = append(changes, services.AuditTextPart("audit.apiKeyApiReadOnlyChanged", boolOnOffPart(beforeAPIReadOnly == 1), boolOnOffPart(*req.APIReadOnly)))
 	}
 	if req.MCPReadOnly != nil && *req.MCPReadOnly != (beforeMCPReadOnly == 1) {
-		changes = append(changes, "MCP 只读："+boolOnOff(beforeMCPReadOnly == 1)+"→"+boolOnOff(*req.MCPReadOnly))
+		changes = append(changes, services.AuditTextPart("audit.apiKeyMcpReadOnlyChanged", boolOnOffPart(beforeMCPReadOnly == 1), boolOnOffPart(*req.MCPReadOnly)))
 	}
 	// legacy 合并列变化（两协议同值变更时 per-protocol 已留痕，此处仅补
 	// 合并口径 delta——测试钉「只读：开→关」文案）
 	if req.ReadOnly != nil && *req.ReadOnly != (beforeReadOnly == 1) {
-		changes = append(changes, "只读："+boolOnOff(beforeReadOnly == 1)+"→"+boolOnOff(*req.ReadOnly))
+		changes = append(changes, services.AuditTextPart("audit.apiKeyReadOnlyChanged", boolOnOffPart(beforeReadOnly == 1), boolOnOffPart(*req.ReadOnly)))
 	}
 	if req.MCPIPWhitelist != nil {
 		beforeCount := apiKeyWhitelistCount(beforeWhitelist)
 		if whitelistChanged || beforeCount != whitelistCount {
-			changes = append(changes, fmt.Sprintf("IP 白名单（约束全部 REST 与 MCP）：%d 条→%d 条", beforeCount, whitelistCount))
+			changes = append(changes, services.AuditTextPart("audit.apiKeyIpWhitelistChanged", beforeCount, whitelistCount))
 		}
 	}
 	if req.ExpirySubmitted() {
 		// 按审计展示精度比较：新旧值展示相同（亚秒差异）不算变更。
 		if before, after := apiKeyExpiryLabel(beforeExpires), apiKeyExpiryLabel(expiresAfter); before != after {
-			changes = append(changes, "过期："+before+"→"+after)
+			changes = append(changes, services.AuditTextPart("audit.apiKeyExpiryChanged", before, after))
 		}
 	}
 	if len(changes) > 0 {
-		auditDetail = services.FormatAuditDetail(auditDetail, "变更："+strings.Join(changes, "、"))
+		auditDetail = services.AppendAuditDetail(auditDetail, services.AuditTextPart("audit.changeSummary", changes))
 	}
 	recordAudit(c, "更新", "API密钥", auditDetail)
 	// 启停子集发通知事件（密钥其余字段编辑不属启停语义）。仅在启用态真实

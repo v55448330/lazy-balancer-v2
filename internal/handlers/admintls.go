@@ -386,8 +386,8 @@ func (h *Handlers) GetAdminTLS(c *gin.Context) {
 // 动作名）。detail 不落证书/私钥材料，只落原因。
 func auditAdminTLSFailure(c *gin.Context, reason string) {
 	recordAudit(c, "更新失败", "基础设置", services.FormatAuditDetail(
-		"操作：保存管理面板 HTTPS 配置",
-		"原因："+reason,
+		services.AuditTextPart("audit.operationSaveAdminTls"),
+		services.AuditTextPart("audit.reason", reason),
 		services.AuditResultPart("failure"),
 	))
 }
@@ -555,9 +555,9 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		certPart = "证书：已清除（切换到 selfsigned）"
 	}
 	recordAudit(c, "更新", "基础设置", services.FormatAuditDetail(
-		map[bool]string{true: "启用", false: "禁用"}[enabled],
-		modePart,
-		certPart,
+		services.AuditRawPart(map[bool]string{true: "启用", false: "禁用"}[enabled]),
+		services.AuditRawPart(modePart), /* audit-detail raw */
+		services.AuditRawPart(certPart), /* audit-detail raw */
 		services.AuditResultPart("success"),
 	))
 	notify.Publish(notify.Event{Type: notify.EvtGlobalChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "管理接口 TLS"}})

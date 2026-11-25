@@ -32,7 +32,7 @@ func TestRecordAuditLog_shutdownBetweenHandleCheckAndExecDoesNotPanic(t *testing
 	t.Cleanup(func() { beforeAuditLogExec = previous })
 
 	requireNoPanic(t, func() {
-		RecordAuditLog("system", "测试", "审计", "关停交错", "127.0.0.1")
+		RecordAuditLog("system", "测试", "审计", AuditRawDetail("关停交错"), "127.0.0.1")
 	})
 	if calls != 1 {
 		t.Fatalf("audit exec interleaving calls=%d, want 1", calls)

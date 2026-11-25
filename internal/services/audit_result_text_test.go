@@ -593,7 +593,7 @@ func TestAuditSourcePart_internalCodesRenderChinese(t *testing.T) {
 		"promote_or_startup": "来源：升主或启动补建",
 	}
 	for code, expected := range want {
-		if got := AuditSourcePart(code); got != expected {
+		if got := AuditSourcePart(code).Text(); got != expected {
 			t.Errorf("AuditSourcePart(%q)=%q, want %q", code, got, expected)
 		}
 	}
@@ -616,7 +616,7 @@ func TestAuditSourcePart_internalCodesRenderChinese(t *testing.T) {
 			t.Errorf("动态来源码 %q 缺映射（落 default 渲染英文）", code)
 		}
 	}
-	if got := AuditSourcePart("unknown_source_code"); got != "来源：unknown_source_code" {
+	if got := AuditSourcePart("unknown_source_code").Text(); got != "来源：unknown_source_code" {
 		t.Errorf("未知来源码必须原样兜底（便于定位漏映射）, got %q", got)
 	}
 }

@@ -200,7 +200,7 @@ func installMFAAuditTestDB(t *testing.T) {
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username VARCHAR(50), action VARCHAR(50), resource VARCHAR(50),
-		detail TEXT, ip_address VARCHAR(50), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(50), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`); err != nil {
 		t.Fatal(err)
 	}
 	db.AuditDB = auditDB

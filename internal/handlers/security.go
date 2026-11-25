@@ -390,7 +390,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	//（与 storage_corrupted 口径对齐）。
 	if existingConditionsJSON != "" {
 		if uerr := json.Unmarshal([]byte(existingConditionsJSON), &existing.Conditions); uerr != nil {
-			recordAudit(c, "更新失败", "自定义规则", services.FormatAuditDetail(fmt.Sprintf("规则 #%s", id), services.AuditResultPart("storage_corrupted")))
+			recordAudit(c, "更新失败", "自定义规则", services.FormatAuditDetail(services.AuditTextPart("audit.ruleIdNumber", id), services.AuditResultPart("storage_corrupted")))
 			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "security.customRuleStoredConditionsCorrupted"))
 			return
 		}
@@ -1344,19 +1344,19 @@ func (h *Handlers) ApplyDefaultPolicies(c *gin.Context) {
 		// 单事务整体回滚：失败时没有可展示的部分进度。（操作标签字面量直写——
 		// audit_vocabulary 守卫禁动态表达式。）
 		if req.Reset {
-			recordAudit(c, "重置失败", "安全策略", services.FormatAuditDetail(auditVerb+"：失败", services.AuditResultPart("tx_rolled_back")))
+			recordAudit(c, "重置失败", "安全策略", services.FormatAuditDetail(services.AuditRawPart(auditVerb+"：失败") /* audit-detail manual */, services.AuditResultPart("tx_rolled_back")))
 		} else {
-			recordAudit(c, "创建失败", "安全策略", services.FormatAuditDetail(auditVerb+"：失败", services.AuditResultPart("tx_rolled_back")))
+			recordAudit(c, "创建失败", "安全策略", services.FormatAuditDetail(services.AuditRawPart(auditVerb+"：失败") /* audit-detail manual */, services.AuditResultPart("tx_rolled_back")))
 		}
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "security.defaultPolicyCreateFailed", err).WithData(items))
 		return
 	}
 	if req.Reset {
-		recordAudit(c, "重置", "安全策略", fmt.Sprintf("%s：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
-			auditVerb, countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt")))
+		recordAudit(c, "重置", "安全策略", services.AuditRawDetail(fmt.Sprintf("%s：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
+			auditVerb, countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt"))) /* audit-detail raw */)
 	} else {
-		recordAudit(c, "创建", "安全策略", fmt.Sprintf("%s：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
-			auditVerb, countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt")))
+		recordAudit(c, "创建", "安全策略", services.AuditRawDetail(fmt.Sprintf("%s：新建 %d 项 / 复用 %d 项 / 重建 %d 项",
+			auditVerb, countApplyStatus(items, "created"), countApplyStatus(items, "exists"), countApplyStatus(items, "rebuilt"))) /* audit-detail raw */)
 	}
 	// 新建/重建的策略可能已被立即绑定（含既有绑定指向同名新行）——必须重渲染
 	// 配置，否则 Caddy 侧无安全链（创建成功≠生效）。
@@ -6084,7 +6084,7 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	recordAudit(c, "更新", "CRS规则库", "自动更新已"+enabledStateLabel(autoUpdate))
+	recordAudit(c, "更新", "CRS规则库", services.AuditRawDetail("自动更新已"+enabledStateLabel(autoUpdate)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "自动更新开关"}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }
@@ -6241,7 +6241,7 @@ func (h *Handlers) UpdateCRSSchedule(c *gin.Context) {
 	if !ok {
 		return
 	}
-	recordAudit(c, "更新", "CRS规则库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
+	recordAudit(c, "更新", "CRS规则库", services.AuditRawDetail(fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "定时设置"}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }
@@ -6392,7 +6392,7 @@ func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
 	}
 	// 开关变化改变 v4+v6 并集树（v6 段并入/移出选项树与校验 known 集）。
 	services.WriteIP2RegionTreeCacheForToggle()
-	recordAudit(c, "更新", "IP数据库", "IPv6 地理库已"+enabledStateLabel(enabled))
+	recordAudit(c, "更新", "IP数据库", services.AuditRawDetail("IPv6 地理库已"+enabledStateLabel(enabled)) /* audit-detail raw */)
 	applyErr := h.applyCaddyConfigE()
 	if applyErr != nil {
 		// 200 注记面向任意登录用户：/load 传输错误恒含 admin 地址，与
@@ -6448,7 +6448,7 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	recordAudit(c, "更新", "IP数据库", "自动更新已"+enabledStateLabel(autoUpdate))
+	recordAudit(c, "更新", "IP数据库", services.AuditRawDetail("自动更新已"+enabledStateLabel(autoUpdate)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "自动更新开关"}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }
@@ -6460,7 +6460,7 @@ func (h *Handlers) UpdateIP2RegionSchedule(c *gin.Context) {
 	if !ok {
 		return
 	}
-	recordAudit(c, "更新", "IP数据库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
+	recordAudit(c, "更新", "IP数据库", services.AuditRawDetail(fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "CRS/IP 库", "3": "定时设置"}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
 }

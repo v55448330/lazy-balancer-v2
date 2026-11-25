@@ -186,9 +186,9 @@ func applySnapshotBranding(dataDir, content string) (bool, error) {
 		return false, nil
 	}
 	if reset {
-		RecordAuditLog("system", "同步", "集群同步", "品牌配置已重置为默认（主节点无品牌文件）", "")
+		RecordAuditLog("system", "同步", "集群同步", AuditRawDetail("品牌配置已重置为默认（主节点无品牌文件）") /* audit-detail raw */, "")
 	} else {
-		RecordAuditLog("system", "同步", "集群同步", "品牌配置已同步生效", "")
+		RecordAuditLog("system", "同步", "集群同步", AuditRawDetail("品牌配置已同步生效") /* audit-detail raw */, "")
 	}
 	return true, nil
 }

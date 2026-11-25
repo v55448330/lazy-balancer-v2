@@ -1,0 +1,80 @@
+[
+  {
+    "name": "结果码 + 规则段",
+    "key": "audit.rulePart|audit.resultSuccess",
+    "params": [
+      [
+        "lb_abc"
+      ],
+      []
+    ],
+    "zh": "规则 lb_abc；结果：成功"
+  },
+  {
+    "name": "用户段与结果段",
+    "key": "audit.userNamedPart|audit.resultFailure",
+    "params": [
+      [
+        "12",
+        "zhang"
+      ],
+      []
+    ],
+    "zh": "用户 12（zhang）；结果：失败"
+  },
+  {
+    "name": "带槽位模板 + 原文段",
+    "key": "audit.file|audit.rawPart",
+    "params": [
+      [
+        "lbbak-1.lbbak"
+      ],
+      [
+        "upstream error text"
+      ]
+    ],
+    "zh": "文件：lbbak-1.lbbak；upstream error text"
+  },
+  {
+    "name": "嵌套段槽位",
+    "key": "audit.oidcEnabledChanged",
+    "params": [
+      [
+        {
+          "k": "audit.oidcEnabled",
+          "a": []
+        },
+        {
+          "k": "audit.oidcDisabled",
+          "a": []
+        }
+      ]
+    ],
+    "zh": "启用状态：启用→禁用"
+  },
+  {
+    "name": "段列表槽位",
+    "key": "audit.oidcChangedFields",
+    "params": [
+      [
+        [
+          {
+            "k": "audit.oidcClientSecretCleared",
+            "a": []
+          }
+        ]
+      ]
+    ],
+    "zh": "认证集成（Client Secret：已清除）"
+  },
+  {
+    "name": "未知结果码兜底",
+    "key": "audit.resultUnmapped",
+    "params": [
+      [
+        "brand_new_code"
+      ]
+    ],
+    "zh": "结果：brand_new_code"
+  }
+]

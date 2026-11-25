@@ -25,6 +25,7 @@ export default {
     'emptyLogs': 'No audit logs yet',
     'filter': 'Filter',
     'keywordPlaceholder': 'Detail keyword',
+    'keywordHistoricalHint': 'Historical entries are searched by their original text',
     'listLoadFailed': 'Failed to load logs',
     'loadFailedBanner': 'Failed to load the audit log: an empty list does not mean there are no logs',
     'operator': 'Operator',

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -32,12 +31,12 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 			// 失败留痕单源：审计中间件对 explicit 路由无条件早退（含 5xx），
 			// 本 handler 的每条失败面必须自行补记——票据签发失败（MFA 未启用/
 			// step-up 缺失/节点离线/DB 故障）此前只剩 stdout clusterError 日志。
-			recordAudit(c, "生成失败", "登录票据", "读取 MFA 状态失败")
+			recordAudit(c, "生成失败", "登录票据", services.AuditRawDetail("读取 MFA 状态失败") /* audit-detail raw */)
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取 MFA 状态失败"})
 			return
 		}
 		if !mfaEnabled {
-			recordAudit(c, "生成失败", "登录票据", "当前账号未启用 MFA，拒绝登录从节点")
+			recordAudit(c, "生成失败", "登录票据", services.AuditRawDetail("当前账号未启用 MFA，拒绝登录从节点") /* audit-detail raw */)
 			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）"})
 			return
 		}
@@ -51,14 +50,14 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	if c.GetString("auth_type") == "jwt" && c.GetString("auth_method") != "oidc" {
 		mfaTs, _ := c.Get("mfa_ts")
 		if ts, ok := mfaTs.(float64); !ok || time.Since(time.Unix(int64(ts), 0)) >= 60*time.Second {
-			recordAudit(c, "生成失败", "登录票据", "缺少有效的 MFA 验证（step-up 未完成）")
+			recordAudit(c, "生成失败", "登录票据", services.AuditRawDetail("缺少有效的 MFA 验证（step-up 未完成）") /* audit-detail raw */)
 			c.AbortWithStatusJSON(http.StatusPreconditionRequired, gin.H{"code": 428, "message": "MFA_STEP_UP_REQUIRED", "detail": "登录从节点需要 MFA 验证"})
 			return
 		}
 	}
 	nodeID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || nodeID <= 0 {
-		recordAudit(c, "生成失败", "登录票据", services.FormatAuditDetail("节点编号无效（"+registerAuditField(c.Param("id"))+"）", services.AuditResultPart("invalid_request")))
+		recordAudit(c, "生成失败", "登录票据", services.FormatAuditDetail(services.AuditTextPart("audit.nodeIdInvalid", registerAuditField(c.Param("id"))), services.AuditResultPart("invalid_request")))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
@@ -104,13 +103,13 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 			message = err.Error()
 			key = ""
 		}
-		recordAudit(c, "生成失败", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), auditReason, services.AuditResultPart(auditCode)))
+		recordAudit(c, "生成失败", "登录票据", services.FormatAuditDetail(services.AuditTextPart("audit.nodeNumber", nodeID), services.AuditRawPart(auditReason) /* audit-detail raw */, services.AuditResultPart(auditCode)))
 		emitClusterError(c, status, message, key, err)
 		return
 	}
 	// 审计带节点名(与服务控制事件同格式「节点 %d（%s）」,:ID 必留,
 	// nodes.name 无 UNIQUE,仅名无法定位行)。
-	recordAudit(c, "生成", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d（%s）", nodeID, response.NodeName), services.AuditResultPart("success")))
+	recordAudit(c, "生成", "登录票据", services.FormatAuditDetail(services.AuditTextPart("audit.nodeNumberWithHost", nodeID, response.NodeName), services.AuditResultPart("success")))
 	// 第三参=票据的登录目标用户（模板「目标用户：%s」）。票据只为主端当前
 	// 操作者签发（claims 取当前会话身份），故目标用户=操作者本人；此前填
 	// 节点 ID 会把「目标用户」渲染成裸编号。
@@ -165,5 +164,5 @@ func (h *Handlers) TicketLogin(c *gin.Context) {
 }
 
 func recordTicketLoginFailure(c *gin.Context, username, reason string) {
-	services.RecordAuditLog(username, "登录失败", "登录票据", services.AuditResultPart(reason), c.ClientIP())
+	services.RecordAuditLog(username, "登录失败", "登录票据", services.FormatAuditDetail(services.AuditResultPart(reason)) /* audit-detail raw */, c.ClientIP())
 }

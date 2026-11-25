@@ -6,7 +6,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -107,7 +106,7 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "修改", "通知日报", services.FormatAuditDetail(
-		fmt.Sprintf("启用=%v 时间=%s 项目数=%d", cfg.Enabled, cfg.SendTime, len(cfg.Items)), "", services.AuditResultPart("success")))
+		services.AuditTextPart("audit.autoUpdateSettings", cfg.Enabled, cfg.SendTime, len(cfg.Items)), services.AuditRawPart(""), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
@@ -166,7 +165,7 @@ func (h *Handlers) TriggerNotificationDaily(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "触发", "通知日报", services.FormatAuditDetail(
-		fmt.Sprintf("手动触发全员日报（渲染 %d 用户）", rendered), "", services.AuditResultPart("success")))
+		services.AuditTextPart("audit.dailyReportManualTrigger", rendered), services.AuditRawPart(""), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rendered": rendered}})
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -95,7 +94,7 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 	}
 
 	id, _ := result.LastInsertId()
-	recordAudit(c, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), fmt.Sprintf("角色：%s", req.Role)))
+	recordAudit(c, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), services.AuditTextPart("audit.role", req.Role)))
 	notify.Publish(notify.Event{Type: notify.EvtUserCreated,
 		Fields: map[string]string{"1": c.GetString("username"), "2": req.Username, "3": req.Role}})
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: apimsg.T(c, "user.created"), MessageKey: "user.created", Data: gin.H{"id": id}})
@@ -352,9 +351,9 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	committed = true
 
 	if len(changed) == 0 {
-		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), "无修改"))
+		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), services.AuditTextPart("audit.noChanges")))
 	} else {
-		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+		recordAudit(c, "更新", "用户", services.FormatAuditDetail(services.AuditUserPart(id, user.Username), services.AuditTextPart("audit.changeSummary", strings.Join(changed, "、"))))
 	}
 	// 角色/显示名变更通知（纯启停继续走 auth.user_status_changed，不双发）。
 	if len(profileChanged) > 0 {
@@ -624,7 +623,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	// 避免条目随一次性用户数量无界驻留（另有阈值清扫兜底）。
 	services.MFAClearVerifyAttempts(id)
 
-	recordAudit(c, "删除", "用户", services.AuditUserPart(id, targetUsername))
+	recordAudit(c, "删除", "用户", services.FormatAuditDetail(services.AuditUserPart(id, targetUsername)) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtUserDeleted,
 		Fields: map[string]string{"1": c.GetString("username"), "2": targetUsername}})
 	messageKey := "user.deleteSucceeded"

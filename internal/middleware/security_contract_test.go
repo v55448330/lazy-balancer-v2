@@ -3,6 +3,7 @@ package middleware
 import (
 	"database/sql"
 	"fmt"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -148,8 +149,8 @@ func captureAuthenticationSecurityAudits(t *testing.T) *[]string {
 	oldRecorder := recordAuthenticationSecurityAudit
 	securityAuditLimiter.reset()
 	recorded := make([]string, 0, 1)
-	recordAuthenticationSecurityAudit = func(username, action, resource, detail, ipAddress string) {
-		recorded = append(recorded, strings.Join([]string{username, action, resource, detail, ipAddress}, " "))
+	recordAuthenticationSecurityAudit = func(username string, action string, resource string, detail services.AuditDetail, ipAddress string) {
+		recorded = append(recorded, strings.Join([]string{username, action, resource, detail.Text(), ipAddress}, " "))
 	}
 	t.Cleanup(func() {
 		recordAuthenticationSecurityAudit = oldRecorder

@@ -842,7 +842,7 @@ func resolvePolicyIPListRefs(policies []*models.SecurityPolicy, store caddyConfi
 			}
 			if auditFailureShouldLog(refErr) {
 				Logf("error", "%s——该策略将被跳过渲染", refErr)
-				RecordAuditLog("system", "渲染跳过", "安全策略", refErr+"，已跳过该策略渲染", "")
+				RecordAuditLog("system", "渲染跳过", "安全策略", AuditRawDetail(refErr+"，已跳过该策略渲染") /* audit-detail raw */, "")
 			}
 		}
 	}

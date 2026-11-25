@@ -13,8 +13,7 @@ const legacyAuditTableDDL = `CREATE TABLE audit_log (
 	username VARCHAR(100),
 	action VARCHAR(50) NOT NULL,
 	resource VARCHAR(100),
-	detail TEXT,
-	ip_address VARCHAR(45),
+	detail TEXT, ip_address VARCHAR(45),
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`
 

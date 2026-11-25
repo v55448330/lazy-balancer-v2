@@ -194,7 +194,7 @@ func TestAuthenticationSecurityAuditRateLimitsSameReasonPathAndIP(t *testing.T) 
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	authenticationSecurityAuditNow = func() time.Time { return now }
 	recorded := 0
-	recordAuthenticationSecurityAudit = func(_, _, _, _, _ string) { recorded++ }
+	recordAuthenticationSecurityAudit = func(_ string, _ string, _ string, _ services.AuditDetail, _ string) { recorded++ }
 	t.Cleanup(func() {
 		recordAuthenticationSecurityAudit = oldRecorder
 		authenticationSecurityAuditNow = oldNow

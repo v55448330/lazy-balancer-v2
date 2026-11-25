@@ -408,7 +408,7 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 		// 普通快照 IO 失败保留既有「更新成功但降级可见」语义；代际
 		// 不一致则必须让任务失败，不能向调用方伪装成同代成功。
 		WriteCRSUpdateLog("ERROR", string(CRSStatusFailed), fmt.Sprintf("规则快照持久化失败: %v（容器重建后将回退，请检查数据卷磁盘空间）", err))
-		RecordAuditLog("system", "写入失败", "CRS规则库", FormatAuditDetail(fmt.Sprintf("版本：%s 规则快照持久化失败: %v（容器重建后将回退到镜像捆绑版本）", tag, err), AuditResultPart("failed")), "")
+		RecordAuditLog("system", "写入失败", "CRS规则库", FormatAuditDetail(AuditTextPart("audit.ruleSnapshotPersistFailed", tag, err), AuditResultPart("failed")), "")
 		if errors.Is(err, errCRSSnapshotVersionMismatch) {
 			return err
 		}

@@ -338,14 +338,14 @@ func failImportBegin(c *gin.Context, action, detail string, cause error) error {
 	// 操作标签字面量直写（audit_vocabulary 守卫：动态表达式不入白名单）。
 	if action == "还原" {
 		if c != nil {
-			recordAudit(c, "还原失败", "配置备份", detail)
+			recordAudit(c, "还原失败", "配置备份", services.AuditRawDetail(detail))
 		} else {
-			services.RecordAuditLog("system", "还原失败", "配置备份", detail, "")
+			services.RecordAuditLog("system", "还原失败", "配置备份", services.AuditRawDetail(detail), "")
 		}
 	} else if c != nil {
-		recordAudit(c, "导入失败", "配置备份", detail)
+		recordAudit(c, "导入失败", "配置备份", services.AuditRawDetail(detail))
 	} else {
-		services.RecordAuditLog("system", "导入失败", "配置备份", detail, "")
+		services.RecordAuditLog("system", "导入失败", "配置备份", services.AuditRawDetail(detail), "")
 	}
 	return cause
 }
@@ -567,7 +567,7 @@ func (session *configImportSession) close() {
 		// 导入/还原写者，审计库写路径由 SQLite 单写方语义串行化，两锁无读者
 		// 共享面（读者不经其中任一把）。新增读者共享锁（读写同锁）不得照抄
 		// ——读者临界区内做审计 INSERT 会把写库开销放大进读路径。
-		services.RecordAuditLog("system", session.actionLabel()+"失败", "配置备份", "导入流程未完成，已回滚", "")
+		services.RecordAuditLog("system", session.actionLabel()+"失败", "配置备份", services.AuditRawDetail("导入流程未完成，已回滚") /* audit-detail raw */, "")
 	}
 	session.h.caddyOpMu.Unlock()
 	caddyLockReleased = true
@@ -646,7 +646,7 @@ func (session *configImportSession) abort(importErr error) error {
 			detail := "数据库提交结果不确定：规则库文件保持导入后状态（未回退）——若提交实际未落地则文件与版本记录分叉，请核对规则库页版本后重新导入或触发规则库更新收敛"
 			session.wafRestoreWarnings = append(importWarnings{}, snapshot.warnings...)
 			services.Logf("error", "配置%s警告: %s", session.actionLabel(), detail)
-			services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", detail, "")
+			services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(detail), "")
 		} else {
 			session.wafRestoreAttempted = true
 			session.wafRestoreWarnings, session.wafRestoreErr = snapshot.restore()
@@ -657,10 +657,10 @@ func (session *configImportSession) abort(importErr error) error {
 				services.Logf("error", "配置%s警告: %s", session.actionLabel(), detail)
 				// 会话上下文不携带用户身份（abort 各调用点自行审计），系统身份
 				// 留痕保证警告必达审计库而非只进响应。
-				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", detail, "")
+				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(detail), "")
 			}
 			for _, warning := range session.wafRestoreWarnings {
-				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", warning.render(i18n.ZH), "")
+				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(warning.render(i18n.ZH)) /* audit-detail raw */, "")
 			}
 		}
 	}
@@ -682,7 +682,7 @@ func (session *configImportSession) abort(importErr error) error {
 				certOperation = "提交结果不确定后按已提交视图对账证书文件"
 				detail := "数据库提交结果不确定：证书文件未直接回退，按已提交视图对账；若对账失败则保留导入后文件，请核对证书后重新导入或重载收敛"
 				services.Logf("error", "配置%s警告: %s", session.actionLabel(), detail)
-				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", detail, "")
+				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(detail), "")
 			} else {
 				certErr = services.RestoreCertFiles(session.runtime.certFiles)
 			}
@@ -695,7 +695,7 @@ func (session *configImportSession) abort(importErr error) error {
 				if notice := session.indeterminateCleanupNotice(); !notice.isZero() {
 					session.failureWarnings = append(session.failureWarnings, notice)
 					services.Logf("warn", "配置%s警告: %s", session.actionLabel(), notice.render(i18n.ZH))
-					services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", notice.render(i18n.ZH), "")
+					services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(notice.render(i18n.ZH)) /* audit-detail raw */, "")
 				}
 			}
 			if recovery.runtime != nil {
@@ -997,7 +997,7 @@ func (session *configImportSession) collectPostCommitCleanup() (*importArtifactC
 		// 判定集读取失败不否决导入：产物清理是提交后的 best-effort，任务行
 		// 已在事务内删净；留痕后按空集继续。
 		services.Logf("error", "导入清理：读取导入后规则集失败（跳过消失规则产物清理）: %v", err)
-		services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理消失规则产物失败（读取导入后规则集）：%v", err), "")
+		services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入后清理消失规则产物失败（读取导入后规则集）：%v", err)) /* audit-detail raw */, "")
 	} else {
 		current := make(map[string]struct{}, len(currentIDs))
 		for _, id := range currentIDs {
@@ -1012,7 +1012,7 @@ func (session *configImportSession) collectPostCommitCleanup() (*importArtifactC
 	withoutMaterial, err := rulesWithoutUsableCertMaterial(ctx, session.tx)
 	if err != nil {
 		services.Logf("error", "导入清理：判定无证书材料规则失败（跳过材料清理）: %v", err)
-		services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理无材料规则证书文件失败（判定集）：%v", err), "")
+		services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入后清理无材料规则证书文件失败（判定集）：%v", err)) /* audit-detail raw */, "")
 	} else {
 		plan.withoutMaterial = withoutMaterial
 	}
@@ -1043,7 +1043,7 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 	disappeared, err := absentRuleIDs(ctx, db.DB, plan.disappeared)
 	if err != nil {
 		services.Logf("error", "导入清理：读取当前规则失败（跳过孤儿清理）: %v", err)
-		services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理消失规则产物失败（读取规则集）：%v", err), "")
+		services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入后清理消失规则产物失败（读取规则集）：%v", err)) /* audit-detail raw */, "")
 		return
 	}
 	withoutMaterial := plan.withoutMaterial
@@ -1051,7 +1051,7 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 		liveWithoutMaterial, err := rulesWithoutUsableCertMaterial(ctx, db.DB)
 		if err != nil {
 			services.Logf("error", "导入清理：复核无证书材料规则失败（跳过材料清理）: %v", err)
-			services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理无材料规则证书文件失败（复核判定集）：%v", err), "")
+			services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入后清理无材料规则证书文件失败（复核判定集）：%v", err)) /* audit-detail raw */, "")
 			withoutMaterial = nil
 		} else {
 			still := make(map[string]struct{}, len(liveWithoutMaterial))
@@ -1081,7 +1081,7 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 			services.Logf("warn", "导入清理：删除消失规则 %s 的证书文件失败: %v", id, err)
 			// 与「无材料规则」路径（removeCertFilesForRules）同口径：同一类
 			// 失败必须同样进审计页，不能只有 warn。
-			services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理规则 %s 的证书文件失败：%v", id, err), "")
+			services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入后清理规则 %s 的证书文件失败：%v", id, err)) /* audit-detail raw */, "")
 		}
 		if db.MetricsDB != nil {
 			if _, err := db.MetricsDB.ExecContext(ctx, "DELETE FROM metrics_history WHERE rule_id=?", id); err != nil {
@@ -1089,18 +1089,18 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 				services.Logf("error", "导入清理：删除消失规则 %s 的指标失败: %v", id, err)
 				// 与证书文件/规则日志/证书日志同口径：同一类失败必须同样
 				// 进审计页，不能只有运行日志（逐项点名哪条规则的指标残留）。
-				services.RecordAuditLog("system", "清理失败", "指标", fmt.Sprintf("导入后清理规则 %s 的指标失败：%v", id, err), "")
+				services.RecordAuditLog("system", "清理失败", "指标", services.AuditRawDetail(fmt.Sprintf("导入后清理规则 %s 的指标失败：%v", id, err)) /* audit-detail raw */, "")
 			}
 		}
 		if err := removeImportRuleLogFiles(id); err != nil {
 			failedRuleLog++
 			services.Logf("error", "导入清理：删除消失规则 %s 的规则日志失败: %v", id, err)
-			services.RecordAuditLog("system", "清理失败", "规则日志", fmt.Sprintf("导入后清理规则 %s 的规则日志失败：%v", id, err), "")
+			services.RecordAuditLog("system", "清理失败", "规则日志", services.AuditRawDetail(fmt.Sprintf("导入后清理规则 %s 的规则日志失败：%v", id, err)) /* audit-detail raw */, "")
 		}
 		if err := removeImportCertJobLogFiles(id); err != nil {
 			failedCertJobLog++
 			services.Logf("error", "导入清理：删除消失规则 %s 的证书日志失败: %v", id, err)
-			services.RecordAuditLog("system", "清理失败", "证书日志", fmt.Sprintf("导入后清理规则 %s 的证书日志失败：%v", id, err), "")
+			services.RecordAuditLog("system", "清理失败", "证书日志", services.AuditRawDetail(fmt.Sprintf("导入后清理规则 %s 的证书日志失败：%v", id, err)) /* audit-detail raw */, "")
 		}
 	}
 	cleanedMaterial := 0
@@ -1114,20 +1114,20 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 	if unprocessed > 0 {
 		detail := fmt.Sprintf("导入后产物清理预算（%s）耗尽：剩余 %d 条规则的证书文件/指标/日志未处理，请核对 certs/ 与日志目录后人工清理", importCleanupBudget, unprocessed)
 		services.Logf("error", "导入清理：%s", detail)
-		services.RecordAuditLog("system", "清理失败", "证书产物", detail, "")
+		services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(detail), "")
 	}
 	if cleanedMaterial > 0 {
-		services.RecordAuditLog("system", "清理", "证书产物", fmt.Sprintf("导入后 %d 条规则已无任何可用证书材料，其残留证书文件已清理", cleanedMaterial), "")
+		services.RecordAuditLog("system", "清理", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入后 %d 条规则已无任何可用证书材料，其残留证书文件已清理", cleanedMaterial)) /* audit-detail raw */, "")
 	}
 	if total := len(disappeared); total > 0 {
 		failures := failedCert + failedMetrics + failedRuleLog + failedCertJobLog
 		if failures == 0 && unprocessed == 0 {
-			services.RecordAuditLog("system", "清理", "证书产物", fmt.Sprintf("导入移除 %d 条规则，已清理其证书文件、指标与日志（证书任务行随导入事务清理）", total), "")
+			services.RecordAuditLog("system", "清理", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入移除 %d 条规则，已清理其证书文件、指标与日志（证书任务行随导入事务清理）", total)) /* audit-detail raw */, "")
 		} else {
 			// 审计真实性：有失败/未处理项时不得断言「已清理」。
-			services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf(
+			services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(fmt.Sprintf(
 				"导入移除 %d 条规则，产物清理未全部完成：已处理 %d 条（证书文件失败 %d、指标失败 %d、规则日志失败 %d、证书日志失败 %d），预算耗尽未处理 %d 条——明细见同批次「清理失败」记录",
-				total, cleaned, failedCert, failedMetrics, failedRuleLog, failedCertJobLog, unprocessed), "")
+				total, cleaned, failedCert, failedMetrics, failedRuleLog, failedCertJobLog, unprocessed)), /* audit-detail raw */ "")
 		}
 	}
 }
@@ -1241,7 +1241,7 @@ func removeCertFilesForRules(ctx context.Context, ruleIDs []string) (cleaned, un
 		}
 		if err := services.RemoveCertFiles(id); err != nil {
 			services.Logf("warn", "导入清理：删除无材料规则 %s 的证书文件失败: %v", id, err)
-			services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理规则 %s 的残留证书文件失败：%v", id, err), "")
+			services.RecordAuditLog("system", "清理失败", "证书产物", services.AuditRawDetail(fmt.Sprintf("导入后清理规则 %s 的残留证书文件失败：%v", id, err)) /* audit-detail raw */, "")
 			continue
 		}
 		cleaned++

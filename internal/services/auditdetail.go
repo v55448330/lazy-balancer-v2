@@ -1,6 +1,12 @@
 package services
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"lazy-balancer-v2/internal/i18n"
+)
 
 // auditResultTextMap 是审计结果码 → 中文渲染的唯一事实源
 // 由 switch 改为 map，供 audit_result_text_test.go 以 AST/字面量互检钉住
@@ -132,14 +138,233 @@ func AuditResultText(result string) string {
 	return result
 }
 
-func FormatAuditDetail(parts ...string) string {
-	filtered := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part != "" {
-			filtered = append(filtered, part)
+// 审计明细的键化模型（方案 C 第 2/3 步，2026-11-25 用户批准）。
+//
+// 明细 = 有序的若干「段」，每段是「已登记词条键 + 若干槽位参数」。落库形态：
+//   - audit_log.detail_key    = 段键以 AuditDetailKeySeparator 连接（空=无明细）；
+//   - audit_log.detail_params = JSON 二维字符串数组，与段一一对应（每段的槽位值）；
+//   - audit_log.detail        = 中文母本文本（历史行只读展示 + 检索兜底）。
+//
+// 英文由前端词条按段键渲染（web/src/i18n/apiMessages.ts，与 message_key 同机制），
+// 后端不按请求语言翻译。段键一律来自 internal/i18n 目录（audit.*），登记见
+// catalog_audit_detail.go；新增段键必须登记 zh（英文译文归前端
+// web/src/locales/apiMessages.en.json），漏登记会被
+// audit_detail_keys_test.go 判红。
+const AuditDetailKeySeparator = "|"
+
+// AuditPart 是明细中的一段：词条键 + 槽位参数（保留原值，供中文母本按模板渲染；
+// 落库时逐槽位格式化为字符串）。
+type AuditPart struct {
+	key  string
+	args []any
+}
+
+// Key 返回段键（i18n 词条键）。
+func (part AuditPart) Key() string { return part.key }
+
+// Text 返回该段的中文母本文本。未登记的词条键原样返回（fail-visible，便于定位
+// 漏登记，而不是静默丢段）。槽位里嵌套的段按其自身母本渲染。
+func (part AuditPart) Text() string {
+	text, _ := i18n.Text(part.key, renderAuditArgs(part.args)...)
+	return text
+}
+
+// Params 返回该段的槽位参数（逐个格式化为字符串）。嵌套段编码为
+// {"k":段键,"a":[槽位...]}、段列表编码为该对象的 JSON 数组，供前端递归渲染；
+// 空段返回空切片而非 nil，保证 detail_params 的段数与段键数恒等（前端按下标
+// 对齐）。
+func (part AuditPart) Params() []string {
+	params := make([]string, len(part.args))
+	for index, arg := range part.args {
+		switch nested := arg.(type) {
+		case AuditPart:
+			params[index] = nested.encode()
+		case []AuditPart:
+			encoded := make([]string, len(nested))
+			for i, item := range nested {
+				encoded[i] = item.encode()
+			}
+			params[index] = "[" + strings.Join(encoded, ",") + "]"
+		default:
+			params[index] = fmt.Sprint(arg)
 		}
 	}
-	return joinChineseParts(filtered)
+	return params
+}
+
+// encode 把段编码成前端可识别的嵌套参数形态。
+func (part AuditPart) encode() string {
+	payload := struct {
+		Key    string   `json:"k"`
+		Params []string `json:"a"`
+	}{Key: part.key, Params: part.Params()}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return part.Text()
+	}
+	return string(encoded)
+}
+
+// renderAuditArgs 把槽位里的嵌套段/段列表换成其中文母本，供 fmt 渲染（段列表
+// 按明细同一分隔符连接）。
+func renderAuditArgs(args []any) []any {
+	rendered := make([]any, len(args))
+	for index, arg := range args {
+		switch nested := arg.(type) {
+		case AuditPart:
+			rendered[index] = nested.Text()
+		case []AuditPart:
+			texts := make([]string, 0, len(nested))
+			for _, item := range nested {
+				texts = append(texts, item.Text())
+			}
+			rendered[index] = joinChineseParts(texts)
+		default:
+			rendered[index] = arg
+		}
+	}
+	return rendered
+}
+
+// AuditDetail 是审计明细的写侧值。字段不可导出：键、参数、母本文本三者必须由
+// 构造函数一并产出，避免调用方只改其一造成键与文本分叉。
+type AuditDetail struct {
+	key    string
+	params [][]string
+	text   string
+}
+
+// Key 返回段键连接串（空表示无明细）。
+func (detail AuditDetail) Key() string { return detail.key }
+
+// Params 返回每段的槽位参数。
+func (detail AuditDetail) Params() [][]string { return detail.params }
+
+// Text 返回中文母本文本（落 detail 列）。
+func (detail AuditDetail) Text() string { return detail.text }
+
+// Identity 返回明细的键化身份（段键 + JSON 参数）：用于按「同一条明细」做
+// 去重/节流，与落库的 detail_key + detail_params 同源。无键明细回落母本文本
+// （历史形态的节流判据）。
+func (detail AuditDetail) Identity() string {
+	if detail.key == "" {
+		return detail.text
+	}
+	encoded, err := json.Marshal(detail.params)
+	if err != nil {
+		return detail.key + "|" + detail.text
+	}
+	return detail.key + "|" + string(encoded)
+}
+
+// IsZero 报告明细是否为空（无段且无文本）。
+func (detail AuditDetail) IsZero() bool { return detail.key == "" && detail.text == "" }
+
+// FormatAuditDetail 把若干段拼成一条明细：段键连接、参数逐段归集、母本文本按
+// 中文分号连接。渲染为空的段（如空错误文本）整体丢弃——与历史「空片段不占位」
+// 口径一致。
+func FormatAuditDetail(parts ...AuditPart) AuditDetail {
+	keys := make([]string, 0, len(parts))
+	params := make([][]string, 0, len(parts))
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		text := part.Text()
+		if text == "" {
+			continue
+		}
+		keys = append(keys, part.Key())
+		params = append(params, part.Params())
+		texts = append(texts, text)
+	}
+	if len(keys) == 0 {
+		return AuditDetail{}
+	}
+	return AuditDetail{key: strings.Join(keys, AuditDetailKeySeparator), params: params, text: joinChineseParts(texts)}
+}
+
+// AppendAuditDetail 在既有明细后追加若干段（明细自身作为一段被保留）。
+func AppendAuditDetail(detail AuditDetail, parts ...AuditPart) AuditDetail {
+	extra := FormatAuditDetail(parts...)
+	if extra.IsZero() {
+		return detail
+	}
+	if detail.IsZero() {
+		return extra
+	}
+	keys := detail.key
+	if extra.key != "" {
+		if keys != "" {
+			keys += AuditDetailKeySeparator
+		}
+		keys += extra.key
+	}
+	params := make([][]string, 0, len(detail.params)+len(extra.params))
+	params = append(params, detail.params...)
+	params = append(params, extra.params...)
+	texts := make([]string, 0, 2)
+	if detail.text != "" {
+		texts = append(texts, detail.text)
+	}
+	if extra.text != "" {
+		texts = append(texts, extra.text)
+	}
+	return AuditDetail{key: keys, params: params, text: joinChineseParts(texts)}
+}
+
+// AuditRawPart 是一段不可翻译的原文（对端错误体、标识、名字等数据）。这类内容
+// 不属于界面文案，英文界面按原样展示。
+func AuditRawPart(text string) AuditPart {
+	return AuditPart{key: "audit.rawPart", args: []any{text}}
+}
+
+// AuditTextPart 是一段已登记词条：键必须是字符串字面量（写点守卫
+// audit_detail_keys_test.go 按 AST 扫字面量实参），槽位数与词条模板一致。
+func AuditTextPart(key string, args ...any) AuditPart {
+	return AuditPart{key: key, args: args}
+}
+
+// AuditRawDetail 只含一段原文的明细（无文案可翻译的写点用）。
+func AuditRawDetail(text string) AuditDetail {
+	return FormatAuditDetail(AuditRawPart(text))
+}
+
+// AuditTextDetail 只含一段词条的明细。
+func AuditTextDetail(key string, args ...any) AuditDetail {
+	return FormatAuditDetail(AuditTextPart(key, args...))
+}
+
+// auditCamelSuffix 把稳定码（下划线分隔）转成词条键尾部的驼峰形态：
+// invalid_credentials → InvalidCredentials。
+func auditCamelSuffix(code string) string {
+	var b strings.Builder
+	for _, piece := range strings.Split(code, "_") {
+		if piece == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(piece[:1]))
+		b.WriteString(piece[1:])
+	}
+	return b.String()
+}
+
+// auditResultCatalogueKey 是结果码的词条键（audit.result<CamelCode>）。
+func auditResultCatalogueKey(code string) string {
+	return "audit.result" + auditCamelSuffix(code)
+}
+
+// auditSourceCatalogueKey 是来源码的词条键（audit.source<CamelCode>）。
+func auditSourceCatalogueKey(code string) string {
+	return "audit.source" + auditCamelSuffix(code)
+}
+
+// AuditResultPart 是「结果：<结果码文本>」段。已收录的结果码各有独立词条（前端按
+// 键直接渲染目标语言），未收录的码走 audit.resultUnmapped 并原样展示码——与改造
+// 前的「未收录码原样输出」一致。
+func AuditResultPart(result string) AuditPart {
+	if _, ok := auditResultTextMap[result]; ok {
+		return AuditPart{key: auditResultCatalogueKey(result)}
+	}
+	return AuditPart{key: "audit.resultUnmapped", args: []any{result}}
 }
 
 func joinChineseParts(parts []string) string {
@@ -155,23 +380,19 @@ func joinChineseParts(parts []string) string {
 
 // AuditUserPart 用户标识段(2026-09-11 裁定):用户相关审计详情显示完整标识
 // 「用户 12（zhang）」;用户名空回退「用户 12」(不可解析场景)。
-func AuditUserPart(id int, username string) string {
+func AuditUserPart(id int, username string) AuditPart {
 	if username == "" {
-		return fmt.Sprintf("用户 %d", id)
+		return AuditPart{key: "audit.userPart", args: []any{id}}
 	}
-	return fmt.Sprintf("用户 %d（%s）", id, username)
+	return AuditPart{key: "audit.userNamedPart", args: []any{id, username}}
 }
 
-func AuditJobPart(jobID int) string {
-	return fmt.Sprintf("任务 %d", jobID)
+func AuditJobPart(jobID int) AuditPart {
+	return AuditPart{key: "audit.jobPart", args: []any{jobID}}
 }
 
-func AuditRulePart(ruleID string) string {
-	return fmt.Sprintf("规则 %s", ruleID)
-}
-
-func AuditResultPart(result string) string {
-	return fmt.Sprintf("结果：%s", AuditResultText(result))
+func AuditRulePart(ruleID string) AuditPart {
+	return AuditPart{key: "audit.rulePart", args: []any{ruleID}}
 }
 
 // auditSourceTextMap 是审计来源码 → 中文渲染的唯一事实源（历史
@@ -216,11 +437,55 @@ var auditSourceTextMap = map[string]string{
 	"config_import": "来源：配置导入",
 }
 
-func AuditSourcePart(source string) string {
-	if text, ok := auditSourceTextMap[source]; ok {
-		return text
+// AuditSourcePart 是「来源：<来源码文本>」段；未收录的码走 audit.sourceUnmapped
+// 并原样展示码（fail-visible，便于定位漏映射）。
+func AuditSourcePart(source string) AuditPart {
+	if _, ok := auditSourceTextMap[source]; ok {
+		return AuditPart{key: auditSourceCatalogueKey(source)}
 	}
-	return fmt.Sprintf("来源：%s", source)
+	return AuditPart{key: "audit.sourceUnmapped", args: []any{source}}
+}
+
+// auditText 按词条渲染中文母本（供同时要写运行日志与审计两处的调用点复用，
+// 避免日志与审计文案分叉）。未登记的键原样返回。
+func auditText(key string, args ...any) string {
+	text, _ := i18n.Text(key, args...)
+	return text
+}
+
+// libUpdateAuditDetail 是数据类更新族（IP 库/CRS/威胁情报库/爬虫地址库）的结果
+// 明细：状态码 → 词条段，触发方式与附加消息作为槽位。状态文案在词条里，不在
+// 代码里拼（英文界面按状态渲染）。
+//
+// 状态码取值域是各族 Status 常量的字符串值（success/failed/skipped/cancelled
+// 以及各族的中间态），未知码走 audit.libUpdateUnknown 并原样展示码。
+func libUpdateAuditDetail(status, trigger, message string) AuditDetail {
+	switch status {
+	case "success":
+		return AuditTextDetail("audit.libUpdateSuccess", trigger, message)
+	case "failed":
+		return AuditTextDetail("audit.libUpdateFailed", trigger, message)
+	case "skipped":
+		return AuditTextDetail("audit.libUpdateSkipped", trigger, message)
+	case "cancelled":
+		return AuditTextDetail("audit.libUpdateCancelled", trigger, message)
+	case "idle":
+		return AuditTextDetail("audit.libUpdateIdle", trigger, message)
+	case "checking":
+		return AuditTextDetail("audit.libUpdateChecking", trigger, message)
+	case "downloading":
+		return AuditTextDetail("audit.libUpdateDownloading", trigger, message)
+	case "installing":
+		return AuditTextDetail("audit.libUpdateInstalling", trigger, message)
+	case "reloading":
+		return AuditTextDetail("audit.libUpdateReloading", trigger, message)
+	}
+	return AuditTextDetail("audit.libUpdateUnknown", status, trigger, message)
+}
+
+// libUpdateNothingDueDetail 是「零到期源」空轮的明细（与常态成功轮区分）。
+func libUpdateNothingDueDetail(trigger string) AuditDetail {
+	return AuditTextDetail("audit.libUpdateNothingDue", trigger)
 }
 
 // recordSystemReloadAudit 数据类更新（IP 库/CRS）触发的真实 Caddy 重载统一
@@ -229,7 +494,7 @@ func recordSystemReloadAudit(source string, err error) {
 	if err != nil {
 		// 审计 detail 是全员可见面：传输失败错误含 admin 端点原文，剥离后再落盘
 		// （服务端日志由调用方的 Logf 保留原文）。
-		RecordAuditLog("system", "重载失败", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), RedactCaddyAdminEndpoint(err.Error())), "")
+		RecordAuditLog("system", "重载失败", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), AuditRawPart(RedactCaddyAdminEndpoint(err.Error()))), "")
 		return
 	}
 	RecordAuditLog("system", "重载", "Caddy服务", FormatAuditDetail(AuditSourcePart(source), AuditResultPart("success")), "")

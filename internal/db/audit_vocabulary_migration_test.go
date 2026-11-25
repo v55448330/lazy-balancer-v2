@@ -31,7 +31,7 @@ func openVocabularyTestAuditDB(t *testing.T) *sql.DB {
 		username VARCHAR(100),
 		action VARCHAR(50) NOT NULL,
 		resource VARCHAR(100),
-		detail TEXT,
+		detail TEXT, detail_key TEXT, detail_params TEXT,
 		ip_address VARCHAR(45),
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {

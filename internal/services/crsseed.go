@@ -437,7 +437,7 @@ func reconcileCRSStateFromInLock(liveDir, snapshotDir, dbV string) {
 			m.rescanRuleCount()
 		}
 		Logf("info", "crs reconcile: 磁盘 CRS 已回退（容器重建），从数据卷快照恢复为 %s", plan.markerVersion)
-		RecordAuditLog("system", "恢复", "CRS规则库", FormatAuditDetail("容器重建后从持久快照恢复 "+plan.markerVersion, AuditResultPart("success")), "")
+		RecordAuditLog("system", "恢复", "CRS规则库", FormatAuditDetail(AuditTextPart("audit.restoredFromSnapshot", plan.markerVersion), AuditResultPart("success")), "")
 	case crsReconcileCorrectDB:
 		if _, err := db.DB.Exec("UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1", plan.dbVersion); err != nil {
 			Logf("error", "crs reconcile: 校正版本记录为磁盘实际版本 %s 失败: %v", plan.dbVersion, err)
@@ -450,6 +450,6 @@ func reconcileCRSStateFromInLock(liveDir, snapshotDir, dbV string) {
 		}
 		Logf("info", "crs reconcile: 版本记录已校正为磁盘实际版本 %s（原记录 %s）", plan.dbVersion, dbV)
 		// 发现2：原记录对应的更新成果随规则树丢失被静默废弃，必须留审计痕迹。
-		RecordAuditLog("system", "恢复", "CRS规则库", FormatAuditDetail(fmt.Sprintf("磁盘规则树与版本记录不一致，版本记录已从 %s 校正为磁盘实际版本 %s（原记录对应的更新成果已废弃）", dbV, plan.dbVersion), AuditResultPart("success")), "")
+		RecordAuditLog("system", "恢复", "CRS规则库", FormatAuditDetail(AuditTextPart("audit.crsVersionReconciled", dbV, plan.dbVersion), AuditResultPart("success")), "")
 	}
 }

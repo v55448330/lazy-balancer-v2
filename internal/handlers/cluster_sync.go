@@ -55,7 +55,7 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 			if name, nameErr := h.clusterService.NodeName(c.Request.Context(), nodeID); nameErr == nil && name != "" {
 				nodeLabel = fmt.Sprintf("节点 %s", name)
 			}
-			services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(nodeLabel, fmt.Sprintf("下发版本：%d", snapshot.Version)), c.ClientIP())
+			services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(services.AuditRawPart(nodeLabel) /* audit-detail raw */, services.AuditTextPart("audit.pushedVersion", snapshot.Version)), c.ClientIP())
 		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.snapshotGenerated"), MessageKey: "cluster.snapshotGenerated", Data: snapshot})
@@ -107,14 +107,14 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	}
 	result, err := h.syncService.Pull(c.Request.Context())
 	if err != nil {
-		recordAudit(c, "同步失败", "集群同步", err.Error())
+		recordAudit(c, "同步失败", "集群同步", services.AuditRawDetail(err.Error()) /* audit-detail raw */)
 		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.syncFailed", err, err.Error()))
 		return
 	}
 	if result.Changed {
-		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail("应用版本："+strconv.Itoa(result.AppliedVersion), services.AuditResultPart("success")))
+		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail(services.AuditTextPart("audit.appliedVersion", strconv.Itoa(result.AppliedVersion)), services.AuditResultPart("success")))
 	} else {
-		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail("配置无变化", services.AuditResultPart("success")))
+		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail(services.AuditTextPart("audit.configUnchanged"), services.AuditResultPart("success")))
 	}
 	services.ResumeSyncIfUserEnabled(h.syncService.Resume)
 	notify.Publish(notify.Event{Type: notify.EvtClusterManualSync, Fields: map[string]string{"1": c.GetString("username")}})
@@ -151,19 +151,19 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 			return
 		}
 		if isMaster {
-			recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail("主节点调用被拒绝：主节点 pin 目录存各从节点钉", services.AuditResultPart("failure")))
+			recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(services.AuditTextPart("audit.masterCallRejectedLocalPins"), services.AuditResultPart("failure")))
 			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.fingerprintClearSlaveOnly"))
 			return
 		}
 	}
 	removed, err := h.syncService.ForgetPins()
 	if err != nil {
-		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(err.Error(), services.AuditResultPart("failure")))
+		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.masterFingerprintClearFailed", err, err.Error()))
 		return
 	}
 	recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
-		fmt.Sprintf("已清除 %d 个主节点证书指纹，下次同步将重新验证并钉扎", removed),
+		services.AuditTextPart("audit.masterFingerprintsCleared", removed),
 		services.AuditResultPart("success"),
 	))
 	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "清除了全部集群信任锚", "3": fmt.Sprintf("主节点证书指纹 %d 个", removed)}})
@@ -187,7 +187,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 		// 编号非法属客户端可修正输入，但 explicit 路由的审计中间件对 4xx
 		// 无条件早退——本分支必须自行留痕（与同文件其余失败面同口径）。
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(
-			"节点编号无效（"+registerAuditField(c.Param("id"))+"）", services.AuditResultPart("invalid_request")))
+			services.AuditTextPart("audit.nodeIdInvalid", registerAuditField(c.Param("id"))), services.AuditResultPart("invalid_request")))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.nodeIdInvalid", err))
 		return
 	}
@@ -205,11 +205,11 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 			// 幂等：无钉可删（http 地址/从未服务控制过）按成功语义回应，
 			// 不阻断运维排障流程。
 			recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
-				fmt.Sprintf("节点 %d", nodeID), "该节点没有已钉扎的证书指纹，无需清除"))
+				services.AuditTextPart("audit.nodeNumber", nodeID), services.AuditTextPart("audit.noPinnedFingerprint")))
 			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeHasNoPinnedFingerprint"))
 			return
 		}
-		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), err.Error()))
+		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(services.AuditTextPart("audit.nodeNumber", nodeID), services.AuditRawPart(err.Error())))
 		c.JSON(status, clusterErrorKeyedResponse(status, "cluster.nodeFingerprintClearFailed", err))
 		return
 	}
@@ -217,7 +217,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 		h.syncService.ForgetNodePinCache(host)
 	}
 	recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
-		fmt.Sprintf("节点 %d（%s）", nodeID, host), services.AuditResultPart("success")))
+		services.AuditTextPart("audit.nodeNumberWithHost", nodeID, host), services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{
 		"1": c.GetString("username"),
 		"2": "清除了单节点证书指纹钉",

@@ -802,7 +802,7 @@ func (h *Handlers) respondRuleApplyError(c *gin.Context, applyErr, runtimeErr, s
 	// 跳过）——此前 apply 失败只写 HTTP 响应，操作审计完全缺席。与配置域
 	// finishTxApply（拒绝/未校验分支）及安全域同口径：失败必须留痕。
 	// 审计词条用字面量（词汇表门禁禁止动态 action；动词集合固定为五值）。
-	failureDetail := caddyFailureAuditDetail("Caddy 配置应用失败", allErr)
+	failureDetail := caddyFailureAuditDetail(services.AuditRawPart("Caddy 配置应用失败"), allErr)
 	switch verb {
 	case "创建":
 		recordAudit(c, "创建失败", "负载规则", failureDetail)
@@ -827,7 +827,7 @@ func (h *Handlers) respondRuleApplyError(c *gin.Context, applyErr, runtimeErr, s
 // 快照失败发生在事务开启前，DB 零变更；失败审计仍必须留痕（与配置域
 // 「Caddy 不可达」同口径）。verb 取固定五值字面量（词汇表门禁禁动态 action）。
 func (h *Handlers) respondRuleSnapshotError(c *gin.Context, verb string, err error) {
-	detail := caddyFailureAuditDetail("备份当前运行配置失败", err)
+	detail := caddyFailureAuditDetail(services.AuditRawPart("备份当前运行配置失败"), err)
 	switch verb {
 	case "创建":
 		recordAudit(c, "创建失败", "负载规则", detail)
@@ -848,8 +848,8 @@ func (h *Handlers) respondRuleSnapshotError(c *gin.Context, verb string, err err
 // （词汇门禁），因此不在本函数内拼接动作。被在途证书签发 / 放锁窗口内的并发
 // 删除或修改挡住的操作必须留痕：运维要能从审计回答「谁在何时尝试、被什么
 // 挡住」，此前 409 族只有版本冲突与并发中止两处有账。
-func ruleConflictDetail(caddyID, reason string) string {
-	return services.FormatAuditDetail(services.AuditRulePart(caddyID), reason, services.AuditResultPart("failure"))
+func ruleConflictDetail(caddyID, reason string) services.AuditDetail {
+	return services.FormatAuditDetail(services.AuditRulePart(caddyID), services.AuditRawPart(reason) /* audit-detail raw */, services.AuditResultPart("failure"))
 }
 
 // recordRuleWriteFailure 是规则写端点「数据库层失败」的统一留痕：这些路由
@@ -863,9 +863,9 @@ func recordRuleWriteFailure(c *gin.Context, verb, phase string, err error) {
 	if err != nil {
 		detail = phase + "：" + err.Error()
 	}
-	parts := []string{detail, services.AuditResultPart("failure")}
+	parts := []services.AuditPart{services.AuditRawPart(detail), services.AuditResultPart("failure")}
 	if caddyID := c.Param("caddy_id"); caddyID != "" {
-		parts = append([]string{services.AuditRulePart(caddyID)}, parts...)
+		parts = append([]services.AuditPart{services.AuditRulePart(caddyID)}, parts...)
 	}
 	failureDetail := services.FormatAuditDetail(parts...)
 	switch verb {
@@ -1726,7 +1726,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		// 提交后失败审计：Explicit 审计策略下提交后失败必须留痕（与
 		// respondRuleApplyError / EnableRule failEnableWithStatus 同口径）。
 		recordAudit(c, "创建失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), commitUncertainLabel+"："+errors.Join(err, recovery.err(), certCleanupErr).Error(), services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(commitUncertainLabel+"："+errors.Join(err, recovery.err(), certCleanupErr).Error()) /* audit-detail manual */, services.AuditResultPart("failure")))
 		writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, nil)
 		return
 	}
@@ -1795,7 +1795,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				detail = "证书任务入队失败（CA 队列未初始化），补偿恢复失败: " + restoreErr.Error()
 			}
 			recordAudit(c, "创建失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+				services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "rule.caQueueNotInitialized"))
 			return
 		}
@@ -1812,7 +1812,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				detail = "证书任务入队失败，补偿恢复失败: " + errors.Join(err, restoreErr).Error()
 			}
 			recordAudit(c, "创建失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+				services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 			// 证书签发任务未运行（队列 paused/inactive）与手工签发
 			// 同口径 409，不再折成 500 误报内部故障。
 			status, message := certEnqueueErrorResponse("创建证书任务失败", err)
@@ -1822,13 +1822,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	services.Logf("info", "Rule created with caddy_id=%s", caddyID)
-	createAuditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), fmt.Sprintf("端口：%d", req.ListenPort), req.Domain}
+	createAuditParts := []services.AuditPart{services.AuditRulePart(caddyID), services.AuditRawPart(req.Name), services.AuditRawPart(fmt.Sprintf("协议：%s", req.Protocol)), services.AuditRawPart(fmt.Sprintf("端口：%d", req.ListenPort)), services.AuditRawPart(req.Domain)}
 	if hint := inactiveHealthCheckAuditHint(clearedDeadHealthCheck); hint != "" {
-		createAuditParts = append(createAuditParts, hint)
+		createAuditParts = append(createAuditParts, services.AuditRawPart(hint))
 	}
 	if len(certWarnings) > 0 {
 		// 证书链/域名警告随成功审计留痕(不阻断)。
-		createAuditParts = append(createAuditParts, "证书警告："+strings.Join(certWarnings, "；"))
+		createAuditParts = append(createAuditParts, services.AuditRawPart("证书警告："+strings.Join(certWarnings, "；")))
 	}
 	recordAudit(c, "创建", "负载规则", services.FormatAuditDetail(createAuditParts...))
 	notify.Publish(notify.Event{Type: notify.EvtRuleCreated,
@@ -1877,7 +1877,7 @@ func retireOldDomainCertJobOrAudit(c *gin.Context, caddyID string, existingRule 
 		services.Logf("error", "清理失败: UpdateRule: failed to retire old-domain cert job after %s for caddy_id=%s: %v", logPhase, caddyID, retireErr)
 		recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
 			services.AuditRulePart(caddyID),
-			fmt.Sprintf("%s：%v。旧域任务保持原状，请人工检查", auditPrefix, retireErr),
+			services.AuditTextPart("audit.oldDomainTaskKept", auditPrefix, retireErr),
 		))
 	}
 }
@@ -3143,7 +3143,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		if ruleVersionConflicts(currentVersion, expectedUpdatedAt) {
 			recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), "并发修改：规则已被他人修改，请刷新后重试", services.AuditResultPart("failure")))
+				services.AuditRulePart(caddyID), services.AuditTextPart("audit.ruleConcurrentlyModified"), services.AuditResultPart("failure")))
 			c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "rule.versionConflict"))
 			return
 		}
@@ -3356,7 +3356,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 		// 提交后失败审计：提交后失败留痕（Explicit 审计策略，中间件不兜底）。
 		recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), commitUncertainLabel+"："+errors.Join(err, recovery.err()).Error(), services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(commitUncertainLabel+"："+errors.Join(err, recovery.err()).Error()) /* audit-detail manual */, services.AuditResultPart("failure")))
 		writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, nil)
 		return
 	}
@@ -3372,7 +3372,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	if droppedBindings > 0 {
-		recordAudit(c, "更新", "安全策略", fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", caddyID, droppedBindings))
+		recordAudit(c, "更新", "安全策略", services.AuditRawDetail(fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", caddyID, droppedBindings)) /* audit-detail raw */)
 	}
 
 	// /规则脱离 ACME（改手动/禁用 TLS）第二步——提交成功后留痕
@@ -3382,11 +3382,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if orphanACME || disabledByUpdate {
 		if switchedCertJobs > 0 {
 			services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", delReason)
-			recordAudit(c, "更新", "证书任务", fmt.Sprintf("规则 %s %s（%d 个）", caddyID, delReason, switchedCertJobs))
+			recordAudit(c, "更新", "证书任务", services.AuditRawDetail(fmt.Sprintf("规则 %s %s（%d 个）", caddyID, delReason, switchedCertJobs)) /* audit-detail raw */)
 		}
 		if disabledByUpdate && disabledJobs > 0 {
 			services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则已禁用，证书任务已暂停")
-			recordAudit(c, "更新", "证书任务", fmt.Sprintf("规则 %s 已禁用，暂停证书任务（%d 个）", caddyID, disabledJobs))
+			recordAudit(c, "更新", "证书任务", services.AuditRawDetail(fmt.Sprintf("规则 %s 已禁用，暂停证书任务（%d 个）", caddyID, disabledJobs)) /* audit-detail raw */)
 		}
 		if qm := services.GetCAQueueManager(); qm != nil {
 			// 有界取消等待不得占住全局 Caddy 操作锁；队列屏障阻止
@@ -3453,7 +3453,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				detail = "解析 CA 提供商失败且恢复失败: " + errors.Join(resolveErr, resolveExistingErr, restoreErr).Error()
 			}
 			recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+				services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 			writeInternalErrorKey(c, http.StatusInternalServerError, "rule.caProviderResolveFailed", errors.Join(resolveErr, resolveExistingErr, restoreErr))
 			return
 		}
@@ -3630,7 +3630,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				detail = detail + "；补偿恢复失败: " + restoreErr.Error()
 			}
 			recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+				services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 			if restoreErr != nil {
 				c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, "rule.restoreRuleAndCaddyFailed", message))
 				return
@@ -3719,7 +3719,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					detail = "证书任务入队失败且恢复失败: " + restoreErr.Error()
 				}
 				recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
-					services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+					services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 				if restoreErr != nil {
 					services.Logf("error", "补偿失败: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: restore=%v", caddyID, restoreErr)
 					writeInternalErrorKey(c, http.StatusInternalServerError, "rule.caQueueUninitializedAndRestoreFailed", nil)
@@ -3744,7 +3744,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					detail = "创建证书任务失败且恢复失败: " + errors.Join(err, restoreErr).Error()
 				}
 				recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
-					services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+					services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 				if restoreErr != nil {
 					services.Logf("error", "补偿失败: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
 					writeInternalErrorKey(c, http.StatusInternalServerError, "rule.certJobCreateAndRestoreFailed", nil)
@@ -3779,18 +3779,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.Protocol == "http" {
 		tlsPart = fmt.Sprintf("TLS：%s", boolText(*req.EnableTLS))
 	}
-	auditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, tlsPart}
+	auditParts := []services.AuditPart{services.AuditRulePart(caddyID), services.AuditRawPart(req.Name), services.AuditRawPart(fmt.Sprintf("协议：%s", req.Protocol)), services.AuditRawPart(domain), services.AuditRawPart(tlsPart)}
 	if hint := inactiveHealthCheckAuditHint(clearedDeadHealthCheck); hint != "" {
-		auditParts = append(auditParts, hint)
+		auditParts = append(auditParts, services.AuditRawPart(hint))
 	}
 	if len(certWarnings) > 0 {
 		// 证书链/域名警告随成功审计留痕(不阻断)。
-		auditParts = append(auditParts, "证书警告："+strings.Join(certWarnings, "；"))
+		auditParts = append(auditParts, services.AuditRawPart("证书警告："+strings.Join(certWarnings, "；")))
 	}
 	if len(updateWarnings) > 0 {
 		// 可用性变化披露双通道之一（另一通道=响应 data.warnings）：事后只能从
 		// 审计判断「这条规则的 HTTPS 为何中断」时，这是唯一线索。
-		auditParts = append(auditParts, "可用性变更："+strings.Join(updateWarnings, "；"))
+		auditParts = append(auditParts, services.AuditRawPart("可用性变更："+strings.Join(updateWarnings, "；")))
 	}
 	recordAudit(c, "更新", "负载规则", services.FormatAuditDetail(auditParts...))
 	notify.Publish(notify.Event{Type: notify.EvtRuleUpdated,
@@ -3895,7 +3895,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 			// 提交后失败审计：提交前失败同样必须留痕（Explicit 审计策略）——
 			// 规则与证书未变，原因点名取消超时。
 			recordAudit(c, "删除失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), "取消证书任务超时，规则与证书保持不变: "+cancelErr.Error(), services.AuditResultPart("failure")))
+				services.AuditRulePart(caddyID), services.AuditTextPart("audit.certJobCancelTimeout", cancelErr.Error()), services.AuditResultPart("failure")))
 			writeInternalErrorKey(c, http.StatusInternalServerError, "rule.certJobCancelTimeout", cancelErr)
 			return
 		}
@@ -3997,7 +3997,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 			caddyID, certPath, keyPath, err, restoreErr)
 		recordAudit(c, "清理失败", "证书文件", services.FormatAuditDetail(
 			services.AuditRulePart(caddyID),
-			fmt.Sprintf("残留路径：%s, %s。错误：%v。请人工检查证书文件，必要时从备份恢复", certPath, keyPath, err),
+			services.AuditTextPart("audit.certResidueManualCheck", certPath, keyPath, err),
 		))
 		if restoreErr != nil {
 			services.Logf("error", "恢复失败: DeleteRule certificate cleanup and runtime restore failed for caddy_id=%s: cleanup=%v restore=%v", caddyID, err, restoreErr)
@@ -4021,7 +4021,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 			detail = commitUncertainLabel + "，且恢复失败：" + errors.Join(err, restoreErr).Error()
 		}
 		recordAudit(c, "删除失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel})
 		return
 	}
@@ -4039,7 +4039,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 			services.Logf("error", "DeleteRule metrics_history delete error for caddy_id=%s: %v", caddyID, err)
 			recordAudit(c, "清理失败", "规则指标", services.FormatAuditDetail(
 				services.AuditRulePart(caddyID),
-				fmt.Sprintf("metrics_history 清理失败：%v（累计残留由孤儿指标清理任务有界重试收敛）", err),
+				services.AuditTextPart("audit.metricsHistoryCleanupFailed", err),
 			))
 		}
 	}
@@ -4049,14 +4049,14 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		// 但残留必须显性化——静默失败的残留文件运维完全不可见。
 		services.Logf("error", "DeleteRule rule log cleanup failed for caddy_id=%s: %v", caddyID, err)
 		recordAudit(c, "清理失败", "规则日志", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), fmt.Sprintf("路径：%s", services.RuleLogPath(caddyID)), err.Error()))
+			services.AuditRulePart(caddyID), services.AuditTextPart("audit.path", services.RuleLogPath(caddyID)), services.AuditRawPart(err.Error())))
 	}
 	if err := services.RemoveCertJobLogFiles(caddyID); err != nil {
 		services.Logf("error", "DeleteRule cert-job log cleanup failed for caddy_id=%s: %v", caddyID, err)
-		recordAudit(c, "清理失败", "证书日志", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("路径：%s", services.CertJobLogPath(caddyID)), err.Error()))
+		recordAudit(c, "清理失败", "证书日志", services.FormatAuditDetail(services.AuditRulePart(caddyID), services.AuditTextPart("audit.path", services.CertJobLogPath(caddyID)), services.AuditRawPart(err.Error())))
 	}
 
-	recordAudit(c, "删除", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
+	recordAudit(c, "删除", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), services.AuditTextPart("audit.protocol", protocol), services.AuditTextPart("audit.port", listenPort), services.AuditRawPart(domain) /* audit-detail raw */))
 	notify.Publish(notify.Event{Type: notify.EvtRuleDeleted,
 		Fields: map[string]string{"1": c.GetString("username"), "2": domain}})
 	reloadNote.finalize()
@@ -4077,7 +4077,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// 文案逐字不变。参数经变参传入，调用点的实参只求值一次。
 	fail := func(status int, key string, args ...any) {
 		recordAudit(c, "复制失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), apimsg.Tf(nil, key, args...), services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(apimsg.Tf(nil, key, args...)), services.AuditResultPart("failure")))
 		c.JSON(status, apimsg.Envelope(nil, status, key, args...))
 	}
 	// failInternal 5xx 分支：审计/日志保留底层错误，响应只回固定文案。
@@ -4089,7 +4089,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			detail = message + "：" + cause.Error()
 		}
 		recordAudit(c, "复制失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, key))
 	}
 
@@ -4461,19 +4461,19 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// 包级中文单源常量（尚未键化），把中文常量当键上送会让 message_key 变成
 		// 中文——此处保留原响应形态，文案仍取同一单源。
 		recordAudit(c, "复制失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), commitUncertainLabel, services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(commitUncertainLabel) /* audit-detail raw */, services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel})
 		return
 	}
 	committed = true
 
-	duplicateAuditParts := []string{fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name}
+	duplicateAuditParts := []services.AuditPart{services.AuditRawPart(fmt.Sprintf("源规则：%s", caddyID)), services.AuditRawPart(fmt.Sprintf("新规则：%s", newCaddyID)), services.AuditRawPart(rule.Name)}
 	if hint := inactiveHealthCheckAuditHint(clearedDeadHealthCheck); hint != "" {
-		duplicateAuditParts = append(duplicateAuditParts, hint)
+		duplicateAuditParts = append(duplicateAuditParts, services.AuditRawPart(hint))
 	}
 	recordAudit(c, "复制", "负载规则", services.FormatAuditDetail(duplicateAuditParts...))
 	if droppedBindings > 0 {
-		recordAudit(c, "复制", "安全策略", fmt.Sprintf("副本 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", newCaddyID, droppedBindings))
+		recordAudit(c, "复制", "安全策略", services.AuditRawDetail(fmt.Sprintf("副本 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", newCaddyID, droppedBindings)) /* audit-detail raw */)
 	}
 	if copiedBindings > 0 {
 		c.JSON(http.StatusCreated, apimsg.Envelope(c, 0, "rule.duplicateCreatedDisabledWithBindings", copiedBindings).WithData(gin.H{"caddy_id": newCaddyID}))
@@ -5008,13 +5008,13 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		// （磁盘满/IO/确认丢失）这一最需追溯的场景必须留痕——与创建/更新/
 		// 删除/禁用四端点逐字同口径。
 		recordAudit(c, "启用失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), commitUncertainLabel+"："+errors.Join(err, recovery.err()).Error(), services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(commitUncertainLabel+"："+errors.Join(err, recovery.err()).Error()) /* audit-detail manual */, services.AuditResultPart("failure")))
 		writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, nil)
 		return
 	}
 	committed = true
 	if droppedBindings > 0 {
-		recordAudit(c, "启用", "安全策略", fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", caddyID, droppedBindings))
+		recordAudit(c, "启用", "安全策略", services.AuditRawDetail(fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", caddyID, droppedBindings)) /* audit-detail raw */)
 	}
 
 	var enqueuedJobID int
@@ -5079,12 +5079,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if restoreErr != nil {
 			services.Logf("error", "补偿失败: EnableRule compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
 			recordAudit(c, "启用失败", "负载规则", services.FormatAuditDetail(
-				services.AuditRulePart(caddyID), detail, "补偿恢复失败: "+restoreErr.Error(), services.AuditResultPart("failure")))
+				services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditTextPart("audit.compensationRestoreFailed", restoreErr.Error()), services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, "rule.restoreRuleAndCaddyFailed", message))
 			return
 		}
 		recordAudit(c, "启用失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(detail) /* audit-detail raw */, services.AuditResultPart("failure")))
 		if key == "" {
 			c.JSON(status, models.APIResponse{Code: status, Message: message})
 			return
@@ -5170,10 +5170,10 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			// 与禁用侧同通道留痕（对照 [WARN] cancelled）：入队成功后才写，
 			// 用户可在 certjob-<rule>.log 看到任务何时重新排队。
 			services.WriteCertJobLogByRule(caddyID, "INFO", "queued", "规则已启用，已创建证书任务")
-			recordAudit(c, "创建", "证书任务", fmt.Sprintf("启用规则 %s，创建证书任务 (%s)", caddyID, domain))
+			recordAudit(c, "创建", "证书任务", services.AuditRawDetail(fmt.Sprintf("启用规则 %s，创建证书任务 (%s)", caddyID, domain)) /* audit-detail raw */)
 		case EnableCertJobKeep:
 			services.WriteCertJobLogByRule(caddyID, "INFO", "kept", "规则已启用，证书仍有效，保持现有任务")
-			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays))
+			recordAudit(c, "启用", "证书任务", services.AuditRawDetail(fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays)) /* audit-detail raw */)
 		case EnableCertJobResume:
 			if enableCertJobResumePreUpdateHook != nil {
 				enableCertJobResumePreUpdateHook(jobID)
@@ -5212,7 +5212,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			reloadNote.markLastGoodSuperseded()
 			// 恢复成功（DB + 重渲染均已完成）后留痕，补偿分支不写。
 			services.WriteCertJobLogByRule(caddyID, "INFO", "resumed", "规则已启用，证书任务已恢复")
-			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
+			recordAudit(c, "启用", "证书任务", services.AuditRawDetail(fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID)) /* audit-detail raw */)
 		case EnableCertJobRenew:
 			if queueManager == nil {
 				failEnable("rule.caQueueUninitializedNoRenew", nil)
@@ -5225,7 +5225,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			}
 			// 与禁用侧同通道留痕（对照 [WARN] cancelled）：入队成功后才写。
 			services.WriteCertJobLogByRule(caddyID, "INFO", "renew", "规则已启用，证书即将过期，已重新排队续签")
-			recordAudit(c, "续签", "证书任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
+			recordAudit(c, "续签", "证书任务", services.AuditRawDetail(fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID)) /* audit-detail raw */)
 		case EnableCertJobRetry:
 			if queueManager == nil {
 				failEnable("rule.caQueueUninitializedNoRetry", nil)
@@ -5238,15 +5238,15 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			}
 			// 与禁用侧同通道留痕：失败/暂停任务经启用重新排队。
 			services.WriteCertJobLogByRule(caddyID, "INFO", "retry", "规则已启用，证书任务已重新排队")
-			recordAudit(c, "重试", "证书任务", fmt.Sprintf("启用规则 %s，任务之前已暂停/失败，重新排队", caddyID))
+			recordAudit(c, "重试", "证书任务", services.AuditRawDetail(fmt.Sprintf("启用规则 %s，任务之前已暂停/失败，重新排队", caddyID)) /* audit-detail raw */)
 		default:
 			// 在途跳过同样留痕——启用动作发生但任务已在签发中（无需操作）。
 			services.WriteCertJobLogByRule(caddyID, "INFO", "in_flight", fmt.Sprintf("规则已启用，签发任务已在进行中（状态: %s）", jobStatus))
-			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，签发任务已在进行中 (状态: %s)", caddyID, jobStatus))
+			recordAudit(c, "启用", "证书任务", services.AuditRawDetail(fmt.Sprintf("启用规则 %s，签发任务已在进行中 (状态: %s)", caddyID, jobStatus)) /* audit-detail raw */)
 		}
 	}
 
-	recordAudit(c, "启用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
+	recordAudit(c, "启用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), services.AuditTextPart("audit.stateEnabled")))
 	notify.Publish(notify.Event{Type: notify.EvtRuleToggled,
 		Fields: map[string]string{"1": c.GetString("username"), "2": "启用", "3": ruleDomain}})
 	reloadNote.finalize()
@@ -5507,7 +5507,7 @@ func abortIfRuleConcurrentlyModifiedAs(c *gin.Context, caddyID, baseline, opName
 	// 被跳过的只有后续证书迁移/补偿。文案必须点明「已保存」——「本次操作已中止」
 	// 会让操作者以为什么都没落库，随后重复提交或误判为配置未生效。
 	detail := services.FormatAuditDetail(
-		services.AuditRulePart(caddyID), "本次变更已保存；放锁窗口内检测到并发修改，已跳过后续迁移/补偿（不回退他人已提交内容）", services.AuditResultPart("failure"))
+		services.AuditRulePart(caddyID), services.AuditTextPart("audit.changeSavedConcurrentSkip"), services.AuditResultPart("failure"))
 	// 审计词条必须为字面量（词汇门禁校验），按入口分支各写一次。
 	switch opName {
 	case "禁用":
@@ -5621,7 +5621,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 		h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 		// 提交后失败审计：提交失败留痕（Explicit 审计策略）。
 		recordAudit(c, "禁用失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), commitUncertainLabel+"："+errors.Join(err, recovery.err()).Error(), services.AuditResultPart("failure")))
+			services.AuditRulePart(caddyID), services.AuditRawPart(commitUncertainLabel+"："+errors.Join(err, recovery.err()).Error()) /* audit-detail manual */, services.AuditResultPart("failure")))
 		writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, nil)
 		return
 	}
@@ -5638,7 +5638,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 	if disabledJobs > 0 {
 		services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则已禁用，证书任务已暂停")
-		recordAudit(c, "禁用", "证书任务", fmt.Sprintf("规则 %s 已禁用，%d 个证书任务状态设为已禁用", caddyID, disabledJobs))
+		recordAudit(c, "禁用", "证书任务", services.AuditRawDetail(fmt.Sprintf("规则 %s 已禁用，%d 个证书任务状态设为已禁用", caddyID, disabledJobs)) /* audit-detail raw */)
 	}
 
 	// 取消仍在排队或执行中的签发协程，避免已禁用规则继续占用 CA 配额
@@ -5674,7 +5674,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 		}
 	}
 
-	recordAudit(c, "禁用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))
+	recordAudit(c, "禁用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), services.AuditTextPart("audit.stateDisabled")))
 	notify.Publish(notify.Event{Type: notify.EvtRuleToggled,
 		Fields: map[string]string{"1": c.GetString("username"), "2": "禁用", "3": domain}})
 	reloadNote.finalize()

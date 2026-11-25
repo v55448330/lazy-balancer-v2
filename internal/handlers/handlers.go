@@ -172,7 +172,7 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 			// 事务内 apply 暂缓的降级审计在此补落（commit 已成功，
 			// 降级描述的是真实生效的已提交配置）；非事务路径已即时落过，取不到。
 			if pending := services.TakePendingRenderDegradationAudit(); pending != "" {
-				services.RecordAuditLog("system", "应用降级", "Caddy配置", pending, "")
+				services.RecordAuditLog("system", "应用降级", "Caddy配置", services.AuditRawDetail(pending), "")
 			}
 			persistCaddyApplyBanner(degraded)
 			return
@@ -269,8 +269,8 @@ func persistCaddyApplyBanner(text string) {
 // 文本可能来自指向 admin 端点的 *url.Error（/load、/config、/adapt 的请求
 // 地址与拨号目标），而操作审计列表全员可见——先剥离端点再入 detail，服务端
 // 日志仍保留原文。
-func caddyFailureAuditDetail(prefix string, err error) string {
-	return services.FormatAuditDetail(prefix, services.RedactCaddyAdminEndpoint(err.Error()), services.AuditResultPart("failure"))
+func caddyFailureAuditDetail(prefix services.AuditPart, err error) services.AuditDetail {
+	return services.FormatAuditDetail(prefix, services.AuditRawPart(services.RedactCaddyAdminEndpoint(err.Error())), services.AuditResultPart("failure"))
 }
 
 // writeApplyFailureBanner 是横幅/系统审计的唯一落盘点。subject 决定横幅正文
@@ -281,7 +281,7 @@ func (h *Handlers) writeApplyFailureBanner(subject applyFailureSubject, err, res
 	wrapped := fmt.Sprintf("%s（%s）：%v", subject.object, caddyApplyFailureLabel(restoreErr), err)
 	services.Logf("error", "%s", wrapped)
 	// 全员可见面（审计列表 + 刷新后仍可见的横幅）剥离 admin 端点地址。
-	services.RecordAuditLog("system", subject.action, subject.resource, services.RedactCaddyAdminEndpoint(wrapped), "")
+	services.RecordAuditLog("system", subject.action, subject.resource, services.AuditRawDetail(services.RedactCaddyAdminEndpoint(wrapped)) /* audit-detail raw */, "")
 	persistCaddyApplyBanner(wrapped)
 }
 
@@ -315,7 +315,7 @@ func (h *Handlers) recordCompensationSideEffects(failureObject string, sideErr e
 	}
 	text := fmt.Sprintf("%s：附带补偿失败（不改变运行配置是否已恢复）：%v", failureObject, sideErr)
 	services.Logf("error", "%s", text)
-	services.RecordAuditLog("system", "补偿失败", "Caddy配置", text, "")
+	services.RecordAuditLog("system", "补偿失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.compensationSideEffectsFailed", failureObject, sideErr)), "")
 }
 
 // recordCaddyApplySavedNotLive 退化提交形态（DB 已提交、运行配置可能未生效）
@@ -435,7 +435,7 @@ func (n *txApplyNote) finalize() {
 // 调用点提供（txReloadDetail 或固定文案）。
 // rulesWrittenInTx：事务是否写过 lb_rules（ACME 谓词 miss 补查门控——
 // 规则写路径 true；UpdateConfig/名单/策略等不触碰 lb_rules 的路径 false）。
-func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail string, rulesWrittenInTx bool) (*txApplyNote, error) {
+func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail services.AuditDetail, rulesWrittenInTx bool) (*txApplyNote, error) {
 	// 裁定 ④'：Caddy CLI 层预检（真 validate-only，零运行时副作用）——校验
 	// 输入即事务视图的最终渲染。校验器不可用时放行（记日志），事务内应用
 	// 仍是最终门控；投影快照失败例外——渲染不可回滚，按乱填保障直接失败。
@@ -500,7 +500,7 @@ func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail stri
 const commitUncertainLabel = "数据库提交结果不确定（可能已生效，请先核对）"
 
 // txReloadDetail 生成规则生命周期路径的重载审计明细（来源 + 规则归因 + 结果）。
-func txReloadDetail(source, ruleID string) string {
+func txReloadDetail(source, ruleID string) services.AuditDetail {
 	return services.FormatAuditDetail(services.AuditSourcePart(source), services.AuditRulePart(ruleID), services.AuditResultPart("success"))
 }
 
@@ -545,7 +545,7 @@ type txApplyFinish struct {
 	MessageKey       string
 	SuccessStatus    int
 	Data             any
-	ReloadDetail     string
+	ReloadDetail     services.AuditDetail
 	RulesWrittenInTx bool
 	// Notify 事务提交成功后发布的通知事件（2026-11-21 查漏补缺批）——
 	// 安全域写操作统一走本收尾，事件随提交原子落地（渲染拒绝/提交失败不发）。
@@ -582,11 +582,11 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 			// 真实 /load 已发生（重载审计）+ 恢复失败时的分叉横幅。
 			reloadNote.auditReload()
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
-			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, services.RedactCaddyAdminEndpoint(joined.Error()), services.AuditResultPart("failure")))
+			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(services.AuditTextPart("audit.commitUncertain"), services.AuditRawPart(services.RedactCaddyAdminEndpoint(joined.Error())), services.AuditResultPart("failure")))
 			writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, joined)
 			return
 		}
-		recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
+		recordAudit(c, f.AuditAction, f.Resource, services.AuditRawDetail(f.AuditDetail) /* audit-detail raw */)
 		// 重载审计与失败横幅清除的唯一收口（此前上方已先清一次、
 		// 此处 reloadNote 内又清一次 = 同请求重复 UPDATE global_config；
 		// 同字节短路形态也由 note 覆盖）。
@@ -608,7 +608,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		// 渲染副作用（稳定命名投影+证书物化）已按未提交
 		// 内容落盘——tx 回滚的同时把磁盘回退到已提交态（零 /load）。
 		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
-		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 校验未通过", applyErr))
+		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(services.AuditTextPart("audit.caddyConfigCheckFailed"), applyErr))
 		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.caddyValidationFailedNotSaved", f.Resource, applyErr.Error()))
 		return
 	}
@@ -634,7 +634,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		}
 		h.recordCompensationSideEffects("Caddy 应用失败且 CLI 校验不可用", recovery.db)
 		h.recordCaddyApplyFailure(joined, recovery.runtime)
-		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 应用失败且 CLI 校验不可用", joined))
+		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(services.AuditTextPart("audit.caddyApplyFailedCliUnavailable"), joined))
 		restoreNote := "已回滚到已提交运行配置"
 		if recovery.runtime != nil {
 			restoreNote = "回滚到已提交运行配置失败，请立即检查 Caddy 状态"
@@ -653,7 +653,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		// 跳过；恢复失败仍须落横幅（提交结果不确定 + 运行态可能滞留候选）。
 		reloadNote.auditReload()
 		h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
-		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, services.RedactCaddyAdminEndpoint(joined.Error()), services.AuditResultPart("failure")))
+		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(services.AuditTextPart("audit.commitUncertain"), services.AuditRawPart(services.RedactCaddyAdminEndpoint(joined.Error())), services.AuditResultPart("failure")))
 		writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, joined)
 		return
 	}
@@ -663,8 +663,8 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 	// 审计同口径经 RedactCaddyAdminEndpoint 脱敏（/load 传输错误携带 admin
 	// 地址），详情仍由日志与审计留痕。
 	h.recordCaddyApplySavedNotLive(applyErr)
-	recordAudit(c, f.AuditAction, f.Resource, f.AuditDetail)
-	recordAudit(c, "重载失败", "Caddy服务", services.RedactCaddyAdminEndpoint(applyErr.Error()))
+	recordAudit(c, f.AuditAction, f.Resource, services.AuditRawDetail(f.AuditDetail) /* audit-detail raw */)
+	recordAudit(c, "重载失败", "Caddy服务", services.AuditRawDetail(services.RedactCaddyAdminEndpoint(applyErr.Error())) /* audit-detail raw */)
 	// 退化提交（DB 已提交、运行配置未生效）与成功分支同口径发布事件：
 	// 事件属「已保存」事实，热路径同分支已发（notify 面漏报窗口）。
 	publishTxApplyNotify(f)
@@ -724,11 +724,11 @@ var rollbackLeakedTx = func() {
 }
 
 // reloadDetailFor 返回收尾选项的重载审计明细（默认「配置变更后自动重载」）。
-func reloadDetailFor(f txApplyFinish) string {
-	if f.ReloadDetail != "" {
+func reloadDetailFor(f txApplyFinish) services.AuditDetail {
+	if !f.ReloadDetail.IsZero() {
 		return f.ReloadDetail
 	}
-	return "配置变更后自动重载"
+	return services.AuditTextDetail("audit.autoReloadAfterConfigChange")
 }
 
 // applyCaddyConfigE serializes against rule/config writes (caddyOpMu) and
@@ -1446,7 +1446,7 @@ func (h *Handlers) ApplyConfigOnStartup(operator string) error {
 	// 「启动应用失败仅记日志保旧配置」的既有取舍一致（main.go 调用侧同样不退出）。
 	if err := validateEnabledStoredRuleConfigs(context.Background()); err != nil {
 		services.Logf("error", "启动校验发现无效规则配置，继续启动（保留旧配置）：%v", err)
-		services.RecordAuditLog(actor, "启动警告", "系统配置", "启动校验发现无效规则配置："+err.Error(), "")
+		services.RecordAuditLog(actor, "启动警告", "系统配置", services.AuditRawDetail("启动校验发现无效规则配置："+err.Error()) /* audit-detail raw */, "")
 	}
 
 	// 启动竞态修复：先等监督器「启动回放阶段完成」标记再继续——
@@ -1505,7 +1505,7 @@ func (h *Handlers) ApplyConfigOnStartup(operator string) error {
 		}
 		wrapped := fmt.Sprintf("运行配置含非本库规则路由（%s，共 %d 条）——疑似 Caddy Admin 地址误配或外来实例曾写入本实例 Caddy，本次启动应用将覆盖收敛", strings.Join(shown, "、"), len(foreign))
 		services.Logf("error", "问题: %s", wrapped)
-		services.RecordAuditLog(actor, "启动警告", "系统配置", wrapped, "")
+		services.RecordAuditLog(actor, "启动警告", "系统配置", services.AuditRawDetail(wrapped), "")
 	}
 
 	// 未初始化实例（无任何用户）空库
@@ -1523,7 +1523,7 @@ func (h *Handlers) ApplyConfigOnStartup(operator string) error {
 			if hasRoutes, probeErr := services.RunningConfigHasRuleRoutes(h.cfg.CaddyAdminURL); probeErr == nil && hasRoutes {
 				wrapped := "启动守卫：未初始化实例（无用户、无启用规则），但 Caddy 运行配置仍含规则路由——跳过本次启动应用（疑似数据目录或 Caddy Admin 地址误配），运行配置保持原样；漂移状态由看门狗持续上报"
 				services.Logf("error", "问题: %s", wrapped)
-				services.RecordAuditLog(actor, "启动警告", "系统配置", wrapped, "")
+				services.RecordAuditLog(actor, "启动警告", "系统配置", services.AuditRawDetail(wrapped), "")
 				// 与同函数成功/回退分支一致，守卫命中属真实
 				// 执行轮结论，须在 tasks/startup:config-load.log 留业务摘要行
 				// （此前只有 Logf+审计，任务日志看似「跑了但无结论」）。
@@ -1553,7 +1553,7 @@ func (h *Handlers) ApplyConfigOnStartup(operator string) error {
 			wrapped := fmt.Sprintf("启动时数据库渲染的配置被 Caddy 拒绝，已回退最后已知正确配置（负载均衡保持可用，运行配置与数据库分叉待修复）：%v", err)
 			services.TaskLogf("startup:config-load", "caddy", "Caddy 应用被拒，已回退最后已知正确配置：%v", err)
 			services.Logf("error", "问题: %s", wrapped)
-			services.RecordAuditLog(actor, "启动警告", "系统配置", wrapped, "")
+			services.RecordAuditLog(actor, "启动警告", "系统配置", services.AuditRawDetail(wrapped), "")
 			// 2026-09-07 裁定：从节点追加补偿标记——Pull 的 304 分支识别后
 			// 全量重拉，消除「同步正常+运行旧配置」静默窗口；主节点不经 Pull
 			// 消费该标记，故不写。
@@ -1578,7 +1578,7 @@ func (h *Handlers) ApplyConfigOnStartup(operator string) error {
 	}
 	services.Logf("info", "启动：Caddy 配置已载入（启用规则 %d 条）", count)
 	services.TaskLogf("startup:config-load", "caddy", "Caddy 配置渲染应用成功（启用规则 %d 条）", count)
-	services.RecordAuditLog(actor, "载入", "系统配置", fmt.Sprintf("从数据库载入配置并应用 Caddy；启用规则 %d 条（触发源见任务运行历史）", count), "")
+	services.RecordAuditLog(actor, "载入", "系统配置", services.AuditRawDetail(fmt.Sprintf("从数据库载入配置并应用 Caddy；启用规则 %d 条（触发源见任务运行历史）", count)) /* audit-detail raw */, "")
 
 	return nil
 }

@@ -91,7 +91,7 @@ func warnCorruptedSnapshotRow(table string, rowID any, err error) {
 	}
 	Logf("error", "集群快照隔离损坏行：表 %s 行 %v 解析失败（该行不下发，健康行照常同步；请修复主节点数据）: %v", table, rowID, err)
 	RecordAuditLog("system", "同步失败", "集群快照",
-		FormatAuditDetail(fmt.Sprintf("表 %s 行 %v", table, rowID), "行数据解析失败，未随快照下发（从节点全量替换后该行消失，主节点修复后自愈）", err.Error()), "")
+		FormatAuditDetail(AuditTextPart("audit.tableRow", table, rowID), AuditTextPart("audit.snapshotRowParseFailed"), AuditRawPart(err.Error())), "")
 }
 
 type snapshotStore interface {

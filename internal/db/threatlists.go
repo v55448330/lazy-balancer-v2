@@ -210,7 +210,7 @@ func migrateThreatSystemListNames() error {
 				fingerprint := threatListTakeoverSkipFingerprint(sl.Name, legacy)
 				observedSkips[fingerprint] = struct{}{}
 				if _, alreadyReported := reportedSkips[fingerprint]; !alreadyReported {
-					recordSystemAudit("启动迁移", "IP 名单", fmt.Sprintf("启动迁移：内置威胁名单规范名 %q 已被另一 system=1 行占用，旧名 %q 行跳过接管（双方保留，名单可能失更，请人工归并）", sl.Name, legacy))
+					recordSystemAudit("启动迁移", "IP 名单", "audit.migrateThreatListNameConflict", sl.Name, legacy)
 				}
 				continue
 			}
@@ -249,8 +249,7 @@ func migrateThreatSystemListNames() error {
 				// 用户名单被改名属于用户可见数据改写，
 				// 聚合留痕（此前仅进程 stdout）。
 				renamedUserLists += len(ids)
-				detail := fmt.Sprintf("启动迁移：内置威胁名单新名 %q 被占用，已改名用户名单 %d 条（ids=%v，保 id/数据）", sl.Name, len(ids), ids)
-				recordSystemAudit("启动迁移", "IP 名单", detail)
+				recordSystemAudit("启动迁移", "IP 名单", "audit.migrateThreatListUserRenamed", sl.Name, len(ids), ids)
 			}
 		}
 		if _, err := DB.Exec(`UPDATE security_ip_lists SET name=?, description=?, updated_at=datetime('now') WHERE system=1 AND name=?`, sl.Name, sl.Description, legacy); err != nil {

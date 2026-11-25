@@ -307,11 +307,9 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 		}
 	}()
 	defer func() {
-		detail := fmt.Sprintf("更新%s（触发：%s）", map[string]string{
-			"success": "成功", "failed": "失败", "cancelled": "已取消", "skipped": "跳过",
-		}[outcome], rc.Trigger)
+		detail := libUpdateAuditDetail(outcome, rc.Trigger, "")
 		if emptyRound && outcome == "success" {
-			detail = fmt.Sprintf("无到期源，本轮无更新（触发：%s）", rc.Trigger)
+			detail = libUpdateNothingDueDetail(rc.Trigger)
 		}
 		switch outcome {
 		case "failed":
@@ -319,7 +317,7 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 			if runErr != nil {
 				notify.PublishLibUpdateResult("爬虫地址库", rc.Trigger, false, runErr.Error())
 			} else {
-				notify.PublishLibUpdateResult("爬虫地址库", rc.Trigger, false, detail)
+				notify.PublishLibUpdateResult("爬虫地址库", rc.Trigger, false, detail.Text())
 			}
 		case "cancelled":
 			RecordAuditLog(operator, "取消", "爬虫地址库", detail, "")

@@ -1898,7 +1898,7 @@ func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
 		if gateErr := certReconcileWriteGate(ctx); gateErr != nil {
 			Logf("warn", "cert reconcile: 重建证书文件前写门拦截（%s）: %v", ruleID, gateErr)
 			if rebuilt > 0 {
-				RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), fmt.Sprintf("重建 %d 个证书文件", rebuilt)), "")
+				RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), AuditTextPart("audit.certFilesRebuilt", rebuilt)), "")
 			}
 			return rebuilt, gateErr
 		}
@@ -1919,7 +1919,7 @@ func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
 		Logf("info", "证书文件缺失，已从数据库重建: %s", domain)
 	}
 	if rebuilt > 0 {
-		RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), fmt.Sprintf("重建 %d 个证书文件", rebuilt)), "")
+		RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), AuditTextPart("audit.certFilesRebuilt", rebuilt)), "")
 	}
 
 	return rebuilt, actionErr
@@ -2499,7 +2499,7 @@ func BackfillMissingACMECertJobs(ctx context.Context, qm *CAQueueManager) (int, 
 	}
 	if created > 0 {
 		Logf("info", "证书任务补建：为 %d 个启用 ACME 规则创建排队任务", created)
-		RecordAuditLog("system", "创建", "证书任务", FormatAuditDetail(AuditSourcePart("promote_or_startup"), fmt.Sprintf("为 %d 个启用 ACME 规则补建证书任务", created)), "")
+		RecordAuditLog("system", "创建", "证书任务", FormatAuditDetail(AuditSourcePart("promote_or_startup"), AuditTextPart("audit.backfillCertJobs", created)), "")
 	}
 	return created, actionErr
 }

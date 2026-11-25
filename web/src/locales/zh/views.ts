@@ -25,6 +25,7 @@ export default {
     'emptyLogs': '暂无操作日志',
     'filter': '筛选',
     'keywordPlaceholder': '详情关键词',
+    'keywordHistoricalHint': '历史明细按原文检索',
     'listLoadFailed': '日志加载失败',
     'loadFailedBanner': '操作日志加载失败：列表为空不代表没有日志',
     'operator': '操作人',

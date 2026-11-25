@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"context"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"sync"
 	"time"
@@ -98,7 +99,7 @@ func (h *Handlers) GetQQBindCode(c *gin.Context) {
 	qqBoundByUser[uid] = qqBoundCred{AppID: result.AppID, Secret: result.AppSecret, OpenID: result.UserOpenID}
 	qqTaskMu.Unlock()
 
-	recordAudit(c, "绑定", "QQ 机器人", "扫码绑定成功（AppID "+result.AppID+"，openid "+result.UserOpenID+"）")
+	recordAudit(c, "绑定", "QQ 机器人", services.AuditRawDetail("扫码绑定成功（AppID "+result.AppID+"，openid "+result.UserOpenID+"）") /* audit-detail raw */)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"bound":  true,
 		"appid":  result.AppID,

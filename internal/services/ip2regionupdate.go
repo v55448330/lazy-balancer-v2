@@ -266,17 +266,8 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 		// 状态中文归一（曾混英文 status token，与 threat 族口径不一）。
 		// 中间阶段三档也必须映射——任何早退/异常形态读到中间状态时不得回落
 		// 成英文 token（panic 路径由下方 recover 先落定 failed，此处是兜底）。
-		statusLabel := map[string]string{
-			string(IP2RegionStatusSuccess): "成功", string(IP2RegionStatusFailed): "失败",
-			string(IP2RegionStatusSkipped): "跳过", string(IP2RegionStatusCancelled): "已取消",
-			string(IP2RegionStatusIdle): "空闲", string(IP2RegionStatusChecking): "检测中",
-			string(IP2RegionStatusDownloading): "下载中", string(IP2RegionStatusInstalling): "安装中",
-			string(IP2RegionStatusReloading): "重载中",
-		}[status]
-		if statusLabel == "" {
-			statusLabel = status
-		}
-		detail := fmt.Sprintf("更新%s（触发：%s）%s", statusLabel, trigger, message)
+		// 状态文案与触发方式在词条里（libUpdateAuditDetail）；此处不再拼中文。
+		detail := libUpdateAuditDetail(status, trigger, message)
 		switch status {
 		case string(IP2RegionStatusFailed):
 			// 资源名用归一表规范名「IP数据库」——旧名

@@ -151,7 +151,7 @@ func (s *SyncService) Report(ctx context.Context) error {
 		s.lastReportFailureMsg = err.Error()
 		s.reportAuditMu.Unlock()
 		if auditChanged {
-			RecordAuditLog("system", "上报失败", "集群节点", err.Error(), "")
+			RecordAuditLog("system", "上报失败", "集群节点", AuditRawDetail(err.Error()) /* audit-detail raw */, "")
 		}
 		return fmt.Errorf("上报主节点失败: %w", err)
 	}
@@ -168,7 +168,7 @@ func (s *SyncService) Report(ctx context.Context) error {
 		s.lastReportFailureMsg = message
 		s.reportAuditMu.Unlock()
 		if auditChanged {
-			RecordAuditLog("system", "上报失败", "集群节点", message, "")
+			RecordAuditLog("system", "上报失败", "集群节点", AuditRawDetail(message), "")
 		}
 		return errors.New(message)
 	}
@@ -193,7 +193,7 @@ func (s *SyncService) Report(ctx context.Context) error {
 		s.lastReportFailureMsg = message
 		s.reportAuditMu.Unlock()
 		if auditChanged {
-			RecordAuditLog("system", "上报失败", "集群节点", message, "")
+			RecordAuditLog("system", "上报失败", "集群节点", AuditRawDetail(message), "")
 		}
 		return errors.New(message)
 	}

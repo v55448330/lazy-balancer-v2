@@ -22,7 +22,7 @@ func newAuditDetailTestDB(t *testing.T) *sql.DB {
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
-		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func newAuditDetailTestDB(t *testing.T) *sql.DB {
 func TestRecordAuditLog_stripsPeerControlCharacters(t *testing.T) {
 	auditDB := newAuditDetailTestDB(t)
 
-	RecordAuditLog("system", "切换失败", "集群模式", "目标：从节点\n；结果：成功\r\t伪造", "")
+	RecordAuditLog("system", "切换失败", "集群模式", AuditRawDetail("目标：从节点\n；结果：成功\r\t伪造"), "")
 
 	var detail string
 	if err := auditDB.QueryRow(`SELECT detail FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
@@ -55,7 +55,7 @@ func TestRecordAuditLog_capsDetailAtUTF8Boundary(t *testing.T) {
 	auditDB := newAuditDetailTestDB(t)
 
 	// 5KB 中文：截断必须落在合法 UTF-8 边界且不超过上限。
-	RecordAuditLog("system", "同步失败", "集群同步", strings.Repeat("错", 2000), "")
+	RecordAuditLog("system", "同步失败", "集群同步", AuditRawDetail(strings.Repeat("错", 2000)), "")
 
 	var detail string
 	if err := auditDB.QueryRow(`SELECT detail FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
@@ -84,7 +84,7 @@ func TestSanitizeAuditDetail_shortTextUnchanged(t *testing.T) {
 func TestRecordAuditLog_sanitizesIdentityColumns(t *testing.T) {
 	auditDB := newAuditDetailTestDB(t)
 
-	RecordAuditLog("alice\n；结果：成功\x00\x07", "登录", "用户", "正常详情", "1.2.3.4\n")
+	RecordAuditLog("alice\n；结果：成功\x00\x07", "登录", "用户", AuditRawDetail("正常详情"), "1.2.3.4\n")
 
 	var username, ipAddress string
 	if err := auditDB.QueryRow(`SELECT username, ip_address FROM audit_log ORDER BY id DESC LIMIT 1`).

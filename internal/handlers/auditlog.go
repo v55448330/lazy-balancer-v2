@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -306,9 +307,13 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 		args = append(args, a1)
 	}
 	if v := strings.TrimSpace(c.Query("keyword")); v != "" {
-		c1, a1 := like("COALESCE(detail,'')", v)
-		conds = append(conds, c1)
-		args = append(args, a1)
+		// 检索降级口径（方案 C 第 2/3 步，用户批准）：键化行按「段键名 + 参数
+		// 原文」命中（detail_params 是 JSON，参数值以原文存于其中），历史行仍按
+		// detail 母本原文命中。三列同条件 OR——两类行都不因另一类存在而漏检。
+		// 界面在搜索框旁标注「历史明细按原文检索」。
+		pattern := "%" + escapeLikePattern(v) + "%"
+		conds = append(conds, " AND (COALESCE(detail,'') LIKE ? ESCAPE '\\' OR COALESCE(detail_key,'') LIKE ? ESCAPE '\\' OR COALESCE(detail_params,'') LIKE ? ESCAPE '\\')")
+		args = append(args, pattern, pattern, pattern)
 	}
 	// 畸形时间筛选改 400：此前解析失败静默丢弃条件
 	// 返回全量数据——用户以为在按时间过滤而实际没有。解析统一在此处做，
@@ -418,6 +423,8 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		       action,
 		       COALESCE(resource,''),
 		       COALESCE(detail,''),
+		       COALESCE(detail_key,''),
+		       COALESCE(detail_params,''),
 		       COALESCE(ip_address,''),
 		       created_at
 		FROM audit_log`+where+`
@@ -435,22 +442,35 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		Action      string `json:"action"`
 		Resource    string `json:"resource"`
 		Detail      string `json:"detail"`
-		IPAddress   string `json:"ip_address"`
-		CreatedAt   string `json:"created_at"`
+		// DetailKey/DetailParams 是键化明细（段键 + 每段槽位参数）：前端按键
+		// 渲染当前语言；Detail 母本保留供历史行展示与检索兜底。
+		DetailKey    string     `json:"detail_key,omitempty"`
+		DetailParams [][]string `json:"detail_params,omitempty"`
+		IPAddress    string     `json:"ip_address"`
+		CreatedAt    string     `json:"created_at"`
 	}
 
 	var logs []AuditLogEntry
 	usernames := map[string]struct{}{}
 	for rows.Next() {
 		var e AuditLogEntry
+		var detailKey, detailParams string
 		var createdAt time.Time
-		if err := rows.Scan(&e.ID, &e.Username, &e.Action, &e.Resource, &e.Detail, &e.IPAddress, &createdAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Username, &e.Action, &e.Resource, &e.Detail, &detailKey, &detailParams, &e.IPAddress, &createdAt); err != nil {
 			// 与计数分支同口径：本端点在 business 组，任意登录用户可读，响应
 			// 只回固定文案，扫描失败的表/列名与驱动错误只进运行日志。
 			writeInternalErrorKey(c, http.StatusInternalServerError, "audit.logRowScanFailed", fmt.Errorf("扫描操作日志行: %w", err))
 			return
 		}
 		e.CreatedAt = createdAt.UTC().Format("2006-01-02 15:04:05")
+		e.DetailKey = detailKey
+		if detailParams != "" {
+			// 参数解析失败只丢键化渲染（前端回落 detail 母本），不阻断列表。
+			if err := json.Unmarshal([]byte(detailParams), &e.DetailParams); err != nil {
+				services.Logf("warn", "audit detail params decode failed for row %d: %v", e.ID, err)
+				e.DetailParams = nil
+			}
+		}
 		e.DisplayName = e.Username
 		if e.Username != "" {
 			usernames[e.Username] = struct{}{}

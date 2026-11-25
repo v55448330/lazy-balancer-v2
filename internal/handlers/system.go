@@ -50,7 +50,7 @@ func (h *Handlers) RestartService(c *gin.Context) {
 	if rejectWriteDuringImport(c, "执行服务重启") {
 		return
 	}
-	recordAudit(c, "重启", "系统", "用户触发服务重启")
+	recordAudit(c, "重启", "系统", services.AuditRawDetail("用户触发服务重启") /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtRestartRequested, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.serviceRestarting"))
 	restartProcess()

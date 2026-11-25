@@ -137,7 +137,7 @@ func TestWafBundleSyncDetail_reportsPerComponentOutcome(t *testing.T) {
 			if tt.name == "version missing falls back to bare update" {
 				b = &WafFileBundle{}
 			}
-			if got := wafBundleSyncDetail(b, tt.crsChanged, tt.xdbChanged); got != tt.want {
+			if got := wafBundleSyncDetail(b, tt.crsChanged, tt.xdbChanged).Text(); got != tt.want {
 				t.Fatalf("detail=%q, want %q", got, tt.want)
 			}
 		})

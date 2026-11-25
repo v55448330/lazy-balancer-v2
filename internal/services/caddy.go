@@ -551,7 +551,7 @@ func applyRenderDegradationState(config map[string]interface{}, persist bool) {
 	if !persist {
 		return
 	}
-	RecordAuditLog("system", "应用降级", "Caddy配置", degraded, "")
+	RecordAuditLog("system", "应用降级", "Caddy配置", AuditRawDetail(degraded), "")
 	if db.DB != nil {
 		// 标记状态变化驱动通知：仅「空 → 置值」的新失败发事件（已存在不重复发；
 		// 恢复走后台重载清除分支的 RowsAffected 判定）。

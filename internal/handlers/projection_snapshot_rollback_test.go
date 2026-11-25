@@ -108,7 +108,7 @@ func TestApplyFromTxNote_projectionSnapshotFailureReturnsError(t *testing.T) {
 	t.Cleanup(func() { _ = tx.Rollback() })
 	c, _ := newApplyTestContext()
 
-	note, err := h.applyFromTxNote(c, tx, "快照失败钉", false)
+	note, err := h.applyFromTxNote(c, tx, services.AuditRawDetail("快照失败钉"), false)
 	if err == nil {
 		if note != nil {
 			note.finalize()

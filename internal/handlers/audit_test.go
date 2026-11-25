@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -35,7 +36,7 @@ func TestRecordAudit_prefersContextAuditIP(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/config", nil)
 	c.Request.RemoteAddr = "127.0.0.1:1234"
 
-	recordAudit(c, "更新", "全局配置", "detail")
+	recordAudit(c, "更新", "全局配置", services.AuditRawDetail("detail"))
 
 	var ip string
 	if err := db.AuditDB.QueryRow(`SELECT ip_address FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&ip); err != nil {

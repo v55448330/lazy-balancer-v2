@@ -63,9 +63,9 @@ func requireMasterNode(c *gin.Context) bool {
 // 池化复用——goroutine 只能消费快照）。api_key 详情与审计 IP 的取法与
 // recordAudit 同口径（中间件 audit_ip 优先）。
 func triggerAuditContext(c *gin.Context, family, name string) services.TriggerAuditContext {
-	detail := ""
+	var detail services.AuditDetail
 	if c.GetString("auth_type") == "api_key" {
-		detail = services.AppendAPIKeyAuditDetail("手动触发任务 "+name, c.GetInt("api_key_id"), c.GetString("api_key_name"))
+		detail = services.AppendAuditDetail(services.AuditTextDetail("audit.taskManualTrigger", name), services.AuditTextPart("audit.authMethodApiKey"), services.AuditTextPart("audit.apiKeyPart", c.GetInt("api_key_id"), c.GetString("api_key_name")))
 	}
 	ip := c.GetString("audit_ip")
 	if ip == "" {
@@ -240,11 +240,11 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 				te.StopLoop(id)
 			}
 			if *req.Enabled {
-				recordAudit(c, "恢复", "任务监控", m.Name+" 调度")
+				recordAudit(c, "恢复", "任务监控", services.AuditRawDetail(m.Name+" 调度") /* audit-detail raw */)
 				notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "恢复调度"}})
 				c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskScheduleResumed", m.Name))
 			} else {
-				recordAudit(c, "停止", "任务监控", m.Name+" 调度")
+				recordAudit(c, "停止", "任务监控", services.AuditRawDetail(m.Name+" 调度") /* audit-detail raw */)
 				notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "停止调度"}})
 				c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskScheduleStopped", m.Name))
 			}
@@ -301,7 +301,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 		}
 		// 文案中性化：可取消族含 crs/ip2region（检查→拉取→安装/重载），
 		// 硬编码「下载阶段」会让审计台账与真实中断阶段不一致。
-		recordAudit(c, "取消", "任务监控", "手动取消任务 "+id+"（当前阶段中断，已完成部分保留）")
+		recordAudit(c, "取消", "任务监控", services.AuditRawDetail("手动取消任务 "+id+"（当前阶段中断，已完成部分保留）") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "取消运行"}})
 		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskCancelRequested"))
 		return
@@ -372,15 +372,15 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	}
 	switch req.Action {
 	case "start":
-		recordAudit(c, "启动", "任务监控", "常驻任务 "+id+" 启动")
+		recordAudit(c, "启动", "任务监控", services.AuditRawDetail("常驻任务 "+id+" 启动") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "启动"}})
 		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskStarted", id))
 	case "stop":
-		recordAudit(c, "停止", "任务监控", "常驻任务 "+id+" 停止")
+		recordAudit(c, "停止", "任务监控", services.AuditRawDetail("常驻任务 "+id+" 停止") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "停止"}})
 		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskStopped", id))
 	default:
-		recordAudit(c, "重启", "任务监控", "常驻任务 "+id+" 重启")
+		recordAudit(c, "重启", "任务监控", services.AuditRawDetail("常驻任务 "+id+" 重启") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "重启"}})
 		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskRestarted", id))
 	}

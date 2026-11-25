@@ -54,6 +54,9 @@
         </el-select>
         <el-input v-model="filters.ip" placeholder="IP" clearable style="width: 120px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.keyword" :placeholder="t('common.app.views.audit.keywordPlaceholder')" clearable style="width: 160px" @keyup.enter="applyFilters" />
+        <!-- 检索降级披露（方案 C 第 2/3 步）：键化行按段键名与参数原文命中，
+             历史行按 detail 原文命中——两类行都能被搜到，但历史行不参与键渲染。 -->
+        <el-text type="info" size="small" class="keyword-hint">{{ t('common.app.views.audit.keywordHistoricalHint') }}</el-text>
         <div class="filter-actions">
           <el-button type="primary" @click="applyFilters">{{ t('common.app.views.audit.filter') }}</el-button>
           <el-button @click="resetFilters">{{ t('common.app.views.audit.reset') }}</el-button>
@@ -87,7 +90,11 @@
         <el-table-column prop="resource" :label="t('common.app.views.audit.resource')" :width="isEn ? 190 : 160">
           <template #default="{ row }">{{ auditResourceLabel(row.resource) }}</template>
         </el-table-column>
-        <el-table-column prop="detail" :label="t('common.app.views.audit.colDetail')" show-overflow-tooltip />
+        <!-- 明细按键渲染（方案 C 第 2/3 步）：键化行按段键取当前语言词条，
+             历史行回落 detail 原文；未知键 fail-visible 显示键本身并告警。 -->
+        <el-table-column :label="t('common.app.views.audit.colDetail')" show-overflow-tooltip>
+          <template #default="{ row }">{{ auditDetailText(row, isEn ? 'en' : 'zh-CN') }}</template>
+        </el-table-column>
         <el-table-column prop="ip_address" :label="t('common.app.views.keys.colSourceIp')" width="160" show-overflow-tooltip />
       </el-table>
 
@@ -127,6 +134,7 @@ import LogStorageBar from '@/components/LogStorageBar.vue'
 
 import { buildAuditLogParams } from '@/utils/auditLogFilters'
 import { actionTagType } from '@/utils/auditActionTone'
+import { auditDetailText } from '@/utils/auditDetail'
 import { AUDIT_LOG_DEEP_PAGE_LIMIT, auditLogDeepPageExceeded, auditLogPaginationTotal, isAuditLogDeepPageError } from '@/utils/auditLogPaging'
 // 动作/对象枚举词条（audit-i18n 方案 C 第 1 步）：en 词条渲染、zh 原样；
 // 表外值回落库值原文。枚举钉 tests/auditVocabularyPairs.spec.ts。
@@ -145,6 +153,8 @@ interface AuditLogEntry {
   action: string
   resource: string
   detail: string
+  detail_key?: string | null
+  detail_params?: unknown
   ip_address: string
   created_at: string
 }
@@ -288,6 +298,7 @@ onMounted(() => {
 }
 .operator-email { font-size: 11.5px; color: var(--el-text-color-secondary); }
 
+.keyword-hint { white-space: nowrap; }
 .filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; align-items: center; }
 /* .polling-error-alert 已收敛 main.css（三处 scoped 逐字重复删除） */
 .filter-actions { display: flex; gap: 0; margin-left: 8px; }

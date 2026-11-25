@@ -36,7 +36,7 @@ func TestGetAuditLogs_returnsRawUtcForFrontendConversion(t *testing.T) {
 	if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, 'Asia/Shanghai')"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
+	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES ('admin', '登录成功', '用户认证', '', '127.0.0.1', '2026-07-19 12:00:00')"); err != nil {
@@ -95,7 +95,7 @@ func TestGetAuditLogs_falls_back_to_username_when_user_lookup_fails(t *testing.T
 	if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, 'UTC')"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, username TEXT, action TEXT, resource TEXT, detail TEXT, ip_address TEXT, created_at DATETIME); INSERT INTO audit_log VALUES (1, 'deleted-user', '更新', '配置', '', '', '2026-07-19 12:00:00')"); err != nil {
+	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, username TEXT, action TEXT, resource TEXT, detail TEXT, detail_key TEXT, detail_params TEXT, ip_address TEXT, created_at DATETIME); INSERT INTO audit_log VALUES (1, 'deleted-user', '更新', '配置', '', '', '', '', '2026-07-19 12:00:00')"); err != nil {
 		t.Fatal(err)
 	}
 	router := gin.New()
@@ -149,7 +149,7 @@ func newAuditLogTestRouter(t *testing.T, rows string) *gin.Engine {
 	if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, 'Asia/Shanghai')"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
+	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
 		t.Fatal(err)
 	}
 	if rows != "" {
@@ -372,7 +372,7 @@ func TestGetAuditLogs_hugePageDoesNot500(t *testing.T) {
 	if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, 'Asia/Shanghai')"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
+	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, created_at) VALUES ('admin', '登录成功', '2026-07-19 12:00:00')"); err != nil {
@@ -585,7 +585,7 @@ func TestGetAuditLogs_storedTimezoneNotConsulted(t *testing.T) {
 			if _, err := mainDB.Exec("CREATE TABLE users (username VARCHAR(50) PRIMARY KEY, display_name VARCHAR(100)); INSERT INTO users VALUES ('admin', '管理员')"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
+			if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES ('admin', '登录成功', '用户认证', '', '127.0.0.1', '2026-07-19 12:00:00')"); err != nil {

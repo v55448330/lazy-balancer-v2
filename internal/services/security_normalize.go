@@ -202,7 +202,7 @@ func securityEnumReportNormalized(changes []securityEnumChange) {
 		switch {
 		case ch.field == "mode" && ch.to == "off" && ch.from != "off":
 			RecordAuditLog("system", "修改状态", "安全策略",
-				FormatAuditDetail(fmt.Sprintf("策略 %q（#%d）mode 由 %q 归一为 off（该策略规则停止发射）", ch.name, ch.id, ch.from), AuditResultPart("success")), "")
+				FormatAuditDetail(AuditTextPart("audit.policyModeNormalizedToOff", ch.name, ch.id, ch.from), AuditResultPart("success")), "")
 		}
 	}
 }

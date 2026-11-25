@@ -17,11 +17,11 @@ import (
 // gin.Context 在 handler 返回后会被池化复用——所有字段必须在启动 goroutine
 // 前从请求上下文预取，goroutine 内不得再读 *gin.Context。
 type TriggerAuditContext struct {
-	Operator string // 操作者（空=system）
-	IP       string // 审计 IP（中间件 audit_ip 或 ClientIP）
-	Family   string // 审计对象（如「任务监控」「安全防护」）
-	Name     string // 任务展示名（审计 detail 用）
-	Detail   string // 可选：覆盖默认「手动触发任务 <Name>」文案
+	Operator string      // 操作者（空=system）
+	IP       string      // 审计 IP（中间件 audit_ip 或 ClientIP）
+	Family   string      // 审计对象（如「任务监控」「安全防护」）
+	Name     string      // 任务展示名（审计 detail 用）
+	Detail   AuditDetail // 可选：覆盖默认「手动触发任务 <Name>」文案
 }
 
 // TriggerTaskAsync 异步触发任务并统一错误分类：
@@ -79,13 +79,13 @@ func RecordTaskTriggerResult(taskID string, actx TriggerAuditContext, runErr err
 	}
 	Logf("error", "手动触发任务 %s 失败: %v", taskID, runErr)
 	RecordAuditLog(actx.Operator, "触发失败", actx.Family,
-		fmt.Sprintf("手动触发任务 %s 失败: %v", actx.Name, runErr), actx.IP)
+		AuditRawDetail(fmt.Sprintf("手动触发任务 %s 失败: %v", actx.Name, runErr)) /* audit-detail raw */, actx.IP)
 }
 
 // triggerAuditDetail 成功触发审计 detail（调用方可用 Detail 覆盖文案）。
-func triggerAuditDetail(actx TriggerAuditContext) string {
-	if actx.Detail != "" {
+func triggerAuditDetail(actx TriggerAuditContext) AuditDetail {
+	if !actx.Detail.IsZero() {
 		return actx.Detail
 	}
-	return "手动触发任务 " + actx.Name
+	return AuditTextDetail("audit.taskManualTrigger", actx.Name)
 }

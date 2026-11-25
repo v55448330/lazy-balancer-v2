@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -193,8 +194,13 @@ func sanitizeAuditIdentity(value string) string {
 // beforeAuditLogExec 保留审计写入前注入缝，供关停交错回归测试使用。
 var beforeAuditLogExec = func() {}
 
-func RecordAuditLog(username, action, resource, detail, ipAddress string) {
-	detail = sanitizeAuditDetail(detail)
+func RecordAuditLog(username, action, resource string, detail AuditDetail, ipAddress string) {
+	detailText := sanitizeAuditDetail(detail.Text())
+	detailKey := ""
+	if key := detail.Key(); key != "" {
+		detailKey = sanitizeAuditIdentity(key)
+	}
+	detailParams, paramsErr := encodeAuditDetailParams(detail.Params())
 	username = sanitizeAuditIdentity(username)
 	action = sanitizeAuditIdentity(action)
 	resource = sanitizeAuditIdentity(resource)
@@ -208,18 +214,86 @@ func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 		Logf("info", "audit vocabulary over limit (action<=%d, resource<=%d): action=%q(%d) resource=%q(%d)", auditActionMaxWords, auditResourceMaxWords, action, aw, resource, rw)
 	}
 	beforeAuditLogExec()
-	if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES (?, ?, ?, ?, ?)",
-		username, action, resource, detail, ipAddress); err != nil {
+	if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, detail_key, detail_params, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		username, action, resource, detailText, auditDetailKeyParameter(detailKey), detailParams, ipAddress); err != nil {
 		Logf("error", "audit log write failed: %v", err)
+	}
+	if paramsErr != nil {
+		// 参数编码失败只丢键化列（行照常落库、detail 母本可读），不静默：
+		// 该行的英文渲染会回落到母本，需要能从日志定位。
+		Logf("warn", "audit detail params dropped (%v): key=%q", paramsErr, detailKey)
 	}
 }
 
-func AppendAPIKeyAuditDetail(detail string, keyID int, keyName string) string {
-	apiKeyPart := fmt.Sprintf("API密钥 %d（%s）", keyID, keyName)
-	if detail == "" {
-		return fmt.Sprintf("认证方式：API密钥；%s", apiKeyPart)
+// auditDetailParamMaxBytes 是单个明细槽位的落库上限。母本文本整体已有 4KB
+// 上限；键化列的每个参数单独限长，避免一条明细携带多个对端长文本时把行放大
+// 数倍（参数总量上限 = 槽位数 × 本值，槽位数由词条模板固定）。
+const auditDetailParamMaxBytes = 1 << 10
+
+// encodeAuditDetailParams 把每段槽位净化并编码为 detail_params 的 JSON 形态；
+// 无参数时返回 nil（列写 NULL，与历史行同形）。编码失败返回 nil 与错误——
+// 调用方按「只丢键化列」处理。
+func encodeAuditDetailParams(params [][]string) (any, error) {
+	if len(params) == 0 {
+		return nil, nil
 	}
-	return fmt.Sprintf("%s；认证方式：API密钥；%s", detail, apiKeyPart)
+	sanitized := make([][]string, len(params))
+	empty := true
+	for index, segment := range params {
+		cleaned := make([]string, len(segment))
+		for slot, value := range segment {
+			cleaned[slot] = truncateAuditDetail(value, auditDetailParamMaxBytes)
+			if cleaned[slot] != "" {
+				empty = false
+			}
+		}
+		sanitized[index] = cleaned
+	}
+	if empty {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(sanitized)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
+}
+
+// auditDetailKeyParameter 返回 detail_key 列的落库值：无键写 NULL（历史行形
+// 态），读侧据此二分「按键渲染」与「按原文展示/检索」。
+func auditDetailKeyParameter(key string) any {
+	if key == "" {
+		return nil
+	}
+	return key
+}
+
+// truncateAuditDetail 是 sanitizeAuditDetail 的截断部分（供单个槽位复用同一
+// 控制字符与 UTF-8 边界口径）。
+func truncateAuditDetail(value string, maxBytes int) string {
+	if value == "" {
+		return value
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
+	if len(cleaned) <= maxBytes {
+		return cleaned
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.ValidString(cleaned[:cut]) {
+		cut--
+	}
+	return cleaned[:cut]
+}
+
+// AppendAPIKeyAuditDetail 在明细后追加「认证方式：API密钥；API密钥 N（name）」
+// 两段（API Key 身份的写点统一留痕）。
+func AppendAPIKeyAuditDetail(detail AuditDetail, keyID int, keyName string) AuditDetail {
+	return AppendAuditDetail(detail, AuditTextPart("audit.authMethodApiKey"), AuditTextPart("audit.apiKeyPart", keyID, keyName))
 }
 
 // auditRetentionMonths 读取审计保留月数（audit_retention_months，默认 3）。
@@ -377,16 +451,16 @@ func auditRetentionRound(ctx context.Context) (auditDeleted int, runsDeleted int
 // 新增路由的审计分工：handler 显式记录 → 入 auditRoutePolicies 为 Explicit；
 // 由中间件记录 → 入 Generic 并在本函数补映射 + TestAuditGenericRoutesExactlyOnce
 // 登记表同步。契约绊线见 TestAuditExplicitRoutesMappingEmpty / TestAuditPolicyListsEqual。
-func FormatAuditAction(path string) (action, resource, detail string) {
+func FormatAuditAction(path string) (action, resource string, detail AuditDetail) {
 	// 通知 Generic 路由按完整路径精确匹配（Contains 会把 Explicit 的
 	// PUT/DELETE/测试 :id 路由一并吞进来，破坏 exactly-once）。
 	switch path {
 	case "/api/v1/notification/channels":
-		return "创建", "通知通道", "创建通知通道"
+		return "创建", "通知通道", AuditTextDetail("audit.notificationChannelCreate")
 	case "/api/v1/notification/daily/test":
-		return "测试", "通知日报", "测试发送通知日报"
+		return "测试", "通知日报", AuditTextDetail("audit.notificationDailyTest")
 	case "/api/v1/notification/settings/smtp-test":
-		return "测试", "通知设置", "测试发送 SMTP 通知"
+		return "测试", "通知设置", AuditTextDetail("audit.notificationSmtpTest")
 	}
 	switch {
 	// /api/v1/config 为 Explicit（handler 记录，HasExplicitAuditEvent
@@ -398,12 +472,12 @@ func FormatAuditAction(path string) (action, resource, detail string) {
 	// 详情写具体事件语义（而非 path）：操作日志的「详情」列展示给用户，
 	// `/api/v1/caddy/restart` 这类 URL 对排障无信息量。
 	case strings.Contains(path, "/caddy/start"):
-		return "启动", "Caddy服务", "启动 Caddy 服务"
+		return "启动", "Caddy服务", AuditTextDetail("audit.caddyStart")
 	case strings.Contains(path, "/caddy/stop"):
-		return "停止", "Caddy服务", "停止 Caddy 服务"
+		return "停止", "Caddy服务", AuditTextDetail("audit.caddyStop")
 	case strings.Contains(path, "/caddy/restart"):
-		return "重启", "Caddy服务", "重启 Caddy 服务"
+		return "重启", "Caddy服务", AuditTextDetail("audit.caddyRestart")
 	}
 
-	return "", "", ""
+	return "", "", AuditDetail{}
 }

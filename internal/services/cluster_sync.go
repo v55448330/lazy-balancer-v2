@@ -913,8 +913,11 @@ func syncRoundSuccessLines(prevFailed bool, res SyncResult) []string {
 // last_sync_error 仍按轮刷新（页面可见性与取证面不变）。
 // 调用方在放行分支内以字面量写 RecordAuditLog（操作标签/事件对象词汇守卫
 // 只认字面量，动态透传会触发 audit_vocabulary 门禁）。
-func (s *SyncService) syncFailureAuditDue(action, category, detail string) bool {
-	key := action + "\x00" + detail
+// syncFailureAuditDue 报告同一 category 的失败审计是否需要再次记录：判据是
+// 明细的键化身份（段键 + 每段槽位）而非渲染文本——同一故障的重复轮次键参数
+// 相同即视为同一条，文案调整/翻译不影响节流。
+func (s *SyncService) syncFailureAuditDue(action, category string, detail AuditDetail) bool {
+	key := action + "\x00" + detail.Identity()
 	s.syncAuditMu.Lock()
 	if s.lastSyncFailureKeys == nil {
 		s.lastSyncFailureKeys = map[string]string{}
@@ -1050,7 +1053,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 						// 降频期：本轮跳过补偿重拉，走 304 返回（marker 保持可见）。
 					} else {
 						Logf("warn", "检测到上次同步应用后后置操作失败（%s），全量重拉补偿重试", lastSyncErr)
-						RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后后置操作失败", "配置无变化但后置副作用未完成，已改为全量拉取"), "")
+						RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(AuditTextPart("audit.postApplyOpFailed"), AuditTextPart("audit.configUnchangedPostStepsIncomplete")), "")
 						resp.Body.Close()
 						sinceVersion, sinceFingerprint = 0, ""
 						continue
@@ -1059,7 +1062,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			}
 			if drifted := s.driftedSections(ctx); drifted != "" {
 				Logf("warn", "本地数据与同步记录不一致（%s），以全量快照重新同步", drifted)
-				RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(fmt.Sprintf("本地数据与记录不一致：%s", drifted), "配置无变化但本地数据缺失，已改为全量拉取"), "")
+				RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(AuditTextPart("audit.localDataRecordMismatch", drifted), AuditTextPart("audit.configUnchangedLocalDataMissing")), "")
 				// 漂移通知只在「无漂移→有漂移」转换轮发一次（持续漂移轮由上方
 				// WARN/审计逐轮留痕，通知不逐轮重复）；收敛轮复位状态机。
 				if logStateTransition("notify:cluster-sync-drift", true) == "warn" {
@@ -1085,7 +1088,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 				}
 				if healed {
 					Logf("warn", "本地品牌配置文件缺失或与主节点镜像不一致，已按同步镜像重建")
-					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("品牌配置文件缺失或损坏", "已按主节点品牌镜像重建（零 Caddy 重载）"), "")
+					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(AuditTextPart("audit.brandingConfigMissing"), AuditTextPart("audit.brandingRebuiltFromMaster")), "")
 				}
 			}
 			// WAF 文件兜底：apply 期 fetchWafFiles/ApplyWafFileBundle
@@ -1102,7 +1105,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 				if s.wafRepullDue() {
 					wafRepullAttempted = true
 					Logf("warn", "本地 CRS/IP2Region 文件与同步记录不一致（上次同步安全数据失败），以全量快照重新拉取")
-					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("本地安全数据文件与记录不一致", "配置无变化但安全数据文件未收敛，已改为全量拉取"), "")
+					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(AuditTextPart("audit.localSecurityFileMismatch"), AuditTextPart("audit.configUnchangedSecurityFilesUnconverged")), "")
 					resp.Body.Close()
 					sinceVersion, sinceFingerprint = 0, ""
 					continue
@@ -1188,7 +1191,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	verifiedSnapshot, err := verifiedSnapshotIntegrity(snapshot, token, appliedVersion)
 	if err != nil {
 		// 同一失败内容不按重试轮重复写操作审计。
-		detail := FormatAuditDetail(fmt.Sprintf("版本：%d", snapshot.Version), err.Error())
+		detail := FormatAuditDetail(AuditTextPart("audit.version", snapshot.Version), AuditRawPart(err.Error()))
 		if s.syncFailureAuditDue("同步失败", "集群同步", detail) {
 			RecordAuditLog("system", "同步失败", "集群同步", detail, "")
 		}
@@ -1213,7 +1216,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	}
 	if applyErr != nil {
 		// 同内容失败（含补偿重拉轮）只留一条操作审计。
-		detail := FormatAuditDetail(fmt.Sprintf("版本：%d", snapshot.Version), applyErr.Error())
+		detail := FormatAuditDetail(AuditTextPart("audit.version", snapshot.Version), AuditRawPart(applyErr.Error()))
 		if s.syncFailureAuditDue("同步失败", "集群同步", detail) {
 			RecordAuditLog("system", "同步失败", "集群同步", detail, "")
 		}
@@ -2403,7 +2406,7 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, reason
 		// 经 combineOrReplaceSyncError 落库：ValidationFailed 属终止类，
 		// helper 直接覆盖，与直写语义等价；闭合「所有写点经 helper」不变式。
 		s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
-		RecordAuditLog("system", "注册失败", "集群节点", message, "")
+		RecordAuditLog("system", "注册失败", "集群节点", AuditRawDetail(message), "")
 		// 终止清空必须一条语句：分步清空在中途瞬时写失败时留下半清空状态
 		//（secret 已清、token 未清 → 下一轮的 401 以通用文案覆盖终止提示并把
 		// 循环置 Halted，明文令牌生命周期也超出设计）。失败必须留痕——静默

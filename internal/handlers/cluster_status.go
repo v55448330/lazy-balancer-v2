@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -55,7 +54,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 	}
 	nodeID := c.GetInt("cluster_node_id")
 	recordDetached := func(result string) {
-		services.RecordAuditLog("system", "脱离", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart(result)), c.ClientIP())
+		services.RecordAuditLog("system", "脱离", "集群节点", services.FormatAuditDetail(services.AuditTextPart("audit.nodeNumber", nodeID), services.AuditResultPart(result)), c.ClientIP())
 	}
 	// 与快照端点对称加 requireMaster——降级主节点残留 nodes 行时,
 	// 旧从节点上报照常写入(无审批),再提升后旧令牌静默重组集群。

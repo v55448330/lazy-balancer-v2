@@ -8,7 +8,6 @@ package handlers
 
 import (
 	"database/sql"
-	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -192,6 +191,6 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.subsSaveFailed", err))
 		return
 	}
-	recordAudit(c, "修改", "通知订阅", services.FormatAuditDetail(fmt.Sprintf("订阅更新×%d", len(ops)), "", services.AuditResultPart("success")))
+	recordAudit(c, "修改", "通知订阅", services.FormatAuditDetail(services.AuditTextPart("audit.subscriptionRefreshCount", len(ops)), services.AuditRawPart(""), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }

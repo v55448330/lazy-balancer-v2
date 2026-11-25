@@ -542,7 +542,7 @@ func MaterializeAllCertsFromDB() {
 	rows, err := db.DB.Query(`SELECT caddy_id, tls_cert, tls_key FROM lb_rules WHERE enabled=1 AND protocol='http' AND enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')!='' AND COALESCE(tls_key,'')!=''`)
 	if err != nil {
 		Logf("error", "certstore: query manual certs failed: %v", err)
-		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：手动证书", AuditResultPart("query_failed")), "")
+		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), AuditTextPart("audit.certTypeManual"), AuditResultPart("query_failed")), "")
 	} else {
 		for rows.Next() {
 			var ruleID, certPEM, keyPEM string
@@ -550,14 +550,14 @@ func MaterializeAllCertsFromDB() {
 				Logf("error", "certstore: scan manual cert failed: %v", err)
 				// 逐行读失败与 io_error 同权留痕：被跳过的行本轮未物化，
 				// 只计数不审计会让运维无从定位是哪条规则的证书缺席。
-				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：手动证书", AuditResultPart("scan_failed")), "")
+				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), AuditTextPart("audit.certTypeManual"), AuditResultPart("scan_failed")), "")
 				manualScanFailures++
 				continue
 			}
 			changed, materializeErr := materializeCertPair(ruleID, certPEM, keyPEM)
 			if materializeErr != nil {
 				Logf("error", "certstore: write manual cert %s failed: %v", ruleID, materializeErr)
-				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：手动证书", AuditResultPart("io_error")), "")
+				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), AuditTextPart("audit.certTypeManual"), AuditResultPart("io_error")), "")
 			} else if changed {
 				manualRecovered++
 			}
@@ -567,7 +567,7 @@ func MaterializeAllCertsFromDB() {
 			Logf("error", "certstore: iterate manual certs failed: %v", iterErr)
 			// 迭代级失败=结果集不完整（未遍历行全部未物化），与查询级失败
 			// 同权审计留痕；摘要按失败轮如实标注，不得无条件报「完成」。
-			RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：手动证书", AuditResultPart("iterate_failed")), "")
+			RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), AuditTextPart("audit.certTypeManual"), AuditResultPart("iterate_failed")), "")
 		}
 		rows.Close()
 	}
@@ -578,20 +578,20 @@ func MaterializeAllCertsFromDB() {
 	materials, scanFailures, selectErr := latestApplicableACMECertMaterials(context.Background(), db.DB, "certstore")
 	if selectErr != nil {
 		Logf("error", "certstore: query ACME certs failed: %v", selectErr)
-		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：ACME证书", AuditResultPart("query_failed")), "")
+		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), AuditTextPart("audit.certTypeAcme"), AuditResultPart("query_failed")), "")
 	} else {
 		for _, material := range materials {
 			changed, materializeErr := materializeCertPair(material.RuleID, material.CertPEM, material.KeyPEM)
 			if materializeErr != nil {
 				Logf("error", "certstore: write ACME cert %s failed: %v", material.RuleID, materializeErr)
-				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(material.RuleID), "类型：ACME证书", AuditResultPart("io_error")), "")
+				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(material.RuleID), AuditTextPart("audit.certTypeAcme"), AuditResultPart("io_error")), "")
 			} else if changed {
 				acmeRecovered++
 			}
 		}
 	}
 	if manualRecovered > 0 || acmeRecovered > 0 {
-		RecordAuditLog("system", "恢复", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), fmt.Sprintf("手动证书 %d 个", manualRecovered), fmt.Sprintf("ACME证书 %d 个", acmeRecovered)), "")
+		RecordAuditLog("system", "恢复", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), AuditTextPart("audit.manualCertCount", manualRecovered), AuditTextPart("audit.acmeCertCount", acmeRecovered)), "")
 	}
 	// 逐行读失败（manual Scan + ACME 选择器已逐行 error 留痕）必须进摘要：
 	// 被跳过的行本轮未物化，无条件报「完成」会让运维看不出残缺轮（两侧对称）。

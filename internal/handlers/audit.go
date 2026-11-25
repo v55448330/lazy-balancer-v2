@@ -6,7 +6,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-func recordAudit(c *gin.Context, action, resource, detail string) {
+func recordAudit(c *gin.Context, action, resource string, detail services.AuditDetail) {
 	username, _ := c.Get("username")
 	usernameStr, _ := username.(string)
 	if c.GetString("auth_type") == "api_key" {

@@ -10,11 +10,11 @@ import (
 
 func TestSwitchToSlaveAuditDetail_outboundIPFallbackNoted(t *testing.T) {
 	detail := switchToSlaveAuditDetail("https://master.example.com", false, 0, "")
-	if !strings.Contains(detail, "出口 IP 探测失败") || !strings.Contains(detail, "注册来源地址") {
+	if !strings.Contains(detail.Text(), "出口 IP 探测失败") || !strings.Contains(detail.Text(), "注册来源地址") {
 		t.Fatalf("fallback must be named in audit detail, got %q", detail)
 	}
 	detailOK := switchToSlaveAuditDetail("https://master.example.com", true, 0, "")
-	if strings.Contains(detailOK, "出口 IP 探测失败") {
+	if strings.Contains(detailOK.Text(), "出口 IP 探测失败") {
 		t.Fatalf("successful probe must not add fallback note, got %q", detailOK)
 	}
 }

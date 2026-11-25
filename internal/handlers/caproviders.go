@@ -87,7 +87,7 @@ func credentialsSemanticallyEqual(a, b string) bool {
 // 并发/凭证门）属未进入写入层的载荷拒绝，不落审计。
 func recordCAProviderUpdateFailure(c *gin.Context, id int, reason string) {
 	recordAudit(c, "更新失败", "CA提供商", services.FormatAuditDetail(
-		fmt.Sprintf("提供商 %d", id), reason, services.AuditResultPart("failure")))
+		services.AuditTextPart("audit.caProviderNumber", id), services.AuditRawPart(reason) /* audit-detail raw */, services.AuditResultPart("failure")))
 }
 
 func (h *Handlers) UpdateCAProvider(c *gin.Context) {
@@ -214,10 +214,10 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		changed = append(changed, "启用状态")
 	}
 	if len(changed) == 0 {
-		parts := []string{fmt.Sprintf("提供商 %d", id), old.Name, "无修改"}
-		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(parts...))
+		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(
+			services.AuditTextPart("audit.caProviderNumber", id), services.AuditRawPart(old.Name), services.AuditTextPart("audit.noChanges")))
 	} else {
-		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), old.Name, fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+		recordAudit(c, "更新", "CA提供商", services.FormatAuditDetail(services.AuditTextPart("audit.caProviderNumber", id), services.AuditRawPart(old.Name), services.AuditTextPart("audit.changeSummary", strings.Join(changed, "、"))))
 	}
 	// 事件第三/第二参用可读名而非裸编号（模板「更新了 CA 提供商「%s」」）：
 	// 名称按生效值（trim 后请求值优先，缺省沿用旧名），空名回退编号。
@@ -236,11 +236,12 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 // 「提供商 N [名称]；结果：<result>」。name 传空串（预查询 404 尚无名称）时
 // 省略名称段，与既有形态逐字一致；结果段经 AuditResultPart 统一渲染。
 func auditCAProviderTestResult(c *gin.Context, id int, name, result string) {
-	parts := []string{fmt.Sprintf("提供商 %d", id)}
+	parts := []services.AuditPart{services.AuditTextPart("audit.caProviderNumber", id)}
 	if name != "" {
-		parts = append(parts, name)
+		parts = append(parts, services.AuditRawPart(name))
 	}
-	recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(append(parts, services.AuditResultPart(result))...))
+	parts = append(parts, services.AuditResultPart(result))
+	recordAudit(c, "测试失败", "CA提供商", services.FormatAuditDetail(parts...))
 }
 
 func (h *Handlers) TestCAProvider(c *gin.Context) {
@@ -308,6 +309,6 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 		return
 	}
 
-	recordAudit(c, "测试成功", "CA提供商", services.FormatAuditDetail(fmt.Sprintf("提供商 %d", id), providerName, services.AuditResultPart("success")))
+	recordAudit(c, "测试成功", "CA提供商", services.FormatAuditDetail(services.AuditTextPart("audit.caProviderNumber", id), services.AuditRawPart(providerName) /* audit-detail raw */, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.caProviderConfigValid"))
 }

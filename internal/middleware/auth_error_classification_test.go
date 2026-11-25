@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"database/sql"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,8 +20,8 @@ func TestClusterAuthMiddlewares_recordAuthRejectionAudit(t *testing.T) {
 	database, _ := newClusterAuthContractDatabase(t)
 	oldRecorder := recordAuthenticationSecurityAudit
 	var recorded []string
-	recordAuthenticationSecurityAudit = func(_, _, _, detail, _ string) {
-		recorded = append(recorded, detail)
+	recordAuthenticationSecurityAudit = func(_ string, _ string, _ string, detail services.AuditDetail, _ string) {
+		recorded = append(recorded, detail.Text())
 	}
 	t.Cleanup(func() { recordAuthenticationSecurityAudit = oldRecorder })
 	securityAuditLimiter.reset()

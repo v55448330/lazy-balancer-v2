@@ -437,7 +437,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		reason := dirErr
 		services.Logf("warn", "%s失败：%v", action, reason)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
-			"触发："+triggerLabel, "备份目录无效", services.AuditResultPart("failed")), "")
+			services.AuditRawPart("触发："+triggerLabel) /* audit-detail manual */, services.AuditTextPart("audit.backupDirInvalid"), services.AuditResultPart("failed")), "")
 		return autoBackupRowView{}, reason
 	}
 	// 目录权限 0700——备份含私钥与凭证明文（文件由
@@ -461,7 +461,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		}
 		services.Logf("warn", "%s失败：创建备份目录失败（%s）", action, err)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
-			"触发："+triggerLabel, "文件："+failureName, "创建备份目录失败："+err.Error(), services.AuditResultPart("failed")), "")
+			services.AuditRawPart("触发："+triggerLabel) /* audit-detail manual */, services.AuditTextPart("audit.file", failureName), services.AuditTextPart("audit.backupDirCreateFailed", err.Error()), services.AuditResultPart("failed")), "")
 		return autoBackupRowView{}, fmt.Errorf("创建备份目录失败: %w", err)
 	}
 	convergeAutoBackupDirPermissions(dir)
@@ -476,7 +476,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		// 无安全可归因文件名，不落 failed 行；审计与任务日志留痕。
 		services.Logf("warn", "%s失败：生成备份文件名：%v", action, ferr)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
-			"触发："+triggerLabel, "生成备份文件名："+ferr.Error(), services.AuditResultPart("failed")), "")
+			services.AuditRawPart("触发："+triggerLabel) /* audit-detail manual */, services.AuditTextPart("audit.backupFilenameGenerateFailed", ferr.Error()), services.AuditResultPart("failed")), "")
 		return autoBackupRowView{}, fmt.Errorf("生成备份文件名: %w", ferr)
 	}
 	fail := func(stage string, err error) error {
@@ -489,7 +489,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		}
 		services.Logf("warn", "%s失败：%s（%s）", action, stage, err)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
-			"触发："+triggerLabel, "文件："+filename, stage+"："+err.Error(), services.AuditResultPart("failed")), "")
+			services.AuditRawPart("触发："+triggerLabel) /* audit-detail manual */, services.AuditTextPart("audit.file", filename), services.AuditRawPart(stage+"："+err.Error()) /* audit-detail manual */, services.AuditResultPart("failed")), "")
 		return wrapped
 	}
 
@@ -572,8 +572,8 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	}
 	services.Logf("info", "%s完成：文件 %s（%s，%.1f KB）", action, filename, countsSummary, float64(len(payload))/1024)
 	services.RecordAuditLog(operator, action, "配置备份", services.FormatAuditDetail(
-		fmt.Sprintf("备份 #%d", id), "文件："+filename, countsSummary,
-		fmt.Sprintf("大小：%d 字节", len(payload)), services.AuditResultPart("success")), "")
+		services.AuditTextPart("audit.backupNumber", id), services.AuditTextPart("audit.file", filename), services.AuditRawPart(countsSummary), /* audit-detail raw */
+		services.AuditTextPart("audit.sizeBytes", len(payload)), services.AuditResultPart("success")), "")
 	// 行视图在 TryLock 持有区内取——调用方回查「最新 manual 行」在并发手动
 	// 备份下会取到他人行。
 	view, verr := scanAutoBackupRowView(db.DB.QueryRowContext(ctx, `SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id))
@@ -914,10 +914,10 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	services.SyncAutoBackupTaskLoop(*req.Enabled)
 	freqLabel := map[string]string{"daily": "每日", "weekly": "每周", "monthly": "每月"}[*req.Frequency]
 	recordAudit(c, "备份设置", "配置备份", services.FormatAuditDetail(
-		fmt.Sprintf("启用：%s", boolText(*req.Enabled)),
-		fmt.Sprintf("频率：%s %s %s", freqLabel, *req.Time, autoBackupDayLabel(*req.Frequency, *req.Day)),
-		fmt.Sprintf("保留份数：%d", *req.Keep),
-		"范围："+strings.Join(autoBackupSectionLabels(req.Sections), "、"),
+		services.AuditTextPart("audit.enabledState", boolText(*req.Enabled)),
+		services.AuditTextPart("audit.frequency", freqLabel, *req.Time, autoBackupDayLabel(*req.Frequency, *req.Day)),
+		services.AuditTextPart("audit.keepCount", *req.Keep),
+		services.AuditTextPart("audit.scope", strings.Join(autoBackupSectionLabels(req.Sections), "、")),
 		services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtAutoBackupChanged, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.autoBackupSettingsSaved"))
@@ -1136,7 +1136,7 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "备份删除", "配置备份", services.FormatAuditDetail(
-		fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, services.AuditResultPart("success")))
+		services.AuditTextPart("audit.backupNumber", view.ID), services.AuditTextPart("audit.file", view.Filename), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.autoBackupRecordDeleted"))
 }
 
@@ -1158,7 +1158,8 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 // 中文文案 + 原因，级别随状态码）。原函数与键化形态共用，留痕口径只维护一处。
 func auditAutoBackupAccessFailure(c *gin.Context, verb, subject, message string, status int, cause error) {
 	detail := subject + "：" + message
-	recordAudit(c, verb+"失败", "配置备份", detail)
+	recordAudit(c, verb+"失败", "配置备份", services.FormatAuditDetail(
+		services.AuditTextPart("audit.subjectWithMessage", services.AuditRawPart(subject), services.AuditRawPart(message))))
 	level := "warn"
 	if status >= http.StatusInternalServerError {
 		level = "error"
@@ -1345,9 +1346,9 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 	if _, err := io.Copy(c.Writer, f); err != nil {
 		services.Logf("warn", "备份下载交付中断 #%d %s: %v", view.ID, view.Filename, err)
 		recordAudit(c, "下载失败", "配置备份", services.FormatAuditDetail(
-			fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, "交付中断："+err.Error(), services.AuditResultPart("failure")))
+			services.AuditTextPart("audit.backupNumber", view.ID), services.AuditTextPart("audit.file", view.Filename), services.AuditTextPart("audit.deliveryInterrupted", err.Error()), services.AuditResultPart("failure")))
 		return
 	}
 	recordAudit(c, "备份下载", "配置备份", services.FormatAuditDetail(
-		fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, "含凭证与证书材料，请加密保管", services.AuditResultPart("success")))
+		services.AuditTextPart("audit.backupNumber", view.ID), services.AuditTextPart("audit.file", view.Filename), services.AuditTextPart("audit.containsCredentialsWarning"), services.AuditResultPart("success")))
 }

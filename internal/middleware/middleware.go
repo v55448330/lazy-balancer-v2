@@ -343,7 +343,7 @@ func recordAuthenticationRejection(c *gin.Context, reason string) {
 	if !securityAuditLimiter.allow(reason+"\x00"+path+"\x00"+ipAddress, authenticationSecurityAuditNow()) {
 		return
 	}
-	detail := services.FormatAuditDetail("路径："+path, "原因类别："+reason)
+	detail := services.FormatAuditDetail(services.AuditTextPart("audit.path", path), services.AuditTextPart("audit.reasonCategory", reason))
 	recordAuthenticationSecurityAudit("system", "认证拒绝", "安全审计", detail, ipAddress)
 }
 
@@ -1371,7 +1371,7 @@ func auditMiddleware() gin.HandlerFunc {
 			return
 		}
 		if c.Writer.Status() >= 500 {
-			detail = detail + "；结果：失败"
+			detail = services.AppendAuditDetail(detail, services.AuditResultPart("failure"))
 		}
 
 		username, _ := c.Get("username")

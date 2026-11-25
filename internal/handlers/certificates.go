@@ -260,7 +260,7 @@ func pruneSupersededDNSCredentialFamily(creds, stored map[string]string) []strin
 // 文案必须指向唯一可执行动作：提交完整新凭据即整列覆写（损坏行由此自愈），
 // 原「请重新保存配置」在省略/掩码载荷上仍会 500，用户照做只会反复失败。
 func respondStoredDNSCredentialsCorrupted(c *gin.Context, configID int, cause error) {
-	recordAudit(c, "更新失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", configID), services.AuditResultPart("storage_corrupted")))
+	recordAudit(c, "更新失败", "DNS配置", services.FormatAuditDetail(services.AuditTextPart("audit.configNumber", configID), services.AuditResultPart("storage_corrupted")))
 	writeInternalErrorKey(c, http.StatusInternalServerError, "cert.storedDnsCredentialsCorrupted", cause)
 }
 
@@ -364,7 +364,7 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	if idErr != nil {
 		services.Logf("error", "CreateCertificateConfig: 读取新配置 ID 失败（审计将记为 0）: %v", idErr)
 	}
-	recordAudit(c, "创建", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, req.DNSProvider, fmt.Sprintf("启用：%t", enabled)))
+	recordAudit(c, "创建", "DNS配置", services.FormatAuditDetail(services.AuditTextPart("audit.configNumber", id), services.AuditRawPart(name) /* audit-detail raw */, services.AuditRawPart(req.DNSProvider), services.AuditTextPart("audit.enabledBool", enabled)))
 	publishCertConfigChanged(c, "创建了 DNS 配置", fmt.Sprintf("%s（%s）", name, req.DNSProvider))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Config created", Data: gin.H{"id": id}})
 }
@@ -661,7 +661,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	}
 
 	if len(changed) == 0 {
-		recordAudit(c, "更新", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), "无修改"))
+		recordAudit(c, "更新", "DNS配置", services.FormatAuditDetail(services.AuditTextPart("audit.configNumber", id), services.AuditTextPart("audit.noChanges")))
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config unchanged"})
 		return
 	}
@@ -680,7 +680,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		return
 	}
 	committed = true
-	recordAudit(c, "更新", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+	recordAudit(c, "更新", "DNS配置", services.FormatAuditDetail(services.AuditTextPart("audit.configNumber", id), services.AuditTextPart("audit.changeSummary", strings.Join(changed, "、"))))
 	publishCertConfigChanged(c, "更新了 DNS 配置", fmt.Sprintf("配置 %d：%s", id, strings.Join(changed, "、")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated"})
 }
@@ -747,7 +747,7 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configDeleteFailed", err)
 		return
 	}
-	recordAudit(c, "删除", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, provider))
+	recordAudit(c, "删除", "DNS配置", services.FormatAuditDetail(services.AuditTextPart("audit.configNumber", id), services.AuditRawPart(name) /* audit-detail raw */, services.AuditRawPart(provider) /* audit-detail raw */))
 	publishCertConfigChanged(c, "删除了 DNS 配置", fmt.Sprintf("%s（%s）", name, provider))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config deleted"})
 }
@@ -815,7 +815,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	if idParam != "" {
 		err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=?", id).Scan(&configName, &provider, &credentials)
 		if errors.Is(err, sql.ErrNoRows) {
-			recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), services.AuditResultPart("not_found")))
+			recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(services.AuditTextPart("audit.configNumber", id), services.AuditResultPart("not_found")))
 		}
 		if dbQueryNotFound(c, err, "Config not found", "TestCertificateConfig query config") {
 			return
@@ -826,7 +826,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		// 独立审计类别；空凭证（未填写/NULL）仍走 Validate 的缺凭证 400 原语义。
 		if credentials != "" {
 			if uerr := json.Unmarshal([]byte(credentials), &creds); uerr != nil {
-				recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("storage_corrupted")))
+				recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(services.AuditTextPart("audit.configNumber", id), services.AuditRawPart(configName) /* audit-detail raw */, services.AuditRawPart(provider) /* audit-detail raw */, services.AuditResultPart("storage_corrupted")))
 				writeInternalErrorKey(c, http.StatusInternalServerError, "cert.storedDnsCredentialsCorrupted", uerr)
 				return
 			}
@@ -838,28 +838,28 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	// （2026-09-05 证书域审计裁定）：无 id 的保存前凭证测试（前端 saveConfig
 	// 先调本端点验证）此前审计 detail 落「配置 0」——改为语义化来源标注；
 	// 有 id 路径保留「配置 N」。
-	auditTarget := fmt.Sprintf("配置 %d", id)
+	auditTarget := services.AuditTextPart("audit.configNumber", id)
 	if idParam == "" {
 		auditTarget = services.AuditSourcePart("保存前测试")
 	}
 	if req.Domain == "" {
-		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, services.AuditResultPart("missing_domain")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, services.AuditRawPart(configName) /* audit-detail raw */, services.AuditRawPart(provider) /* audit-detail raw */, services.AuditResultPart("missing_domain")))
 		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.testDomainRequired"))
 		return
 	}
 
 	p, ok := dnsproviders.Get(provider)
 	if !ok {
-		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, services.AuditResultPart("unknown_provider")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, services.AuditRawPart(configName) /* audit-detail raw */, services.AuditRawPart(provider) /* audit-detail raw */, services.AuditResultPart("unknown_provider")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown provider"})
 		return
 	}
 	if err := p.Validate(c.Request.Context(), creds, req.Domain); err != nil {
-		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, req.Domain, services.AuditResultPart("credentials_invalid")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, services.AuditRawPart(configName) /* audit-detail raw */, services.AuditRawPart(provider) /* audit-detail raw */, services.AuditRawPart(req.Domain), services.AuditResultPart("credentials_invalid")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
-	recordAudit(c, "测试成功", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, req.Domain, services.AuditResultPart("success")))
+	recordAudit(c, "测试成功", "DNS配置", services.FormatAuditDetail(auditTarget, services.AuditRawPart(configName) /* audit-detail raw */, services.AuditRawPart(provider) /* audit-detail raw */, services.AuditRawPart(req.Domain), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.dnsCredentialsValid"))
 }
 
@@ -987,12 +987,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		return
 	}
 	bindErr := c.ShouldBindJSON(&req)
-	scope := "范围：全部 ACME 规则"
+	scope := services.AuditTextPart("audit.scopeAllAcmeRules")
 	if req.CaddyID != "" {
-		scope = fmt.Sprintf("规则：%s", req.CaddyID)
+		scope = services.AuditTextPart("audit.scopeRule", req.CaddyID)
 	}
-	auditFailure := func(result string, detail ...string) {
-		parts := append([]string{scope}, detail...)
+	auditFailure := func(result string, detail ...services.AuditPart) {
+		parts := append([]services.AuditPart{scope}, detail...)
 		parts = append(parts, services.AuditResultPart(result))
 		recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(parts...))
 	}
@@ -1008,7 +1008,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	}
 	qm := services.GetCAQueueManager()
 	if qm == nil {
-		auditFailure("failed", "CA 队列未初始化")
+		auditFailure("failed", services.AuditTextPart("audit.caQueueNotInitialized"))
 		writeInternalErrorKey(c, http.StatusInternalServerError, "rule.caQueueNotInitialized", errors.New("CA queue manager not initialized"))
 		return
 	}
@@ -1017,7 +1017,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	// 错误），原实现走「200 已创建 0 个任务」的假成功或 500。规则屏障与在途
 	// 两条 changed=false 出口在下方定向/批量分支分别归因。
 	if !qm.IsActive() {
-		auditFailure("skipped", "证书签发队列已暂停")
+		auditFailure("skipped", services.AuditTextPart("audit.certQueuePaused"))
 		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.issuanceQueuePaused"))
 		return
 	}
@@ -1043,7 +1043,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		if err != nil {
 			// 审计详情/响应体都只放固定归因，底层驱动文本只进运行日志
 			// （writeInternalErrorKey 记录 cause）——business 组任意登录用户可读。
-			auditFailure("failed", "查询 ACME 规则失败")
+			auditFailure("failed", services.AuditTextPart("audit.acmeRuleQueryFailed"))
 			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRulesQueryFailed", err)
 			return
 		}
@@ -1051,7 +1051,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			var ruleID, domain string
 			if err := rows.Scan(&ruleID, &domain); err != nil {
 				err = errors.Join(err, rows.Close())
-				auditFailure("failed", "读取 ACME 规则失败")
+				auditFailure("failed", services.AuditTextPart("audit.acmeRuleReadFailed"))
 				writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRuleReadFailed", err)
 				return
 			}
@@ -1059,12 +1059,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		}
 		if err := rows.Err(); err != nil {
 			err = errors.Join(err, rows.Close())
-			auditFailure("failed", "遍历 ACME 规则失败")
+			auditFailure("failed", services.AuditTextPart("audit.acmeRuleIterateFailed"))
 			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRulesIterateFailed", err)
 			return
 		}
 		if err := rows.Close(); err != nil {
-			auditFailure("failed", "关闭 ACME 规则结果失败")
+			auditFailure("failed", services.AuditTextPart("audit.acmeRuleCloseFailed"))
 			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRulesCloseFailed", err)
 			return
 		}
@@ -1075,7 +1075,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		// caddyOpMu 临界区内执行（保持「当前态复核→upsert 同临界区」不变量），
 		// 无上限时一次请求可让全部规则写/Caddy 应用线性排队。
 		if len(batchTargets) > maxBatchIssueTargets {
-			auditFailure("failed", fmt.Sprintf("批量目标数 %d 超过单次上限 %d", len(batchTargets), maxBatchIssueTargets))
+			auditFailure("failed", services.AuditTextPart("audit.batchTargetsOverLimit", len(batchTargets), maxBatchIssueTargets))
 			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.batchIssuanceTooManyRules", maxBatchIssueTargets, len(batchTargets)))
 			return
 		}
@@ -1117,7 +1117,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		// 规则删除/迁移屏障期按冲突语义 409 点名（EnqueueIfActive 内部
 		// 同判据兜底，此处给出可读原因）。
 		if qm.IsRuleBlocked(req.CaddyID) {
-			auditFailure("skipped", "规则证书操作被屏障阻塞（规则正在删除或迁移）")
+			auditFailure("skipped", services.AuditTextPart("audit.ruleCertOperationBlocked"))
 			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.ruleCertificateOperationBlocked"))
 			return
 		}
@@ -1127,29 +1127,29 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			Scan(&enabled, &enableTLS, &protocol, &tlsSource, &ruleDomain)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				auditFailure("failed", "规则不存在")
+				auditFailure("failed", services.AuditTextPart("audit.ruleNotFound"))
 			} else {
-				auditFailure("failed", "查询规则失败")
+				auditFailure("failed", services.AuditTextPart("audit.ruleQueryFailed"))
 			}
 		}
 		if dbQueryNotFound(c, err, "规则不存在", "IssueCertificate query rule") {
 			return
 		}
 		if !enabled || protocol != "http" || !enableTLS || tlsSource != "acme_dns" {
-			auditFailure("failed", "规则状态不支持 ACME 签发")
+			auditFailure("failed", services.AuditTextPart("audit.ruleStateNotAcmeEligible"))
 			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.ruleNotEnabledAcmeHttps"))
 			return
 		}
 		canonicalRuleDomain, canonicalErr := services.CanonicalACMEDomains(ruleDomain)
 		if canonicalErr != nil {
-			auditFailure("failed", "规则域名无效")
+			auditFailure("failed", services.AuditTextPart("audit.ruleDomainInvalid"))
 			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.ruleDomainNotAcmeEligible"))
 			return
 		}
 		if req.Domain != "" {
 			canonicalRequestDomain, canonicalErr := services.CanonicalACMEDomains(req.Domain)
 			if canonicalErr != nil || canonicalRequestDomain != canonicalRuleDomain {
-				auditFailure("failed", "域名集合与规则不一致")
+				auditFailure("failed", services.AuditTextPart("audit.domainSetMismatch"))
 				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.issuanceDomainMismatchWithRule"))
 				return
 			}
@@ -1171,7 +1171,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				// 「触发签发」是同等知情显式操作，冷却中放行。其余形状（退役 409、
 				// 在途执行中、部署退避窗口文案）不受裁定影响，按原语义拒绝。
 				if statusCode != http.StatusTooManyRequests || jobStatus != "failed" {
-					auditFailure("blocked", apimsg.Tf(nil, messageKey, messageArgs...))
+					auditFailure("blocked", services.AuditRawPart(apimsg.Tf(nil, messageKey, messageArgs...)))
 					c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 					return
 				}
@@ -1188,7 +1188,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			if certJobCAcooldownActive(jobStatus, jobCAAvailableAfter, now) {
 				if !forceIssue {
 					cooldownKey, cooldownArgs := certJobCAcooldownKey(jobCAAvailableAfter.Time, now)
-					auditFailure("blocked", apimsg.Tf(nil, cooldownKey, cooldownArgs...))
+					auditFailure("blocked", services.AuditRawPart(apimsg.Tf(nil, cooldownKey, cooldownArgs...)))
 					c.JSON(http.StatusTooManyRequests, apimsg.Envelope(nil, http.StatusTooManyRequests, cooldownKey, cooldownArgs...))
 					return
 				}
@@ -1206,7 +1206,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 					if statusCode >= http.StatusInternalServerError {
 						services.Logf("error", "IssueCertificate deployment retry failed for job %d: %v", jobID, markErr)
 					}
-					auditFailure("failed", apimsg.Tf(nil, messageKey, messageArgs...))
+					auditFailure("failed", services.AuditRawPart(apimsg.Tf(nil, messageKey, messageArgs...)))
 					c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 					return
 				}
@@ -1220,18 +1220,18 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 						if statusCode >= http.StatusInternalServerError {
 							services.Logf("error", "IssueCertificate deployment retry failed for job %d: %v", jobID, deployErr)
 						}
-						auditFailure("failed", apimsg.Tf(nil, messageKey, messageArgs...))
+						auditFailure("failed", services.AuditRawPart(apimsg.Tf(nil, messageKey, messageArgs...)))
 						c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
 						return
 					}
-					recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, "已触发重新部署（不重新签发）", services.AuditResultPart("deployment_retry")))
+					recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, services.AuditTextPart("audit.redeployTriggered"), services.AuditResultPart("deployment_retry")))
 					c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cert.redeployTriggeredWithoutReissue"), MessageKey: "cert.redeployTriggeredWithoutReissue", Data: gin.H{"queued": 0, "redeployed": true}})
 					return
 				}
 				// rescheduled=false：规则/材料在窗口内刚变化，回落整轮重签。
 			}
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			auditFailure("failed", "读取证书任务失败")
+			auditFailure("failed", services.AuditTextPart("audit.certJobReadFailed"))
 			writeInternalErrorKey(c, http.StatusInternalServerError, "rule.certJobReadFailed", err)
 			return
 		}
@@ -1240,7 +1240,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			if errors.Is(err, services.ErrCertRuleStateConflict) {
 				// upsert 落库闸的规则当前态复核拒绝（防御纵深——
 				// 持锁临界区内正常不可达）——409 冲突语义，不得折成 500。
-				auditFailure("conflict", "规则状态已变更（规则已删除、禁用或域名已修改）")
+				auditFailure("conflict", services.AuditTextPart("audit.ruleStateChanged"))
 				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.ruleStateChanged"))
 				return
 			}
@@ -1258,12 +1258,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				// 与 CA-force 族同口径：失败冷却越冷实际发生（窗口已清）但收尾
 				// 失败——独立 cooldown_override 行留痕（成功路径 :1267 对称）。
 				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope,
-					"定向重签越过失败冷却", failedCooldownMessage, services.AuditResultPart("cooldown_override")))
+					services.AuditTextPart("audit.targetedReissueCooldownOverride"), services.AuditRawPart(failedCooldownMessage) /* audit-detail raw */, services.AuditResultPart("cooldown_override")))
 			}
 			if statusCode == http.StatusConflict {
-				auditFailure("skipped", auditMessage)
+				auditFailure("skipped", services.AuditRawPart(auditMessage))
 			} else {
-				auditFailure("failed", auditMessage)
+				auditFailure("failed", services.AuditRawPart(auditMessage))
 			}
 			c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
 			return
@@ -1272,30 +1272,30 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			// changed=false 必须区分三条出口，不得统一回 200 queued=0。
 			switch {
 			case !qm.IsActive():
-				auditFailure("skipped", "证书签发队列已暂停")
+				auditFailure("skipped", services.AuditTextPart("audit.certQueuePaused"))
 				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.issuanceQueuePaused"))
 			case qm.IsRuleBlocked(req.CaddyID):
-				auditFailure("skipped", "规则证书操作被屏障阻塞（规则正在删除或迁移）")
+				auditFailure("skipped", services.AuditTextPart("audit.ruleCertOperationBlocked"))
 				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.ruleCertificateOperationBlocked"))
 			case qm.IsJobActive(jobID):
 				// 在途：保留 200，但明确 queued=0 与归因（未新建任务）。
-				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, "任务正在执行中，未重复入队", services.AuditResultPart("skipped")))
+				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, services.AuditTextPart("audit.taskAlreadyRunning"), services.AuditResultPart("skipped")))
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cert.issuanceJobRunningNotRequeued"), MessageKey: "cert.issuanceJobRunningNotRequeued", Data: gin.H{"queued": 0, "skipped_cooldown": 0, "in_flight": true}})
 			default:
 				// 任务处于不可重排状态（非在途、非冷却）——如实 409，不伪装成功。
-				auditFailure("skipped", "任务状态不支持重新入队")
+				auditFailure("skipped", services.AuditTextPart("audit.jobStateNotRequeueable"))
 				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.issuanceJobStateNotRequeueable"))
 			}
 			return
 		}
 		if failedCooldownOverride {
 			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope,
-				"定向重签越过失败冷却", failedCooldownMessage, services.AuditResultPart("cooldown_override")))
+				services.AuditTextPart("audit.targetedReissueCooldownOverride"), services.AuditRawPart(failedCooldownMessage) /* audit-detail raw */, services.AuditResultPart("cooldown_override")))
 		}
 		queued++
 	} else {
 		if !req.All {
-			auditFailure("invalid_request", "请求格式错误")
+			auditFailure("invalid_request", services.AuditTextPart("audit.requestFormatInvalid"))
 			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.batchIssuanceExplicitConfirmRequired"))
 			return
 		}
@@ -1471,7 +1471,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			return text + batchForceNote
 		}
 		if pausedMidBatch && queued == 0 && redeployed == 0 {
-			auditFailure("skipped", withForceNote(formulaSkippedNote(skippedCooldown+skippedWaitingCA, skippedInFlight, skippedBlocked, skippedUnsupported, skippedRetired)), "证书签发队列已暂停")
+			auditFailure("skipped", services.AuditRawPart(withForceNote(formulaSkippedNote(skippedCooldown+skippedWaitingCA, skippedInFlight, skippedBlocked, skippedUnsupported, skippedRetired))), services.AuditTextPart("audit.certQueuePaused"))
 			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.issuanceQueuePaused"))
 			return
 		}
@@ -1485,7 +1485,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			}
 			// 审计明细沿用迁移前的中文整句（语言无关）；响应按键 + 参数渲染。
 			message := fmt.Sprintf("已创建 %d 个签发任务，已触发重新部署 %d 个；证书签发队列被暂停，剩余目标未处理", queued, redeployed) + suffix
-			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, message, services.AuditResultPart("partial")))
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, services.AuditRawPart(message) /* audit-detail raw */, services.AuditResultPart("partial")))
 			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.batchIssuancePausedMidBatch", queued, redeployed, suffix).WithData(gin.H{
 				"queued":             queued,
 				"redeployed":         redeployed,
@@ -1507,11 +1507,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			// 入队族判定与定向签发共用 certEnqueueErrorResponse 单源。
 			if enqueueConflict == len(failed) {
 				if conflictFailed == enqueueConflict {
-					auditFailure("conflict", "规则状态已变更（规则已删除、禁用或域名已修改）")
+					auditFailure("conflict", services.AuditTextPart("audit.ruleStateChanged"))
 					c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.ruleStateChanged"))
 					return
 				}
-				auditFailure("skipped", enqueueConflictMessage)
+				auditFailure("skipped", services.AuditRawPart(enqueueConflictMessage))
 				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: enqueueConflictMessage})
 				return
 			}
@@ -1526,7 +1526,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				}
 				detail += skipNote
 			}
-			auditFailure("failed", detail)
+			auditFailure("failed", services.AuditRawPart(detail))
 			// 响应体只回固定文案：failed 明细含 SQL 片段/队列内部态，只进运行
 			// 日志（business 组任意登录用户可读，5xx 不得直出底层错误）。
 			services.Logf("error", "IssueCertificate batch: 全部签发任务创建失败: %s", strings.Join(failed, "; "))
@@ -1567,7 +1567,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			}
 			// 审计明细沿用迁移前的中文整句（语言无关）；响应按键 + 参数渲染。
 			message := fmt.Sprintf("已触发重新部署 %d 个（不重新签发）", redeployed) + suffix
-			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, message, services.AuditResultPart("deployment_retry")))
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, services.AuditRawPart(message) /* audit-detail raw */, services.AuditResultPart("deployment_retry")))
 			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.batchIssuanceRedeployedOnly", redeployed, suffix).WithData(gin.H{
 				"queued":             0,
 				"redeployed":         redeployed,
@@ -1590,7 +1590,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				skipNote = "当前没有处于启用状态的 ACME 签发规则"
 			}
 			skipNote = withForceNote(skipNote)
-			auditFailure("skipped", skipNote)
+			auditFailure("skipped", services.AuditRawPart(skipNote))
 			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.batchIssuanceNoJobsCreated", skipNote).WithData(gin.H{
 				"queued":             0,
 				"failed":             len(failed),
@@ -1630,7 +1630,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			if len(failed) > 0 {
 				args = append(args, len(failed))
 			}
-			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf(format, args...), services.AuditResultPart("partial")))
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, services.AuditRawPart(fmt.Sprintf(format, args...)), services.AuditResultPart("partial")))
 			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.batchIssuancePartial", queued, suffix).WithData(gin.H{
 				"queued":             queued,
 				"redeployed":         redeployed,
@@ -1650,7 +1650,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	if forceCAOverride {
 		forceNote = "，手动越过 CA 冷却"
 	}
-	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务%s", queued, forceNote), services.AuditResultPart("requested")))
+	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, services.AuditTextPart("audit.tasksEnqueued", queued, forceNote), services.AuditResultPart("requested")))
 	// 入队后渲染输入零变化——签发完成由 worker 链路自行应用，去掉强制重载
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.issuanceJobsCreated", queued).WithData(gin.H{"queued": queued, "skipped_cooldown": skippedCooldown}))
 }

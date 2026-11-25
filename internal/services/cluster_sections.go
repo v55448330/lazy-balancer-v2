@@ -461,11 +461,11 @@ func logSectionSyncOutcome(sk *sectionSkips, version int) {
 	for _, sec := range syncSections {
 		switch outcomes[sec.Key] {
 		case sectionOutcomeDisabled:
-			RecordAuditLog("system", "同步跳过", "集群同步", FormatAuditDetail(formatSectionAction("开关关闭", sec.Key), fmt.Sprintf("版本：%d", version)), "")
+			RecordAuditLog("system", "同步跳过", "集群同步", FormatAuditDetail(AuditRawPart(formatSectionAction("开关关闭", sec.Key)), AuditTextPart("audit.version", version)), "")
 		case sectionOutcomeUnchanged:
-			RecordAuditLog("system", "同步跳过", "集群同步", FormatAuditDetail(formatSectionAction("哈希一致", sec.Key), fmt.Sprintf("版本：%d", version)), "")
+			RecordAuditLog("system", "同步跳过", "集群同步", FormatAuditDetail(AuditRawPart(formatSectionAction("哈希一致", sec.Key)), AuditTextPart("audit.version", version)), "")
 		default:
-			RecordAuditLog("system", "同步应用", "集群同步", FormatAuditDetail(formatSectionAction("内容已更新", sec.Key), fmt.Sprintf("版本：%d", version)), "")
+			RecordAuditLog("system", "同步应用", "集群同步", FormatAuditDetail(AuditRawPart(formatSectionAction("内容已更新", sec.Key)), AuditTextPart("audit.version", version)), "")
 		}
 	}
 }
@@ -594,7 +594,7 @@ func logSyncSwitchGuards(ctx context.Context, dbh *sql.DB, snapshot models.Clust
 	if !wafFilesRefVersionLabelsDiffer(snapshot.WafFiles) {
 		return
 	}
-	RecordAuditLog("system", "同步警告", "集群同步", "检测到主节点 CRS/IP2Region/威胁库文件已更新（同步开关关闭），本地文件保持不变", "")
+	RecordAuditLog("system", "同步警告", "集群同步", AuditRawDetail("检测到主节点 CRS/IP2Region/威胁库文件已更新（同步开关关闭），本地文件保持不变") /* audit-detail raw */, "")
 	// 告警后只推进去重版本(哈希不动——security 关闭时哈希列不被
 	// 消费),保证每版本 bump 至多一条告警。推进失败必须留痕：该列是去重唯一
 	// 依据，静默失败会让同一告警按 apply 轮重复刷审计且无信号解释（正是上方

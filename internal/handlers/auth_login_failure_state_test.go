@@ -95,7 +95,7 @@ func TestLogin_mfaChallengeIssueFailureIsAudited(t *testing.T) {
 	if action != "登录失败" || resource != "用户认证" {
 		t.Fatalf("audit action=%q resource=%q, want 登录失败/用户认证", action, resource)
 	}
-	if !strings.Contains(detail, services.AuditResultPart("internal_error")) {
+	if !strings.Contains(detail, services.AuditResultPart("internal_error").Text()) {
 		t.Fatalf("audit detail=%q, want 含 %q", detail, services.AuditResultPart("internal_error"))
 	}
 }

@@ -175,7 +175,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, securityErrKeyed(http.StatusInternalServerError, "notify.settingsSaveFailed", err))
 		return
 	}
-	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail("变更键: "+strings.Join(changed, ","), "", services.AuditResultPart("success")))
+	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail(services.AuditTextPart("audit.changedKeys", strings.Join(changed, ",")), services.AuditRawPart(""), services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtNotificationCfgChanged, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "notify.settingsSaved"))
 }

@@ -25,6 +25,7 @@ export const BACKEND_CATALOG_FILES: readonly string[] = [
   'internal/i18n/catalog_gen.go',
   'internal/i18n/catalog_manual.go',
   'internal/i18n/catalog_unkeyed.go',
+  'internal/i18n/catalog_audit_detail.go',
 ]
 
 /** 生成文件（相对 web/）。 */

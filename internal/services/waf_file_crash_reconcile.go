@@ -96,7 +96,7 @@ func pruneStaleWafSnapshotDirs() {
 	}
 	Logf("warn", "已清理 %d 个导入崩溃残留的 WAF 文件快照目录（%s）", removed, wafSnapshotParentDir())
 	RecordAuditLog("system", "清理", "配置备份",
-		fmt.Sprintf("启动对账清理 %d 个导入崩溃残留的 WAF 文件快照目录（进程在导入提交前退出留下的副本）", removed), "")
+		AuditRawDetail(fmt.Sprintf("启动对账清理 %d 个导入崩溃残留的 WAF 文件快照目录（进程在导入提交前退出留下的副本）", removed)) /* audit-detail raw */, "")
 }
 
 // pruneUnmanagedHiddenCRSConf 清理 live rules 下不会被同步打包/哈希纳管、
@@ -129,7 +129,7 @@ func pruneUnmanagedHiddenCRSConf() {
 	}
 	Logf("warn", "已清理 %d 个 live 中不参与同步校验但会被 Include 加载的点前缀 .conf", removed)
 	RecordAuditLog("system", "清理", "规则库",
-		fmt.Sprintf("启动对账清理 %d 个未纳管但会被 Coraza 加载的点前缀 .conf", removed), "")
+		AuditRawDetail(fmt.Sprintf("启动对账清理 %d 个未纳管但会被 Coraza 加载的点前缀 .conf", removed)) /* audit-detail raw */, "")
 }
 
 // reconcileIP2RegionVersionFromDiskMarker 按磁盘的 .version 伴生标记校正版本行。
@@ -165,7 +165,7 @@ func reconcileIP2RegionVersionFromDiskMarker() {
 	}
 	Logf("warn", "ip2region: 启动对账把版本行从 %q 校正为磁盘标记 %q（文件已在导入提交前落盘、进程随后退出）", current, tag)
 	RecordAuditLog("system", "更新", "IP数据库",
-		fmt.Sprintf("启动对账：live 库版本标记为 %q 而版本行为 %q，已按在役库校正版本行", tag, current), "")
+		AuditRawDetail(fmt.Sprintf("启动对账：live 库版本标记为 %q 而版本行为 %q，已按在役库校正版本行", tag, current)) /* audit-detail raw */, "")
 }
 
 // pruneOrphanThreatFiles 删除「源已不在 security_threat_sources」的威胁名单文件。
@@ -235,5 +235,5 @@ func pruneOrphanThreatFiles() {
 	}
 	Logf("warn", "已清理 %d 个已删除威胁源的残留名单文件（%s）", removed, dir)
 	RecordAuditLog("system", "清理", "安全策略",
-		fmt.Sprintf("启动对账清理 %d 个已删除威胁源的残留名单文件（DB 无记录仍会被 WAF 加载）", removed), "")
+		AuditRawDetail(fmt.Sprintf("启动对账清理 %d 个已删除威胁源的残留名单文件（DB 无记录仍会被 WAF 加载）", removed)) /* audit-detail raw */, "")
 }

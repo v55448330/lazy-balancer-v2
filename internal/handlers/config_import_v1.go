@@ -1036,12 +1036,12 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			// 分支后继续提交后收敛）对齐——此前提前返回丢失全部转换/跳过/
 			// 归一化警告、不写「重载」审计、不清陈旧 caddy_apply_error 横幅。
 			// detail 走单源：审计 action 已带「部分失败」，detail 不再重复动作词。
-			auditDetail := importFailureAuditDetail(err)
+			auditDetail := services.AuditRawDetail(importFailureAuditDetail(err))
 			if len(disabledConflicts) > 0 {
-				auditDetail = services.FormatAuditDetail(auditDetail, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
+				auditDetail = services.AppendAuditDetail(auditDetail, services.AuditTextPart("audit.conflictsDisabled", services.AuditRawPart(formatDisabledRuleConflicts(disabledConflicts))))
 			}
 			recordAudit(c, "部分失败", "配置备份", auditDetail)
-			recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
+			recordAudit(c, "重载", "Caddy服务", services.AuditTextDetail("audit.reloadAfterImport"))
 			h.recordCaddyApplyResult(nil)
 			// DB 已提交=导入完成事实（部分失败仅降级了证书队列恢复），发完成通知。
 			notifyImportOutcome(c, "导入", true, "")
@@ -1064,7 +1064,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			status = http.StatusBadRequest
 		}
 		auditDetail := importFailureAuditDetail(err)
-		recordAudit(c, "导入失败", "配置备份", auditDetail)
+		recordAudit(c, "导入失败", "配置备份", services.AuditRawDetail(auditDetail))
 		notifyImportOutcome(c, "导入", false, auditDetail)
 		// 事务已回滚：循环里的插入计数全部作废，不得报 imported（否则前端/
 		// 运维会误判部分规则已落地）。warnings 透出会话收尾披露（提交不确定态
@@ -1079,17 +1079,17 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(status, envelope.WithData(failurePayload))
 		return
 	}
-	auditParts := []string{"来源：v1 备份（覆盖导入规则）", fmt.Sprintf("规则 %d 条", imported), fmt.Sprintf("TLS 规则 %d 条", tlsCount), fmt.Sprintf("上游 %d 个", upstreamCount)}
+	auditParts := []services.AuditPart{services.AuditRawPart("来源：v1 备份（覆盖导入规则）"), services.AuditRawPart(fmt.Sprintf("规则 %d 条", imported)), services.AuditRawPart(fmt.Sprintf("TLS 规则 %d 条", tlsCount)), services.AuditRawPart(fmt.Sprintf("上游 %d 个", upstreamCount))}
 	if len(disabledConflicts) > 0 {
-		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
+		auditParts = append(auditParts, services.AuditRawPart("冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts)))
 	}
 	if len(allWarnings) > 0 {
-		auditParts = append(auditParts, "转换/跳过警告："+strings.Join(allWarnings.render(i18n.ZH), "；"))
+		auditParts = append(auditParts, services.AuditRawPart("转换/跳过警告："+strings.Join(allWarnings.render(i18n.ZH), "；")))
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	notifyImportOutcome(c, "导入", true, "")
-	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
+	recordAudit(c, "重载", "Caddy服务", services.AuditRawDetail("导入配置后自动重载") /* audit-detail raw */)
 	// 2026-09-07：导入成功后清除陈旧 caddy_apply_error（对齐口径）。
 	h.recordCaddyApplyResult(nil)
 	tlsSuffix := ""

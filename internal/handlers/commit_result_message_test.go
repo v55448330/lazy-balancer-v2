@@ -7,6 +7,7 @@ package handlers
 // 该口径裁定，本钉子要求事务收尾家族同口径且文案单源。
 
 import (
+	"lazy-balancer-v2/internal/i18n"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,7 +43,7 @@ func TestFinishTxApply_commitFailureReportsUncertainOutcome(t *testing.T) {
 	h.finishTxApply(ginCtx, tx, txApplyFinish{
 		Resource:    "规则",
 		AuditAction: "创建",
-		AuditDetail: services.FormatAuditDetail("规则 lb_uncertain", services.AuditResultPart("success")),
+		AuditDetail: services.FormatAuditDetail(services.AuditRawPart("规则 lb_uncertain"), services.AuditResultPart("success")).Text(),
 		SuccessMsg:  "创建成功",
 	})
 
@@ -73,7 +74,10 @@ func TestFinishTxApply_commitFailureReportsUncertainOutcome(t *testing.T) {
 func TestCommitFailureWordingHasSingleSource(t *testing.T) {
 	// 事务收尾家族（finishTxApply、IP 名单热路径、规则五端点、DuplicateRule、
 	// Caddy 配置逃生口）共用同一常量，禁止各写文案。
-	for _, file := range []string{"handlers.go", "securityiplists.go", "rules.go", "caddy.go"} {
+	// caddy.go 的响应与审计都已词条化（apimsg common.commitResultUncertain… /
+	// audit.commitUncertain），源码不再引用常量——要求 0 处并靠下方词条相等性
+	// 与 apimsg 词条守卫兜住单源。
+	for file, wantUses := range map[string]int{"handlers.go": 1, "securityiplists.go": 1, "rules.go": 1, "caddy.go": 0} {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatalf("read %s: %v", file, err)
@@ -84,9 +88,16 @@ func TestCommitFailureWordingHasSingleSource(t *testing.T) {
 				t.Errorf("%s 仍存在 %s（提交错误结果不可判定，须用 commitUncertainLabel）", file, forbidden)
 			}
 		}
-		if got := strings.Count(source, "commitUncertainLabel"); got < 2 {
-			t.Errorf("%s 使用 commitUncertainLabel %d 处, want >=2（响应与审计共用单源）", file, got)
+		// 审计侧文案已键化（方案 C 第 2/3 步）：审计用 audit.commitUncertain
+		// 词条，其母本必须与本常量逐字相等（下方断言），因此本文件只需在响应
+		// 面继续引用常量（>=1）；两处文案由词条相等性钉住，不再各写一份。
+		if got := strings.Count(source, "commitUncertainLabel"); got < wantUses {
+			t.Errorf("%s 使用 commitUncertainLabel %d 处, want >=%d（响应面必须引用单源常量）", file, got, wantUses)
 		}
+	}
+	// 审计词条母本与响应常量逐字相等（单源跨栈约束）
+	if got := i18n.T(i18n.ZH, "audit.commitUncertain"); got != commitUncertainLabel {
+		t.Errorf("audit.commitUncertain 母本=%q, 响应常量=%q（必须逐字相等）", got, commitUncertainLabel)
 	}
 	if strings.Contains(commitUncertainLabel, "失败") {
 		t.Fatalf("commitUncertainLabel=%q 不得含「失败」断言", commitUncertainLabel)

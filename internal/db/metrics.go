@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"lazy-balancer-v2/internal/i18n"
 	"log"
 	"os"
 	"path/filepath"
@@ -110,10 +111,9 @@ func quarantineCorruptSQLiteFile(path string) (string, error) {
 // security_events 与 threat 大屏 rollup，隔离会丢弃安全事件历史——必须显式
 // 告知丢弃范围与隔离文件位置，不能只留一行 "metrics history reset"。
 func reportMetricsQuarantine(cause, quarantinePath string) {
-	detail := fmt.Sprintf("问题: metrics 库损坏（%s）；已隔离为 %s 并重建——指标历史与安全事件历史（security_events / security_event_rollup / security_event_target_rollup / security_event_ip_rollup / security_event_rule_rollup）一并丢弃，需从隔离文件人工取证",
-		cause, filepath.Base(quarantinePath))
+	detail, _ := i18n.Text("audit.metricsQuarantineDetail", cause, filepath.Base(quarantinePath))
 	log.Print(detail)
-	recordSystemAudit("库自愈", "指标库", detail)
+	recordSystemAudit("库自愈", "指标库", "audit.metricsQuarantineDetail", cause, filepath.Base(quarantinePath))
 }
 
 const MetricsDBFilename = "lazy-balancer-metrics.db"
@@ -743,9 +743,9 @@ func ensureSecurityEventsTransactionIndex(db *sql.DB) error {
 			return fmt.Errorf("failed to deduplicate security_events transaction IDs: %w", err)
 		}
 		removed, _ := result.RowsAffected()
-		detail := fmt.Sprintf("启动迁移：security_events 重复 transaction_id（%s）已去重删除 %d 行（保留每事务最后插入行）", strings.Join(duplicates, ", "), removed)
+		detail, _ := i18n.Text("audit.migrateSecurityEventsDeduped", strings.Join(duplicates, ", "), removed)
 		log.Printf("WARN: %s并继续创建唯一索引", detail)
-		recordSystemAudit("启动迁移", "安全事件", detail)
+		recordSystemAudit("启动迁移", "安全事件", "audit.migrateSecurityEventsDeduped", strings.Join(duplicates, ", "), removed)
 	}
 	if err := ensureUniqueIndex(db, "idx_security_events_transaction", securityEventsTransactionIndexSQL); err != nil {
 		return fmt.Errorf("failed to create security_events transaction index: %w", err)

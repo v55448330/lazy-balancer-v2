@@ -743,7 +743,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return err
 	}
 
-	RecordAuditLog("system", "签发成功", "证书任务", fmt.Sprintf("规则 %s 证书签发成功，过期时间 %s", ruleID, notAfter.Format("2006-01-02")), "")
+	RecordAuditLog("system", "签发成功", "证书任务", AuditRawDetail(fmt.Sprintf("规则 %s 证书签发成功，过期时间 %s", ruleID, notAfter.Format("2006-01-02"))) /* audit-detail raw */, "")
 	return nil
 }
 
@@ -808,7 +808,7 @@ func (s *CertIssuer) redeployDownloadedInLock(ctx context.Context, jobID int, ma
 		})); err != nil {
 			return fmt.Errorf("finalize already deployed certificate: %w", err)
 		}
-		RecordAuditLog("system", "签发成功", "证书任务", fmt.Sprintf("规则 %s 证书已部署，无需重新部署", ruleID), "")
+		RecordAuditLog("system", "签发成功", "证书任务", AuditRawDetail(fmt.Sprintf("规则 %s 证书已部署，无需重新部署", ruleID)) /* audit-detail raw */, "")
 		// 与主部署路径同口径：未来生效证书即使本次无需重写文件，也要登记
 		// 生效点重载（否则首次部署写盘后失败的收敛路径会缺这一次补充重载）。
 		s.noteFutureNotBefore(jobID, material)
@@ -861,7 +861,7 @@ func (s *CertIssuer) redeployDownloadedInLock(ctx context.Context, jobID int, ma
 	if err != nil {
 		return errors.Join(fmt.Errorf("finalize certificate redeploy: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
 	}
-	RecordAuditLog("system", "签发成功", "证书任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
+	RecordAuditLog("system", "签发成功", "证书任务", AuditRawDetail(fmt.Sprintf("规则 %s 证书重新部署成功", ruleID)) /* audit-detail raw */, "")
 	// 与主部署路径同口径登记生效点重载（noteFutureNotBefore 幂等，非未来
 	// 生效时不产生任何登记）。
 	s.noteFutureNotBefore(jobID, material)
@@ -1036,7 +1036,7 @@ func (s *CertIssuer) noteFutureNotBefore(jobID int, material issuedCertificate) 
 	Logf("warn", "证书任务 %d（规则 %s）：证书尚未生效（NotBefore=%s UTC），已登记生效后重载", jobID, material.ruleID, effectiveAt)
 	RecordAuditLog("system", "警告", "证书任务", FormatAuditDetail(
 		AuditJobPart(jobID), AuditRulePart(material.ruleID),
-		fmt.Sprintf("证书尚未生效（生效时间 %s UTC），已登记生效后重载", effectiveAt)), "")
+		AuditTextPart("audit.certNotYetValid", effectiveAt)), "")
 	if notBeforeReloadScheduler != nil {
 		notBeforeReloadScheduler(jobID, material.ruleID, delay)
 	}

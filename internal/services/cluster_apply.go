@@ -102,13 +102,13 @@ func (s *SyncService) applySnapshotBrandingChecked(cfg *config.Config, content s
 	if cfg == nil || cfg.DataDir == "" {
 		if snapshotBrandingDegradeWarned.CompareAndSwap(false, true) {
 			Logf("warn", "集群品牌配置同步已降级：数据目录未配置，branding.json 不落盘（下次重启请检查品牌配置）")
-			RecordAuditLog("system", "警告", "集群同步", "品牌配置同步跳过：数据目录未配置", "")
+			RecordAuditLog("system", "警告", "集群同步", AuditRawDetail("品牌配置同步跳过：数据目录未配置") /* audit-detail raw */, "")
 		}
 		return false, nil
 	}
 	changed, err := applySnapshotBranding(cfg.DataDir, content)
 	if err != nil {
-		detail := fmt.Sprintf("品牌配置落盘失败: %v", err)
+		detail := FormatAuditDetail(AuditTextPart("audit.brandingPersistFailed", err))
 		if s.syncFailureAuditDue("同步失败", "集群同步", detail) {
 			RecordAuditLog("system", "同步失败", "集群同步", detail, "")
 		}
@@ -332,9 +332,9 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			}
 		}
 		if removedLogs > 0 {
-			detail := fmt.Sprintf("清理消失规则的访问日志：%d 条", removedLogs)
+			detail := FormatAuditDetail(AuditTextPart("audit.ruleLogsCleaned", removedLogs))
 			if logFailures > 0 {
-				detail += fmt.Sprintf("，失败 %d 条（见应用日志）", logFailures)
+				detail = AppendAuditDetail(detail, AuditTextPart("audit.ruleLogsCleanFailures", logFailures))
 			}
 			RecordAuditLog("system", "清理", "规则日志", detail, "")
 		}
@@ -377,7 +377,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	logSectionSyncOutcome(skip, snapshot.Version)
 	if len(skip.drifted) > 0 {
 		Logf("warn", "检测到本地数据与同步记录不一致（%s），已强制重新应用", strings.Join(skip.drifted, "、"))
-		RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(fmt.Sprintf("本地数据与记录不一致：%s", strings.Join(skip.drifted, "、")), fmt.Sprintf("已强制重新应用版本：%d", snapshot.Version)), "")
+		RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(AuditTextPart("audit.localDataRecordMismatch", strings.Join(skip.drifted, "、")), AuditTextPart("audit.forcedReapplyVersion", snapshot.Version)), "")
 	}
 	// 漂移强制重放后本地数据已镜像主节点——drifted 节必须存本地重建口径哈希作为
 	// 稳定参照，否则跨构建口径分歧时（如 COALESCE 加固前后）漂移判定永远不一致、
@@ -386,7 +386,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if bookkeepingErr != nil {
 		// 记账失败不回滚已提交的快照应用（本地数据已镜像主节点），但必须
 		// 可见：漂移/跳过判定在下轮起失真前，节流审计暴露该故障。
-		detail := fmt.Sprintf("记录已应用节哈希失败: %v", bookkeepingErr)
+		detail := FormatAuditDetail(AuditTextPart("audit.appliedHashesPersistFailed", bookkeepingErr))
 		if s.syncFailureAuditDue("同步失败", "集群同步", detail) {
 			RecordAuditLog("system", "同步失败", "集群同步", detail, "")
 		}
@@ -441,13 +441,13 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		if ferr != nil {
 			Logf("error", "同步安全数据失败（数据库版本行已同步）: %v", ferr)
 			// 安全数据失败按内容去重（每轮 apply 都会重试）。
-			detail := fmt.Sprintf("拉取安全数据失败: %v", ferr)
+			detail := FormatAuditDetail(AuditTextPart("audit.securityDataFetchFailed", ferr))
 			if s.syncFailureAuditDue("同步失败", "安全数据", detail) {
 				RecordAuditLog("system", "同步失败", "安全数据", detail, "")
 			}
 		} else if aerr != nil {
 			Logf("error", "落盘同步安全数据失败: %v", aerr)
-			detail := fmt.Sprintf("落盘安全数据失败: %v", aerr)
+			detail := FormatAuditDetail(AuditTextPart("audit.securityDataPersistFailed", aerr))
 			if s.syncFailureAuditDue("同步失败", "安全数据", detail) {
 				RecordAuditLog("system", "同步失败", "安全数据", detail, "")
 			}
@@ -527,7 +527,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		RecordBackgroundApplyFailure(BackgroundApplyClusterSync, err)
 		// Caddy /load 持续故障时补偿重拉每轮都会到达此处——同内容
 		// 重载失败只留一条操作审计（标记/日志仍按轮刷新）。
-		detail := fmt.Sprintf("同步应用后自动重载失败: %v", err)
+		detail := FormatAuditDetail(AuditTextPart("audit.syncAutoReloadFailed", err))
 		if s.syncFailureAuditDue("重载失败", "Caddy服务", detail) {
 			RecordAuditLog("system", "重载失败", "Caddy服务", detail, "")
 		}
@@ -551,7 +551,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		// 重载成功即清除本来源的失败面记录（含 304 补偿重拉成功形态——
 		// 上轮失败登记的失败面随本轮成功收敛）。
 		ClearBackgroundApplyFailure(BackgroundApplyClusterSync)
-		RecordAuditLog("system", "重载", "Caddy服务", "同步应用后自动重载", "")
+		RecordAuditLog("system", "重载", "Caddy服务", AuditRawDetail("同步应用后自动重载") /* audit-detail raw */, "")
 	} else {
 		// 跳过重载本身留一行应用日志（不进操作审计——零真实重载不落审计，
 		// 与 errSameConfig 短路同口径的审计真实性裁定）。
@@ -568,7 +568,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		if RestartRequiredHandlerInstalled() {
 			// 先审计后触发：优雅停机信号会让进程在数秒内退出，审计行必须
 			// 先落库（与 handlers.RestartService 的「审计→重启」同序）。
-			RecordAuditLog("system", "重启", "系统", "同步到新的 HTTPS 访问配置，自动重启生效", "")
+			RecordAuditLog("system", "重启", "系统", AuditRawDetail("同步到新的 HTTPS 访问配置，自动重启生效") /* audit-detail raw */, "")
 			Logf("info", "Admin TLS config changed via sync, restarting to apply")
 			RequestRestart()
 		} else {
@@ -576,7 +576,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			// os.Exit(0)，落到那里既不重启侧可见也不留痕，测试进程更会被
 			// 静默截断且判通过。改为可见失败：warn + 审计 + 跳过本轮重启。
 			Logf("warn", "集群同步：Admin TLS 配置已变化，但进程未安装优雅重启处理器，跳过自动重启")
-			RecordAuditLog("system", "重启失败", "系统", "同步到新的 HTTPS 访问配置，但进程未安装优雅重启处理器，未自动重启", "")
+			RecordAuditLog("system", "重启失败", "系统", AuditRawDetail("同步到新的 HTTPS 访问配置，但进程未安装优雅重启处理器，未自动重启") /* audit-detail raw */, "")
 		}
 	}
 	// 三分类合并:全局配置随 users 节恒同步,不存在「基本设置:开关关闭」
@@ -585,21 +585,21 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 条/用户 N 个/基本设置：已同步…）与同秒的「哈希一致跳过」自相矛盾，
 	// 读者误以为全部节都已写入。
 	appliedSecs, hashSkipped, disSkipped := sectionOutcomeNames(skip)
-	summaryParts := []string{fmt.Sprintf("应用版本：%d", snapshot.Version)}
+	summaryParts := []AuditPart{AuditTextPart("audit.appliedVersion", snapshot.Version)}
 	if len(appliedSecs) > 0 {
-		summaryParts = append(summaryParts, "本轮应用："+strings.Join(appliedSecs, "、"))
+		summaryParts = append(summaryParts, AuditTextPart("audit.appliedSections", strings.Join(appliedSecs, "、")))
 	}
 	if len(hashSkipped) > 0 {
-		summaryParts = append(summaryParts, "跳过（哈希一致）："+strings.Join(hashSkipped, "、"))
+		summaryParts = append(summaryParts, AuditTextPart("audit.skippedHashSame", strings.Join(hashSkipped, "、")))
 	}
 	if len(disSkipped) > 0 {
-		summaryParts = append(summaryParts, "跳过（开关关闭）："+strings.Join(disSkipped, "、"))
+		summaryParts = append(summaryParts, AuditTextPart("audit.skippedSwitchOff", strings.Join(disSkipped, "、")))
 	}
 	if len(appliedSecs) == 0 {
-		summaryParts = append(summaryParts, "全部节无变化")
+		summaryParts = append(summaryParts, AuditTextPart("audit.noSectionChanged"))
 	}
 	if !mustReload {
-		summaryParts = append(summaryParts, "Caddy 重载：跳过（渲染输入无变化）")
+		summaryParts = append(summaryParts, AuditTextPart("audit.reloadSkippedNoRenderInput"))
 	}
 	// 不再输出「Caddy 全局配置：已同步」——该段恒真（v3 快照的 CaddyConfig
 	// 恒非 nil）且已被节级三态覆盖：全局配置并入 users（系统数据）节，节实际
@@ -610,24 +610,28 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 
 // wafBundleSyncDetail 按组件实际变化组合同步结果文案：更新的组件带版本号，
 // 未变化的标注已是最新——操作日志读者能直接看出本次同步更新了什么。
-func wafBundleSyncDetail(bundle *WafFileBundle, crsChanged, xdbChanged bool) string {
-	crsPart := "CRS 规则已是最新"
-	if crsChanged {
-		crsPart = "CRS 规则已更新"
-		if bundle.CRSVersion != "" {
-			crsPart = "CRS 规则已更新至 " + bundle.CRSVersion
-		}
+// 各组件文案是词条段，版本号是槽位（英文界面按段渲染）。
+func wafBundleSyncDetail(bundle *WafFileBundle, crsChanged, xdbChanged bool) AuditDetail {
+	parts := []AuditPart{}
+	switch {
+	case crsChanged && bundle.CRSVersion != "":
+		parts = append(parts, AuditTextPart("audit.syncedCrsUpdatedTo", bundle.CRSVersion))
+	case crsChanged:
+		parts = append(parts, AuditTextPart("audit.syncedCrsUpdated"))
+	default:
+		parts = append(parts, AuditTextPart("audit.syncedCrsUpToDate"))
 	}
-	xdbPart := "IP2Region数据库已是最新"
-	if xdbChanged {
-		xdbPart = "IP2Region数据库已更新"
-		if bundle.IP2RegionTag != "" {
-			xdbPart = "IP2Region数据库已更新至 " + bundle.IP2RegionTag
-		}
+	switch {
+	case xdbChanged && bundle.IP2RegionTag != "":
+		parts = append(parts, AuditTextPart("audit.ip2regionUpdatedTo", bundle.IP2RegionTag))
+	case xdbChanged:
+		parts = append(parts, AuditTextPart("audit.ip2regionUpdated"))
+	default:
+		parts = append(parts, AuditTextPart("audit.ip2regionUpToDate"))
 	}
 	// 2026-09-18 用户裁定:明确数据来源语义——从节点不自动升级,规则库变更唯
 	// 一来源是主节点同步
-	return "从主节点同步：" + crsPart + "；" + xdbPart
+	return FormatAuditDetail(parts...)
 }
 
 // pruneSyncedThreatFiles 按主端引用集合收敛本地威胁库文件（收口，

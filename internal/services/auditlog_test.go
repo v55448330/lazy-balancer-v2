@@ -63,12 +63,12 @@ func TestRecordAuditLogWritesToIndependentDatabase(t *testing.T) {
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
-		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		t.Fatal(err)
 	}
 
-	RecordAuditLog("system", "测试", "审计", "同步写入", "127.0.0.1")
+	RecordAuditLog("system", "测试", "审计", AuditRawDetail("同步写入"), "127.0.0.1")
 
 	var count int
 	if err := auditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE detail='同步写入'").Scan(&count); err != nil {
@@ -95,10 +95,10 @@ func TestFormatAuditAction_detailIsSemanticNotPath(t *testing.T) {
 		if action == "" {
 			t.Fatalf("%s 映射为空（该路由将零审计）", path)
 		}
-		if detail != wantDetail {
-			t.Fatalf("%s detail=%q, want %q（不得回显 path）", path, detail, wantDetail)
+		if got := detail.Text(); got != wantDetail {
+			t.Fatalf("%s detail=%q, want %q（不得回显 path）", path, got, wantDetail)
 		}
-		if detail == path {
+		if detail.Text() == path {
 			t.Fatalf("%s detail 仍是 API path", path)
 		}
 	}
@@ -160,10 +160,10 @@ func TestGetAuditLogSizeBytes_cachesThresholdWithinTTL(t *testing.T) {
 // AuditUserPart(2026-09-11 裁定):用户相关审计详情显示完整标识
 // 「用户 12（zhang）」;用户名空回退「用户 12」。
 func TestAuditUserPart(t *testing.T) {
-	if got := AuditUserPart(12, "zhang"); got != "用户 12（zhang）" {
+	if got := AuditUserPart(12, "zhang").Text(); got != "用户 12（zhang）" {
 		t.Errorf("AuditUserPart(12,\"zhang\")=%q, want 用户 12（zhang）", got)
 	}
-	if got := AuditUserPart(7, ""); got != "用户 7" {
+	if got := AuditUserPart(7, "").Text(); got != "用户 7" {
 		t.Errorf("AuditUserPart(7,\"\")=%q, want 用户 7 (empty username fallback)", got)
 	}
 }
@@ -195,7 +195,7 @@ func TestCleanupAuditLogs_fallsBackToDefaultOnMissingConfigRow(t *testing.T) {
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
-		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestCleanupAuditLogs_deletesInBatches(t *testing.T) {
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
-		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestCleanupAuditLogs_reportsPartialCountOnMidwayFailure(t *testing.T) {
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
-		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestCleanupAuditLogs_skipsDeletionWhenRetentionReadFails(t *testing.T) {
 	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username VARCHAR(100), action VARCHAR(50) NOT NULL, resource VARCHAR(100),
-		detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		detail TEXT, detail_key TEXT, detail_params TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		t.Fatal(err)
 	}

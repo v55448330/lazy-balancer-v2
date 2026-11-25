@@ -28,28 +28,28 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	if !h.requireClusterService(c) {
 		// explicit 路由中间件对 5xx 不代记（与本函数其余拒绝面同口径），
 		// 装配缺失的 503 也由 handler 留痕。
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("集群服务未初始化", services.AuditResultPart("service_unavailable")))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.clusterServiceNotInitialized"), services.AuditResultPart("service_unavailable")))
 		return
 	}
 	if h.syncService == nil {
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("同步服务未初始化", services.AuditResultPart("service_unavailable")))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.syncServiceNotInitialized"), services.AuditResultPart("service_unavailable")))
 		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.syncServiceNotInitialized", nil))
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterMachineBodyLimitBytes)
 	var req models.ClusterModeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", "集群模式参数无效", services.AuditResultPart("invalid_request")))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetSlave"), services.AuditTextPart("audit.clusterModeParamInvalid"), services.AuditResultPart("invalid_request")))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.modeParamsInvalid", err))
 		return
 	}
 	if req.Mode == "master" {
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：主节点", "请使用提升接口切换为主节点", services.AuditResultPart("invalid_request")))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetMaster"), services.AuditTextPart("audit.usePromoteEndpoint"), services.AuditResultPart("invalid_request")))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.usePromoteEndpoint", nil))
 		return
 	}
 	if req.MasterURL == "" || req.RegisterToken == "" {
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", "主节点地址和注册令牌不能为空", services.AuditResultPart("invalid_request")))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetSlave"), services.AuditTextPart("audit.masterAddrRequired"), services.AuditResultPart("invalid_request")))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.masterUrlAndTokenRequired", nil))
 		return
 	}
@@ -59,7 +59,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		masterAuditURL = parsedMasterURL.Scheme + "://" + parsedMasterURL.Host
 	}
 	if err := models.ValidateClusterAccessURL(req.MasterURL); err != nil {
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标："+masterAuditURL, err.Error()))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.target", masterAuditURL), services.AuditRawPart(err.Error())))
 		clusterError(c, http.StatusBadRequest, err.Error(), err)
 		return
 	}
@@ -71,12 +71,12 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	// 避免主节点拒绝或把脏名字写入集群。
 	name = models.NormalizeClusterNodeName(name)
 	if name == "" {
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", models.ErrInvalidClusterNodeName.Error(), services.AuditResultPart("invalid_request")))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetSlave"), services.AuditRawPart(models.ErrInvalidClusterNodeName.Error()), services.AuditResultPart("invalid_request")))
 		clusterError(c, http.StatusBadRequest, models.ErrInvalidClusterNodeName.Error(), models.ErrInvalidClusterNodeName)
 		return
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.MasterURL)), "http://") {
-		recordAudit(c, "警告", "集群模式", services.FormatAuditDetail("目标：从节点", "使用明文 HTTP 注册，证书私钥将明文传输，建议改用 HTTPS"))
+		recordAudit(c, "警告", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetSlave"), services.AuditTextPart("audit.plainHttpRegistrationWarning")))
 	}
 	outboundIP, outboundIPOK := dialOutboundIP()
 	// 探测失败时不得把回环地址当机器地址上报：多台无默认路由的从节点会命中
@@ -88,7 +88,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	}
 	if outboundIPOK && models.ClusterAccessURLTargetsNode(req.MasterURL, outboundIP, h.cfg.Port) {
 		const message = "不能将本节点注册为自己的从节点，请填写另一主节点的地址，或使用提升接口保持主节点角色"
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标："+masterAuditURL, message))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.target", masterAuditURL), services.AuditRawPart(message) /* audit-detail raw */))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.selfRegistrationNotAllowed", nil))
 		return
 	}
@@ -96,13 +96,13 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		Token: req.RegisterToken, Name: name, IPAddress: registrationIP, Port: h.cfg.Port, Protocol: requestProtocol(c),
 	})
 	if err != nil {
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", err.Error()))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetSlave"), services.AuditRawPart(err.Error())))
 		c.JSON(http.StatusBadGateway, clusterErrorKeyedResponse(http.StatusBadGateway, "cluster.registerWithMasterFailed", err, err.Error()))
 		return
 	}
 	if err := h.clusterService.BecomeSlave(c.Request.Context(), strings.TrimRight(req.MasterURL, "/"), registration); err != nil {
 		services.Logf("error", "cluster registration %d requires manual cleanup after local mode transition failed: %v", registration.RegistrationID, err)
-		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", fmt.Sprintf("registration_id：%d", registration.RegistrationID), err.Error()))
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetSlave"), services.AuditTextPart("audit.registrationId", registration.RegistrationID), services.AuditRawPart(err.Error())))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{
 			Code:    http.StatusInternalServerError,
 			Message: apimsg.T(c, "cluster.switchToSlaveFailedRemoteRegistrationCreated"), MessageKey: "cluster.switchToSlaveFailedRemoteRegistrationCreated",
@@ -155,13 +155,13 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 		return
 	}
 	if !h.requireClusterService(c) {
-		recordAudit(c, "提升失败", "集群模式", services.FormatAuditDetail("集群服务未初始化", services.AuditResultPart("service_unavailable")))
+		recordAudit(c, "提升失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.clusterServiceNotInitialized"), services.AuditResultPart("service_unavailable")))
 		return
 	}
 	// syncService 缺失判定前置——此前 Promote 已生效才报
 	// 503,调用方见到失败但角色已提升,重试撞 ErrAlreadyMaster。
 	if h.syncService == nil {
-		recordAudit(c, "提升失败", "集群模式", services.FormatAuditDetail("同步服务未初始化", services.AuditResultPart("service_unavailable")))
+		recordAudit(c, "提升失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.syncServiceNotInitialized"), services.AuditResultPart("service_unavailable")))
 		c.JSON(http.StatusServiceUnavailable, clusterErrorKeyedResponse(http.StatusServiceUnavailable, "cluster.syncServiceNotInitialized", nil))
 		return
 	}
@@ -170,7 +170,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 		if errors.Is(err, services.ErrAlreadyMaster) {
 			status = http.StatusBadRequest
 		}
-		recordAudit(c, "提升失败", "集群模式", err.Error())
+		recordAudit(c, "提升失败", "集群模式", services.AuditRawDetail(err.Error()) /* audit-detail raw */)
 		c.JSON(status, clusterErrorKeyedResponse(status, "cluster.promoteFailed", err, err.Error()))
 		return
 	}
@@ -181,7 +181,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	h.syncService.ForgetClusterPins()
 	// 生命周期由任务引擎统一驱动（Promote → SetRole → daemon hook/角色门），
 	// handler 不再直调管理器或旧调度器。
-	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail("从节点 → 主节点", services.AuditResultPart("success")))
+	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.slaveToMaster"), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.promotedToMaster"))
 }
 
@@ -194,13 +194,13 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 	if !h.requireClusterService(c) {
 		// explicit 路由中间件对 5xx 不代记（与本函数其余失败面同口径），
 		// 装配缺失的 503 也由 handler 留痕。
-		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail("集群服务未初始化", services.AuditResultPart("service_unavailable")))
+		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail(services.AuditTextPart("audit.clusterServiceNotInitialized"), services.AuditResultPart("service_unavailable")))
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterMachineBodyLimitBytes)
 	var req models.ClusterSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail("集群设置参数无效", services.AuditResultPart("invalid_request")))
+		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail(services.AuditTextPart("audit.clusterSettingsParamInvalid"), services.AuditResultPart("invalid_request")))
 		c.JSON(http.StatusBadRequest, clusterErrorKeyedResponse(http.StatusBadRequest, "cluster.settingsParamsInvalid", err))
 		return
 	}
@@ -228,9 +228,9 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		}
 		// explicit 路由的 4xx/5xx 中间件不代记——拒绝面（含从节点越权/误操作
 		// 与内部故障）必须由 handler 留痕，与成功面同端点同口径。
-		detail := msg
+		detail := services.AuditRawDetail(msg)
 		if err.Error() != msg {
-			detail = services.FormatAuditDetail(msg, err.Error())
+			detail = services.FormatAuditDetail(services.AuditRawPart(msg), services.AuditRawPart(err.Error()))
 		}
 		recordAudit(c, "更新失败", "集群设置", detail)
 		if key != "" {
@@ -245,11 +245,12 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 	// 空 body = 幂等空保存，parts 为空时审计详情曾落空串
 	// （无法区分「无修改」与记录缺陷）——复用同域既有「无修改」文案
 	// （caproviders/certificates 同口径）。
-	detail := clusterSettingsChangeDetail(req)
-	if detail == "" {
-		detail = "无修改"
+	changeDetail := clusterSettingsChangeDetail(req)
+	detail := services.AuditTextDetail("audit.noChanges")
+	if changeDetail != "" {
+		detail = services.AuditRawDetail(changeDetail)
 	}
-	recordAudit(c, "更新", "集群设置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
+	recordAudit(c, "更新", "集群设置", services.AppendAuditDetail(detail, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtClusterSettingsChanged, Fields: map[string]string{"1": c.GetString("username")}})
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.settingsUpdated"))
 }
@@ -258,17 +259,17 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 // 时追加点名——上报地址为空、由主节点按注册来源地址落库，运维可见。
 // 主节点回填了被覆盖节点（重复 ip:port 命中已批准节点的 upsert）时同样点名：
 // 该节点的审批/令牌已在主节点被重置，运营方必须能在审计里看到这一事实。
-func switchToSlaveAuditDetail(masterURL string, outboundIPOK bool, overwrittenNodeID int, overwrittenNodeName string) string {
-	parts := []string{"主节点 → 从节点", masterURL, "等待审批"}
+func switchToSlaveAuditDetail(masterURL string, outboundIPOK bool, overwrittenNodeID int, overwrittenNodeName string) services.AuditDetail {
+	parts := []services.AuditPart{services.AuditTextPart("audit.masterToSlave"), services.AuditRawPart(masterURL), services.AuditTextPart("audit.awaitingApproval")}
 	if overwrittenNodeID > 0 {
 		name := strings.TrimSpace(overwrittenNodeName)
 		if name == "" {
 			name = "-"
 		}
-		parts = append(parts, fmt.Sprintf("已覆盖节点 #%d（%s），其审批与令牌已重置", overwrittenNodeID, name))
+		parts = append(parts, services.AuditTextPart("audit.nodeOverwrittenReset", overwrittenNodeID, name))
 	}
 	if !outboundIPOK {
-		parts = append(parts, "出口 IP 探测失败，已按注册来源地址登记，请稍后在节点设置中确认访问地址")
+		parts = append(parts, services.AuditTextPart("audit.outboundIpProbeFailed"))
 	}
 	return services.FormatAuditDetail(parts...)
 }

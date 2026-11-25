@@ -831,7 +831,7 @@ func restoreClusterSyncSchedulingAfterDemote() {
 	if meta, ok := te.Lookup("cluster-sync"); ok && !meta.LoopOn {
 		Logf("warn", "cluster-sync 调度处于用户停止态：切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点")
 		RecordAuditLog("system", "同步停止", "集群模式",
-			FormatAuditDetail("已停止：切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点", AuditResultPart("warning")), "")
+			FormatAuditDetail(AuditTextPart("audit.clusterSyncStoppedHint"), AuditResultPart("warning")), "")
 		return
 	}
 	// 角色恢复：非唤醒——仅恢复角色翻转前已开启的调度（loopEnabled 保留语义），
@@ -974,14 +974,14 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	rebuildCrawlerSnapshotAfterPromote()
 
 	if registrationID > 0 {
-		RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")
+		RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(AuditTextPart("audit.registrationNumber", registrationID), AuditTextPart("audit.nodeDetachedAndPromoted"), AuditResultPart("success")), "")
 	}
 	if len(pendingCompensations) > 0 {
 		// 只报告不自动动作：补偿属于旧集群拓扑，新主节点不能替旧主重放；
 		// 告警指引一次系统配置载入收敛运行态。
-		detail := fmt.Sprintf("升主完成：检测到上次同步存在未完成补偿（%s），建议执行一次系统配置载入", strings.Join(pendingCompensations, "、"))
+		detail := auditText("audit.promotePendingCompensations", strings.Join(pendingCompensations, "、"))
 		Logf("warn", "Promote: %s", detail)
-		RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(detail, AuditResultPart("warning")), "")
+		RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(AuditTextPart("audit.promotePendingCompensations", strings.Join(pendingCompensations, "、")), AuditResultPart("warning")), "")
 	}
 	// 自动备份：v2.0 引擎 Scheduled 驱动（RunsOn=MasterOnly 角色门）——
 	// promote 后由引擎 SetRole 使能，无需单独拉起。
@@ -997,9 +997,9 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 			// 离线/版本滞后判定，cluster_masterserving.go）。升主不擅自武装被
 			// 用户停掉的调度（偏好保留，既有钉测锁定），但巡检缺位必须可见——
 			// 否则从节点离线/版本滞后不再告警且无任何信号。
-			detail := "cluster-sync 调度保持停止（用户偏好保留）：主节点服务面巡检（从节点离线/版本滞后判定）未启用，需要时请在任务监控启动「集群同步」"
+			detail := auditText("audit.clusterSyncStaysStopped")
 			Logf("warn", "Promote: %s", detail)
-			RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(detail, AuditResultPart("warning")), "")
+			RecordAuditLog("system", "提升完成", "集群节点", FormatAuditDetail(AuditTextPart("audit.clusterSyncStaysStopped"), AuditResultPart("warning")), "")
 		}
 	}
 	// 升主后的任务面收尾（六业务驱动任务对齐 + 规则库首槽重装）与角色对账
@@ -1041,7 +1041,7 @@ func (s *ClusterService) detachFromMaster(ctx context.Context, masterURL, oldTok
 	parsedMasterURL, err := url.Parse(masterURL)
 	if err != nil {
 		Logf("info", "parse old cluster master URL after promotion: %v", err)
-		RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点地址无效", err.Error()), "")
+		RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail(AuditTextPart("audit.oldMasterInvalid"), AuditRawPart(err.Error())), "")
 		// 地址损坏时无法定位旧主节点 pin 文件——磁盘残留为已知边界
 		// 残留仅在该 host:port 将来重新注册
 		// 为从节点时引发一次 PinMismatch，forget-pins 可恢复。
@@ -1053,7 +1053,7 @@ func (s *ClusterService) detachFromMaster(ctx context.Context, masterURL, oldTok
 	pinPath, err := clusterPinPath(s.dataDir, s.db, parsedMasterURL.Host)
 	if err != nil {
 		Logf("info", "locate old cluster master pin after promotion: %v", err)
-		RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+parsedMasterURL.Scheme+"://"+parsedMasterURL.Host, err.Error()), "")
+		RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail(AuditTextPart("audit.oldMasterParts", parsedMasterURL.Scheme, parsedMasterURL.Host), AuditRawPart(err.Error())), "")
 		// 同上：pin 路径定位失败，磁盘清理不可达，残留边界已知。
 		return
 	}
@@ -1105,12 +1105,12 @@ func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) (pinGone bo
 		}
 		if s.pinCleanupFailureKeys[pinPath] != failureKey {
 			s.pinCleanupFailureKeys[pinPath] = failureKey
-			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, err.Error()), "")
+			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail(AuditTextPart("audit.oldMaster", auditURL), AuditRawPart(err.Error())), "")
 		}
 		return false
 	}
 	s.clearPendingPinLocked(pinPath)
-	RecordAuditLog("system", "清理", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, AuditResultPart("success")), "")
+	RecordAuditLog("system", "清理", "证书指纹", FormatAuditDetail(AuditTextPart("audit.oldMaster", auditURL), AuditResultPart("success")), "")
 	return true
 }
 
