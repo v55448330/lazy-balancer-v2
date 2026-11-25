@@ -510,6 +510,11 @@ func TestImportWarningCatalog_keysRegisteredAndVerbsAligned(t *testing.T) {
 			}
 			checked++
 			position := fset.Position(literal.Pos())
+			// 只有独立英文译文才做英文侧断言：中文兜底（英文留空，T(EN) 回落中文）是
+			// 2026-11-25 裁定的目标形态（英文译文归前端词条），不算译文缺陷。
+			if !i18n.HasEnglish(key) {
+				return true
+			}
 			if zhVerbs, enVerbs := fmtVerbs(zh), fmtVerbs(en); !slices.Equal(zhVerbs, enVerbs) {
 				t.Errorf("%s: 词条 %s 的 zh/en 动词不一致 zh=%q%v en=%q%v", position, key, zh, zhVerbs, en, enVerbs)
 			}

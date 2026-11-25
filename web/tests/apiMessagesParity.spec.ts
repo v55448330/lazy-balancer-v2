@@ -16,6 +16,8 @@ import assert from 'node:assert/strict'
 import {
   goUnquote,
   loadBackendCatalog,
+  loadFrontendEnglish,
+  mergeTranslations,
   parseBackendCatalog,
   readGeneratedModule,
   renderApiMessagesModule,
@@ -23,14 +25,14 @@ import {
 
 const HAN = /\p{Script=Han}/u
 
-test('前端接口消息词条与后端目录逐字相等', () => {
+test('前端接口消息词条与两侧来源逐字相等', () => {
   const entries = loadBackendCatalog()
   // 扫描面：后端目录现在是六百余条；骤降说明解析器漏读了大半——对等会假绿。
   assert.ok(entries.length > 600, `后端目录只解析出 ${entries.length} 条——扫描面异常`)
   const committed = readGeneratedModule()
   assert.ok(committed !== null, 'src/i18n/apiMessages.ts 不存在——在 web/ 下运行 npm run gen:api-messages 导出')
 
-  const expected = renderApiMessagesModule(entries)
+  const expected = renderApiMessagesModule(entries, loadFrontendEnglish())
   if (committed !== expected) {
     // 逐行定位第一处差异，报错里直接给出可对照的两行。
     const actualLines = committed.split('\n')
@@ -38,15 +40,32 @@ test('前端接口消息词条与后端目录逐字相等', () => {
     let first = 0
     while (first < actualLines.length && first < expectedLines.length && actualLines[first] === expectedLines[first]) first++
     assert.fail(
-      `src/i18n/apiMessages.ts 与后端目录不一致（第 ${first + 1} 行起）——在 web/ 下运行 npm run gen:api-messages 重新导出\n`
+      `src/i18n/apiMessages.ts 与来源不一致（第 ${first + 1} 行起）——在 web/ 下运行 npm run gen:api-messages 重新导出\n`
       + `  生成文件: ${actualLines[first] ?? '<无此行>'}\n`
       + `  应为:     ${expectedLines[first] ?? '<无此行>'}`,
     )
   }
 })
 
+test('词条归属：中文母本齐全，英文优先前端词条、后端无英文的键前端必须补', () => {
+  const entries = loadBackendCatalog()
+  const frontendEnglish = loadFrontendEnglish()
+  const merged = mergeTranslations(entries, frontendEnglish)
+  // 目标：前端词条里不得有后端目录没有的键（目录改名后的死条目）。
+  assert.deepEqual(merged.errors, [], '前端英文词条含死条目——后端目录改名后必须同步删除')
+  // 目标：每个只有中文兜底的键，前端必须自带英文译文（后端不再翻译）。
+  assert.deepEqual(merged.missing, [], `以下键只有中文兜底且前端未提供英文：\n  ${merged.missing.join('\n  ')}`)
+  // 回归：后端仍带英文的键，前端未覆盖时沿用后端英文（迁移期次选）。
+  const legacy = entries.find((entry) => entry.en)
+  assert.ok(legacy, '后端目录里应有遗留英文译文（否则本用例空转）')
+  const en = new Map(merged.en)
+  assert.equal(en.get(legacy.key), frontendEnglish[legacy.key] ?? legacy.en)
+})
+
 test('接口消息的英文译文不得残留汉字', () => {
-  const offenders = loadBackendCatalog().filter((entry) => HAN.test(entry.en)).map((entry) => `${entry.key} = ${entry.en}`)
+  const entries = loadBackendCatalog()
+  const merged = mergeTranslations(entries, loadFrontendEnglish())
+  const offenders = merged.en.filter(([, text]) => HAN.test(text)).map(([key, text]) => `${key} = ${text}`)
   assert.deepEqual(offenders, [], `英文译文有 ${offenders.length} 条残留汉字`)
 })
 

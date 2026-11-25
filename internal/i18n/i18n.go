@@ -141,6 +141,16 @@ func Register(key, zh, en string) {
 	catalog[key] = [2]string{zh, en}
 }
 
+// HasEnglish 报告键是否有独立的英文译文。false 表示只有中文兜底（T(EN) 回落中文）：
+// 区分「没有英文译文」（不属缺陷——英文译文归前端词条，2026-11-25 裁定）与
+// 「英文译文有问题」（动词不齐、残留汉字）。
+func HasEnglish(key string) bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	entry, ok := catalog[key]
+	return ok && entry[1] != ""
+}
+
 // T 查词条;缺译/未知键回落 key 本身(调用方通常已把消息原文存为 key 场景外)。
 func T(lang, key string) string {
 	mu.RLock()

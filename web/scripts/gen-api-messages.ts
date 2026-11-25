@@ -109,29 +109,61 @@ export const parseBackendCatalog = (goSource: string, fileName = '<catalog>'): A
 }
 
 /** 键 → 文本的 TS 对象字面量（JSON 转义，与 Go 源码里的写法无关）。 */
-const renderMap = (entries: readonly ApiMessage[], pick: (entry: ApiMessage) => string): string => {
-  const lines = entries.map((entry) => `  ${JSON.stringify(entry.key)}: ${JSON.stringify(pick(entry))},`)
+const renderMap = (pairs: ReadonlyArray<readonly [string, string]>): string => {
+  const lines = pairs.map(([key, text]) => `  ${JSON.stringify(key)}: ${JSON.stringify(text)},`)
   return `{\n${lines.join('\n')}\n}`
 }
 
+/** 前端自带的英文词条（2026-11-25 裁定：后端不再翻译，英文译文归前端）。 */
+export const FRONTEND_EN_FILE = 'src/locales/apiMessages.en.json'
+
+/**
+ * 合并中英词条：
+ *   - 中文母本一律取后端目录（后端 message 的兜底原文同源）；
+ *   - 英文优先取前端词条，其次取后端遗留英文；两者都没有则该键只有中文兜底，
+ *     由守卫要求前端补齐（`missing`）。
+ *   - 前端词条里出现后端目录没有的键 = 死条目（`errors`）——目录改名后必须同步删。
+ */
+export const mergeTranslations = (
+  entries: readonly ApiMessage[],
+  frontendEnglish: Readonly<Record<string, string>>,
+): { zh: Array<[string, string]>; en: Array<[string, string]>; errors: string[]; missing: string[] } => {
+  const known = new Set(entries.map((entry) => entry.key))
+  const errors = Object.keys(frontendEnglish)
+    .filter((key) => !known.has(key))
+    .map((key) => `前端英文词条含后端目录没有的键（死条目）：${key}`)
+  const zh: Array<[string, string]> = []
+  const en: Array<[string, string]> = []
+  const missing: string[] = []
+  for (const entry of entries) {
+    zh.push([entry.key, entry.zh])
+    const translated = frontendEnglish[entry.key] ?? entry.en
+    if (translated) en.push([entry.key, translated])
+    else missing.push(entry.key)
+  }
+  return { zh, en, errors, missing }
+}
+
 /** 生成 src/i18n/apiMessages.ts 的全文。键按后端登记顺序（重新导出时 diff 只动变化的行）。 */
-export const renderApiMessagesModule = (entries: readonly ApiMessage[]): string => {
+export const renderApiMessagesModule = (entries: readonly ApiMessage[], frontendEnglish: Readonly<Record<string, string>> = {}): string => {
   const keys = new Set<string>()
   for (const entry of entries) {
     if (keys.has(entry.key)) throw new Error(`后端目录里键重复：${entry.key}`)
     keys.add(entry.key)
   }
+  const { zh, en } = mergeTranslations(entries, frontendEnglish)
   return [
     '// 由 scripts/gen-api-messages.ts 从后端目录导出——不要手改。',
-    '// 后端改了词条后，在 web/ 下运行 npm run gen:api-messages 重新导出；',
-    '// tests/apiMessagesParity.spec.ts 钉住本文件与后端目录逐字相等。',
+    '// 中文母本来自后端目录；英文译文由前端词条（src/locales/apiMessages.en.json）补，',
+    '// 后端遗留的英文译文作为次选。改了任一侧后在 web/ 下运行 npm run gen:api-messages；',
+    '// tests/apiMessagesParity.spec.ts 钉住本文件与两侧来源逐字相等。',
     '// 键是后端响应的 message_key（域名.驼峰名）；渲染入口见 utils/apiMessage.ts。',
     '',
     `/** 中文母本（后端 message 的兜底原文同源）。 */`,
-    `export const API_MESSAGE_ZH: Readonly<Record<string, string>> = ${renderMap(entries, (entry) => entry.zh)}`,
+    `export const API_MESSAGE_ZH: Readonly<Record<string, string>> = ${renderMap(zh)}`,
     '',
-    '/** 英文译文。 */',
-    `export const API_MESSAGE_EN: Readonly<Record<string, string>> = ${renderMap(entries, (entry) => entry.en)}`,
+    '/** 英文译文（前端词条优先，后端遗留英文次选；只有中文兜底的键不在此表）。 */',
+    `export const API_MESSAGE_EN: Readonly<Record<string, string>> = ${renderMap(en)}`,
     '',
   ].join('\n')
 }
@@ -151,22 +183,48 @@ export const readGeneratedModule = (): string | null => {
   }
 }
 
+/** 前端自带的英文词条；文件不存在按空表处理。 */
+export const loadFrontendEnglish = (): Record<string, string> => {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(new URL(FRONTEND_EN_FILE, webRoot), 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${FRONTEND_EN_FILE} 必须是 JSON 对象`)
+    const table: Record<string, string> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value !== 'string') throw new Error(`${FRONTEND_EN_FILE}: ${key} 的值必须是字符串`)
+      table[key] = value
+    }
+    return table
+  } catch (error) {
+    if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return {}
+    throw error
+  }
+}
+
 // 入口判断：被 node 直接执行时才跑。不用 import.meta.main——它要 Node 24.2+，而 engines
 // 声明的最低版本是 22.18，在 22 上它是 undefined，生成器会静默什么都不做。
 const invokedDirectly = process.argv[1] !== undefined && pathToFileURL(resolve(process.argv[1])).href === import.meta.url
 if (invokedDirectly) {
   const check = process.argv.includes('--check')
   const entries = loadBackendCatalog()
-  const expected = renderApiMessagesModule(entries)
+  const frontendEnglish = loadFrontendEnglish()
+  const { errors, missing } = mergeTranslations(entries, frontendEnglish)
+  if (errors.length > 0) {
+    console.error(`前端英文词条有 ${errors.length} 处问题：\n${errors.join('\n')}`)
+    process.exit(1)
+  }
+  if (missing.length > 0) {
+    console.warn(`以下 ${missing.length} 个键只有中文兜底、前端尚未提供英文译文（守卫会拦）：\n  ${missing.join('\n  ')}`)
+  }
+  const expected = renderApiMessagesModule(entries, frontendEnglish)
   if (check) {
     if (readGeneratedModule() === expected) {
-      console.log(`${OUTPUT_FILE} 与后端目录一致（${entries.length} 条）`)
+      console.log(`${OUTPUT_FILE} 与两侧来源一致（${entries.length} 条）`)
     } else {
-      console.error(`${OUTPUT_FILE} 与后端目录不一致——在 web/ 下运行 npm run gen:api-messages 重新导出`)
+      console.error(`${OUTPUT_FILE} 与来源不一致——在 web/ 下运行 npm run gen:api-messages 重新导出`)
       process.exit(1)
     }
   } else {
     writeFileSync(fileURLToPath(new URL(OUTPUT_FILE, webRoot)), expected)
-    console.log(`已导出 ${OUTPUT_FILE}（${entries.length} 条）`)
+    console.log(`已导出 ${OUTPUT_FILE}（${entries.length} 条，英文 ${mergeTranslations(entries, frontendEnglish).en.length} 条）`)
   }
 }

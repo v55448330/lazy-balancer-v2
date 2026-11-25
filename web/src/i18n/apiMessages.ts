@@ -1,6 +1,7 @@
 // 由 scripts/gen-api-messages.ts 从后端目录导出——不要手改。
-// 后端改了词条后，在 web/ 下运行 npm run gen:api-messages 重新导出；
-// tests/apiMessagesParity.spec.ts 钉住本文件与后端目录逐字相等。
+// 中文母本来自后端目录；英文译文由前端词条（src/locales/apiMessages.en.json）补，
+// 后端遗留的英文译文作为次选。改了任一侧后在 web/ 下运行 npm run gen:api-messages；
+// tests/apiMessagesParity.spec.ts 钉住本文件与两侧来源逐字相等。
 // 键是后端响应的 message_key（域名.驼峰名）；渲染入口见 utils/apiMessage.ts。
 
 /** 中文母本（后端 message 的兜底原文同源）。 */
@@ -666,7 +667,7 @@ export const API_MESSAGE_ZH: Readonly<Record<string, string>> = {
   "security.eventsRetentionPolicySummary": "每日清理 · 保留 %d 天 / 上限 %d 行（按行计，单行最大约 %s，理论体积上限约 %s）",
 }
 
-/** 英文译文。 */
+/** 英文译文（前端词条优先，后端遗留英文次选；只有中文兜底的键不在此表）。 */
 export const API_MESSAGE_EN: Readonly<Record<string, string>> = {
   "common.querySucceeded": "Query succeeded",
   "security.captureControlRequestBodyTooLarge": "Capture control request body exceeds the 4KB limit",
