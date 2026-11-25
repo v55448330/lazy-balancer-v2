@@ -32,7 +32,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 		// 仍按 500 fail-closed，与写闸原语义一致）。
 		isMaster, err := services.RoleOf(c.Request.Context(), database)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "cluster.roleQueryFailed"))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, apimsg.Envelope(500, "cluster.roleQueryFailed"))
 			return
 		}
 		if !isMaster {
@@ -42,7 +42,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 				return
 			}
 			recordAuthenticationRejection(c, "slave_write_denied")
-			c.AbortWithStatusJSON(http.StatusForbidden, apimsg.Envelope(c, 403, "cluster.slaveReadOnly"))
+			c.AbortWithStatusJSON(http.StatusForbidden, apimsg.Envelope(403, "cluster.slaveReadOnly"))
 			return
 		}
 		if c.GetString("role") != "admin" {
@@ -53,7 +53,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 				return
 			}
 			recordAuthenticationRejection(c, "non_admin_write_denied")
-			c.AbortWithStatusJSON(http.StatusForbidden, apimsg.Envelope(c, 403, "system.nonAdminReadOnly"))
+			c.AbortWithStatusJSON(http.StatusForbidden, apimsg.Envelope(403, "system.nonAdminReadOnly"))
 			return
 		}
 		c.Next()

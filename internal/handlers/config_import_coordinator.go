@@ -15,7 +15,6 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -319,7 +318,7 @@ func rejectWriteDuringImport(c *gin.Context, action string) bool {
 		return false
 	}
 	action = strings.ReplaceAll(action, "（配置导入进行中）", "")
-	c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "backup.importInProgressActionNotAllowed", action))
+	c.JSON(http.StatusConflict, apimsg.Envelope(http.StatusConflict, "backup.importInProgressActionNotAllowed", action))
 	return true
 }
 
@@ -532,10 +531,10 @@ func (h *Handlers) beginConfigImportWithPrelock(c *gin.Context, ctx context.Cont
 // （可重试语义），其余（读规则/开事务）→ 500。
 func respondImportBeginError(c *gin.Context, err error) {
 	if errors.Is(err, errCertQueueDrainIncomplete) || errors.Is(err, errImportTaskDrainIncomplete) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.ErrMsg(err)})
 		return
 	}
-	c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.importSessionStartFailed"))
+	c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "backup.importSessionStartFailed"))
 }
 
 func (session *configImportSession) close() {
@@ -660,7 +659,7 @@ func (session *configImportSession) abort(importErr error) error {
 				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(detail), "")
 			}
 			for _, warning := range session.wafRestoreWarnings {
-				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(warning.render(i18n.ZH)) /* audit-detail raw */, "")
+				services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(warning.render()) /* audit-detail raw */, "")
 			}
 		}
 	}
@@ -694,8 +693,8 @@ func (session *configImportSession) abort(importErr error) error {
 				// 必须显性说明（同族 WAF 文件面已有 lbbakWafRollbackWarning）。
 				if notice := session.indeterminateCleanupNotice(); !notice.isZero() {
 					session.failureWarnings = append(session.failureWarnings, notice)
-					services.Logf("warn", "配置%s警告: %s", session.actionLabel(), notice.render(i18n.ZH))
-					services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(notice.render(i18n.ZH)) /* audit-detail raw */, "")
+					services.Logf("warn", "配置%s警告: %s", session.actionLabel(), notice.render())
+					services.RecordAuditLog("system", session.actionLabel()+"警告", "配置备份", services.AuditRawDetail(notice.render()) /* audit-detail raw */, "")
 				}
 			}
 			if recovery.runtime != nil {

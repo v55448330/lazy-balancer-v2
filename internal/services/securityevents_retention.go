@@ -59,10 +59,10 @@ const (
 // 行帽按行不按字节：单行最坏 ≈ 请求头 64KiB + 请求体 64KiB + URI 8KiB +
 // rule_msg 2KiB（采集上限 securityEvents*Cap，另有文本截断标记）——摘要
 // 披露理论体积上限，避免「100 万行」被误读为固定小体积。
-// lang 是摘要的渲染语言（面板按请求语言取词）；行数上限不随语言变化。
-func SecurityEventsRetentionSnapshot(lang string) (string, int) {
+// 摘要与行数上限不随界面语言变化：后端只出中文母本，前端按词条渲染。
+func SecurityEventsRetentionSnapshot() (string, int) {
 	policy, _ := securityEventsRetentionPolicyFromDB()
-	return fmt.Sprintf(i18n.T(lang, "security.eventsRetentionPolicySummary"),
+	return fmt.Sprintf(i18n.T("security.eventsRetentionPolicySummary"),
 		policy.Days, policy.Max, securityEventsRowMaxLabel(), securityEventsRowCapByteBudget(policy.Max)), policy.Max
 }
 

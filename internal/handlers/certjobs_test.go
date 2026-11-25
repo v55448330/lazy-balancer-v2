@@ -81,7 +81,7 @@ func TestCertJobRetryBlocked_downloaded_job_uses_deployment_message(t *testing.T
 	if messageKey != "cert.jobRetryAwaitingDeployment" || len(messageArgs) != 0 {
 		t.Fatalf("downloaded messageKey=%q args=%v, want cert.jobRetryAwaitingDeployment（无参数）", messageKey, messageArgs)
 	}
-	if zh := apimsg.Tf(nil, messageKey, messageArgs...); !strings.Contains(zh, "部署") {
+	if zh := apimsg.Tf(messageKey, messageArgs...); !strings.Contains(zh, "部署") {
 		t.Fatalf("downloaded message=%q, want deployment-window wording", zh)
 	}
 }

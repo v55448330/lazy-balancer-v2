@@ -21,7 +21,7 @@ import (
 // hashKeyPattern 旧键形态：中文原文的哈希。
 var hashKeyPattern = regexp.MustCompile(`\bk_[0-9a-f]{8}\b`)
 
-// registeredCatalogKeys 解析目录文件里 Register(key, zh, en) 的第一个参数字面量。
+// registeredCatalogKeys 解析目录文件里 Register(key, zh) 的第一个参数字面量。
 func registeredCatalogKeys(t *testing.T) []string {
 	t.Helper()
 	paths, err := filepath.Glob("catalog_*.go")
@@ -37,7 +37,7 @@ func registeredCatalogKeys(t *testing.T) []string {
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) < 3 {
+			if !ok || len(call.Args) < 2 {
 				return true
 			}
 			fn, ok := call.Fun.(*ast.Ident)

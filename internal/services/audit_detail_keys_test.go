@@ -101,7 +101,7 @@ func scanAuditDetailKeySites(t *testing.T) (sites int, problems []string) {
 				problems = append(problems, rel+": 明细段键必须以 audit. 起头: "+key)
 				return true
 			}
-			if i18n.T(i18n.ZH, key) == key {
+			if i18n.T(key) == key {
 				problems = append(problems, rel+": 明细段键未在 i18n 目录登记: "+key)
 			}
 			return true
@@ -209,7 +209,7 @@ func TestAuditDetail_renderParityFixture(t *testing.T) {
 			t.Errorf("%s: 母本渲染=%q, 夹具 zh=%q", c.Name, got, c.ZH)
 		}
 		for _, segment := range strings.Split(c.Key, AuditDetailKeySeparator) {
-			if i18n.T(i18n.ZH, segment) == segment {
+			if i18n.T(segment) == segment {
 				t.Errorf("%s: 段键未登记: %s", c.Name, segment)
 			}
 		}
@@ -238,7 +238,7 @@ func renderDetailForTest(t *testing.T, key string, raw any) string {
 // renderSegmentForTest 按词条键渲染一段（槽位可能是字符串、嵌套段或段列表）。
 func renderSegmentForTest(t *testing.T, key string, slots []any) string {
 	t.Helper()
-	template := i18n.T(i18n.ZH, key)
+	template := i18n.T(key)
 	if len(slots) == 0 {
 		return template
 	}

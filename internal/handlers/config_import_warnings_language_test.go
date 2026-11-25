@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,30 +22,29 @@ import (
 	"lazy-balancer-v2/internal/i18n"
 )
 
-// 导入/还原的预览与结果 warnings、冲突明细、安全事件行的保留提示走词条：
-// 英文界面（Accept-Language: en）不得混入中文，中文界面文案逐字不变，
-// 操作审计明细不随界面语言变化（恒为中文）。
+// 导入/还原的预览与结果 warnings、冲突明细、安全事件行的保留提示走词条。
+//
+// 2026-11-25 项目所有者裁定（web/docs/I18N.md 第 0 节）：后端只下发稳定键 + 参数，
+// 文案只归前端。因此本文件的判据从「英文请求返回英文」改为两条更强的断言：
+//   1. 响应与 Accept-Language 无关——同一请求带 zh-CN 与 en 的响应体逐字相同；
+//   2. 响应用的是中文母本（词条目录），操作审计明细同样恒为中文母本。
+// 英文界面由前端按 message_key 取自己的词条渲染（web/tests/apiMessagesParity.spec.ts
+// 钉住键集合双向对等）。
 
 var importCJKPattern = regexp.MustCompile(`\p{Han}`)
 
 // zhWarnings / zhWarning 把告警事实按中文母本渲染——既有用例直测产出函数时
 // 断言的中文字面量不变，只是取词方式从字符串改为事实渲染。
-func zhWarnings(warnings importWarnings) []string { return warnings.render(i18n.ZH) }
+func zhWarnings(warnings importWarnings) []string { return warnings.render() }
 
-func zhWarning(warning importWarning) string { return warning.render(i18n.ZH) }
-
-// zhCtx 是不带语言头的请求上下文（取词回落中文母本）。
-func zhCtx() i18n.Ctx {
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	return ctx
-}
+func zhWarning(warning importWarning) string { return warning.render() }
 
 // catalogZH 返回字面量作为词条键时的中文母本；不是键或未登记时返回空串。
 func catalogZH(literal string) string {
 	if !i18n.IsMessageKey(literal) {
 		return ""
 	}
-	zh := i18n.T(i18n.ZH, literal)
+	zh := i18n.T(literal)
 	if zh == literal {
 		return ""
 	}
@@ -66,36 +64,50 @@ type importLanguageEnvelope struct {
 	} `json:"data"`
 }
 
-// postWithLanguage 以指定 Accept-Language 调用一个端点并解析导入类响应。
-func postWithLanguage(t *testing.T, router *gin.Engine, method, path, body string, lang string) importLanguageEnvelope {
+// postImportRaw 以指定 Accept-Language 调用端点，返回原始响应体（用于跨语言逐字比对）。
+func postImportRaw(t *testing.T, router *gin.Engine, method, path, body, lang string) (int, string) {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Language", lang)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	envelope := importLanguageEnvelope{status: rec.Code}
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("%s %s 解析响应失败: %v (status=%d body=%s)", lang, path, err, rec.Code, rec.Body.String())
-	}
-	return envelope
+	return rec.Code, rec.Body.String()
 }
 
-// assertImportSurfaceNoCJK 断言一组用户可见文案不含汉字；空集同样失败——
-// 守卫必须证明产生点确实被触发，而不是因为没有任何文案而空过。
-func assertImportSurfaceNoCJK(t *testing.T, surface string, texts []string) {
+// volatileTempSuffix 归一化响应里的一次性临时文件名（os.CreateTemp 生成的随机后缀）：
+// 同一请求两次执行会得到不同的临时名，那不是语言差异，也不是可重复的响应内容。
+var volatileTempSuffix = regexp.MustCompile(`-[0-9]+\.tmp`)
+
+func normalizeVolatile(body string) string {
+	return volatileTempSuffix.ReplaceAllString(body, "-N.tmp")
+}
+
+// assertLanguageIndependent 对同一请求分别带 zh-CN 与 en 各打一次（run 负责为每次调用
+// 准备**独立**的 handler/router：导入类端点会写库，共享实例会让第二次请求看到已变更的状态，
+// 那不是语言差异），要求状态码与响应体逐字相同：后端不再按请求语言渲染。
+func assertLanguageIndependent(t *testing.T, run func(lang string) (int, string)) (int, string) {
 	t.Helper()
-	if len(texts) == 0 {
-		t.Fatalf("%s 为空——夹具未触发任何文案，守卫空转", surface)
+	zhStatus, zhBody := run("zh-CN")
+	enStatus, enBody := run("en")
+	if zhStatus != enStatus {
+		t.Fatalf("状态码随 Accept-Language 变化: zh=%d en=%d", zhStatus, enStatus)
 	}
-	for _, text := range texts {
-		if text == "" {
-			continue
-		}
-		if hit := importCJKPattern.FindString(text); hit != "" {
-			t.Errorf("%s 英文界面残留中文 %q: %q", surface, hit, text)
-		}
+	if normalizeVolatile(zhBody) != normalizeVolatile(enBody) {
+		t.Fatalf("响应体随 Accept-Language 变化（后端不得按语言渲染）:\n zh: %s\n en: %s", zhBody, enBody)
 	}
+	return zhStatus, zhBody
+}
+
+// assertLanguageIndependentEnvelope 同 assertLanguageIndependent，并把响应解析成导入类信封。
+func assertLanguageIndependentEnvelope(t *testing.T, run func(lang string) (int, string)) importLanguageEnvelope {
+	t.Helper()
+	status, body := assertLanguageIndependent(t, run)
+	envelope := importLanguageEnvelope{status: status}
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v (body=%s)", err, body)
+	}
+	return envelope
 }
 
 func conflictReasonTexts(conflicts []disabledRuleConflict) []string {
@@ -173,127 +185,95 @@ func warningRichBackupPreviewOnlyZHFragments() []string {
 	}
 }
 
-func TestValidateConfigImport_warningsFollowLanguage(t *testing.T) {
-	for _, lang := range []string{"zh-CN", "en"} {
-		t.Run(lang, func(t *testing.T) {
-			h := newAutoBackupTestHandlers(t)
-			h.cfg.Version = "v9.9.9"
-			router := languageRouter("current-admin")
-			router.POST("/config/import/validate", h.ValidateConfigImport)
-			response := postWithLanguage(t, router, http.MethodPost, "/config/import/validate", warningRichBackupJSON(t), lang)
-			if response.status != http.StatusOK || !response.Data.Valid {
-				t.Fatalf("预览未通过: status=%d valid=%v error=%q", response.status, response.Data.Valid, response.Data.Error)
-			}
-			reasons := conflictReasonTexts(response.Data.DisabledConflicts)
-			if len(response.Data.DisabledConflicts) != 2 || len(reasons) == 0 {
-				t.Fatalf("冲突明细未触发: %+v", response.Data.DisabledConflicts)
-			}
-			if lang == "en" {
-				assertImportSurfaceNoCJK(t, "预览 warnings", response.Data.Warnings)
-				assertImportSurfaceNoCJK(t, "预览 disabled_conflicts", reasons)
-				assertWarningsContainAll(t, response.Data.Warnings,
-					"Rule lb_empty has an empty domain and was skipped",
-					"Block page #7 has empty content and was skipped",
-					"1 security policy bindings were skipped together with the empty-domain rules",
-					"carried an active \"updating\" state",
-					"outside the allowed vocabulary and were normalized to idle",
-					"autoban_threshold out of range (0), clamped to 1",
-					"jwt_expire_minutes out of range, reset to 20",
-					"request_body_max_size_mb has an invalid form (abc), normalized to 128",
-					"The backup does not contain the current account; if \"System data\" is selected on import")
-				assertWarningsContainAll(t, reasons, "HTTP domain dup.example.test is duplicated")
-				return
-			}
-			assertWarningsContainAll(t, response.Data.Warnings, append(warningRichBackupSharedZHFragments(), warningRichBackupPreviewOnlyZHFragments()...)...)
-			assertWarningsContainAll(t, reasons, "HTTP 域名 dup.example.test 重复")
-			// 顺序与逐字形态钉住：软跳过三条在前，其后是拦截页跳过与版本状态归一。
-			wantHead := []string{
-				"纯 JSON 备份不携带威胁名单文件，已保留本地威胁源配置与名单",
-				"规则 lb_empty 的域名为空，已跳过导入",
-				"1 条安全策略绑定随空域名规则一并跳过",
-				"拦截页面 #7 的内容为空，已跳过导入",
-			}
-			if len(response.Data.Warnings) < len(wantHead) {
-				t.Fatalf("warnings=%v", response.Data.Warnings)
-			}
-			for index, want := range wantHead {
-				if got := response.Data.Warnings[index]; got != want {
-					t.Errorf("warnings[%d]=%q, want 中文母本逐字不变 %q", index, got, want)
-				}
-			}
-		})
+func TestValidateConfigImport_warningsAreLanguageIndependentChineseMother(t *testing.T) {
+	body := warningRichBackupJSON(t)
+	response := assertLanguageIndependentEnvelope(t, func(lang string) (int, string) {
+		h := newAutoBackupTestHandlers(t)
+		h.cfg.Version = "v9.9.9"
+		router := languageRouter("current-admin")
+		router.POST("/config/import/validate", h.ValidateConfigImport)
+		return postImportRaw(t, router, http.MethodPost, "/config/import/validate", body, lang)
+	})
+	if response.status != http.StatusOK || !response.Data.Valid {
+		t.Fatalf("预览未通过: status=%d valid=%v error=%q", response.status, response.Data.Valid, response.Data.Error)
+	}
+	reasons := conflictReasonTexts(response.Data.DisabledConflicts)
+	if len(response.Data.DisabledConflicts) != 2 || len(reasons) == 0 {
+		t.Fatalf("冲突明细未触发: %+v", response.Data.DisabledConflicts)
+	}
+	assertWarningsContainAll(t, response.Data.Warnings, append(warningRichBackupSharedZHFragments(), warningRichBackupPreviewOnlyZHFragments()...)...)
+	assertWarningsContainAll(t, reasons, "HTTP 域名 dup.example.test 重复")
+	// 顺序与逐字形态钉住：软跳过三条在前，其后是拦截页跳过与版本状态归一。
+	wantHead := []string{
+		"纯 JSON 备份不携带威胁名单文件，已保留本地威胁源配置与名单",
+		"规则 lb_empty 的域名为空，已跳过导入",
+		"1 条安全策略绑定随空域名规则一并跳过",
+		"拦截页面 #7 的内容为空，已跳过导入",
+	}
+	if len(response.Data.Warnings) < len(wantHead) {
+		t.Fatalf("warnings=%v", response.Data.Warnings)
+	}
+	for index, want := range wantHead {
+		if got := response.Data.Warnings[index]; got != want {
+			t.Errorf("warnings[%d]=%q, want 中文母本逐字不变 %q", index, got, want)
+		}
 	}
 }
 
 // 史前（结构版本 1）备份不含完整性校验和：预览必须披露内容未经摘要校验。
-func TestValidateConfigImport_legacyNoChecksumWarningFollowsLanguage(t *testing.T) {
-	for _, lang := range []string{"zh-CN", "en"} {
-		t.Run(lang, func(t *testing.T) {
-			h := newAutoBackupTestHandlers(t)
-			backup := buildBackupStruct(t, backupFixtureOptions{FillAll: true, EmptyConfigIfNil: true})
-			backup.Meta.Version = 1
-			backup.Meta.Checksum = ""
-			router := languageRouter("")
-			router.POST("/config/import/validate", h.ValidateConfigImport)
-			response := postWithLanguage(t, router, http.MethodPost, "/config/import/validate", marshalJSONForTest(t, backup), lang)
-			if response.status != http.StatusOK || !response.Data.Valid {
-				t.Fatalf("预览未通过: status=%d valid=%v error=%q", response.status, response.Data.Valid, response.Data.Error)
-			}
-			if lang == "en" {
-				assertImportSurfaceNoCJK(t, "预览 warnings", response.Data.Warnings)
-				assertWarningsContainAll(t, response.Data.Warnings, "The backup has no integrity checksum (exported by an early version) and was imported after structural validation only")
-				return
-			}
-			assertWarningsContainAll(t, response.Data.Warnings, "备份不含完整性校验和（史前版本导出），已按结构性校验导入——文件内容未经摘要校验，建议尽快用当前版本重新导出备份")
-		})
+func TestValidateConfigImport_legacyNoChecksumWarningLanguageIndependent(t *testing.T) {
+	backup := buildBackupStruct(t, backupFixtureOptions{FillAll: true, EmptyConfigIfNil: true})
+	backup.Meta.Version = 1
+	backup.Meta.Checksum = ""
+	body := marshalJSONForTest(t, backup)
+	response := assertLanguageIndependentEnvelope(t, func(lang string) (int, string) {
+		h := newAutoBackupTestHandlers(t)
+		router := languageRouter("")
+		router.POST("/config/import/validate", h.ValidateConfigImport)
+		return postImportRaw(t, router, http.MethodPost, "/config/import/validate", body, lang)
+	})
+	if response.status != http.StatusOK || !response.Data.Valid {
+		t.Fatalf("预览未通过: status=%d valid=%v error=%q", response.status, response.Data.Valid, response.Data.Error)
 	}
+	assertWarningsContainAll(t, response.Data.Warnings, "备份不含完整性校验和（史前版本导出），已按结构性校验导入——文件内容未经摘要校验，建议尽快用当前版本重新导出备份")
 }
 
-func TestImportConfigBackup_warningsFollowLanguage(t *testing.T) {
-	for _, lang := range []string{"zh-CN", "en"} {
-		t.Run(lang, func(t *testing.T) {
-			h := newAutoBackupTestHandlers(t)
-			h.cfg.DataDir = t.TempDir()
-			h.cfg.Version = "v9.9.9"
-			router := languageRouter("current-admin")
-			router.POST("/config/import", h.ImportConfigBackup)
-			response := postWithLanguage(t, router, http.MethodPost, "/config/import", warningRichBackupJSON(t), lang)
-			if response.status != http.StatusOK {
-				t.Fatalf("导入未成功: status=%d message=%q", response.status, response.Message)
-			}
-			reasons := conflictReasonTexts(response.Data.DisabledConflicts)
-			if len(reasons) == 0 {
-				t.Fatalf("冲突明细未触发: %+v", response.Data.DisabledConflicts)
-			}
-			if lang == "en" {
-				assertImportSurfaceNoCJK(t, "导入 warnings", response.Data.Warnings)
-				assertImportSurfaceNoCJK(t, "导入 disabled_conflicts", reasons)
-				assertWarningsContainAll(t, response.Data.Warnings,
-					"1 security policy bindings were skipped together with the empty-domain rules",
-					"The backup does not contain the current account — system data was replaced, so sign in with an administrator account from the backup")
-				if warningsContain(response.Data.Warnings, "jwt_expire_minutes") {
-					t.Errorf("导入响应不得出现钳制说明（该说明只进操作审计）: %v", response.Data.Warnings)
-				}
-				// 操作审计明细不随界面语言变化：英文请求写入的审计仍是中文母本。
-				for _, want := range []string{
-					"跳过警告：纯 JSON 备份不携带威胁名单文件，已保留本地威胁源配置与名单；规则 lb_empty 的域名为空，已跳过导入；1 条安全策略绑定随空域名规则一并跳过",
-					"jwt_expire_minutes 越界，已重置为 20",
-					"autoban_threshold 越界（0），已钳位为 1",
-					"冲突置为禁用：dup-a（冲突对象：dup-b：HTTP 域名 dup.example.test 重复）",
-				} {
-					var auditCount int
-					if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='配置备份' AND detail LIKE ?`, "%"+want+"%").Scan(&auditCount); err != nil {
-						t.Fatalf("读取审计: %v", err)
-					}
-					if auditCount == 0 {
-						t.Errorf("英文请求下操作审计未保留中文母本: %q", want)
-					}
-				}
-				return
-			}
-			assertWarningsContainAll(t, response.Data.Warnings, append(warningRichBackupSharedZHFragments(),
-				"备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")...)
-		})
+func TestImportConfigBackup_warningsAreLanguageIndependentChineseMother(t *testing.T) {
+	body := warningRichBackupJSON(t)
+	response := assertLanguageIndependentEnvelope(t, func(lang string) (int, string) {
+		h := newAutoBackupTestHandlers(t)
+		h.cfg.DataDir = t.TempDir()
+		h.cfg.Version = "v9.9.9"
+		router := languageRouter("current-admin")
+		router.POST("/config/import", h.ImportConfigBackup)
+		return postImportRaw(t, router, http.MethodPost, "/config/import", body, lang)
+	})
+	if response.status != http.StatusOK {
+		t.Fatalf("导入未成功: status=%d message=%q", response.status, response.Message)
+	}
+	reasons := conflictReasonTexts(response.Data.DisabledConflicts)
+	if len(reasons) == 0 {
+		t.Fatalf("冲突明细未触发: %+v", response.Data.DisabledConflicts)
+	}
+	assertWarningsContainAll(t, response.Data.Warnings, append(warningRichBackupSharedZHFragments(),
+		"备份不含当前操作账户——系统数据已替换，请使用备份内的管理员账户登录")...)
+	if warningsContain(response.Data.Warnings, "jwt_expire_minutes") {
+		t.Errorf("导入响应不得出现钳制说明（该说明只进操作审计）: %v", response.Data.Warnings)
+	}
+	// 操作审计明细恒为中文母本（与界面语言无关，因为后端已无语言概念）。
+	for _, want := range []string{
+		"跳过警告：纯 JSON 备份不携带威胁名单文件，已保留本地威胁源配置与名单；规则 lb_empty 的域名为空，已跳过导入；1 条安全策略绑定随空域名规则一并跳过",
+		"jwt_expire_minutes 越界，已重置为 20",
+		"autoban_threshold 越界（0），已钳位为 1",
+		"冲突置为禁用：dup-a（冲突对象：dup-b：HTTP 域名 dup.example.test 重复）",
+	} {
+		var auditCount int
+		if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='配置备份' AND detail LIKE ?`, "%"+want+"%").Scan(&auditCount); err != nil {
+			t.Fatalf("读取审计: %v", err)
+		}
+		if auditCount == 0 {
+			t.Errorf("操作审计未保留中文母本: %q", want)
+		}
 	}
 }
 
@@ -330,155 +310,115 @@ func v1WarningRichBackupJSON() string {
 	)
 }
 
-func TestValidateConfigImport_v1WarningsFollowLanguage(t *testing.T) {
-	for _, lang := range []string{"zh-CN", "en"} {
-		t.Run(lang, func(t *testing.T) {
-			h := newBackupTestHandlers(t)
-			router := languageRouter("")
-			router.POST("/config/import/validate", h.ValidateConfigImport)
-			response := postWithLanguage(t, router, http.MethodPost, "/config/import/validate", v1WarningRichBackupJSON(), lang)
-			if response.status != http.StatusOK || !response.Data.Valid {
-				t.Fatalf("v1 预览未通过: status=%d valid=%v error=%q warnings=%v", response.status, response.Data.Valid, response.Data.Error, response.Data.Warnings)
-			}
-			reasons := conflictReasonTexts(response.Data.DisabledConflicts)
-			if len(reasons) == 0 {
-				t.Fatalf("v1 冲突明细未触发: %+v", response.Data.DisabledConflicts)
-			}
-			if lang == "en" {
-				assertImportSurfaceNoCJK(t, "v1 预览 warnings", response.Data.Warnings)
-				assertImportSurfaceNoCJK(t, "v1 预览 disabled_conflicts", reasons)
-				assertWarningsContainAll(t, response.Data.Warnings,
-					"Only load-balancing rules are imported",
-					`Rule v1-mystery: load-balancing strategy "mystery" cannot be mapped; weighted_round_robin was used`,
-					"Rule v1-empty has an empty domain and was skipped",
-					"Rule #1 (v1-mystery) upstream #1: upstream protocol tcp on an HTTP rule was imported as http",
-					"the v1 health-check interval was too short and was raised to ",
-					"the rule is disabled and its certificate/private key is empty, so it was imported with TLS turned off")
-				assertWarningsContainAll(t, reasons, "HTTP domain v1-dup.example.test is duplicated")
-				return
-			}
-			assertWarningsContainAll(t, response.Data.Warnings,
-				"仅导入负载规则（用户、全局配置不导入；旧规则的证书任务、证书材料与日志将随规则替换一并清理）",
-				`规则 v1-mystery 的负载策略 "mystery" 无法映射，已使用 weighted_round_robin`,
-				"规则 v1-empty 的域名为空，已跳过导入",
-				"规则 #1（v1-mystery）上游 #1：HTTP 规则上游协议 tcp 已按 http 导入",
-				"规则 #1（v1-mystery）：v1 健康检查间隔过短，已提为 ",
-				"规则 #1（v1-mystery）：规则为禁用状态且证书/私钥为空，已按关闭 TLS 导入（证书可后续补齐再启用）")
-			assertWarningsContainAll(t, reasons, "HTTP 域名 v1-dup.example.test 重复")
-		})
+func TestValidateConfigImport_v1WarningsAreLanguageIndependentChineseMother(t *testing.T) {
+	body := v1WarningRichBackupJSON()
+	response := assertLanguageIndependentEnvelope(t, func(lang string) (int, string) {
+		h := newBackupTestHandlers(t)
+		router := languageRouter("")
+		router.POST("/config/import/validate", h.ValidateConfigImport)
+		return postImportRaw(t, router, http.MethodPost, "/config/import/validate", body, lang)
+	})
+	if response.status != http.StatusOK || !response.Data.Valid {
+		t.Fatalf("v1 预览未通过: status=%d valid=%v error=%q warnings=%v", response.status, response.Data.Valid, response.Data.Error, response.Data.Warnings)
 	}
+	reasons := conflictReasonTexts(response.Data.DisabledConflicts)
+	if len(reasons) == 0 {
+		t.Fatalf("v1 冲突明细未触发: %+v", response.Data.DisabledConflicts)
+	}
+	assertWarningsContainAll(t, response.Data.Warnings,
+		"仅导入负载规则（用户、全局配置不导入；旧规则的证书任务、证书材料与日志将随规则替换一并清理）",
+		`规则 v1-mystery 的负载策略 "mystery" 无法映射，已使用 weighted_round_robin`,
+		"规则 v1-empty 的域名为空，已跳过导入",
+		"规则 #1（v1-mystery）上游 #1：HTTP 规则上游协议 tcp 已按 http 导入",
+		"规则 #1（v1-mystery）：v1 健康检查间隔过短，已提为 ",
+		"规则 #1（v1-mystery）：规则为禁用状态且证书/私钥为空，已按关闭 TLS 导入（证书可后续补齐再启用）")
+	assertWarningsContainAll(t, reasons, "HTTP 域名 v1-dup.example.test 重复")
 }
 
 // 备份历史还原与文件导入共用导入核心，动作词为「还原」。
-func TestRestoreAutoBackup_warningsFollowLanguage(t *testing.T) {
-	for _, lang := range []string{"zh-CN", "en"} {
-		t.Run(lang, func(t *testing.T) {
-			h := newAutoBackupTestHandlers(t)
-			h.cfg.DataDir = t.TempDir()
-			payload, _, _, _, err := h.buildLbbakExport(context.Background(), []string{"users"})
-			if err != nil {
-				t.Fatalf("构建 lbbak: %v", err)
-			}
-			name := "lbbak-restore-language.lbbak"
-			if err := os.WriteFile(filepath.Join(h.cfg.BackupDir, name), payload, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			row, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, trigger_type) VALUES (?, 'success', 'manual')`, name)
-			if err != nil {
-				t.Fatalf("登记备份行: %v", err)
-			}
-			id, _ := row.LastInsertId()
-			router := languageRouter("admin")
-			router.POST("/auto-backup/:id/restore", h.RestoreAutoBackup)
-			response := postWithLanguage(t, router, http.MethodPost, fmt.Sprintf("/auto-backup/%d/restore", id), "", lang)
-			if response.status != http.StatusOK {
-				t.Fatalf("还原未成功: status=%d message=%q", response.status, response.Message)
-			}
-			if lang == "en" {
-				assertImportSurfaceNoCJK(t, "还原 warnings", response.Data.Warnings)
-				assertWarningsContainAll(t, response.Data.Warnings, "System data was restored: all login sessions were revoked, please sign in again")
-				return
-			}
-			assertWarningsContainAll(t, response.Data.Warnings, "系统数据已还原：全部登录会话已吊销，请重新登录")
-		})
+func TestRestoreAutoBackup_warningsAreLanguageIndependentChineseMother(t *testing.T) {
+	response := assertLanguageIndependentEnvelope(t, func(lang string) (int, string) {
+		h := newAutoBackupTestHandlers(t)
+		h.cfg.DataDir = t.TempDir()
+		payload, _, _, _, err := h.buildLbbakExport(context.Background(), []string{"users"})
+		if err != nil {
+			t.Fatalf("构建 lbbak: %v", err)
+		}
+		name := "lbbak-restore-language.lbbak"
+		if err := os.WriteFile(filepath.Join(h.cfg.BackupDir, name), payload, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		row, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, trigger_type) VALUES (?, 'success', 'manual')`, name)
+		if err != nil {
+			t.Fatalf("登记备份行: %v", err)
+		}
+		id, _ := row.LastInsertId()
+		router := languageRouter("admin")
+		router.POST("/auto-backup/:id/restore", h.RestoreAutoBackup)
+		return postImportRaw(t, router, http.MethodPost, fmt.Sprintf("/auto-backup/%d/restore", id), "", lang)
+	})
+	if response.status != http.StatusOK {
+		t.Fatalf("还原未成功: status=%d message=%q", response.status, response.Message)
 	}
+	assertWarningsContainAll(t, response.Data.Warnings, "系统数据已还原：全部登录会话已吊销，请重新登录")
 }
 
 // lbbak 包内 manifest 未登记的威胁库条目：预览告警。
-func TestValidateConfigImport_lbbakUnregisteredThreatWarningsFollowsLanguage(t *testing.T) {
-	for _, lang := range []string{"zh-CN", "en"} {
-		t.Run(lang, func(t *testing.T) {
-			h := newBackupTestHandlers(t)
-			backupJSON := buildBackup(t, backupFixtureOptions{FillAll: true, EmptyConfigIfNil: true})
-			body := buildLbbakWithExtraThreatEntry(t, backupJSON, []byte("1.2.3.4\n"))
-			router := languageRouter("")
-			router.POST("/config/import/validate", h.ValidateConfigImport)
-			response := postWithLanguage(t, router, http.MethodPost, "/config/import/validate", string(body), lang)
-			if response.status != http.StatusOK || !response.Data.Valid {
-				t.Fatalf("lbbak 预览未通过: status=%d valid=%v error=%q", response.status, response.Data.Valid, response.Data.Error)
-			}
-			if lang == "en" {
-				assertImportSurfaceNoCJK(t, "lbbak 预览 warnings", response.Data.Warnings)
-				assertWarningsContainAll(t, response.Data.Warnings,
-					"The lbbak contains threat-library entries not registered in the manifest (threat/ustc.iplist)",
-					"The lbbak contains threat-list files (integrity verified)")
-				return
-			}
-			assertWarningsContainAll(t, response.Data.Warnings,
-				"lbbak 含威胁库名单文件（完整性已校验）——导入「安全防护」将落盘名单文件；本包不含 CRS/IP2Region 数据文件",
-				"lbbak 含 manifest 未登记的威胁库条目（threat/ustc.iplist）——内容未经完整性校验，已按原样落盘；建议核实来源后重新导出备份")
-		})
+func TestValidateConfigImport_lbbakUnregisteredThreatWarningsLanguageIndependent(t *testing.T) {
+	backupJSON := buildBackup(t, backupFixtureOptions{FillAll: true, EmptyConfigIfNil: true})
+	body := string(buildLbbakWithExtraThreatEntry(t, backupJSON, []byte("1.2.3.4\n")))
+	response := assertLanguageIndependentEnvelope(t, func(lang string) (int, string) {
+		h := newBackupTestHandlers(t)
+		router := languageRouter("")
+		router.POST("/config/import/validate", h.ValidateConfigImport)
+		return postImportRaw(t, router, http.MethodPost, "/config/import/validate", body, lang)
+	})
+	if response.status != http.StatusOK || !response.Data.Valid {
+		t.Fatalf("lbbak 预览未通过: status=%d valid=%v error=%q", response.status, response.Data.Valid, response.Data.Error)
+	}
+	assertWarningsContainAll(t, response.Data.Warnings,
+		"lbbak 含威胁库名单文件（完整性已校验）——导入「安全防护」将落盘名单文件；本包不含 CRS/IP2Region 数据文件",
+		"lbbak 含 manifest 未登记的威胁库条目（threat/ustc.iplist）——内容未经完整性校验，已按原样落盘；建议核实来源后重新导出备份")
+}
+
+func TestGetLogStats_securityEventsRetentionNoteLanguageIndependent(t *testing.T) {
+	status, body := assertLanguageIndependent(t, func(lang string) (int, string) {
+		h := newBackupTestHandlers(t)
+		router := languageRouter("")
+		router.GET("/logs/stats", h.GetLogStats)
+		return postImportRaw(t, router, http.MethodGet, "/logs/stats?key=security_events", "", lang)
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	var resp struct {
+		Data struct {
+			Logs []struct {
+				Key           string `json:"key"`
+				RetentionNote string `json:"retention_note"`
+				LimitRows     *int64 `json:"limit_rows"`
+			} `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Logs) != 1 || resp.Data.Logs[0].Key != "security_events" {
+		t.Fatalf("logs=%+v, want exactly security_events row", resp.Data.Logs)
+	}
+	row := resp.Data.Logs[0]
+	if !strings.HasPrefix(row.RetentionNote, fmt.Sprintf("每日清理 · 保留 %d 天 / 上限 %d 行", db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap)) {
+		t.Errorf("retention_note=%q, want 中文母本", row.RetentionNote)
+	}
+	if row.LimitRows == nil || *row.LimitRows != int64(db.DefaultSecurityEventsRowCap) {
+		t.Errorf("limit_rows=%v, want %d", row.LimitRows, db.DefaultSecurityEventsRowCap)
 	}
 }
 
-func TestGetLogStats_securityEventsRetentionNoteFollowsLanguage(t *testing.T) {
-	for _, lang := range []string{"zh-CN", "en"} {
-		t.Run(lang, func(t *testing.T) {
-			h := newBackupTestHandlers(t)
-			router := languageRouter("")
-			router.GET("/logs/stats", h.GetLogStats)
-			req := httptest.NewRequest(http.MethodGet, "/logs/stats?key=security_events", nil)
-			req.Header.Set("Accept-Language", lang)
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-			}
-			var resp struct {
-				Data struct {
-					Logs []struct {
-						Key           string `json:"key"`
-						RetentionNote string `json:"retention_note"`
-						LimitRows     *int64 `json:"limit_rows"`
-					} `json:"logs"`
-				} `json:"data"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-				t.Fatal(err)
-			}
-			if len(resp.Data.Logs) != 1 || resp.Data.Logs[0].Key != "security_events" {
-				t.Fatalf("logs=%+v, want exactly security_events row", resp.Data.Logs)
-			}
-			row := resp.Data.Logs[0]
-			if lang == "en" {
-				assertImportSurfaceNoCJK(t, "安全事件行 retention_note", []string{row.RetentionNote})
-				want := fmt.Sprintf("Cleaned daily · keep %d days / cap %d rows", db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap)
-				if !strings.HasPrefix(row.RetentionNote, want) {
-					t.Errorf("retention_note=%q, want 前缀 %q", row.RetentionNote, want)
-				}
-			} else if !strings.Contains(row.RetentionNote, "每日清理 · 保留 90 天 / 上限 1000000 行") {
-				t.Errorf("retention_note=%q, want 中文母本逐字不变", row.RetentionNote)
-			}
-			if row.LimitRows == nil || *row.LimitRows != int64(db.DefaultSecurityEventsRowCap) {
-				t.Errorf("limit_rows=%v, want %d（行帽数值不随语言变化）", row.LimitRows, db.DefaultSecurityEventsRowCap)
-			}
-		})
-	}
-}
-
-// 词条守卫：导入/还原告警面与安全事件行提示用到的每个键都已登记，且 zh/en
-// 模板的 fmt 动词序列一致——模板经 fmt.Sprintf 渲染，动词不一致时英文界面
-// 会输出 %!verb 或丢参数；英文译文不得残留汉字。
+// 词条守卫：导入/还原告警面与安全事件行提示用到的每个键都已登记，且中文母本
+// 模板里的 fmt 动词数不超过实参数——模板经 fmt.Sprintf 渲染，多传会输出
+// %!(EXTRA …)、少传会输出 %!s(MISSING)。
+// 英文译文的动词对齐归前端守卫（后端不再登记译文）。
 func TestImportWarningCatalog_keysRegisteredAndVerbsAligned(t *testing.T) {
 	files := []string{
 		"config_backup.go", "config_import_chain.go", "config_import_v1.go",
@@ -501,26 +441,16 @@ func TestImportWarningCatalog_keysRegisteredAndVerbsAligned(t *testing.T) {
 			if err != nil || !i18n.IsMessageKey(key) {
 				return true
 			}
-			zh, en := i18n.T(i18n.ZH, key), i18n.T(i18n.EN, key)
+			zh := i18n.T(key)
 			// 形态像键但未登记的，是 manifest.json / caddy.log 这类文件名字面量——语义键与
 			// 文件名同为「小写.小写」形态，只看形态分不出来。是否登记由全仓守卫
-			// TestMessageKeyUses_areRegistered 负责；这里只管已登记词条的 zh/en 对齐。
+			// TestMessageKeyUses_areRegistered 负责；这里只管已登记词条的中文母本形态。
 			if zh == key {
 				return true
 			}
 			checked++
-			position := fset.Position(literal.Pos())
-			// 只有独立英文译文才做英文侧断言：中文兜底（英文留空，T(EN) 回落中文）是
-			// 2026-11-25 裁定的目标形态（英文译文归前端词条），不算译文缺陷。
-			if !i18n.HasEnglish(key) {
-				return true
-			}
-			if zhVerbs, enVerbs := fmtVerbs(zh), fmtVerbs(en); !slices.Equal(zhVerbs, enVerbs) {
-				t.Errorf("%s: 词条 %s 的 zh/en 动词不一致 zh=%q%v en=%q%v", position, key, zh, zhVerbs, en, enVerbs)
-			}
-			if hit := importCJKPattern.FindString(en); hit != "" {
-				t.Errorf("%s: 词条 %s 的英文译文含汉字 %q: %q", position, key, hit, en)
-			}
+			// 中文母本可以是纯符号模板（"%s"、"IP：%s"）：不含汉字的形态由
+			// internal/i18n 的 noHanChineseMother 基线钉住，这里不再重复判。
 			return true
 		})
 	}
@@ -530,8 +460,8 @@ func TestImportWarningCatalog_keysRegisteredAndVerbsAligned(t *testing.T) {
 }
 
 // 传参点槽数对账：importWarn、lbbakWafApplyResult.warn 与 services 侧 say 的
-// 实参数必须等于所引词条的动词数——模板经 fmt.Sprintf 渲染，多传会输出
-// %!(EXTRA …)、少传会输出 %!s(MISSING)，两种语言一起坏。
+// 实参数必须等于所引词条中文母本的动词数——模板经 fmt.Sprintf 渲染，多传会输出
+// %!(EXTRA …)、少传会输出 %!s(MISSING)。
 func TestImportWarningCallSites_argsMatchTemplateSlots(t *testing.T) {
 	files := []string{
 		"config_backup.go", "config_import_chain.go", "config_import_v1.go",
@@ -566,12 +496,13 @@ func TestImportWarningCallSites_argsMatchTemplateSlots(t *testing.T) {
 				return true
 			}
 			for _, key := range warningKeysOf(keyArg) {
-				if i18n.T(i18n.ZH, key) == key {
+				template := i18n.T(key)
+				if template == key {
 					continue // 未登记的键由词条守卫报告
 				}
 				checked++
-				if slots := len(fmtVerbs(i18n.T(i18n.ZH, key))); slots != args {
-					t.Errorf("%s: 传 %d 参，词条 %s（zh=%q）有 %d 个槽", fset.Position(call.Pos()), args, key, i18n.T(i18n.ZH, key), slots)
+				if slots := len(fmtVerbs(template)); slots != args {
+					t.Errorf("%s: 传 %d 参，词条 %s（zh=%q）有 %d 个槽", fset.Position(call.Pos()), args, key, template, slots)
 				}
 			}
 			return true

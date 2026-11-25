@@ -38,7 +38,7 @@ func TestImportPartialSuccess_messageKeepsPhaseOnce(t *testing.T) {
 	if !strings.Contains(message, "database is locked") {
 		t.Fatalf("message 丢失真实原因: %s", message)
 	}
-	warning := importPartialSuccessWarning(zhCtx(), queueErr)
+	warning := importPartialSuccessWarning(queueErr)
 	if got := strings.Count(warning, "证书任务恢复失败"); got != 1 {
 		t.Fatalf("warning 中阶段描述出现 %d 次, want 1: %s", got, warning)
 	}

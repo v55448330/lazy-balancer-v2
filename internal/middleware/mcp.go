@@ -20,7 +20,7 @@ func mcpGlobalSwitchGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": apimsg.T(c, "apikey.mcpDisabled"), "message_key": "apikey.mcpDisabled"})
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": apimsg.T("apikey.mcpDisabled"), "message_key": "apikey.mcpDisabled"})
 	}
 }
 

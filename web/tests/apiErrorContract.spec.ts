@@ -85,11 +85,11 @@ const RESPONSE_CALL_SITE = /\b[A-Za-z_]\w*\.(?:JSON|AbortWithStatusJSON)\(/g
 const ENVELOPE_LITERAL = /^(?:models\.APIResponse\{\s*Code:|gin\.H\{\s*"(?:code|Code)"\s*:)\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)/
 
 /**
- * 构造入口形态：`apimsg.Envelope(ctx, <业务码>, "键"[, 参数…])`——状态在 `c.JSON`
- * 首实参、业务码在构造函数第二实参，二者在同一调用里，配对比字面量更直接。
+ * 构造入口形态：`apimsg.Envelope(<业务码>, "键"[, 参数…])`——状态在 `c.JSON`
+ * 首实参、业务码在构造函数首实参，二者在同一调用里，配对比字面量更直接。
  * 带键响应统一经此构造（DESIGN_SPEC §25-8），不认它会把 800 余个站点误当非信封站点。
  */
-const ENVELOPE_CALL = /^apimsg\.Envelope\(\s*[^,]+,\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/
+const ENVELOPE_CALL = /^apimsg\.Envelope\(\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)\s*,/
 
 type PayloadKind =
   | { envelope: true; code: string }
@@ -285,12 +285,12 @@ test('扫描器形态自测：同行/多行、两种方法/信封、字面量/�
     'resp := models.APIResponse{Code: statusCode}\n\tc.JSON(statusCode, resp)',
     'payload := gin.H{"code": statusCode}\n\tc.AbortWithStatusJSON(statusCode, payload)',
     // 构造入口形态：状态与业务码在同一调用里（带键响应统一经它构造）
-    'c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "rule.versionConflict"))',
-    'c.JSON(http.StatusBadRequest, apimsg.Envelope(ctx, 400, "backup.importInProgressActionNotAllowed", "开始新的"+action))',
+    'c.JSON(http.StatusConflict, apimsg.Envelope(http.StatusConflict, "rule.versionConflict"))',
+    'c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "backup.importInProgressActionNotAllowed", "开始新的"+action))',
     // 构造入口藏在变量里：与字面量信封同口径解析
-    'resp := apimsg.Envelope(c, 500, "common.databaseError")\n\tc.JSON(http.StatusInternalServerError, resp)',
+    'resp := apimsg.Envelope(500, "common.databaseError")\n\tc.JSON(http.StatusInternalServerError, resp)',
     // 信封的透明包装：X.WithData(载荷) 按接收变量解析
-    'envelope := apimsg.Envelope(c, 409, "rule.versionConflict")\n\tc.JSON(http.StatusConflict, envelope.WithData(gin.H{"a": 1}))',
+    'envelope := apimsg.Envelope(409, "rule.versionConflict")\n\tc.JSON(http.StatusConflict, envelope.WithData(gin.H{"a": 1}))',
   ]
   for (const fixture of fixtures) {
     assert.equal(scan(fixture).pairs.length, 1, `扫描器漏形态：${fixture}`)
@@ -306,7 +306,7 @@ test('扫描器形态自测：同行/多行、两种方法/信封、字面量/�
     '动态形态必须解出同一表达式',
   )
   // 构造入口形态的状态 ⇄ 业务码同义判定同样生效：错配必须判 false，而不是漏判。
-  const constructorPair = scan('c.JSON(http.StatusConflict, apimsg.Envelope(c, 500, "rule.versionConflict"))')
+  const constructorPair = scan('c.JSON(http.StatusConflict, apimsg.Envelope(500, "rule.versionConflict"))')
   assert.deepEqual(
     constructorPair.pairs.map(({ status, code }) => ({ status, code })),
     [{ status: 'http.StatusConflict', code: '500' }],

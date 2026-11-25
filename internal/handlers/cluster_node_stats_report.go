@@ -23,12 +23,12 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportBodyLimitBytes)
 	var stats notify.ClusterNodeStats
 	if err := c.ShouldBindJSON(&stats); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.statsPayloadInvalid"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "cluster.statsPayloadInvalid"))
 		return
 	}
 	date, err := time.Parse("2006-01-02", stats.Date)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.statsDateFormatInvalid"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "cluster.statsDateFormatInvalid"))
 		return
 	}
 	// 降级主节点残留 nodes 行时旧从节点照常上报会让统计错挂主节点簿记；
@@ -40,7 +40,7 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 	// 余量；未来日期与更早日期直接 400——否则未来行永不被保留窗口清理
 	//（只删旧行），成为永久脏数据。
 	if !clusterNodeStatsDateInWindow(date) {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.statsDateOutOfWindow"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "cluster.statsDateOutOfWindow"))
 		return
 	}
 	nodeID := c.GetInt("cluster_node_id")
@@ -49,7 +49,7 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// 直写豁免：集群机器接口（同上）。
-			c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "cluster.reporterNodeNotRegistered"))
+			c.JSON(http.StatusForbidden, apimsg.Envelope(403, "cluster.reporterNodeNotRegistered"))
 		case errors.Is(err, services.ErrNotMasterNode):
 			clusterMasterForbidden(c, err)
 		default:

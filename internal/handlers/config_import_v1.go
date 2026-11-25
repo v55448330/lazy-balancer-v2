@@ -14,7 +14,6 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -129,30 +128,6 @@ type ruleConflictOpponent struct {
 	reason importWarning
 }
 
-// localizeDisabledRuleConflicts 按语言重建冲突明细的展示形态（预览/导入/还原
-// 响应的 disabled_conflicts）；入参结构体的 reason 字段保持中文母本不动。
-// 英文界面下多条原因以 "; " 连接（中文母本为全角分号）。
-func localizeDisabledRuleConflicts(conflicts []disabledRuleConflict, lang string) []disabledRuleConflict {
-	if len(conflicts) == 0 || lang != i18n.EN {
-		return conflicts
-	}
-	out := make([]disabledRuleConflict, len(conflicts))
-	for index, conflict := range conflicts {
-		localized := conflict
-		localized.Reason = strings.Join(conflict.reasons.render(lang), "; ")
-		if len(conflict.ConflictsWith) > 0 {
-			opponents := make([]ruleConflictOpponent, len(conflict.ConflictsWith))
-			for opponentIndex, opponent := range conflict.ConflictsWith {
-				opponents[opponentIndex] = opponent
-				opponents[opponentIndex].Reason = opponent.reason.render(lang)
-			}
-			localized.ConflictsWith = opponents
-		}
-		out[index] = localized
-	}
-	return out
-}
-
 func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRuleConflict {
 	reasons := make(map[int]importWarnings)
 	opponents := make(map[int][]ruleConflictOpponent)
@@ -200,7 +175,7 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 			reasons[plainIndex] = append(reasons[plainIndex], reason)
 			for _, tlsIndex := range tlsIndexes {
 				opponents[plainIndex] = append(opponents[plainIndex], ruleConflictOpponent{
-					Name: candidates[tlsIndex].name, CaddyID: candidates[tlsIndex].caddyID, Reason: reason.render(i18n.ZH), reason: reason,
+					Name: candidates[tlsIndex].name, CaddyID: candidates[tlsIndex].caddyID, Reason: reason.render(), reason: reason,
 				})
 			}
 		}
@@ -260,8 +235,8 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 		}
 		reasons[leftIndex] = append(reasons[leftIndex], reason)
 		reasons[rightIndex] = append(reasons[rightIndex], reason)
-		opponents[leftIndex] = append(opponents[leftIndex], ruleConflictOpponent{Name: right.name, CaddyID: right.caddyID, Reason: reason.render(i18n.ZH), reason: reason})
-		opponents[rightIndex] = append(opponents[rightIndex], ruleConflictOpponent{Name: left.name, CaddyID: left.caddyID, Reason: reason.render(i18n.ZH), reason: reason})
+		opponents[leftIndex] = append(opponents[leftIndex], ruleConflictOpponent{Name: right.name, CaddyID: right.caddyID, Reason: reason.render(), reason: reason})
+		opponents[rightIndex] = append(opponents[rightIndex], ruleConflictOpponent{Name: left.name, CaddyID: left.caddyID, Reason: reason.render(), reason: reason})
 	}
 	for leftIndex := range candidates {
 		port := candidates[leftIndex].listenPort
@@ -300,7 +275,7 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 		if candidateReasons := reasons[index]; len(candidateReasons) > 0 {
 			conflicts = append(conflicts, disabledRuleConflict{
 				index: index, Name: candidate.name, CaddyID: candidate.caddyID,
-				Reason: strings.Join(candidateReasons.render(i18n.ZH), "；"), ConflictsWith: opponents[index], reasons: candidateReasons,
+				Reason: strings.Join(candidateReasons.render(), "；"), ConflictsWith: opponents[index], reasons: candidateReasons,
 			})
 		}
 	}
@@ -639,7 +614,7 @@ func lbbakPayloadFromCtx(c *gin.Context) *lbbakPayload {
 
 func limitConfigImportBody(c *gin.Context) bool {
 	if c.Request.ContentLength > maxConfigImportBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
+		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxConfigImportBytes)
@@ -670,11 +645,11 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		}
 		raw, err := c.GetRawData()
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
+			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.importFileLoadFailed", apimsg.ErrMsg(c, err)))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "backup.importFileLoadFailed", apimsg.ErrMsg(err)))
 			return
 		}
 		body = raw
@@ -694,7 +669,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		c.Set("lbbak_payload", payload)
 	}
 	if len(body) == 0 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "backup.importFileEmpty"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "backup.importFileEmpty"))
 		return
 	}
 	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
@@ -728,46 +703,45 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		sectionTables := chain.SectionTables
-		// 响应文案按请求语言渲染：链产出的是语言中立的告警事实（importWarning）。
-		lang := i18n.FromCtx(c)
-		disabledConflicts := localizeDisabledRuleConflicts(chain.DisabledConflicts, lang)
+		// 链产出的是语言中立的告警事实（importWarning），响应渲染中文母本。
+		disabledConflicts := chain.DisabledConflicts
 		crsTreeReplaced := chain.CRSTreeReplaced
 		acmeDanglingImported := chain.ACMEDanglingImported
 		// 2026-09-18 用户裁定:操作者缺席不再阻断——降级为预览 warning(分类
 		// 未选系统数据时操作者不受影响;选了也尊重用户选择)。
 		// 同序后 sections 已知——未选系统数据/备份 users 缺席不再误告
 		// (与导入侧口径一致)。
-		validateWarnings := chain.SkipWarnings.render(lang)
+		validateWarnings := chain.SkipWarnings.render()
 		if warning := backupProductVersionWarning(backup.Meta, h.cfg.Version); !warning.isZero() {
-			validateWarnings = append(validateWarnings, warning.render(lang))
+			validateWarnings = append(validateWarnings, warning.render())
 		}
 		// 完全不含校验和的史前 v1 备份：导入照常（结构门全执行），预览必须
 		// 明确告知内容未经摘要校验——与导入侧审计警告同文案。
 		if chain.NoIntegrityChecksum {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importNoIntegrityChecksumOnlyStructurallyValidated"))
+			validateWarnings = append(validateWarnings, apimsg.T("backup.importNoIntegrityChecksumOnlyStructurallyValidated"))
 		}
 		if crsTreeReplaced {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importCrsTreeReplacedPolicyRefsUnverified"))
+			validateWarnings = append(validateWarnings, apimsg.T("backup.importCrsTreeReplacedPolicyRefsUnverified"))
 		}
 		if importUsername := c.GetString("username"); importUsername != "" && sectionTables["users"] && len(backup.Tables["users"]) > 0 && !backupContainsUsername(backup.Tables["users"], importUsername) {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.validateOperatorAccountNotInBackup"))
+			validateWarnings = append(validateWarnings, apimsg.T("backup.validateOperatorAccountNotInBackup"))
 		}
 		// 反向悬挂降级警告进预览(与导入 responseWarnings 同文案)。
 		if acmeDanglingImported > 0 {
-			validateWarnings = append(validateWarnings, apimsg.Tf(c, "backup.importBackupRulesDnsProviderDangling", acmeDanglingImported))
+			validateWarnings = append(validateWarnings, apimsg.Tf("backup.importBackupRulesDnsProviderDangling", acmeDanglingImported))
 		}
 		// 证书任务级 CA 提供商悬挂/禁用引用的归一警告（与导入同通道）。
-		validateWarnings = append(validateWarnings, chain.CertJobProviderWarnings.render(lang)...)
+		validateWarnings = append(validateWarnings, chain.CertJobProviderWarnings.render()...)
 		// 链内自动封禁钳制事实（阈值/窗口越界被归一）与上述并列，预览必须
 		// 可见——否则预览显示 valid 且无提示，导入后实际生效值已变。
-		validateWarnings = append(validateWarnings, chain.AutobanClampNotes.render(lang)...)
+		validateWarnings = append(validateWarnings, chain.AutobanClampNotes.render()...)
 		// 全局配置数值归一（整型钳制表 + request_body_max_size_mb）同源可见：
 		// 预览与导入共用链内归一点，同一份备份两侧给出同一组文案。
-		validateWarnings = append(validateWarnings, chain.ConfigClampNotes.render(lang)...)
+		validateWarnings = append(validateWarnings, chain.ConfigClampNotes.render()...)
 		// live 证书任务引用 live CA 提供商的悬挂预检：链内单源产出（按
 		// 「已禁用=真失败 / 不存在=回落自愈」分档，规则源按备份是否携带
 		// lb_rules 二选一），预览与导入对同一备份给出同一组文案。
-		validateWarnings = append(validateWarnings, chain.CertJobDanglingWarnings.render(lang)...)
+		validateWarnings = append(validateWarnings, chain.CertJobDanglingWarnings.render()...)
 		hasWaf := false
 		if payload := lbbakPayloadFromCtx(c); payload != nil {
 			// 威胁库名单条目也是规则库数据文件
@@ -777,28 +751,28 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			hasWaf = payload.CRSTarGz != nil || payload.Xdb != nil || len(payload.ThreatIplists) > 0
 			if hasWaf {
 				if payload.CRSTarGz != nil || payload.Xdb != nil {
-					validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importLbbakCompleteWithRuleLibraryFiles"))
+					validateWarnings = append(validateWarnings, apimsg.T("backup.importLbbakCompleteWithRuleLibraryFiles"))
 				} else {
-					validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importLbbakHasOnlyThreatListFiles"))
+					validateWarnings = append(validateWarnings, apimsg.T("backup.importLbbakHasOnlyThreatListFiles"))
 				}
 			}
 			// manifest 未登记的威胁库条目——预览/导入
 			// 同文案告警（不拒绝，老备份兼容）。
 			if len(payload.UnregisteredThreatEntries) > 0 {
-				validateWarnings = append(validateWarnings, unregisteredThreatWarning(lang, payload.UnregisteredThreatEntries, sectionTables["security_crs_version"]))
+				validateWarnings = append(validateWarnings, unregisteredThreatWarning(payload.UnregisteredThreatEntries, sectionTables["security_crs_version"]))
 			}
 		}
 		// 版本表随文件缺失的剔除及其零导入判据已在链内按导入同序完成
 		// （行级校验 → 版本表剔除 → 剔除后判据），此处只把同一事实呈现为
 		// 响应 warning，文案与导入侧共用常量。
 		if chain.WAFMetadataSkipped {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importRuleLibraryVersionRecordsSkippedNoDataFile"))
+			validateWarnings = append(validateWarnings, apimsg.T("backup.importRuleLibraryVersionRecordsSkippedNoDataFile"))
 		}
 		if chain.WAFCRSMetadataSkipped {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importCrsVersionRecordSkippedNoDataFile"))
+			validateWarnings = append(validateWarnings, apimsg.T("backup.importCrsVersionRecordSkippedNoDataFile"))
 		}
 		if chain.WAFXdbMetadataSkipped {
-			validateWarnings = append(validateWarnings, apimsg.T(c, "backup.importIp2RegionVersionRecordSkippedNoDataFile"))
+			validateWarnings = append(validateWarnings, apimsg.T("backup.importIp2RegionVersionRecordSkippedNoDataFile"))
 		}
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {
@@ -822,9 +796,8 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		for _, r := range validRules {
 			allWarnings = append(allWarnings, v1CertificateWarnings(r, "")...)
 		}
-		lang := i18n.FromCtx(c)
 		if len(validRules) == 0 {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: "所有规则均校验失败", Warnings: allWarnings.render(lang)}})
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: "所有规则均校验失败", Warnings: allWarnings.render()}})
 			return
 		}
 		disabledConflicts := disableConvertedRuleConflicts(validRules)
@@ -837,11 +810,11 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			upstreamCount += len(r.Upstreams)
 		}
 		warnings := []string{
-			apimsg.T(c, "backup.importV1RulesOnly"),
-			apimsg.T(c, "backup.importV1CertificatesImportedAsManual"),
-			apimsg.T(c, "backup.importV1NginxSpecificConfigIgnored"),
+			apimsg.T("backup.importV1RulesOnly"),
+			apimsg.T("backup.importV1CertificatesImportedAsManual"),
+			apimsg.T("backup.importV1NginxSpecificConfigIgnored"),
 		}
-		warnings = append(warnings, allWarnings.render(lang)...)
+		warnings = append(warnings, allWarnings.render()...)
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{
 			Valid: true,
 			Type:  "v1",
@@ -851,7 +824,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 				"upstreams": upstreamCount,
 			},
 			Warnings:          warnings,
-			DisabledConflicts: localizeDisabledRuleConflicts(disabledConflicts, lang),
+			DisabledConflicts: disabledConflicts,
 		}})
 		return
 	}
@@ -867,7 +840,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	body, err := c.GetRawData()
 	if isRequestBodyTooLarge(err) {
-		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
+		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
 		return
 	}
 	if err != nil {
@@ -901,9 +874,8 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	rules, conversionWarnings := convertV1Rules(proxies, upstreams)
 	validRules, validationSkips, normalizations := validateConvertedV1Rules(rules, h.validateRuleListenPortForSave)
 	var allWarnings importWarnings
-	// 响应文案按请求语言渲染；v1CertificateWarnings 等产出的是语言中立的告警
-	// 事实（importWarning），操作审计明细恒取中文母本。
-	lang := i18n.FromCtx(c)
+	// v1CertificateWarnings 等产出的告警事实（importWarning），操作审计明细
+	// 与响应同取中文母本。
 	allWarnings = append(allWarnings, conversionWarnings...)
 	allWarnings = append(allWarnings, validationSkips...)
 	allWarnings = append(allWarnings, normalizations...)
@@ -976,7 +948,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
 			err = failImportAbort(c, session, "导入", "生成规则编号", err)
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "backup.importRuleIdGenerateFailed", apimsg.ErrMsg(c, err)))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "backup.importRuleIdGenerateFailed", apimsg.ErrMsg(err)))
 			return
 		}
 		affectedRuleIDs = append(affectedRuleIDs, caddyID)
@@ -1049,9 +1021,9 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			// message/warnings 只带阶段说明与真实原因（不重复动作词）——与 v2
 			// 出口共用 importPartialSuccess* 单源（此前 v1 自行内联两份同义文案，
 			// 措辞「，但」与单源的「（部分完成）：」分叉，只改单源会静默漂移）。
-			partialWarnings := append(append([]string{}, allWarnings.render(lang)...), importPartialSuccessWarning(c, err))
-			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.importPartialSuccess", "导入", importFailureCause(err)).WithData(gin.H{
-				"imported": imported, "disabled_conflicts": localizeDisabledRuleConflicts(disabledConflicts, lang),
+			partialWarnings := append(append([]string{}, allWarnings.render()...), importPartialSuccessWarning(err))
+			c.JSON(http.StatusOK, apimsg.Envelope(0, "backup.importPartialSuccess", "导入", importFailureCause(err)).WithData(gin.H{
+				"imported": imported, "disabled_conflicts": disabledConflicts,
 				"partial": true, "warnings": partialWarnings,
 			}))
 			return
@@ -1069,12 +1041,12 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		// 事务已回滚：循环里的插入计数全部作废，不得报 imported（否则前端/
 		// 运维会误判部分规则已落地）。warnings 透出会话收尾披露（提交不确定态
 		// 下的产物清理去向），否则「删除失败」被读成「磁盘也已收敛」。
-		failureWarnings := append([]string{}, session.failureWarnings.render(lang)...)
-		failurePayload := gin.H{"disabled_conflicts": localizeDisabledRuleConflicts(disabledConflicts, lang), "warnings": failureWarnings}
+		failureWarnings := append([]string{}, session.failureWarnings.render()...)
+		failurePayload := gin.H{"disabled_conflicts": disabledConflicts, "warnings": failureWarnings}
 		// 两个键都以字面量出现在构造调用里：调用点槽数对账按字面量取键，变量键无法对账。
-		envelope := apimsg.Envelope(c, status, "backup.v1ImportFailed", auditDetail)
+		envelope := apimsg.Envelope(status, "backup.v1ImportFailed", auditDetail)
 		if caddyRejected {
-			envelope = apimsg.Envelope(c, status, "backup.v1ImportCaddyRejected", auditDetail)
+			envelope = apimsg.Envelope(status, "backup.v1ImportCaddyRejected", auditDetail)
 		}
 		c.JSON(status, envelope.WithData(failurePayload))
 		return
@@ -1084,7 +1056,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		auditParts = append(auditParts, services.AuditRawPart("冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts)))
 	}
 	if len(allWarnings) > 0 {
-		auditParts = append(auditParts, services.AuditRawPart("转换/跳过警告："+strings.Join(allWarnings.render(i18n.ZH), "；")))
+		auditParts = append(auditParts, services.AuditRawPart("转换/跳过警告："+strings.Join(allWarnings.render(), "；")))
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
@@ -1103,7 +1075,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	// 直写豁免:还原/导入统计长拼接为结构化弹框(RestoreResultDialog)的
 	// 解析消费面——徽章网格按 zh 母本「键 数量」形态解析,en 改模板会破坏解析。
 	// 数据文本双语归后端双语工程(后续/Tier 2 残余),此处登记豁免不迁移。
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s%s", imported, upstreamCount, tlsSuffix, skipSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": localizeDisabledRuleConflicts(disabledConflicts, lang), "warnings": allWarnings.render(lang)}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s%s", imported, upstreamCount, tlsSuffix, skipSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": allWarnings.render()}})
 }
 
 func tlsSource(r convertedRule) string {

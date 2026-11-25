@@ -49,7 +49,7 @@ func clusterVersionMiddleware(database *sql.DB) gin.HandlerFunc {
 				return
 			}
 			_ = c.Error(installErr) // 请求日志尾部列输出（requestLogFormatter 消费 ErrorMessage）
-			c.AbortWithStatusJSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "cluster.versionTriggerUnavailable"))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, apimsg.Envelope(500, "cluster.versionTriggerUnavailable"))
 			return
 		}
 		c.Next()

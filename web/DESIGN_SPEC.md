@@ -367,19 +367,22 @@
    - `tests/i18nArchitecture.spec.ts`——前端「把中文当标识」只减不增（与中文字面量的比较、
      含中文的子串 / 前缀判断）；模板不得写死中文（语言名称除外）。
    - `tests/i18nEnglishValues.spec.ts`——英文词条不得残留汉字（例外逐条登记白名单）。
-   - 后端 `internal/apimsg/backend_text_ratchet_test.go`——后端不再新增展示文案：`internal/i18n`
-     的中→英登记数、响应 `Message` 直接写中文字面量的处数不得高于基线。
+   - 后端 `internal/apimsg/backend_text_ratchet_test.go`——后端英文译文登记数必须为 0、
+     错误模板登记数必须为 0，响应 `Message` 直接写中文字面量的处数不得高于基线；
+     `internal/i18n/backend_language_guard_test.go`——生产代码不得出现语言协商机制。
    新增「后端中文 → 词条键」映射表随迁移改为用稳定码，由第一条守卫在改成比较写法时拦下。
-8. **响应消息按键渲染**（2026-11-25，语义键改造后）。响应信封带 `message_key`（语义键
-   `域名.驼峰名`）时，前端用**自己的接口消息词条**按当前语言渲染提示文字。词条由
-   `npm run gen:api-messages`（在 `web/` 下）从后端目录 `internal/i18n/catalog_gen.go`、
-   `catalog_manual.go` 导出到 `src/i18n/apiMessages.ts`，不并入 vue-i18n 词条树（键是语义
-   键而非路径）。渲染与回落的顺序：
+8. **响应消息按键渲染**（2026-11-25，语义键改造后；同日收尾：后端不再出译文）。响应信封带
+   `message_key`（语义键 `域名.驼峰名`）时，前端用**自己的接口消息词条**按当前语言渲染提示
+   文字。词条由 `npm run gen:api-messages`（在 `web/` 下）拼装到 `src/i18n/apiMessages.ts`：
+   中文母本取后端目录 `internal/i18n/catalog_*.go`（只有 `Register(key, zh)`），英文取唯一
+   维护源 `src/locales/apiMessages.en.json`（手写）；键集合双向对等由守卫钉住，不并入
+   vue-i18n 词条树（键是语义键而非路径）。渲染与回落的顺序：
    - `message_params`：模板参数，JSON 字符串数组，按占位符顺序排列；元素就是后端填进
      `message` 的那段文本（后端 `Tf` 对每个实参做 `fmt.Sprint`）。带键响应一律经
-     `apimsg.Envelope(c, code, key, args...)` 构造：一次调用同时产出业务码、按请求语言
-     渲染的 `message`、`message_key` 与 `message_params`，实参只求值一次（实参常含
-     `apimsg.ErrMsg`、脱敏、时间计算等函数调用，调用点不得再抄一份参数）。
+     `apimsg.Envelope(code, key, args...)` 构造：一次调用同时产出业务码、中文母本
+     `message`、`message_key` 与 `message_params`，实参只求值一次（实参常含
+     `apimsg.ErrMsg`、脱敏、时间计算等函数调用，调用点不得再抄一份参数）。签名里没有
+     请求上下文/语言参数：响应与 `Accept-Language` 无关。
    - 渲染与后端 `Tf` 同口径：`%s/%d/%v/%q` 各消费一个参数并原样填入（`%q` 两侧加引号），
      `%%` 输出一个 `%`，槽外写法原样保留；参数用完占位符原样留下、多出的忽略。
    - 有键、词条里有、参数具备（模板带占位符时 `message_params` 必须存在且元素全是字符串）
@@ -392,10 +395,10 @@
      `clusterErrorKeyedResponse` / `failAutoBackupAccessKeyed` 保留既有日志与审计口径，响应按
      「中文母本 + message_key + message_params」装配（`message` 取键的中文母本，前端按界面
      语言渲染）。
-   - 守卫：`tests/apiMessagesParity.spec.ts`（生成文件与两侧来源逐字相等、英文译文无汉字、
-     解析器判别自检）、`tests/apiMessage.spec.ts`（渲染与回落边界、覆盖后端目录全部占位符
-     形态）、`tests/fixtures/apiMessage_format.json`（两侧共享夹具：后端渲染镜像与前端
-     渲染器同一结果，Go 侧见 `internal/apimsg/envelope_test.go`）。
+   - 守卫：`tests/apiMessagesParity.spec.ts`（生成文件与两侧来源逐字相等、键集合双向对等、
+     英文译文无汉字与词间双空格、解析器判别自检）、`tests/apiMessage.spec.ts`（渲染与回落
+     边界、覆盖后端目录全部占位符形态）、`tests/fixtures/apiMessage_format.json`（两侧共享
+     夹具：后端渲染镜像与前端渲染器同一结果，Go 侧见 `internal/apimsg/envelope_test.go`）。
 
 ## 26. 增补裁定（2026-11-25 第十六轮，弹框与表单尺度）
 > 依据：项目所有者 2026-11-25 裁定——弹框宽度「根据弹框内容、样式、布局决定」；说明文字两种位置都可以，原则是「尽量不要宽度不够导致折行，如果要折行则直接使用换行样式」；页脚按钮高度「根据内容决定」；短字段并排「根据设计和布局决定」；遵循直角原则。下表的数值与判据由主审按上述原则确定。

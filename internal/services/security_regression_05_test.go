@@ -378,19 +378,17 @@ func TestThreatIplistHasEntries_fastFirstWithoutExpansion(t *testing.T) {
 
 // ---- 切换从节点成功文案的 catalog 词条 ----
 
-// SetClusterMode 成功响应（含明文 HTTP 警告变体）必须双语可译：zh 母本与
-// en 译文都在 catalog——缺任一侧英文用户都会看到中文。
-func TestClusterModeSwitchMessages_catalogBilingual(t *testing.T) {
+// SetClusterMode 成功响应（含明文 HTTP 警告变体）的中文母本必须在 catalog。
+// 英文译文归前端词条，由 web/tests/apiMessagesParity.spec.ts 的键集合对等守卫钉住；
+// 后端不再登记译文（2026-11-25 裁定）。
+func TestClusterModeSwitchMessages_catalogChineseMother(t *testing.T) {
 	cases := []struct{ key, zh string }{
 		{"cluster.switchedToSlaveAwaitingApproval", "已切换为从节点，等待主节点审批"},
 		{"cluster.switchedToSlaveAwaitingApprovalInsecureHttp", "已切换为从节点，等待主节点审批；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"},
 	}
 	for _, tc := range cases {
-		if got := i18n.T(i18n.ZH, tc.key); got != tc.zh {
+		if got := i18n.T(tc.key); got != tc.zh {
 			t.Fatalf("catalog zh[%s]=%q, want %q", tc.key, got, tc.zh)
-		}
-		if en := i18n.T(i18n.EN, tc.key); en == "" || en == tc.zh {
-			t.Fatalf("catalog en[%s]=%q, want 非空英文译文（缺译回落中文）", tc.key, en)
 		}
 	}
 }

@@ -18,10 +18,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { loadBackendCatalog } from '../scripts/gen-api-messages.ts'
+import { loadBackendCatalog, loadFrontendEnglish } from '../scripts/gen-api-messages.ts'
 import { apiMessageText, formatApiMessage, templateVerbs } from '../src/utils/apiMessage.ts'
 
-const entries = loadBackendCatalog()
+// 中文母本来自后端目录（只有键 + 中文）；英文来自唯一维护源
+// src/locales/apiMessages.en.json（2026-11-25 收尾：后端不再有英文译文）。
+const english = loadFrontendEnglish()
+const entries = loadBackendCatalog().map((entry) => ({ ...entry, en: english[entry.key] ?? '' }))
 const zhOf = (key: string): string => entries.find((entry) => entry.key === key)?.zh ?? ''
 const enOf = (key: string): string => entries.find((entry) => entry.key === key)?.en ?? ''
 const noArg = entries.find((entry) => templateVerbs(entry.zh).length === 0)

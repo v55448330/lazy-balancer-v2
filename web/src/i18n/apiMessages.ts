@@ -1,7 +1,8 @@
-// 由 scripts/gen-api-messages.ts 从后端目录导出——不要手改。
-// 中文母本来自后端目录；英文译文由前端词条（src/locales/apiMessages.en.json）补，
-// 后端遗留的英文译文作为次选。改了任一侧后在 web/ 下运行 npm run gen:api-messages；
-// tests/apiMessagesParity.spec.ts 钉住本文件与两侧来源逐字相等。
+// 由 scripts/gen-api-messages.ts 拼装——不要手改。
+// 中文母本来自后端目录（internal/i18n/catalog_*.go，只有键 + 中文）；
+// 英文译文来自前端词条 src/locales/apiMessages.en.json（唯一维护源，手写）。
+// 改了任一侧后在 web/ 下运行 npm run gen:api-messages；
+// tests/apiMessagesParity.spec.ts 钉住键集合双向对等与本文件逐字相等。
 // 键是后端响应的 message_key（域名.驼峰名）；渲染入口见 utils/apiMessage.ts。
 
 /** 中文母本（后端 message 的兜底原文同源）。 */

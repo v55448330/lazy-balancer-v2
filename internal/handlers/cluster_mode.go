@@ -105,7 +105,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.targetSlave"), services.AuditTextPart("audit.registrationId", registration.RegistrationID), services.AuditRawPart(err.Error())))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{
 			Code:    http.StatusInternalServerError,
-			Message: apimsg.T(c, "cluster.switchToSlaveFailedRemoteRegistrationCreated"), MessageKey: "cluster.switchToSlaveFailedRemoteRegistrationCreated",
+			Message: apimsg.T("cluster.switchToSlaveFailedRemoteRegistrationCreated"), MessageKey: "cluster.switchToSlaveFailedRemoteRegistrationCreated",
 			Data: gin.H{"registration_id": registration.RegistrationID},
 		})
 		return
@@ -132,7 +132,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	if strings.HasPrefix(strings.TrimSpace(strings.ToLower(req.MasterURL)), "http://") {
 		key = "cluster.switchedToSlaveAwaitingApprovalInsecureHttp"
 	}
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, key))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, key))
 }
 
 // requestProtocol 返回本节点自述访问协议，注册时上报主节点（用于拼接该
@@ -182,7 +182,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	// 生命周期由任务引擎统一驱动（Promote → SetRole → daemon hook/角色门），
 	// handler 不再直调管理器或旧调度器。
 	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail(services.AuditTextPart("audit.slaveToMaster"), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.promotedToMaster"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "cluster.promotedToMaster"))
 }
 
 func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
@@ -252,7 +252,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 	}
 	recordAudit(c, "更新", "集群设置", services.AppendAuditDetail(detail, services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtClusterSettingsChanged, Fields: map[string]string{"1": c.GetString("username")}})
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.settingsUpdated"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "cluster.settingsUpdated"))
 }
 
 // switchToSlaveAuditDetail 构建切换从节点的审计详情;出口 IP 探测失败

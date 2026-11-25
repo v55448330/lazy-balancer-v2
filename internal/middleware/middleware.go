@@ -559,7 +559,7 @@ func mcpAPIKeyRateLimit() gin.HandlerFunc {
 // 口径，auditpolicy 契约已披露）：身份判定前拒绝，痕迹在访问日志。
 func abortMCPRateLimit(c *gin.Context, retryAfter int) {
 	c.Header("Retry-After", strconv.Itoa(retryAfter))
-	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T(c, "apikey.mcpRateLimited"), "message_key": "apikey.mcpRateLimited"})
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T("apikey.mcpRateLimited"), "message_key": "apikey.mcpRateLimited"})
 }
 
 // noStoreResponse 让响应不可被任何缓存留存（浏览器回退缓存、中间反代）。
@@ -695,7 +695,7 @@ func releaseRateLimitReservation(bucket *loginRateBucket, generation uint64, fai
 // 拒绝，痕迹在访问日志；401 失败尝试另经 recordAuthenticationRejection 留痕。
 func abortClusterMachineRateLimit(c *gin.Context, retryAfter int) {
 	c.Header("Retry-After", strconv.Itoa(retryAfter))
-	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T(c, "cluster.machineApiRateLimited"), "message_key": "cluster.machineApiRateLimited"})
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T("cluster.machineApiRateLimited"), "message_key": "cluster.machineApiRateLimited"})
 }
 
 // SweepRateLimitBuckets 删除已过窗（until 早于 now）的限流桶，返回删除
@@ -808,9 +808,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 	// CORS
 	r.Use(corsMiddleware())
-	// 语言协商:i18n.Negotiate 解析 Accept-Language 注入 gin 上下文
-	// (i18n.Msg/TrErr 取用),响应回写 Content-Language 供前端对账。
-	r.Use(i18nMiddleware())
+	// 不协商请求语言：响应内容与 Accept-Language 无关，文案由前端按 message_key
+	// 自己的词条渲染（2026-11-25 裁定）。
 	// 压缩中间件为本项目实现（internal/middleware/gzip.go）：错误/无体响应保留
 	// Vary，避免把 CORS 的 Vary: Origin 一起删掉。
 	r.Use(gzipMiddleware())
@@ -859,10 +858,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			if err != nil {
 				var maxBytesError *http.MaxBytesError
 				if errors.As(err, &maxBytesError) {
-					c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": apimsg.T(c, "common.requestBodyTooLarge"), "message_key": "common.requestBodyTooLarge"})
+					c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": apimsg.T("common.requestBodyTooLarge"), "message_key": "common.requestBodyTooLarge"})
 					return
 				}
-				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": apimsg.T(c, "common.requestBodyInvalid"), "message_key": "common.requestBodyInvalid"})
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": apimsg.T("common.requestBodyInvalid"), "message_key": "common.requestBodyInvalid"})
 				return
 			}
 			c.Request.Body = io.NopCloser(bytes.NewReader(body))
@@ -1420,7 +1419,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			recordAuthenticationRejection(c, "jwt_missing")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.authHeaderMissing"), "message_key": "auth.authHeaderMissing"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.authHeaderMissing"), "message_key": "auth.authHeaderMissing"})
 			c.Abort()
 			return
 		}
@@ -1430,7 +1429,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		tokenString := bearerToken(authHeader)
 		if tokenString == "" {
 			recordAuthenticationRejection(c, "jwt_format_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.authHeaderMalformed"), "message_key": "auth.authHeaderMalformed"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.authHeaderMalformed"), "message_key": "auth.authHeaderMalformed"})
 			c.Abort()
 			return
 		}
@@ -1445,10 +1444,10 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 			// 凭证误导成「重新登录就能好」。401 状态码不变，仅消息分语义。
 			if errors.Is(err, jwt.ErrTokenExpired) {
 				recordAuthenticationRejection(c, "jwt_expired")
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.sessionExpired"), "message_key": "auth.sessionExpired"})
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.sessionExpired"), "message_key": "auth.sessionExpired"})
 			} else {
 				recordAuthenticationRejection(c, "jwt_invalid")
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
 			}
 			c.Abort()
 			return
@@ -1457,7 +1456,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
 			recordAuthenticationRejection(c, "jwt_claims_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
 			c.Abort()
 			return
 		}
@@ -1479,7 +1478,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		userIDFloat, ok := claims["user_id"].(float64)
 		if !ok {
 			recordAuthenticationRejection(c, "jwt_subject_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
 			c.Abort()
 			return
 		}
@@ -1494,7 +1493,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		FROM auth_state LEFT JOIN users u ON u.id=?`, encodedRevocationHash, models.FormatRevokedTokenTime(now), int64(userIDFloat)).Scan(&revoked, &dbUsername, &dbRole, &dbEnabled, &passwordVersion)
 		if queryErr == nil && revoked {
 			recordAuthenticationRejection(c, "jwt_revoked")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.sessionRevoked"), "message_key": "auth.sessionRevoked"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.sessionRevoked"), "message_key": "auth.sessionRevoked"})
 			c.Abort()
 			return
 		}
@@ -1504,20 +1503,20 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		// （与 readOnlyGuard/clusterTokenAuth 口径一致）。
 		if queryErr != nil {
 			services.Logf("error", "jwt auth state query failed: %v", queryErr)
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": apimsg.T(c, "auth.authStateQueryFailed"), "message_key": "auth.authStateQueryFailed"})
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": apimsg.T("auth.authStateQueryFailed"), "message_key": "auth.authStateQueryFailed"})
 			c.Abort()
 			return
 		}
 		if !dbUsername.Valid || !dbRole.Valid || !dbEnabled.Valid || !dbEnabled.Bool || !passwordVersion.Valid {
 			recordAuthenticationRejection(c, "jwt_user_unavailable")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.userNotFoundOrDisabled"), "message_key": "auth.userNotFoundOrDisabled"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.userNotFoundOrDisabled"), "message_key": "auth.userNotFoundOrDisabled"})
 			c.Abort()
 			return
 		}
 		claimUsername, valid := claims["username"].(string)
 		if !valid || claimUsername != dbUsername.String {
 			recordAuthenticationRejection(c, "jwt_identity_mismatch")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.loginTokenInvalid"), "message_key": "auth.loginTokenInvalid"})
 			c.Abort()
 			return
 		}
@@ -1525,13 +1524,13 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 			claimVersion, valid := claim.(float64)
 			if !valid || claimVersion != float64(passwordVersion.Int64) {
 				recordAuthenticationRejection(c, "jwt_password_changed")
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.sessionInvalidatedByPasswordChange"), "message_key": "auth.sessionInvalidatedByPasswordChange"})
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.sessionInvalidatedByPasswordChange"), "message_key": "auth.sessionInvalidatedByPasswordChange"})
 				c.Abort()
 				return
 			}
 		} else if passwordVersion.Int64 != 0 {
 			recordAuthenticationRejection(c, "jwt_password_changed")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "auth.sessionInvalidatedByPasswordChange"), "message_key": "auth.sessionInvalidatedByPasswordChange"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T("auth.sessionInvalidatedByPasswordChange"), "message_key": "auth.sessionInvalidatedByPasswordChange"})
 			c.Abort()
 			return
 		}

@@ -445,12 +445,9 @@ func TestSetClusterMode_successResponseCarriesMessageKey(t *testing.T) {
 		t.Fatalf("decode: %v body=%s", err, response.Body.String())
 	}
 	if resp.MessageKey == "" {
-		t.Fatalf("成功响应缺 message_key（硬编码中文不可翻译）: %s", response.Body.String())
+		t.Fatalf("成功响应缺 message_key（前端无从渲染）: %s", response.Body.String())
 	}
-	if resp.Message != i18n.T(i18n.ZH, resp.MessageKey) {
-		t.Fatalf("message=%q 与 catalog zh 词条 %q 不一致", resp.Message, i18n.T(i18n.ZH, resp.MessageKey))
-	}
-	if en := i18n.T(i18n.EN, resp.MessageKey); en == "" || en == resp.Message {
-		t.Fatalf("catalog 缺 en 译文（key=%s en=%q）——英文用户将回落中文", resp.MessageKey, en)
+	if resp.Message != i18n.T(resp.MessageKey) {
+		t.Fatalf("message=%q 与 catalog 中文母本 %q 不一致", resp.Message, i18n.T(resp.MessageKey))
 	}
 }

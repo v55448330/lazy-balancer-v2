@@ -79,9 +79,9 @@ func packageStringConstants(files []*ast.File) map[string]string {
 
 // keyArgumentIndex 返回 call 里键实参的下标；不是取词条的调用返回 -1。
 //   - apimsg.T / apimsg.Tf、i18n.T / i18n.Tf，以及 i18n 包内不带限定名的 T / Tf：
-//     键是第二个实参（下标 1）；
-//   - apimsg.Envelope(c, code, key, args...)：带键响应信封的构造入口，键是第三个
-//     实参（下标 2）。
+//     键是第一个实参（下标 0）；
+//   - apimsg.Envelope(code, key, args...)：带键响应信封的构造入口，键是第二个
+//     实参（下标 1）。
 func keyArgumentIndex(call *ast.CallExpr, inI18nPackage bool) int {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
@@ -90,14 +90,14 @@ func keyArgumentIndex(call *ast.CallExpr, inI18nPackage bool) int {
 			return -1
 		}
 		if fn.Sel.Name == "T" || fn.Sel.Name == "Tf" {
-			return 1
+			return 0
 		}
 		if fn.Sel.Name == "Envelope" {
-			return 2
+			return 1
 		}
 	case *ast.Ident:
 		if inI18nPackage && (fn.Name == "T" || fn.Name == "Tf") {
-			return 1
+			return 0
 		}
 	}
 	return -1
@@ -151,7 +151,7 @@ func scanMessageKeyUses(packages map[string][]string) (uses []messageKeyUse, che
 			site := site{key, fmtSite(position)}
 			if !seen[site] {
 				seen[site] = true
-				if T(ZH, key) == key {
+				if T(key) == key {
 					uses = append(uses, messageKeyUse{key, site.pos})
 				}
 			}
@@ -261,17 +261,17 @@ const (
 )
 
 func h(c int, runtimeKey string) {
-	_ = apimsg.Tf(c, "rule.literalUpper", 1)
-	_ = apimsg.T(c, "rule.lowercase")
+	_ = apimsg.Tf("rule.literalUpper", 1)
+	_ = apimsg.T("rule.lowercase")
 	_ = pick(c, "backup.indirectRegistered", "backup.indirectUnregistered")
 	_ = "config.yaml"
 	_ = struct{ MessageKey string }{MessageKey: msgPlain}
 	_ = struct{ MessageKey string }{MessageKey: "security.lowercaseField"}
 	_ = struct{ MessageKey string }{MessageKey: runtimeKey}
-	_ = apimsg.T(c, runtimeKey)
+	_ = apimsg.T(runtimeKey)
 	_ = struct{ MessageKey string }{MessageKey: msgUpper}
-	_ = apimsg.Envelope(c, 404, "rule.envelopeplain")
-	_ = apimsg.Envelope(c, 400, "rule.envelopemissing", 1)
+	_ = apimsg.Envelope(404, "rule.envelopeplain")
+	_ = apimsg.Envelope(400, "rule.envelopemissing", 1)
 }
 `
 
@@ -284,7 +284,7 @@ func TestScanMessageKeyUses_recognizesKeyPositions(t *testing.T) {
 	// 目录是包级全局表：登记合成源码里"应当已登记"的键，用完即撤。
 	registered := []string{"notify.fromUpperConst", "rule.literalUpper", "rule.lowercase", "backup.indirectRegistered", "security.lowercaseField", "rule.envelopeplain"}
 	for _, key := range registered {
-		Register(key, "合成", "synthetic")
+		Register(key, "合成")
 	}
 	t.Cleanup(func() {
 		mu.Lock()

@@ -222,11 +222,11 @@ func f(c *gin.Context, err error, status int) {
 	c.JSON(status, models.APIResponse{Code: 0, Message: "已保存；但应用失败：" + message})
 	// i18n 译文形态（apimsg.ErrMsg/Tf 注入）与 .Error() 直拼披露语义等价——
 	// 与 5xx 扫描同政策，未脱敏即泄漏。
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.ErrMsg(c, err)})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_x", apimsg.ErrMsg(c, err))})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.ErrMsg(err)})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf("k_x", apimsg.ErrMsg(err))})
 	// 合法形态：脱敏出口（含译文形态经脱敏包裹）。
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存；但 Caddy 配置应用失败：" + services.RedactCaddyAdminEndpoint(err.Error())})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_x", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, err)))})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf("k_x", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(err)))})
 	// 5xx 写点归 collect5xxErrorTextLeaks 管辖，本扫描不重复计。
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "x: " + err.Error()})
 	// 4xx 配置拒绝类不受约束（同 5xx 扫描的反形状）：400/409 字面量与动态

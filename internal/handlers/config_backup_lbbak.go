@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -423,7 +422,7 @@ type lbbakWafApplyResult struct {
 func (result *lbbakWafApplyResult) warn(c *gin.Context, action, key string, args ...any) {
 	warning := importWarn(key, args...)
 	result.Warnings = append(result.Warnings, warning)
-	recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warning.render(i18n.ZH)) /* audit-detail raw */)
+	recordAudit(c, action+"警告", "配置备份", services.AuditRawDetail(warning.render()) /* audit-detail raw */)
 }
 
 // validateLbbakXdbPayload 把待落盘 xdb 写到临时文件后用运行时同一条装载路径
@@ -525,7 +524,7 @@ func applyLbbakWafFilesInLock(c *gin.Context, action string, payload *lbbakPaylo
 		iplistPath := filepath.Join(services.WafDir(), "threat-"+source+".iplist")
 		fail := func(stage importWarning, err error) {
 			result.FailedThreatSources = append(result.FailedThreatSources, source)
-			services.Logf("error", "lbbak 导入威胁库 %s: %s: %v", source, stage.render(i18n.ZH), err)
+			services.Logf("error", "lbbak 导入威胁库 %s: %s: %v", source, stage.render(), err)
 			result.warn(c, action, "backup.importThreatSourceApplyFailedLocalKept", source, stage, err)
 		}
 		if err := os.MkdirAll(filepath.Dir(iplistPath), 0755); err != nil {

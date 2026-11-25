@@ -10,7 +10,7 @@
 import { tSafe as t } from '../i18n/tSafe.ts'
 
 /** 后端退化 200 的稳定语义键（后端 message_key，语言无关）：DB 已提交、Caddy
- *  应用失败。判定首选此键——message 按 Accept-Language 翻译，en 模板不含 zh 标记。
+ *  应用失败。判定首选此键——message 是中文母本、字面量比较会随文案漂移。
  *
  *  两个键语义同为「已提交但 Caddy 未生效」，只是后端端点族不同：
  *    security.savedButCaddyApplyFailed=「已保存；但 Caddy 配置应用失败」（通用写端点）

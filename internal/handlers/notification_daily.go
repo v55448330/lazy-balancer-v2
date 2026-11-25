@@ -39,7 +39,7 @@ func (h *Handlers) GetNotificationDaily(c *gin.Context) {
 // 端点共用同一实现——两处各写一份会让其中一侧静默接受非法时间。
 func validateDailySendTime(c *gin.Context, sendTime string) bool {
 	if _, err := time.Parse("15:04", sendTime); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.dailySendTimeInvalid"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.dailySendTimeInvalid"))
 		return false
 	}
 	return true
@@ -53,7 +53,7 @@ func validateDailyItems(c *gin.Context, items []string) bool {
 	}
 	for _, it := range items {
 		if !validItems[it] {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.dailyItemUnknown", it))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.dailyItemUnknown", it))
 			return false
 		}
 	}
@@ -74,7 +74,7 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidRequest", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.invalidRequest", apimsg.ErrMsg(err)))
 		return
 	}
 	if !validateDailySendTime(c, req.SendTime) {
@@ -121,7 +121,7 @@ func (h *Handlers) PreviewNotificationDaily(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidRequest", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.invalidRequest", apimsg.ErrMsg(err)))
 		return
 	}
 	switch req.Format {
@@ -156,7 +156,7 @@ func (h *Handlers) TriggerNotificationDaily(c *gin.Context) {
 		return
 	}
 	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "notify.dailyTriggerForbidden"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "notify.dailyTriggerForbidden"))
 		return
 	}
 	rendered, err := notify.DeliverDailyForAll(c.Request.Context(), time.Now())

@@ -609,7 +609,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		// 内容落盘——tx 回滚的同时把磁盘回退到已提交态（零 /load）。
 		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
 		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(services.AuditTextPart("audit.caddyConfigCheckFailed"), applyErr))
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.caddyValidationFailedNotSaved", f.Resource, applyErr.Error()))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "security.caddyValidationFailedNotSaved", f.Resource, applyErr.Error()))
 		return
 	}
 	// 乱填保障（2026-09-06 补充裁定）：CLI 不可用 + 应用传输失败 = 未经任何
@@ -668,7 +668,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 	// 退化提交（DB 已提交、运行配置未生效）与成功分支同口径发布事件：
 	// 事件属「已保存」事实，热路径同分支已发（notify 面漏报窗口）。
 	publishTxApplyNotify(f)
-	c.JSON(status, apimsg.Envelope(c, 0, "security.savedButCaddyApplyFailed", f.SuccessMsg, services.RedactCaddyAdminEndpoint(applyErr.Error())).WithData(f.Data))
+	c.JSON(status, apimsg.Envelope(0, "security.savedButCaddyApplyFailed", f.SuccessMsg, services.RedactCaddyAdminEndpoint(applyErr.Error())).WithData(f.Data))
 }
 
 // postCommitRecovery 提交失败统一恢复的结果，两通道分离：

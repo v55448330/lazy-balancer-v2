@@ -208,10 +208,12 @@ test('自动备份还原结果展示冲突自动禁用明细', () => {
 })
 
 // 还原结果弹框靠「告警文本包含标记子串」决定按钮是「重新登录」还是「刷新页面」。
-// 会话吊销告警后端已双语、按动作（导入/还原）各登记一条：标记必须同时命中每条的
+// 会话吊销告警按动作（导入/还原）各登记一条中文母本；英文译文在前端词条
+// （src/locales/apiMessages.en.json，后端不再登记英文）。标记必须同时命中每条的
 // 中、英文案，否则英文界面把「重新登录」降级成「刷新页面」。
 test('会话吊销标记同时命中导入/还原告警的中英文案', () => {
   const catalog = repoCode('internal/i18n/catalog_manual.go')
+  const english = JSON.parse(repoCode('web/src/locales/apiMessages.en.json')) as Record<string, string>
   const marks = (['zh', 'en'] as const).map((locale) => {
     const mark = /"sessionRevokeMark": "([^"]+)"/.exec(code(`src/locales/${locale}/settings.ts`))?.[1]
     assert.ok(mark, `${locale} 须有 restoreResult.sessionRevokeMark`)
@@ -220,9 +222,11 @@ test('会话吊销标记同时命中导入/还原告警的中英文案', () => {
   for (const key of ['backup.importSystemDataSessionsRevoked', 'backup.restoreSystemDataSessionsRevoked']) {
     const line = catalog.split('\n').find((l) => l.includes(`"${key}"`)) ?? ''
     const texts = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1])
-    assert.equal(texts.length, 3, `${key} 须为「键, 中文, 英文」三项`)
-    assert.ok(texts[1].includes(marks[0]), `zh 的会话吊销标记须是 ${key} 中文文案的子串`)
-    assert.ok(texts[2].includes(marks[1]), `en 的会话吊销标记须是 ${key} 英文文案的子串`)
+    assert.equal(texts.length, 2, `${key} 后端只登记「键, 中文母本」两项`)
+    assert.ok(texts[1]?.includes(marks[0]), `zh 的会话吊销标记须是 ${key} 中文文案的子串`)
+    const en = english[key]
+    assert.ok(en, `${key} 必须在前端英文词条里登记`)
+    assert.ok(en.includes(marks[1]), `en 的会话吊销标记须是 ${key} 英文文案的子串`)
   }
 })
 

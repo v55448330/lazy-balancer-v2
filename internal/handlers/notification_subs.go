@@ -139,7 +139,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	catalogByID := map[string]struct{}{}
@@ -154,11 +154,11 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 	ops := make([]subOp, 0, len(req.Items))
 	for _, item := range req.Items {
 		if _, ok := catalogByID[item.EventType]; !ok {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.subscriptionEventNotInCatalog", item.EventType))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.subscriptionEventNotInCatalog", item.EventType))
 			return
 		}
 		if item.MinLevel != "" && !validSubLevel(item.MinLevel) {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidSubscriptionLevel"))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.invalidSubscriptionLevel"))
 			return
 		}
 		ops = append(ops, subOp{eventType: item.EventType, minLevel: item.MinLevel, bodyTemplate: item.BodyTemplate})

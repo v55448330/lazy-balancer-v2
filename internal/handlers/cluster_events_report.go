@@ -82,11 +82,11 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportBodyLimitBytes)
 	var req notify.ClusterEventReport
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Events) == 0 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.reportPayloadInvalid"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "cluster.reportPayloadInvalid"))
 		return
 	}
 	if len(req.Events) > 100 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.eventBatchTooLarge"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "cluster.eventBatchTooLarge"))
 		return
 	}
 	// 与同族机器端点（节点上报）同一 requireMaster 门——降级主节点残留 nodes
@@ -98,7 +98,7 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 	_, reporterLabel, err := h.clusterService.NodeIdentity(c.Request.Context(), nodeID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "cluster.reporterNodeNotRegistered"))
+			c.JSON(http.StatusForbidden, apimsg.Envelope(403, "cluster.reporterNodeNotRegistered"))
 			return
 		}
 		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.reporterNodeReadFailed", err))

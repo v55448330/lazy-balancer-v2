@@ -40,7 +40,7 @@ test('401 豁免白名单与后端 mfa.go 文案逐字对齐（跨栈钉）', ()
     ['auth.mfaChallengeAlreadyUsed', 'MFA 挑战已被使用，请重新登录'],
   ] as const) {
     assert.ok(catalog.includes(`Register("${key}", "${msg}"`), `catalog 母本漂移:「${msg}」`)
-    const keyPattern = new RegExp(`apimsg\\.Envelope\\([^,]+, [^,]+, "${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`)
+    const keyPattern = new RegExp(`apimsg\\.Envelope\\([^,]+, "${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`)
     assert.ok(go.includes(`MessageKey: "${key}"`) || keyPattern.test(go), `mfa.go 调用点不再使用键 ${key}(401 文案「${msg}」)——前端白名单失配`)
   }
 })

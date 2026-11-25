@@ -12,18 +12,19 @@ import (
 	"unicode"
 )
 
-// 后端不再新增展示文案（基线钉）。用户 2026-11-25 裁定：后端只返回稳定键 + 参数，
-// 展示文案归前端词条（web/docs/I18N.md 第 0 节）。
+// 后端不再出现英文译文（基线钉，2026-11-25 项目所有者裁定：后端只返回稳定键 +
+// 参数，展示文案归前端词条，web/docs/I18N.md 第 0 节 + web/DESIGN_SPEC.md §25）。
 //
-// 数两样东西，当前数量必须恰好等于基线——变多 = 新增违规；变少 = 基线过松，
+// 数三样东西，当前数量必须恰好等于基线——变多 = 新增违规；变少 = 基线过松，
 // 请在同一提交里把基线调低：
 //
-//	A. internal/i18n 里「中 → 英」登记的条数：Register（响应词条）与 RegisterErrTpl（错误模板）。
-//	   后端不该再翻译文案；存量随迁移搬到前端后删除，登记数只应下降。
-//	   注意：键 → 中文原文的对照在迁移后仍由后端保留（响应 message 的中文母本），
-//	   所以后续若登记形态变为「只有中文」，这里的判别要随之改成只数带英文译文的登记。
+//	A. internal/i18n 里带英文译文的中→英登记数：Register(key, zh, en) 的三参形态与
+//	   RegisterErrTpl（后端错误模板翻译）。迁移完成后两者都必须是 0——英文译文只
+//	   存在前端词条（web/src/locales/apiMessages.en.json）；目录只保留键 + 中文母本。
 //	B. handlers / middleware 里 APIResponse.Message 直接写中文字面量的处数
 //	   （含 fmt.Sprintf 的中文字面量格式串）。新文案应返回稳定键 + 参数。
+//	C. 「按请求语言选择」的机制（语言协商头、协商函数、英文译文判定）——
+//	   见 internal/i18n/backend_language_guard_test.go；本文件只钉 A 与 B 的存量。
 //
 // 豁免：机器接口文件（集群节点上报 / 注册、MCP 鉴权）——消费方是从节点重试逻辑与
 // API 客户端，没有用户语言面。
@@ -31,13 +32,13 @@ import (
 // 本测试是基线钉：它钉的是当前存量，按 TDD 规范豁免 RED；判别是否有效由
 // TestBackendTextRatchet_detector 的自检与变异验证证明。
 
-// 当前存量（2026-11-25 基线 661；同日语义键改造删除 9 个无人使用的键、补登记 7 个此前
-// 从未登记的通知词条——那 7 处用户原本看到的是原始键——净减 2）。修掉存量后把数字调低；
+// 当前存量（2026-11-25 收尾：后端英文译文已全部删除——catalog 英文列删列，错误模板
+// 翻译机制整体移除，英文唯一来源改为前端词条）。修掉存量后把数字调低；
 // 调高即新增违规。
 const (
-	baselineCatalogRegistrations = 659
-	baselineErrTplRegistrations  = 750
-	baselineLiteralMessageSinks  = 1
+	baselineCatalogEnglishRegistrations = 0
+	baselineErrTplRegistrations         = 0
+	baselineLiteralMessageSinks         = 1
 )
 
 var backendTextMachineOnlyFiles = map[string]bool{
@@ -175,21 +176,21 @@ func TestBackendTextRatchet_detector(t *testing.T) {
 		src  string
 		want backendTextCounts
 	}{
-		{"响应词条登记计入 catalog", `package x
+		{"响应词条三参（英文译文）计入 catalog", `package x
 func init() { Register("a", "查询成功", "Query succeeded") }`, backendTextCounts{catalog: 1}},
 		{"错误模板登记计入 errtpl", `package x
 func init() { RegisterErrTpl("%s 不是有效 CIDR: %s", "%s is not a valid CIDR: %s") }`, backendTextCounts{errtpl: 1}},
 		{"不带中文的 Register 不计（避免把别的同名函数算进来）", `package x
 func init() { Register("a", "plain", "plain") }`, backendTextCounts{}},
-		{"只有中文原文、没有英文译文的登记不计（迁移后的保留形态）", `package x
-func init() { Register("a", "查询成功", ""); RegisterErrTpl("%s 无效", "") }`, backendTextCounts{}},
+		{"只有键 + 中文母本（现行形态）不计", `package x
+func init() { Register("a", "查询成功") }`, backendTextCounts{}},
 		{"Message 直接写中文字面量计入", `package x
 func h() { _ = models.APIResponse{Code: 500, Message: "删除成功"} }`, backendTextCounts{literalMessage: 1}},
 		{"Message 写 fmt.Sprintf 中文字面量计入", `package x
 import "fmt"
 func h() { _ = models.APIResponse{Message: fmt.Sprintf("规则 %s 已禁用", id)} }`, backendTextCounts{literalMessage: 1}},
 		{"Message 经词条键取值不计（合规形态）", `package x
-func h() { _ = models.APIResponse{Code: 0, Message: apimsg.T(c, "rule.saved"), MessageKey: "rule.saved"} }`, backendTextCounts{}},
+func h() { _ = models.APIResponse{Code: 0, Message: apimsg.T("rule.saved"), MessageKey: "rule.saved"} }`, backendTextCounts{}},
 		{"Message 是错误原文或变量不计（另有运行期口径）", `package x
 func h() { _ = models.APIResponse{Message: err.Error()}; _ = models.APIResponse{Message: msg} }`, backendTextCounts{}},
 		{"非 APIResponse 的 Message 字段不计", `package x
@@ -237,7 +238,7 @@ func TestBackendTextRatchet_backendAddsNoDisplayText(t *testing.T) {
 				"变少了=请把基线调到 %d。", name, got, want, got)
 		}
 	}
-	check("响应词条中→英登记", total.catalog, baselineCatalogRegistrations)
+	check("后端英文译文登记（Register 三参）", total.catalog, baselineCatalogEnglishRegistrations)
 	check("错误模板中→英登记", total.errtpl, baselineErrTplRegistrations)
 	check("响应 Message 直接写中文", total.literalMessage, baselineLiteralMessageSinks)
 	if total.literalMessage != baselineLiteralMessageSinks {

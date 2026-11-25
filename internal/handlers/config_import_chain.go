@@ -41,10 +41,10 @@ func importWarn(key string, args ...any) importWarning {
 // isZero 表示没有告警（与空串文案等价）。
 func (warning importWarning) isZero() bool { return warning.key == "" }
 
-// render 按语言渲染；参数可以嵌套另一条告警，按同一语言递归渲染。不走
+// render 渲染中文母本文案；参数可以嵌套另一条告警，递归渲染同一份母本。不走
 // apimsg.Tf：其传参点守卫要求键为字符串字面量，而这里的键由事实携带；模板
 // 只使用 fmt 动词，fmt.Sprintf 与 Tf 同序填充。
-func (warning importWarning) render(lang string) string {
+func (warning importWarning) render() string {
 	if warning.isZero() {
 		return ""
 	}
@@ -60,9 +60,9 @@ func (warning importWarning) render(lang string) string {
 			copy(args, warning.args)
 			copied = true
 		}
-		args[index] = nested.render(lang)
+		args[index] = nested.render()
 	}
-	return fmt.Sprintf(i18n.T(lang, warning.key), args...)
+	return fmt.Sprintf(i18n.T(warning.key), args...)
 }
 
 // auditPart 把告警事实转成审计明细段（同一条词条键，审计与响应同源）。
@@ -93,38 +93,35 @@ func (list importWarnings) auditParts() []services.AuditPart {
 // importWarnings 告警集合。
 type importWarnings []importWarning
 
-// render 按语言逐条渲染；空集合返回 nil（响应 JSON 形态与此前一致）。
-func (list importWarnings) render(lang string) []string {
+// render 逐条渲染中文母本；空集合返回 nil（响应 JSON 形态与此前一致）。
+func (list importWarnings) render() []string {
 	if len(list) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(list))
 	for _, warning := range list {
-		out = append(out, warning.render(lang))
+		out = append(out, warning.render())
 	}
 	return out
 }
 
-// importListSeparator 列举项连接符：中文母本用顿号，英文用逗号。
-func importListSeparator(lang string) string {
-	if lang == i18n.EN {
-		return ", "
-	}
+// importListSeparator 列举项连接符：中文母本用顿号（后端只出中文母本）。
+func importListSeparator() string {
 	return "、"
 }
 
 // unregisteredThreatWarning 是 manifest 未登记的威胁库条目告警（预览与导入
 // 同文案）：landed 为 true 表示条目随「安全防护」分类落盘。
-func unregisteredThreatWarning(lang string, entries []string, landed bool) string {
+func unregisteredThreatWarning(entries []string, landed bool) string {
 	key := "backup.importThreatEntryUnregisteredNotImported"
 	if landed {
 		key = "backup.importThreatEntryUnregisteredLandedUnverified"
 	}
-	return fmt.Sprintf(i18n.T(lang, key), strings.Join(entries, importListSeparator(lang)))
+	return fmt.Sprintf(i18n.T(key), strings.Join(entries, importListSeparator()))
 }
 
-// importActionKey 按「导入/还原」动作取词条：动作词在句中的形态随语言不同
-// （中文「导入后」/英文 "After import"），整句各登记一条，不做词级拼接。
+// importActionKey 按「导入/还原」动作取词条：动作词在句中的形态固定（「导入后」），
+// 整句各登记一条，不做词级拼接。
 func importActionKey(action, importKey, restoreKey string) string {
 	if action == "还原" {
 		return restoreKey

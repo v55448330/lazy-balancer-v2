@@ -84,11 +84,11 @@ func triggerAuditContext(c *gin.Context, family, name string) services.TriggerAu
 // 审计由触发服务/调用方按既有单记口径处理，本 helper 只写响应。
 func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 	if errors.Is(err, taskengine.ErrNotMaster) {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "system.taskTriggerRejected", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "system.taskTriggerRejected", apimsg.ErrMsg(err)))
 		return
 	}
 	if errors.Is(err, taskengine.ErrAlreadyRunning) || errors.Is(err, taskengine.ErrSchedulingPaused) {
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "system.taskTriggerRejected", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "system.taskTriggerRejected", apimsg.ErrMsg(err)))
 		return
 	}
 	// 引擎已停止（IsStopped 预检之后才停止的关停竞态窗）：与 toggle/cancel/
@@ -98,7 +98,7 @@ func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 		respondTaskEngineStopped(c)
 		return
 	}
-	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(c, 503, "system.taskTriggerFailed", apimsg.ErrMsg(c, err)))
+	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(503, "system.taskTriggerFailed", apimsg.ErrMsg(err)))
 }
 
 // respondTaskEngineUnavailable 任务引擎未装配的统一响应。引擎缺失属「服务
@@ -106,14 +106,14 @@ func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 // 全仓单一出口（库更新触发端点此前 500，与任务监控 503
 // 形成家族状态码漂移）。
 func respondTaskEngineUnavailable(c *gin.Context) {
-	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(c, 503, "system.taskEngineNotInitialized"))
+	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(503, "system.taskEngineNotInitialized"))
 }
 
 // respondTaskEngineStopped 引擎已停止（关停窗口/测试装配/嵌入形态）时的统一
 // 响应：调度写端点在已停引擎上调用 StartLoop/StopLoop 均为 no-op，回 200 与
 // 「已恢复/已停止」文案是假信号（只有偏好落库、下次启动才生效）。
 func respondTaskEngineStopped(c *gin.Context) {
-	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(c, 503, "system.taskEngineStopped"))
+	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(503, "system.taskEngineStopped"))
 }
 
 // TriggerSystemTask 手动触发（admin；仅排程/队列类任务族）。
@@ -123,7 +123,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	// 产出误导性的「触发失败」审计——显式拒绝让客户端拿到文档登记的
 	// import_in_progress 码（cert-job 分支经重试核心内部同门，此处先行拦截）。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "system.taskTriggerBlockedByImport"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "system.taskTriggerBlockedByImport"))
 		return
 	}
 	id := c.Param("id")
@@ -136,7 +136,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	if strings.HasPrefix(id, "cert-job:") {
 		jobID, ok := parseCertJobTaskID(id)
 		if !ok || jobID > int64(^uint(0)>>1) {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, msgInvalidJobID))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, msgInvalidJobID))
 			return
 		}
 		h.retryCertJobByID(c, int(jobID))
@@ -153,13 +153,13 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 		}
 		if m, ok := te.Lookup(id); ok { // 单任务元数据（免全量 DescribeAll）
 			if !m.CanTrigger {
-				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.taskTriggerNotSupported"))
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "system.taskTriggerNotSupported"))
 				return
 			}
 			// v2.0：单飞由引擎 CAS 强制；在跑任务同步 409
 			// （曾异步吞错恒 200+apidocs 409 不可达——双击假成功）
 			if te.IsTaskInFlight(id) {
-				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "security.taskRunningRetryLater"))
+				c.JSON(http.StatusConflict, apimsg.Envelope(409, "security.taskRunningRetryLater"))
 				return
 			}
 			// 触发与审计统一走 services.TriggerTaskAsync（单源）——
@@ -177,7 +177,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 			return
 		}
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "system.taskNotFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "system.taskNotFound"))
 		return
 	}
 	// 无引擎时统一 503（回退 switch 删除）。
@@ -190,7 +190,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 // 触发=不可调度（前端显示禁用开关）。
 func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "system.taskScheduleToggleBlockedByImport"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "system.taskScheduleToggleBlockedByImport"))
 		return
 	}
 	id := c.Param("id")
@@ -205,7 +205,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.taskToggleEnabledRequired"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "system.taskToggleEnabledRequired"))
 		return
 	}
 	if te := services.TaskEngine(); te != nil {
@@ -217,13 +217,13 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 		}
 		if m, ok := te.Lookup(id); ok {
 			if m.Kind == taskengine.KindOneshot {
-				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.taskNotSchedulableTriggerOnly"))
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "system.taskNotSchedulableTriggerOnly"))
 				return
 			}
 			// 业务驱动任务（自动更新/自动备份/自动封禁）只能由对应业务页开关
 			// 修改；引擎只同步 loop_on，禁止在任务监控反写业务配置或另开第二入口。
 			if services.IsBusinessDrivenTask(id) {
-				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.taskToggleControlledByFeaturePage"))
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "system.taskToggleControlledByFeaturePage"))
 				return
 			}
 			// 用户显式启停落节点本地偏好（重启后不得按默认清单复活）。
@@ -231,7 +231,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			// 500——此前先切换再吞 WARN，响应仍 200 且偏好零行，重启后按
 			// 默认清单复活与用户意图相反。
 			if err := services.RecordTaskLoopPref(id, *req.Enabled); err != nil {
-				c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.taskPreferenceSaveFailedStateUnchanged", apimsg.ErrMsg(c, err)))
+				c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "system.taskPreferenceSaveFailedStateUnchanged", apimsg.ErrMsg(err)))
 				return
 			}
 			if *req.Enabled {
@@ -242,15 +242,15 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			if *req.Enabled {
 				recordAudit(c, "恢复", "任务监控", services.AuditRawDetail(m.Name+" 调度") /* audit-detail raw */)
 				notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "恢复调度"}})
-				c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskScheduleResumed", m.Name))
+				c.JSON(http.StatusOK, apimsg.Envelope(0, "system.taskScheduleResumed", m.Name))
 			} else {
 				recordAudit(c, "停止", "任务监控", services.AuditRawDetail(m.Name+" 调度") /* audit-detail raw */)
 				notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "停止调度"}})
-				c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskScheduleStopped", m.Name))
+				c.JSON(http.StatusOK, apimsg.Envelope(0, "system.taskScheduleStopped", m.Name))
 			}
 			return
 		}
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "system.taskNotFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "system.taskNotFound"))
 		return
 	}
 	// 无引擎时统一 503（回退 switch 删除）。
@@ -267,7 +267,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 	// consumeCancelledSlotLocked 消费已到期槽——与「导入排空不消费槽（恢复后
 	// 补跑）」语义相反，回滚后该族自动更新会推迟到下一排程槽。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "system.taskCancelBlockedByImport"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "system.taskCancelBlockedByImport"))
 		return
 	}
 	id := c.Param("id")
@@ -284,7 +284,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 		}
 		m, ok := te.Lookup(id)
 		if !ok {
-			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "system.taskNotFound"))
+			c.JSON(http.StatusNotFound, apimsg.Envelope(404, "system.taskNotFound"))
 			return
 		}
 		// 不可取消的任务（描述符 Cancelable=false）：拒绝原因是「任务不支持
@@ -292,18 +292,18 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 		// 矛盾，会让运维反复点取消并怀疑状态失真。零副作用：不记取消审计、
 		// 不发事件。
 		if !m.Cancelable {
-			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "system.taskCancelNotSupported"))
+			c.JSON(http.StatusConflict, apimsg.Envelope(409, "system.taskCancelNotSupported"))
 			return
 		}
 		if !te.Cancel(id) {
-			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "system.taskNotRunningOrNotCancelable"))
+			c.JSON(http.StatusConflict, apimsg.Envelope(409, "system.taskNotRunningOrNotCancelable"))
 			return
 		}
 		// 文案中性化：可取消族含 crs/ip2region（检查→拉取→安装/重载），
 		// 硬编码「下载阶段」会让审计台账与真实中断阶段不一致。
 		recordAudit(c, "取消", "任务监控", services.AuditRawDetail("手动取消任务 "+id+"（当前阶段中断，已完成部分保留）") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "取消运行"}})
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskCancelRequested"))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "system.taskCancelRequested"))
 		return
 	}
 	// 无引擎时统一 503（回退 switch 删除）。
@@ -317,7 +317,7 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 // 对其恒 400。v2.0 前「Continuous 族可控」注释已随四类型标准作废。
 func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "system.taskStartStopBlockedByImport"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "system.taskStartStopBlockedByImport"))
 		return
 	}
 	id := c.Param("id")
@@ -331,7 +331,7 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || (req.Action != "start" && req.Action != "stop" && req.Action != "restart") {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.taskControlActionInvalid"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "system.taskControlActionInvalid"))
 		return
 	}
 	te := services.TaskEngine()
@@ -347,18 +347,18 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	}
 	m, ok := te.Lookup(id)
 	if !ok {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "system.taskNotFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "system.taskNotFound"))
 		return
 	}
 	if !m.Controllable {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "system.taskStartStopNotSupported"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "system.taskStartStopNotSupported"))
 		return
 	}
 	// 用户显式启停落节点本地偏好；restart 的终态为运行。与 toggle 同口径：
 	// 先持久化再动作——写失败即 500 且内存态不动（否则「已重启」是假信号，
 	// 重启后偏好仍是旧值）。
 	if err := services.RecordTaskLoopPref(id, req.Action != "stop"); err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.taskPreferenceSaveFailedStateUnchanged", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "system.taskPreferenceSaveFailedStateUnchanged", apimsg.ErrMsg(err)))
 		return
 	}
 	switch req.Action {
@@ -374,15 +374,15 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	case "start":
 		recordAudit(c, "启动", "任务监控", services.AuditRawDetail("常驻任务 "+id+" 启动") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "启动"}})
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskStarted", id))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "system.taskStarted", id))
 	case "stop":
 		recordAudit(c, "停止", "任务监控", services.AuditRawDetail("常驻任务 "+id+" 停止") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "停止"}})
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskStopped", id))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "system.taskStopped", id))
 	default:
 		recordAudit(c, "重启", "任务监控", services.AuditRawDetail("常驻任务 "+id+" 重启") /* audit-detail raw */)
 		notify.Publish(notify.Event{Type: notify.EvtTaskManualAction, Fields: map[string]string{"1": c.GetString("username"), "2": m.Name, "3": "重启"}})
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.taskRestarted", id))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "system.taskRestarted", id))
 	}
 }
 
@@ -399,7 +399,7 @@ func (h *Handlers) GetSystemTaskHistory(c *gin.Context) {
 	}
 	if te := services.TaskEngine(); te != nil {
 		if _, ok := te.Lookup(id); !ok {
-			c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "system.taskNotFound"))
+			c.JSON(http.StatusNotFound, apimsg.Envelope(404, "system.taskNotFound"))
 			return
 		}
 		// 残留 running 行归一在引擎 History/LatestRun 内完成（与列表同一判定
@@ -423,7 +423,7 @@ func (h *Handlers) GetSystemTaskHistory(c *gin.Context) {
 func (h *Handlers) certJobRunHistory(c *gin.Context, taskID string) {
 	jobID, ok := parseCertJobTaskID(taskID)
 	if !ok {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, msgInvalidJobID))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, msgInvalidJobID))
 		return
 	}
 	// 库句柄缺失属「服务暂不可用」而非任务不存在——与 requireMasterNode
@@ -431,7 +431,7 @@ func (h *Handlers) certJobRunHistory(c *gin.Context, taskID string) {
 	// 兜成 500 + 栈噪声）。
 	database := db.DB
 	if database == nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.databaseNotInitialized"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "system.databaseNotInitialized"))
 		return
 	}
 	var status, message string
@@ -477,7 +477,7 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 		// 本路由属业务读面（全部登录用户可读）——原始 DB/驱动错误只入库内
 		// 日志，对外保持 500 + 固定文案（不泄露 schema/驱动/挂载路径）。
 		services.Logf("error", "任务日志路径解析失败（%s）: %v", id, err)
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.taskLogPathResolveFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "system.taskLogPathResolveFailed"))
 		return
 	}
 	if path == "" {
@@ -498,7 +498,7 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 	content, truncated, readErr := readRotatedLogTail(path, keep, tail, 0, tail)
 	if readErr != nil {
 		services.Logf("error", "任务日志读取失败（%s, %s）: %v", id, "read", readErr)
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.taskLogReadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "system.taskLogReadFailed"))
 		return
 	}
 	// 截断只以 truncated 布尔披露（与证书任务日志端点同形态）——提示行由消费端

@@ -96,7 +96,7 @@ func TestCommitFailureWordingHasSingleSource(t *testing.T) {
 		}
 	}
 	// 审计词条母本与响应常量逐字相等（单源跨栈约束）
-	if got := i18n.T(i18n.ZH, "audit.commitUncertain"); got != commitUncertainLabel {
+	if got := i18n.T("audit.commitUncertain"); got != commitUncertainLabel {
 		t.Errorf("audit.commitUncertain 母本=%q, 响应常量=%q（必须逐字相等）", got, commitUncertainLabel)
 	}
 	if strings.Contains(commitUncertainLabel, "失败") {

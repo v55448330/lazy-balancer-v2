@@ -18,7 +18,6 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -83,12 +82,6 @@ func postServiceControlWithOperator(router *gin.Engine, action, ticket, operator
 func newSlaveTestHandler(cfg *config.Config) (*Handlers, *gin.Engine) {
 	handler := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, ""), caddyService: services.NewCaddyService(cfg.CaddyAdminURL)}
 	router := gin.New()
-	// 生产语言协商在 middleware.i18nMiddleware；测试路由用同一 Negotiate
-	// 实现把 Accept-Language 落到上下文（同口径，先于路由匹配生效）。
-	router.Use(func(c *gin.Context) {
-		c.Set(i18n.CtxLangKey, i18n.Negotiate(c.GetHeader("Accept-Language")))
-		c.Next()
-	})
 	router.POST("/service-control", handler.ClusterServiceControl)
 	return handler, router
 }
@@ -197,14 +190,15 @@ func TestClusterServiceControl_caddy_failure_returns_500(t *testing.T) {
 	}
 	// 执行失败 5xx 固定文案：底层错误（exec 退出码/admin 拨号地址）不得
 	// 直出——本端点凭票据可达（非 admin 会话），详情只进从节点审计+日志。
-	// 票据一次性：上方循环已消费，失败形态用新票据重放。
+	// 票据一次性：上方循环已消费，失败形态用新票据重放。带 en 头也必须得到
+	// 同一份中文母本（后端不按语言渲染）。
 	for _, tc := range []struct {
 		action string
 		lang   string
 		want   string
 	}{
 		{models.ClusterServiceActionStartCaddy, "zh-CN", "服务控制执行失败"},
-		{models.ClusterServiceActionRestartCaddy, "en", "Service control execution failed"},
+		{models.ClusterServiceActionRestartCaddy, "en", "服务控制执行失败"},
 	} {
 		action := tc.action
 		if _, err := db.DB.Exec("UPDATE global_config SET is_master=1 WHERE id=1"); err != nil {

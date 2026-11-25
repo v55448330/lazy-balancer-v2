@@ -69,7 +69,7 @@ test('深翻页上限与后端常量、消息键跨栈同值', () => {
   const backend = repoCode('internal/handlers/auditlog.go')
   assert.match(
     backend,
-    new RegExp(`(?:MessageKey: |apimsg\\.Envelope\\([^,]+, [^,]+, )"${AUDIT_LOG_DEEP_PAGE_MESSAGE_KEY}"`),
+    new RegExp(`(?:MessageKey: |apimsg\\.Envelope\\([^,]+, )"${AUDIT_LOG_DEEP_PAGE_MESSAGE_KEY}"`),
     '后端该 400 必须下发稳定消息键（前端判别依赖）',
   )
 })

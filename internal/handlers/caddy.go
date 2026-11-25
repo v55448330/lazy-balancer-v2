@@ -490,7 +490,7 @@ func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 	healthStatus, err := h.caddyService.GetUpstreamHealthDetailed()
 	if err != nil {
 		services.Logf("error", "collect upstream health: %v", err)
-		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, http.StatusBadGateway, "caddy.upstreamHealthCollectFailed"))
+		c.JSON(http.StatusBadGateway, apimsg.Envelope(http.StatusBadGateway, "caddy.upstreamHealthCollectFailed"))
 		return
 	}
 
@@ -751,7 +751,7 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.invalidRequest"))
 		return
 	}
 	if err := validateUpdateConfigRequest(&req); err != nil {
@@ -760,19 +760,19 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 	}
 	old, err := loadConfigSnapshot(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configLoadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configLoadFailed"))
 		return
 	}
 	// 与保存同一跨字段门与归一（含存量格式清空的预告）。
 	if _, err := resolveAccessLogFormatGate(&req, old); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	// 与保存同一判据的无变化短路：无变化=无写入，无需预检（存量坏规则不该
 	// 阻断「确认无变更」流程），两端对同一载荷给出同一答案。
 	plan := planConfigChanges(req, old)
 	if !plan.Changed {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "caddy.configUnchanged"), MessageKey: "caddy.configUnchanged", Data: plan})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("caddy.configUnchanged"), MessageKey: "caddy.configUnchanged", Data: plan})
 		return
 	}
 	// 与 UpdateConfig 同门、同分类器：DB 故障不得被回成 400 携带底层错误文本
@@ -834,10 +834,10 @@ func writeConfigValidationFailure(c *gin.Context, err error, auditFailure bool) 
 	if !isPureConfigValidationError(err) {
 		services.Logf("error", "更新全局配置的规则预校验混入非配置类错误：%v", err)
 		auditServerFailure()
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.ruleConfigPreValidateFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.ruleConfigPreValidateFailed"))
 		return
 	}
-	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 }
 
 // writeUpdateConfigValidationFailure 映射 UpdateConfig/PreviewConfigUpdate 的
@@ -862,7 +862,7 @@ func writeUpdateConfigValidationFailure(c *gin.Context, err error, auditFailure 
 		writeInternalError(c, http.StatusInternalServerError, errTrustedProxyRead.Error(), cause)
 		return
 	}
-	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 }
 
 func (h *Handlers) UpdateConfig(c *gin.Context) {
@@ -877,7 +877,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.invalidRequest"))
 		return
 	}
 
@@ -894,7 +894,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		// 保存端点服务端失败分支留痕（操作者归因 + 错误详情），
 		// 此前仅成功路径写审计；动作复用既有 danger 词条「更新失败」。
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.currentConfigReadFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configLoadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configLoadFailed"))
 		return
 	}
 	// access_log_json=false 时 access_log_format 不生效（渲染层
@@ -902,13 +902,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// 存量归一单源见 resolveAccessLogFormatGate（保存/预览共用）。
 	formatCleared, gateErr := resolveAccessLogFormatGate(&req, old)
 	if gateErr != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, gateErr)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(gateErr)})
 		return
 	}
 	plan := planConfigChanges(req, old)
 	if !plan.Changed {
 		recordAudit(c, "更新", plan.Section, services.AuditRawDetail("无修改") /* audit-detail raw */)
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "caddy.configUnchanged"), MessageKey: "caddy.configUnchanged", Data: plan})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("caddy.configUnchanged"), MessageKey: "caddy.configUnchanged", Data: plan})
 		return
 	}
 
@@ -929,7 +929,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		oldRuntimeConfig, err = h.caddyService.GetConfig()
 		if err != nil {
 			recordAudit(c, "更新失败", "全局配置", caddyFailureAuditDetail(services.AuditTextPart("audit.caddyGetConfigFailed"), err))
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.runningConfigLoadFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.runningConfigLoadFailed"))
 			return
 		}
 	}
@@ -940,7 +940,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.configTxBeginFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configTransactionBeginFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configTransactionBeginFailed"))
 		return
 	}
 	committed := false
@@ -1015,18 +1015,18 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.ServerMapLat, req.ServerMapLon, req.ThreatScreenMode, req.ThreatTrafficSampleN, req.SecurityEventsRetentionDays, req.SecurityEventsRowCap, req.NotificationDeliveryRetentionDays)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.configWriteToDbFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configDbWriteFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configDbWriteFailed"))
 		return
 	}
 	rows, err := res.RowsAffected()
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.configWriteToDbFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configDbWriteFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configDbWriteFailed"))
 		return
 	}
 	if rows != 1 {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.configWriteToDbFailed"), services.AuditTextPart("audit.affectedRecords", rows), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configDbWriteUnexpectedRows", rows))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configDbWriteUnexpectedRows", rows))
 		return
 	}
 	// 主节点坐标是未单独配置坐标的从节点的默认值：变化时必须 bump 集群版本，
@@ -1037,7 +1037,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	if siteChanged {
 		if err := services.BumpClusterVersion(caddyWriteCtx(c), tx); err != nil {
 			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.clusterVersionIncrementFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.clusterVersionIncrementFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.clusterVersionIncrementFailed"))
 			return
 		}
 	}
@@ -1091,9 +1091,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			// url.Error 形态（含自定义 caddy_admin_url 的地址与端口），全员可见
 			// 响应不得披露内部控制面端点。
 			if rejected {
-				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "caddy.configApplyRejectedNotSaved", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, applyErr))))
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "caddy.configApplyRejectedNotSaved", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(applyErr))))
 			} else {
-				c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configApplyFailedNotSaved", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, applyErr))))
+				c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configApplyFailedNotSaved", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(applyErr))))
 			}
 			return
 		}
@@ -1110,7 +1110,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 			err = errors.Join(err, recovery.err())
 			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.commitUncertainWithDetail", services.RedactCaddyAdminEndpoint(err.Error())), services.AuditResultPart("failure")))
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", err.Error()))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.commitResultUncertainWithDetail", err.Error()))
 			return
 		}
 	} else if err := commitTx(tx); err != nil {
@@ -1119,7 +1119,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		// Rollback 不触达 driver——池级补发回收泄漏写锁。
 		rollbackLeakedTx()
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.AuditTextPart("audit.configCommitFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configCommitFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configCommitFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	committed = true
@@ -1176,10 +1176,10 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		configKey = "caddy.configUpdated"
 	}
 	if formatCleared {
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.accessLogJsonOffFormatCleared", apimsg.T(c, configKey)).WithData(plan))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "caddy.accessLogJsonOffFormatCleared", apimsg.T(configKey)).WithData(plan))
 		return
 	}
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, configKey).WithData(plan))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, configKey).WithData(plan))
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
@@ -1196,12 +1196,12 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&configData); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "caddy.configValidationInvalidJson"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "caddy.configValidationInvalidJson"))
 		return
 	}
 	rendered, err := json.Marshal(configData)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "caddy.configValidationInvalidJson"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "caddy.configValidationInvalidJson"))
 		return
 	}
 	// CLI 不可用回退路径仍执行真实 /load，保持与其他写
@@ -1213,11 +1213,11 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	// 的 load+回弹口径。
 	if err := h.caddyService.ValidateJSONViaCLI(rendered); err == nil {
 		recordAudit(c, "校验成功", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.configCheck"), services.AuditResultPart("success")))
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.configValid"))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "caddy.configValid"))
 		return
 	} else if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
 		recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.configCheck"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "caddy.configValidationFailed"), MessageKey: "caddy.configValidationFailed", Data: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T("caddy.configValidationFailed"), MessageKey: "caddy.configValidationFailed", Data: err.Error()})
 		return
 	}
 	// admin 自锁护栏（回退真实 /load 之前）：与逃生口 PutCaddyConfig 同口径——
@@ -1227,7 +1227,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	if h.cfg != nil {
 		if err := validateCaddyAdminSection(configData, h.cfg.CaddyAdminURL); err != nil {
 			recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.configCheck"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 			return
 		}
 	}
@@ -1250,23 +1250,23 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		h.recordCaddyApplyFailure(joined, restoreErr)
 		recordAudit(c, "校验失败", "Caddy配置", caddyFailureAuditDetail(
 			services.AuditTextPart("audit.caddyRestoreAfterValidationFailed"), joined))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configRestoreAfterValidationFailed", apimsg.ErrMsg(c, joined)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configRestoreAfterValidationFailed", apimsg.ErrMsg(joined)))
 		return
 	}
 	if validateErr != nil {
 		recordAudit(c, "校验失败", "Caddy配置", caddyFailureAuditDetail(services.AuditTextPart("audit.configCheck"), validateErr))
 		if services.IsConfigRejected(validateErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "caddy.configValidationFailed"), MessageKey: "caddy.configValidationFailed", Data: validateErr.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T("caddy.configValidationFailed"), MessageKey: "caddy.configValidationFailed", Data: validateErr.Error()})
 			return
 		}
 		// 传输/超时等系统故障不得伪装成「配置无效」——候选是否被拒未知，
 		// 但运行配置已回弹权威值。
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.validationRequestFailedConfigRestored", apimsg.ErrMsg(c, validateErr)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.validationRequestFailedConfigRestored", apimsg.ErrMsg(validateErr)))
 		return
 	}
 
 	recordAudit(c, "校验成功", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.configCheck"), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.configValid"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "caddy.configValid"))
 }
 
 func (h *Handlers) ReloadCaddy(c *gin.Context) {
@@ -1280,12 +1280,12 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 		// 操作者归因 + 错误详情（recordCaddyApplyResult 的系统级「应用失败」
 		// 不带用户身份，不能替代本条）。
 		recordAudit(c, "重载失败", "Caddy服务", caddyFailureAuditDetail(services.AuditTextPart("audit.caddyManualReload"), err))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configReloadFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configReloadFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	// 手动重载成功同样需要留痕（69d809b4 曾误删本行）。
 	recordAudit(c, "重载", "Caddy服务", services.AuditRawDetail("手动重载 Caddy 配置") /* audit-detail raw */)
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.configReloaded"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "caddy.configReloaded"))
 }
 
 func (h *Handlers) GetCaddyStatus(c *gin.Context) {
@@ -1365,7 +1365,7 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	// 或敏感 header——与 GetConfig 的 caddy_config 脱敏同口径：非管理员及
 	// 只读 API Key 一律拒绝（路由已收敛到 admin 组，此处为纵深防御）。
 	if !canReadSensitiveSecrets(c) {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "caddy.rawConfigAdminOnly"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "caddy.rawConfigAdminOnly"))
 		return
 	}
 	// 与 GetCaddyStatus 同源取 cfg.CaddyAdminURL——此前硬编码
@@ -1374,7 +1374,7 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	if err != nil {
 		// admin 不可达=上游/网关级故障（与 GetRuleCaddyConfig、GetUpstreamHealth
 		// 同口径的 502）；500 留给「读到的字节解析失败/超限」这类面板侧失败。
-		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "caddy.rawConfigConnectFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusBadGateway, apimsg.Envelope(502, "caddy.rawConfigConnectFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	defer resp.Body.Close()
@@ -1382,12 +1382,12 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	// 静默截断会把「超限」误报为下游「解析失败」，排障误导）。
 	body, err := services.ReadAdminConfigBody(resp)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.rawConfigReadFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.rawConfigReadFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	var configData interface{}
 	if err := json.Unmarshal(body, &configData); err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.rawConfigParseFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.rawConfigParseFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configData})
@@ -1423,7 +1423,7 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 	if !ok {
 		// fail-visible：未知类型此前静默回落到 runtime 日志，
 		// 排障者会误读错误文件（不同日志族内容完全不同）。
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "caddy.unknownLogType", logType, strings.Join(caddyLogTypes(), "、")))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "caddy.unknownLogType", logType, strings.Join(caddyLogTypes(), "、")))
 		return
 	}
 
@@ -1625,7 +1625,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	// maxCreateRuleBodyBytes 同口径）。
 	const maxPutCaddyConfigBytes int64 = 1 << 20 // 1MB
 	if c.Request.ContentLength > maxPutCaddyConfigBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "common.requestBodyTooLarge"))
+		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(413, "common.requestBodyTooLarge"))
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxPutCaddyConfigBytes)
@@ -1639,10 +1639,10 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		// MaxBytesReader 超限（chunked/未知 ContentLength）映射 413，与导入路径口径一致
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "common.requestBodyTooLarge"))
+			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(413, "common.requestBodyTooLarge"))
 			return
 		}
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.invalidRequest"))
 		return
 	}
 
@@ -1651,7 +1651,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 
 	var configData map[string]interface{}
 	if err := json.Unmarshal([]byte(req.Content), &configData); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "caddy.rawConfigInvalidJson"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "caddy.rawConfigInvalidJson"))
 		return
 	}
 	// 内部键净化：__lazy_balancer_ 前缀是渲染器私有通道，用户原始载荷携带
@@ -1663,7 +1663,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	if h.cfg != nil {
 		if err := validateCaddyAdminSection(configData, h.cfg.CaddyAdminURL); err != nil {
 			recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.caddyConfigCheckFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 			return
 		}
 	}
@@ -1675,7 +1675,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	if err := h.caddyService.ValidateJSONViaCLI([]byte(req.Content)); err != nil {
 		if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
 			recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.caddyConfigCheckFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "caddy.rawConfigValidateFailed", apimsg.ErrMsg(c, err)))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "caddy.rawConfigValidateFailed", apimsg.ErrMsg(err)))
 			return
 		}
 		services.Logf("error", "caddy CLI 校验器不可用，跳过逃生口预检（应用拒绝仍回滚）: %v", err)
@@ -1684,13 +1684,13 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail(services.AuditTextPart("audit.caddyConfigBackupFailed"), err))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configBackupFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configBackupFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.caddyConfigTxBeginFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.rawConfigTransactionBeginFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.rawConfigTransactionBeginFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	committed := false
@@ -1704,13 +1704,13 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	result, err := tx.ExecContext(caddyWriteCtx(c), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.caddyConfigSaveFailed"), services.AuditRawPart(err.Error()), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.rawConfigSaveFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.rawConfigSaveFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected == 0 {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail(services.AuditTextPart("audit.caddyConfigSaveFailed"), services.AuditTextPart("audit.affectedRecords", rowsAffected), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.rawConfigSaveNoRowsUpdated"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.rawConfigSaveNoRowsUpdated"))
 		return
 	}
 	appliedConfig, loaded, applyErr := h.caddyService.ApplyConfigReportingForCommit(configData)
@@ -1742,9 +1742,9 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		// 响应内错误原文经 RedactCaddyAdminEndpoint（同 UpdateConfig 两出口）：
 		// /load 传输失败携带 admin 端点原文，不得进入全员可见响应。
 		if rejected {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "caddy.rawConfigRejected", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, err))))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "caddy.rawConfigRejected", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(err))))
 		} else {
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "caddy.configApplyFailedNotSaved", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, err))))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "caddy.configApplyFailedNotSaved", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(err))))
 		}
 		return
 	}
@@ -1762,7 +1762,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 		err = errors.Join(err, recovery.err())
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail(services.AuditTextPart("audit.commitUncertain"), err))
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, "common.commitResultUncertainWithDetailAsciiColon", err.Error()))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(http.StatusInternalServerError, "common.commitResultUncertainWithDetailAsciiColon", err.Error()))
 		return
 	}
 	committed = true
@@ -1838,7 +1838,7 @@ func (h *Handlers) caddyLifecycleConfigMissing(c *gin.Context) bool {
 	if h.cfg != nil {
 		return false
 	}
-	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(c, 503, "caddy.serviceConfigNotInitialized"))
+	c.JSON(http.StatusServiceUnavailable, apimsg.Envelope(503, "caddy.serviceConfigNotInitialized"))
 	return true
 }
 
@@ -1857,7 +1857,7 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
 		// 失败同样是可用性事实（此前只在成功时发事件——启停通知永远「成功」）。
 		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": caddyLifecycleFailureResult(err)}})
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	// `caddy run` boots with the bare Caddyfile (welcome page); re-apply the
@@ -1870,7 +1870,7 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 		return
 	}
 	notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "启动", "3": "成功"}})
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.serviceStarted"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "caddy.serviceStarted"))
 }
 
 func (h *Handlers) StopCaddy(c *gin.Context) {
@@ -1887,11 +1887,11 @@ func (h *Handlers) StopCaddy(c *gin.Context) {
 
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
 		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "停止", "3": caddyLifecycleFailureResult(err)}})
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "停止", "3": "成功"}})
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.serviceStopped"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "caddy.serviceStopped"))
 }
 
 func (h *Handlers) RestartCaddy(c *gin.Context) {
@@ -1906,12 +1906,12 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
 		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": caddyLifecycleFailureResult(err)}})
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
 		notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": caddyLifecycleFailureResult(err)}})
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	// Same as StartCaddy: caller holds caddyOpMu, use the locked variant.
@@ -1921,7 +1921,7 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 		return
 	}
 	notify.Publish(notify.Event{Type: notify.EvtCaddyLifecycle, Fields: map[string]string{"1": c.GetString("username"), "2": "重启", "3": "成功"}})
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.serviceRestarted"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "caddy.serviceRestarted"))
 }
 
 // accessLogRedactionLine 恒脱敏行的规范形态（与 services 渲染层同一路径，

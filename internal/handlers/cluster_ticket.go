@@ -124,7 +124,7 @@ func (h *Handlers) TicketLogin(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		recordTicketLoginFailure(c, "", "invalid_request")
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	// 装配缺失 fail-closed 必须晚于体积/格式门：公开端点的 413 预检是请求
@@ -157,7 +157,7 @@ func (h *Handlers) TicketLogin(c *gin.Context) {
 			// 不得复用凭证文案——否则运维误判为票据问题并反复重取票据。
 			messageKey = "cluster.loginTicketValidationFailed"
 		}
-		c.JSON(status, apimsg.Envelope(c, status, messageKey))
+		c.JSON(status, apimsg.Envelope(status, messageKey))
 		return
 	}
 	h.respondLoginWithMFA(c, user, passwordVersion, 0, true, claims.AuthMethod)

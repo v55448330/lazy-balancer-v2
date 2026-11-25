@@ -41,7 +41,7 @@ func requireLibSourceFlagRowUpdated(result sql.Result, c *gin.Context, spec libS
 		return false
 	}
 	if affected == 0 {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(nil, http.StatusNotFound, spec.NotFoundKey))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(http.StatusNotFound, spec.NotFoundKey))
 		return false
 	}
 	return true
@@ -65,18 +65,18 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.libSourceIdInvalid"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "security.libSourceIdInvalid"))
 		return
 	}
 	var body struct {
 		UpdateEnabled *bool `json:"update_enabled"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.invalidRequest"))
 		return
 	}
 	if body.UpdateEnabled == nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.noFieldsToUpdate"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "security.noFieldsToUpdate"))
 		return
 	}
 	if !requireMasterNode(c) {
@@ -95,7 +95,7 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	).Scan(&name, &wasEnabled); err != nil {
 		// 三分支：缺行=404，其余 DB 故障=500（可重试故障不得误报「源不存在」）。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, apimsg.Envelope(nil, http.StatusNotFound, spec.NotFoundKey))
+			c.JSON(http.StatusNotFound, apimsg.Envelope(http.StatusNotFound, spec.NotFoundKey))
 		} else {
 			c.JSON(http.StatusInternalServerError, spec.InternalError(spec.ReadErrMsg, err))
 		}
@@ -144,5 +144,5 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	}
 	recordAudit(c, "更新", spec.Family, services.AuditRawDetail(fmt.Sprintf("%s 更新开关：%s", name, enabledStateLabel(*body.UpdateEnabled))) /* audit-detail raw */)
 	notify.Publish(notify.Event{Type: notify.EvtLibSettingsChanged, Fields: map[string]string{"1": c.GetString("username"), "2": spec.Family, "3": "更新了源开关"}})
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "security.updated"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "security.updated"))
 }

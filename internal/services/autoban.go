@@ -714,23 +714,20 @@ func reconcileAutobanRuntimeLocked(old, new AutobanConfig) func() {
 }
 
 // AutobanConfigReplaceEffectNote 返回「替换十列后运行期收敛动作」的用户可读
-// 说明（导入/还原响应的 warnings 与成功审计单源）；lang 是渲染语言——响应按
-// 请求语言，操作审计明细恒取中文母本。无收敛动作（十列相同，或仅时长/观察
+// 说明（导入/还原响应的 warnings 与成功审计单源）。后端只出中文母本，前端按
+// 词条渲染；操作审计明细同文留痕。无收敛动作（十列相同，或仅时长/观察
 // 模式变化）时返回空串。
 //
 // 文案只披露真实变化的因子：清桶是合并判定（窗口 ∪ 口径 ∪ 证据分层参数），
 // 把合并判定写成「统计窗口/口径由 X 改为 X」会在仅改证据分层字段时谎报
 // 窗口/口径变更（判定与文案必须由同一组分项驱动）。
-func AutobanConfigReplaceEffectNote(old, new AutobanConfig, lang string) string {
+func AutobanConfigReplaceEffectNote(old, new AutobanConfig) string {
 	effect := autobanConfigReplaceEffectsOf(old, new)
 	say := func(key string, args ...any) string {
-		return fmt.Sprintf(i18n.T(lang, key), args...)
+		return fmt.Sprintf(i18n.T(key), args...)
 	}
-	// 分句与列举项的连接符随语言：中文母本为全角分号/顿号。
+	// 分句与列举项的连接符固定中文母本形态（全角分号/顿号）。
 	sep, listSep := "；", "、"
-	if lang == i18n.EN {
-		sep, listSep = "; ", ", "
-	}
 	parts := []string{}
 	if effect.resetCounters {
 		changed := make([]string, 0, 3)

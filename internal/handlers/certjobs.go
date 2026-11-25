@@ -276,11 +276,11 @@ func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
 		// gin 解析文本含 Go 字段名/英文（只读白名单端点，任意只读凭据可触发）：
 		// 响应固定中文文案，细节只进运行日志。
 		services.Logf("warn", "GetCurrentCertJobs: 请求体校验失败: %v", err)
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	if len(req.RuleIDs) > 200 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.currentJobsRuleIdsTooMany"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "cert.currentJobsRuleIdsTooMany"))
 		return
 	}
 	result := make(map[string]*models.CertJob, len(req.RuleIDs))
@@ -418,7 +418,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// 契约。409 fast-fail（拒绝重试是幂等可重试语义，不改变任何任务状态），
 	// 两个入口（RetryCertJob / TriggerSystemTask 的 cert-job 分支）共用本核心。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, http.StatusConflict, "cert.jobRetryBlockedByImport"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(http.StatusConflict, "cert.jobRetryBlockedByImport"))
 		return
 	}
 	operationLock := certJobOperationLock(id)
@@ -483,14 +483,14 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 				result = "permanent"
 			}
 			auditFailureWithRule(result)
-			c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
+			c.JSON(statusCode, apimsg.Envelope(statusCode, messageKey, messageArgs...))
 			return
 		}
 		// 越冷留痕以入队实际发生（changed=true）为前提（与 CA-force 族同口径）：
 		// 此处仅标记，待入队成功后并入成功审计片段——防请求最终被 CA 退避
 		// 429 拒绝/入队失败时残留成功通道审计行（稀释 cooldown_override 取证）。
 		failedCooldownOverride = true
-		cooldownMessage = apimsg.Tf(nil, messageKey, messageArgs...)
+		cooldownMessage = apimsg.Tf(messageKey, messageArgs...)
 	}
 
 	// CA 退避窗口（failed/waiting_ca 行的 ca_available_after，429=Retry-After
@@ -505,7 +505,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	if cooldownActive && !forceRetry {
 		auditFailureWithRule("ca_cooldown")
 		key, args := certJobCAcooldownKey(caAvailableAfter.Time, now)
-		c.JSON(http.StatusTooManyRequests, apimsg.Envelope(nil, http.StatusTooManyRequests, key, args...))
+		c.JSON(http.StatusTooManyRequests, apimsg.Envelope(http.StatusTooManyRequests, key, args...))
 		return
 	}
 
@@ -545,7 +545,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 			services.Logf("error", "Manual deployment retry failed for job %d: %v", id, err)
 		}
 		auditFailureWithRule("deployment_retry_failed")
-		c.JSON(statusCode, apimsg.Envelope(nil, statusCode, messageKey, messageArgs...))
+		c.JSON(statusCode, apimsg.Envelope(statusCode, messageKey, messageArgs...))
 		return
 	} else if rescheduled {
 		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), services.AuditRawPart(domain) /* audit-detail raw */, services.AuditTextPart("audit.previousState", status), services.AuditResultPart("deployment_retry")))
@@ -617,18 +617,18 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		}
 		if currentStatus != status {
 			auditFailureWithRule("state_changed")
-			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.jobStateChanged"))
+			c.JSON(http.StatusConflict, apimsg.Envelope(409, "cert.jobStateChanged"))
 			return
 		}
 		// EnqueueIfActive 的在途命中同样走!changed 且重读
 		// 状态未变，需优先归因"任务正在队列中"，避免误导为规则禁用/配置变更。
 		if qm.IsJobActive(id) {
 			auditFailureWithRule("in_flight")
-			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.retryJobAlreadyInQueue"))
+			c.JSON(http.StatusConflict, apimsg.Envelope(409, "cert.retryJobAlreadyInQueue"))
 			return
 		}
 		auditFailureWithRule("not_retryable")
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.jobNotRetryable"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "cert.jobNotRetryable"))
 		return
 	}
 	// 手动重试入队成功=有在途证书工作——唤醒 cert-waiting-ca
@@ -663,7 +663,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 // HTTP 状态与消息键（+ 模板参数）：busy/blocked/inactive 都是可行动冲突
 // （窗口已推进、自动部署会接手），其余为 500。签发端点与证书任务重试端点
 // 共用本映射——响应由调用点经 apimsg.Envelope 装配（中文母本在 i18n 目录、
-// 英文归前端词条），审计与失败明细用 apimsg.Tf(nil, key, args...) 取母本。
+// 英文归前端词条），审计与失败明细用 apimsg.Tf(key, args...) 取母本。
 func deploymentRetryFailureResponse(err error) (int, string, []any) {
 	switch {
 	case errors.Is(err, services.ErrCertificateDeploymentRetryBusy):
@@ -756,7 +756,7 @@ func certJobRetryRemainingSeconds(status string, updatedAt, createdAt, caAvailab
 
 // certJobRetryBlocked 返回任务是否被重试门拦截、应返回的 HTTP 状态码，以及
 // 拒绝文案的消息键与模板参数：响应由调用点经 apimsg.Envelope 装配（中文母本
-// 在 i18n 目录、英文归前端词条），审计明细用 apimsg.Tf(nil, key, args...) 取母本。
+// 在 i18n 目录、英文归前端词条），审计明细用 apimsg.Tf(key, args...) 取母本。
 // 429 =「稍后重试可成功」（执行中/冷却），409 =「永久条件不可重试」（已退役）。
 //
 // 通用冷却窗口计算必须复用 services.CertJobRetryRemaining（下发剩余秒/任务
@@ -848,7 +848,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	// 文件）。与 retryCertJobByID 共用同一探测。
 	if configImportBusy() {
 		recordAudit(c, "删除失败", "证书任务", services.FormatAuditDetail(services.AuditResultPart("import_in_progress")))
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.jobDeleteBlockedByImport"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "cert.jobDeleteBlockedByImport"))
 		return
 	}
 	id, err := strconv.Atoi(c.Param("id"))
@@ -949,7 +949,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		if active > 0 {
 			releaseCaddyOp()
 			auditFailure("guarded_active_rule")
-			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, messageKey))
+			c.JSON(http.StatusConflict, apimsg.Envelope(409, messageKey))
 			return
 		}
 	}
@@ -999,7 +999,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		}
 		releaseCaddyOp()
 		auditFailure("state_changed")
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.jobStateChanged"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "cert.jobStateChanged"))
 		return
 	}
 	// 取消移出全局 CaddyOpLock 临界区——原顺序

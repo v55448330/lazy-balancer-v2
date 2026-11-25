@@ -233,12 +233,12 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 			action = "<解析失败>"
 		}
 		recordClusterServiceControlAudit(c, action, "失败：请求格式错误")
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, http.StatusBadRequest, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(http.StatusBadRequest, "common.malformedRequest"))
 		return
 	}
 	if !models.IsValidClusterServiceAction(req.Action) {
 		recordClusterServiceControlAudit(c, req.Action, "失败：不支持的动作")
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, http.StatusBadRequest, "cluster.unsupportedServiceControlAction"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(http.StatusBadRequest, "cluster.unsupportedServiceControlAction"))
 		return
 	}
 	// 导入窗口内的 Caddy 启停会与导入会话互抢 caddyOpMu（导入自
@@ -270,7 +270,7 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 		// 与 caddy 分支同口径带 operator——空 operator 回退「主节点」，
 		// 非空则记录主节点侧实际操作人（此前 restart_app 恒匿名）。
 		recordClusterServiceControlAuditBy(c, req.Action, "已接受：服务即将重启", req.Operator)
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "system.serviceRestarting"))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "system.serviceRestarting"))
 		go func() {
 			time.Sleep(clusterServiceExitDelay)
 			clusterServiceExit()
@@ -285,7 +285,7 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 		// 从节点审计留痕（经 RedactCaddyAdminEndpoint 脱敏）+运行日志承担，
 		// 与票据校验失败分支（固定文案+clusterError 日志）同口径。
 		services.Logf("error", "cluster service-control: action %s failed: %v", req.Action, err)
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, http.StatusInternalServerError, "cluster.serviceControlFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(http.StatusInternalServerError, "cluster.serviceControlFailed"))
 		return
 	}
 	// 成功消息一并落审计——从节点操作日志可见「配置已从数据库载入」等

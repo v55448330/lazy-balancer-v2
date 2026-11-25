@@ -20,14 +20,14 @@ import (
 // （err==nil 表示调用方已就地留痕，不重复写）。
 func internalErrorKeyed(tag string, status int, key string, cause error, args ...any) models.APIResponse {
 	if cause != nil {
-		message := i18n.T(i18n.ZH, key)
+		message := i18n.T(key)
 		if tag != "" {
 			services.Logf("error", "%s: %s: %v", tag, message, cause)
 		} else {
 			services.Logf("error", "%s: %v", message, cause)
 		}
 	}
-	return apimsg.Envelope(nil, status, key, args...)
+	return apimsg.Envelope(status, key, args...)
 }
 
 // securityErrKeyed 是 serverErrMsg 的键化形态（域标签「安全处理器」，与 internalError 同源）。
@@ -41,13 +41,13 @@ func clusterErrorKeyedResponse(status int, key string, cause error, args ...any)
 	if cause != nil {
 		services.Logf("error", "cluster request failed: %v", cause)
 	}
-	return apimsg.Envelope(nil, status, key, args...)
+	return apimsg.Envelope(status, key, args...)
 }
 
 // failAutoBackupAccessKeyed 是 failAutoBackupAccess 的键化形态：审计明细（动作 + 对象 + 中文
 // 母本）、日志级别与日志正文口径逐字保留。
 func failAutoBackupAccessKeyed(c *gin.Context, verb, subject, key string, status int, cause error, args ...any) {
-	resp := apimsg.Envelope(nil, status, key, args...)
+	resp := apimsg.Envelope(status, key, args...)
 	// 审计明细与运行日志沿用中文母本文案（不随请求语言变）：带槽词条必须在此按 args
 	// 填充，键化前的明细才逐字不变（如「读取备份文件失败: <err>」不得退化成剩下 %s 的模板）。
 	auditAutoBackupAccessFailure(c, verb, subject, resp.Message, status, cause)

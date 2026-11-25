@@ -37,10 +37,10 @@ func requireAPIKeyStepUp(c *gin.Context) bool {
 	decision, derr := DecideMFAStepUp(c, true, db.DB, services.MFAUserEnabled)
 	if derr != nil {
 		if errors.Is(derr, ErrMFAStepUpGuardUnreadable) {
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.mfaWriteGuardLoadFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.mfaWriteGuardLoadFailed"))
 			return true
 		}
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.mfaStatusQueryFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.mfaStatusQueryFailed"))
 		return true
 	}
 	if !decision.Applies {
@@ -121,18 +121,18 @@ func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 	// 与创建/更新/删除三入口同形的认证上下文门：缺身份时不得退化为
 	// created_by=0 的孤儿行查询（会话异常的前端应重登而非拿 200 空列表）。
 	if userID <= 0 {
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "apikey.authContextMissing"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "apikey.authContextMissing"))
 		return
 	}
 	rows, err := queryAPIKeys("WHERE k.created_by = ?", userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.databaseError"))
 		return
 	}
 	defer rows.Close()
 	keys, err := scanAPIKeys(rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.databaseError"))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
@@ -150,7 +150,7 @@ func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 	// scopedUserID==0 在 deleteAPIKey 中表示「全局删除」；自助入口缺少
 	// 认证上下文时必须拒绝，不能退化成管理员级删除。
 	if userID <= 0 {
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "apikey.authContextMissing"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "apikey.authContextMissing"))
 		return
 	}
 	deleteAPIKey(c, userID)
@@ -172,7 +172,7 @@ func deleteAPIKey(c *gin.Context, scopedUserID int) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.invalidId"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.invalidId"))
 		return
 	}
 	where := "id = ?"
@@ -190,23 +190,23 @@ func deleteAPIKey(c *gin.Context, scopedUserID int) {
 	}
 	result, err := db.DB.Exec("DELETE FROM api_keys WHERE "+where, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.deleteFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.deleteFailed"))
 		return
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.deleteResultCheckFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.deleteResultCheckFailed"))
 		return
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "apikey.notFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "apikey.notFound"))
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(services.AuditTextPart("audit.apiKeyNumber", id), services.AuditRawPart(name) /* audit-detail raw */))
 	notify.Publish(notify.Event{Type: notify.EvtAPIKeyDeleted,
 		Fields: map[string]string{"1": c.GetString("username"), "2": name}})
 	purgeAPIKeyWhitelistCache(id)
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "apikey.deleted"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "apikey.deleted"))
 }
 
 func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
@@ -259,7 +259,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	// created_by=0 的孤儿 Key（配额按 0 计数，列表 JOIN users 隐藏它 →
 	// 不可见但可用）。生产链 jwtAuth/apiKeyAuth 必写 user_id，此为防御门。
 	if userID <= 0 {
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "apikey.authContextMissing"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "apikey.authContextMissing"))
 		return
 	}
 	// 导入窗口 409，先于解析 body。
@@ -271,7 +271,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	// 名称 TrimSpace 后非空且 ≤100 字符——空白名/超长名
@@ -279,11 +279,11 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	// 审计出现不可读名;修剪后落库。重名不拒绝(既有产品决策保持)。
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.nameRequired"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.nameRequired"))
 		return
 	}
 	if utf8.RuneCountInString(req.Name) > 100 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.nameTooLong"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.nameTooLong"))
 		return
 	}
 	// 每用户配额 ≤50：此前无数量上限，普通用户可
@@ -312,7 +312,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		apiEnabled = *req.APIEnabled
 	}
 	if req.ExpiresAt != nil && req.ExpiresAt.Before(time.Now()) {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.expiryMustBeFuture"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.expiryMustBeFuture"))
 		return
 	}
 	// （2026-09 用户裁定）：特权 Key（非只读或 MCP）创建不验密码——API Key
@@ -329,24 +329,24 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.mcpIpWhitelistInvalid", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.mcpIpWhitelistInvalid", apimsg.ErrMsg(err)))
 		return
 	}
 	// 上限按归一化去重后的实际集合计数：257 条重复 CIDR 的唯一集合只有 1 条，
 	// 不应在去重前误拒。
 	if len(whitelist) > apiKeyMaxWhitelistEntries {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.mcpIpWhitelistLimitReached", apiKeyMaxWhitelistEntries))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.mcpIpWhitelistLimitReached", apiKeyMaxWhitelistEntries))
 		return
 	}
 	whitelistJSON, err := encodeMCPIPWhitelist(whitelist)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.mcpIpWhitelistEncodeFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.mcpIpWhitelistEncodeFailed"))
 		return
 	}
 
 	keyBytes := make([]byte, 32)
 	if _, err := rand.Read(keyBytes); err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.keyGenerationFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.keyGenerationFailed"))
 		return
 	}
 	apiKey := "lb_sk_" + base64.URLEncoding.EncodeToString(keyBytes)[:32]
@@ -364,21 +364,21 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		WHERE (SELECT COUNT(*) FROM api_keys WHERE created_by = ?) < ?
 	`, req.Name, keyHash, keyPrefix, userID, req.ExpiresAt, req.MCPEnabled, apiEnabled, req.ReadOnly, apiRO, mcpRO, whitelistJSON, userID, userID, apiKeyMaxPerUser)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.createFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.createFailed"))
 		return
 	}
 	inserted, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.createResultCheckFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.createResultCheckFailed"))
 		return
 	}
 	if inserted == 0 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.perUserQuotaReached", apiKeyMaxPerUser))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.perUserQuotaReached", apiKeyMaxPerUser))
 		return
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.createdIdLoadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.createdIdLoadFailed"))
 		return
 	}
 	var expires sql.NullTime
@@ -416,7 +416,7 @@ func (h *Handlers) ListAPIKeys(c *gin.Context) {
 	if !isAdminRequest(c) || c.Query("mine") == "1" {
 		if uid <= 0 {
 			// 认证上下文缺失：与自助入口同形 401（不得退化为 created_by=0 孤儿查询）
-			c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "apikey.authContextMissing"))
+			c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "apikey.authContextMissing"))
 			return
 		}
 		where = "WHERE k.created_by = ?"
@@ -424,13 +424,13 @@ func (h *Handlers) ListAPIKeys(c *gin.Context) {
 	}
 	rows, err := queryAPIKeys(where, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.databaseError"))
 		return
 	}
 	defer rows.Close()
 	keys, err := scanAPIKeys(rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.databaseError"))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
@@ -451,7 +451,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.invalidId"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.invalidId"))
 		return
 	}
 	userID := int(contextUserID(c))
@@ -459,7 +459,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 按 created_by=0 查询后回答「不存在」的 404（客户端无法区分未认证与
 	// 不存在，三入口契约须一致）。
 	if currentUserOnly && userID <= 0 {
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "apikey.authContextMissing"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "apikey.authContextMissing"))
 		return
 	}
 	var req models.UpdateAPIKeyRequest
@@ -467,12 +467,12 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	if req.IsEnabled == nil && req.MCPEnabled == nil && req.APIEnabled == nil && req.ReadOnly == nil &&
 		req.APIReadOnly == nil && req.MCPReadOnly == nil && req.MCPIPWhitelist == nil && !req.ExpirySubmitted() {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.updateFieldsRequired"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.updateFieldsRequired"))
 		return
 	}
 	// expires_at 三态：未提交=不改；null=改为永不过期；时间串=新的过期时间。
@@ -482,14 +482,14 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		if raw := string(req.ExpiresAt); raw != "null" {
 			var parsed time.Time
 			if err := json.Unmarshal(req.ExpiresAt, &parsed); err != nil {
-				c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+				c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 				return
 			}
 			expiresAfter = sql.NullTime{Time: parsed, Valid: true}
 		}
 	}
 	if expiresAfter.Valid && expiresAfter.Time.Before(time.Now()) {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.expiryMustBeFuture"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.expiryMustBeFuture"))
 		return
 	}
 	// 非管理员：任何「授予写」形态拒绝（legacy read_only=false 或 per-protocol false）
@@ -498,7 +498,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 			(req.APIReadOnly != nil && !*req.APIReadOnly) ||
 			(req.MCPReadOnly != nil && !*req.MCPReadOnly)
 		if grantWrite {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.writeGrantAdminOnly"))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.writeGrantAdminOnly"))
 			return
 		}
 		readOnly := true
@@ -524,19 +524,19 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	if req.MCPIPWhitelist != nil {
 		whitelist, err := services.NormalizeCIDRs(*req.MCPIPWhitelist)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.mcpIpWhitelistInvalid", apimsg.ErrMsg(c, err)))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.mcpIpWhitelistInvalid", apimsg.ErrMsg(err)))
 			return
 		}
 		// 上限按去重后的实际集合计数（与落库/审计同源）。
 		if len(whitelist) > apiKeyMaxWhitelistEntries {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "apikey.mcpIpWhitelistLimitReached", apiKeyMaxWhitelistEntries))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "apikey.mcpIpWhitelistLimitReached", apiKeyMaxWhitelistEntries))
 			return
 		}
 		whitelistCount = len(whitelist)
 		normalizedWhitelist = whitelist
 		encoded, err := encodeMCPIPWhitelist(whitelist)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.mcpIpWhitelistEncodeFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.mcpIpWhitelistEncodeFailed"))
 			return
 		}
 		whitelistJSON = &encoded
@@ -547,7 +547,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 作用）；早退路径（404/step-up/更新失败/提交失败）由 defer 回滚兜住。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.updateFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.updateFailed"))
 		return
 	}
 	committed := false
@@ -657,23 +657,23 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	result, err := tx.ExecContext(c.Request.Context(), update, updateArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.updateFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.updateFailed"))
 		return
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.updateResultCheckFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.updateResultCheckFailed"))
 		return
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "apikey.notFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "apikey.notFound"))
 		return
 	}
 	// 提交先于审计：审计（独立 AuditDB 连接）不得记录可能随后回滚的变更。
 	if err := commitTx(tx); err != nil {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
 		rollbackLeakedTx()
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "apikey.updateFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "apikey.updateFailed"))
 		return
 	}
 	committed = true
@@ -733,7 +733,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	if (req.IsEnabled != nil && !*req.IsEnabled) || req.MCPIPWhitelist != nil {
 		purgeAPIKeyWhitelistCache(id)
 	}
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "apikey.updated"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "apikey.updated"))
 }
 
 // apiKeyExpiryLabel 是审计文案里的过期值：NULL=永不过期，否则按面板时区
@@ -803,7 +803,7 @@ func encodeMCPIPWhitelist(whitelist []string) (string, error) {
 // （今日调用/错误率/趋势/最近调用；MCP 列沿用 /notification/mcp/stats）。
 func (h *Handlers) GetAccessOverview(c *gin.Context) {
 	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "apikey.accessStatsAdminOnly"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "apikey.accessStatsAdminOnly"))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rest": services.GetRESTCallOverview()}})

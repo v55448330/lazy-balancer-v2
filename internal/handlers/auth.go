@@ -38,7 +38,7 @@ const maxAuthJSONBodyBytes int64 = 64 << 10
 // ShouldBindJSON 报错走既有 400 分支。
 func guardAuthJSONBody(c *gin.Context) bool {
 	if c.Request.ContentLength > maxAuthJSONBodyBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "common.requestBodyTooLarge"))
+		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(413, "common.requestBodyTooLarge"))
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthJSONBodyBytes)
@@ -198,7 +198,7 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		services.RecordAuditLog("", "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("invalid_request")) /* audit-detail raw */, c.ClientIP())
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 
@@ -217,12 +217,12 @@ func (h *Handlers) Login(c *gin.Context) {
 		_ = loginDummyCompare(loginDummyBcryptHash, []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("invalid_credentials")) /* audit-detail raw */, c.ClientIP())
 		notifyLoginFailed(req.Username, "认证失败", c.ClientIP())
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.invalidCredentials"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.invalidCredentials"))
 		return
 	}
 	if err != nil {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.databaseError"))
 		return
 	}
 	// 登录失败锁定（用户裁定：受「登录失败锁定」开关控制）。锁定期间仍跑一次
@@ -232,14 +232,14 @@ func (h *Handlers) Login(c *gin.Context) {
 	if lockErr != nil {
 		// 开关读取失败 fail-closed——不进入认证流程。
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.databaseError"))
 		return
 	}
 	if locked {
 		_ = bcrypt.CompareHashAndPassword(loginCompareHash(passwordHash), []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditTextPart("audit.accountLocked")), c.ClientIP())
 		notifyLoginFailed(req.Username, "账户已锁定", c.ClientIP())
-		c.JSON(http.StatusTooManyRequests, apimsg.Envelope(c, 429, "auth.accountLocked", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())))
+		c.JSON(http.StatusTooManyRequests, apimsg.Envelope(429, "auth.accountLocked", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())))
 		return
 	}
 
@@ -255,13 +255,13 @@ func (h *Handlers) Login(c *gin.Context) {
 		recordLoginFailure(user.ID)
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("invalid_credentials")) /* audit-detail raw */, c.ClientIP())
 		notifyLoginFailed(req.Username, "认证失败", c.ClientIP())
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.invalidCredentials"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.invalidCredentials"))
 		return
 	}
 	if !user.IsEnabled {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditTextPart("audit.accountDisabled")), c.ClientIP())
 		notifyLoginFailed(req.Username, "账号已禁用", c.ClientIP())
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "auth.loginAccountDisabled"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "auth.loginAccountDisabled"))
 		return
 	}
 
@@ -281,7 +281,7 @@ func (h *Handlers) Login(c *gin.Context) {
 			// 拿不到挑战」在审计里完全不可见。
 			services.Logf("error", "登录: 签发 MFA 挑战失败: user_id=%d: %v", user.ID, ierr)
 			services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.mfaChallengeIssueFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.mfaChallengeIssueFailed"))
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"mfa_required": true, "mfa_token": mfaToken})
@@ -416,7 +416,7 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 	tokenString, _, err := signSessionJWT(h.cfg.JWTSecret, user.ID, user.Username, user.Role, passwordVersion, mfaTs, authMethod)
 	if err != nil {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditResultPart("internal_error")) /* audit-detail raw */, c.ClientIP())
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.loginTokenIssueFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.loginTokenIssueFailed"))
 		return
 	}
 	if isLogin {
@@ -459,7 +459,7 @@ func (h *Handlers) Logout(c *gin.Context) {
 	// 分支。对齐仓内 DELETE 幂等契约（重复调用 404——见 apidocs
 	// operationDescription 的删除类约定），按「无会话令牌可吊销」返回 404。
 	if c.GetString("auth_type") == "api_key" {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "auth.apiKeyLogoutNoSessionToken"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "auth.apiKeyLogoutNoSessionToken"))
 		return
 	}
 	username, _ := c.Get("username")
@@ -468,23 +468,23 @@ func (h *Handlers) Logout(c *gin.Context) {
 	expiresAt, ok := c.Get("token_expires_at")
 	expiresAtTime, valid := expiresAt.(time.Time)
 	if revocationHash == "" || !ok || !valid {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.logoutFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.logoutFailed"))
 		return
 	}
 	if _, err := db.DB.ExecContext(c.Request.Context(), "INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", revocationHash, models.FormatRevokedTokenTime(expiresAtTime)); err != nil {
 		services.Logf("error", "登出吊销会话失败（令牌尚未吊销）: username=%s: %v", usernameStr, err)
 		services.RecordAuditLog(usernameStr, "登出", "用户认证", services.FormatAuditDetail(services.AuditResultPart("failure")) /* audit-detail raw */, c.ClientIP())
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.logoutFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.logoutFailed"))
 		return
 	}
 	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.FormatAuditDetail(services.AuditResultPart("success")) /* audit-detail raw */, c.ClientIP())
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "auth.loggedOut"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "auth.loggedOut"))
 }
 
 func (h *Handlers) GetCurrentUser(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	if userID == nil {
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.notLoggedInOrSessionExpired"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.notLoggedInOrSessionExpired"))
 		return
 	}
 
@@ -499,10 +499,10 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 		// 并发删除时 ErrNoRows 不是 500——与 jwtAuth 同文案 401，客户端据此
 		// 重新登录而不是重试。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.userNotFoundOrDisabled"))
+			c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.userNotFoundOrDisabled"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.databaseError"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "common.databaseError"))
 		return
 	}
 
@@ -590,7 +590,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	}
 	userID, _ := c.Get("user_id")
 	if userID == nil {
-		c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.notLoggedInOrSessionExpired"))
+		c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.notLoggedInOrSessionExpired"))
 		return
 	}
 
@@ -602,7 +602,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	// 2026-09-18 用户裁定:OIDC 用户的显示名/密码源自 IdP——本地不可改,
@@ -617,7 +617,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		return
 	}
 	if err := validatePasswordPolicy(req.Password); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	// currentPasswordVersion 函数级：确认读载入，事务 UPDATE 的乐观并发守卫
@@ -627,20 +627,20 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		// 2026-09 用户裁定：改密是登录后唯一需要密码确认的例外操作；失败仅
 		// 401 不计数不锁定（全系统唯一锁定在登录阶段，5 次/10 分钟受开关控制）。
 		if req.CurrentPassword == "" {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "auth.passwordChangeRequiresCurrentPassword"))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "auth.passwordChangeRequiresCurrentPassword"))
 			return
 		}
 		var currentHash string
 		if err := db.DB.QueryRow("SELECT password_hash, password_version FROM users WHERE id=?", userIDInt).Scan(&currentHash, &currentPasswordVersion); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.userNotFoundOrDisabled"))
+				c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.userNotFoundOrDisabled"))
 				return
 			}
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.userLoadFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.userLoadFailed"))
 			return
 		}
 		if bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(req.CurrentPassword)) != nil {
-			c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.currentPasswordRejected"))
+			c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.currentPasswordRejected"))
 			return
 		}
 		// 乐观并发守卫注入点（测试缝，生产恒 nil）：确认读之后、写事务
@@ -656,7 +656,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	if req.Password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordHashingFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "user.passwordHashingFailed"))
 			return
 		}
 		passwordHash = string(hash)
@@ -664,7 +664,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "user.updateFailed"))
 		return
 	}
 	committed := false
@@ -679,10 +679,10 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	var oldDisplayName string
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(display_name,'') FROM users WHERE id = ?", userIDInt).Scan(&oldDisplayName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.userNotFoundOrDisabled"))
+			c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.userNotFoundOrDisabled"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.userLoadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.userLoadFailed"))
 		return
 	}
 
@@ -722,12 +722,12 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		}
 		res, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?"+guard, args...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "user.updateFailed"))
 			return
 		}
 		if passwordHash != "" {
 			if affected, err := res.RowsAffected(); err == nil && affected == 0 {
-				c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "auth.passwordChangedConcurrently"))
+				c.JSON(http.StatusConflict, apimsg.Envelope(409, "auth.passwordChangedConcurrently"))
 				return
 			}
 		}
@@ -736,7 +736,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		// 改密在同一事务内吊销在册 MFA 挑战（版本绑定是主防线，
 		// 这里保证旧挑战不会以任何路径残留）。
 		if err := revokeMFAChallenges(tx, userIDInt); err != nil {
-			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.updateFailed"))
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "user.updateFailed"))
 			return
 		}
 	}
@@ -751,16 +751,16 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		// 鉴权层与本事务之间用户被并发删除：ErrNoRows=401（与 jwtAuth 同
 		// 文案），不得折叠为 500 诱导客户端重试。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "auth.userNotFoundOrDisabled"))
+			c.JSON(http.StatusUnauthorized, apimsg.Envelope(401, "auth.userNotFoundOrDisabled"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.userLoadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.userLoadFailed"))
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
 		rollbackLeakedTx()
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.userUpdateCommitFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.userUpdateCommitFailed"))
 		return
 	}
 	committed = true
@@ -806,7 +806,7 @@ func (h *Handlers) GetSetupStatus(c *gin.Context) {
 	// 不得引导建号(建号会被同步覆盖)。角色读失败 fail-closed 500。
 	master, roleErr := setupRoleAllowsInit(c.Request.Context())
 	if roleErr != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.nodeRoleLoadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.nodeRoleLoadFailed"))
 		return
 	}
 	if !master {
@@ -815,7 +815,7 @@ func (h *Handlers) GetSetupStatus(c *gin.Context) {
 	}
 	var count int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.setupStatusCheckFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.setupStatusCheckFailed"))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"needs_setup": count == 0}})
@@ -826,20 +826,20 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 	// 角色读失败 fail-closed 500（不得落回主节点语义放行建号）。
 	master, roleErr := setupRoleAllowsInit(c.Request.Context())
 	if roleErr != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.nodeRoleLoadFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.nodeRoleLoadFailed"))
 		return
 	}
 	if !master {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "auth.setupNotSupportedOnSlave"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "auth.setupNotSupportedOnSlave"))
 		return
 	}
 	var count int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.setupStatusCheckFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.setupStatusCheckFailed"))
 		return
 	}
 	if count > 0 {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "auth.alreadyInitialized"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "auth.alreadyInitialized"))
 		return
 	}
 	var req struct {
@@ -851,20 +851,20 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "auth.initialAdminCredentialsTooShort"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "auth.initialAdminCredentialsTooShort"))
 		return
 	}
 	if err := validateUsernamePolicy(req.Username); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	if err := validatePasswordPolicy(req.Password); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "user.passwordHashingFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "user.passwordHashingFailed"))
 		return
 	}
 	// 刻意无 ctx 豁免：引导阶段一次性播种语境——单行幂等 INSERT（NOT EXISTS
@@ -872,19 +872,19 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 	result, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled, is_setup_admin) SELECT ?, ?, 'admin', ?, 1, 1 WHERE NOT EXISTS (SELECT 1 FROM users)",
 		req.Username, string(hash), req.DisplayName)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.initialAdminCreateFailed"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.initialAdminCreateFailed"))
 		return
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "auth.initialAdminCreateResultUnknown"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "auth.initialAdminCreateResultUnknown"))
 		return
 	}
 	if affected == 0 {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "auth.alreadyInitialized"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "auth.alreadyInitialized"))
 		return
 	}
 	id, _ := result.LastInsertId()
 	services.RecordAuditLog(req.Username, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), services.AuditTextPart("audit.firstAdminInit")), c.ClientIP())
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "auth.initialAdminCreated"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "auth.initialAdminCreated"))
 }

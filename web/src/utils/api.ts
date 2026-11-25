@@ -235,11 +235,8 @@ service.interceptors.request.use(
     if (authToken) {
       config.headers.Authorization = `Bearer ${authToken}`
     }
-    // i18n:后端按 Accept-Language 返回已翻译的 message(message_key 恒定,
-    // 供前端分类钉测与本地词表回落);curl/脚本不带该头时后端回落中文。
-    // 语言取 i18n 实例的当前 locale:首访跟随浏览器时界面语言是运行期检测出来
-    // 的、不落盘,只读存储键会把英文界面判成中文,后端文案随之整批回中文。
-    config.headers['Accept-Language'] = i18n.global.locale.value === 'en' ? 'en' : 'zh-CN'
+    // 不发送 Accept-Language：后端不按请求语言渲染（2026-11-25 裁定，中文母本 +
+    // message_key + message_params 恒定返回），界面语言只由前端词条决定。
     return config
   },
   (error) => {

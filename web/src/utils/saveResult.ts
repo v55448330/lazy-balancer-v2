@@ -11,8 +11,8 @@ interface SaveResultLike {
 }
 
 /** PUT /config 无变化成功响应的稳定语义键（后端 caddy.configUnchanged）：DB/运行配置均未
- *  变更。message 按 Accept-Language 翻译（zh「配置无变化」/ en「No configuration
- *  changes」），字面量比较在 en 下必然失配——三张设置卡统一走本判据。 */
+ *  变更。后端不再按请求语言翻译，message 恒为中文母本（「配置无变化」）——但字面量比较
+ *  仍属脆弱写法，三张设置卡统一走本语言无关判据。 */
 const CONFIG_UNCHANGED_MESSAGE_KEY = 'caddy.configUnchanged'
 
 /** 「配置无变化」判定单源：语言无关语义键。无键旧响应按未变化=未知处理（false，
@@ -21,8 +21,8 @@ export const isConfigUnchanged = (res: SaveResultLike | undefined | void): boole
   !!res && res.messageKey === CONFIG_UNCHANGED_MESSAGE_KEY
 
 // 后端成功响应（code:0）可能是退化 200：DB 已提交但 Caddy 配置应用失败。
-// 判定首选 messageKey（语言无关）——message 按 Accept-Language 翻译，en 模板
-// 不含 zh 标记；zh 标记仅作无键旧响应兜底（bulkApplyResult 单源）。
+// 判定首选 messageKey（语言无关）——message 是中文母本、且易随文案漂移；
+// zh 标记仅作无键旧响应兜底（bulkApplyResult 单源）。
 // 退化必须以持续警告呈现给用户，否则失败对 UI 不可见。
 export function showSaveResult(res: SaveResultLike | undefined | void, fallback: string): void {
   const message = res?.message || fallback

@@ -11,15 +11,12 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/apimsg"
-	i18n "lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 )
 
-func enCtx() tfCtx { return tfCtx{i18n.CtxLangKey: i18n.EN} }
-
-// Envelope 是带键响应信封的构造入口：一次调用产出业务码、按请求语言渲染的
-// message、稳定键 message_key 与模板参数 message_params。前端据键 + 参数用自己的
-// 词条按界面语言渲染，渲染不出时回落 message。
+// Envelope 是带键响应信封的构造入口：一次调用产出业务码、中文母本 message、
+// 稳定键 message_key 与模板参数 message_params。前端据键 + 参数用自己的词条按
+// 界面语言渲染，渲染不出时回落 message。
 //
 // 为什么要有它：手写三字段（Code / Message / MessageKey）要把键抄两遍，已有 73 处
 // 漏抄了键；补模板参数时若把实参再抄一份，实参里的函数调用（apimsg.ErrMsg、脱敏、
@@ -30,7 +27,7 @@ func enCtx() tfCtx { return tfCtx{i18n.CtxLangKey: i18n.EN} }
 // message 的那段文本）。
 
 func TestEnvelope_carriesKeyAndParamsOnTheWire(t *testing.T) {
-	got := apimsg.Envelope(zhCtx(), 400, "notify.dailyItemUnknown", "no_such_item")
+	got := apimsg.Envelope(400, "notify.dailyItemUnknown", "no_such_item")
 	want := models.APIResponse{
 		Code:          400,
 		Message:       "未知的日报项目: no_such_item",
@@ -52,11 +49,11 @@ func TestEnvelope_carriesKeyAndParamsOnTheWire(t *testing.T) {
 
 func TestEnvelope_withoutArgs_matchesHandWrittenLiteral(t *testing.T) {
 	// 回归：无参数时不产生 message_params，其余三字段与既有写法逐字相同。
-	hand := models.APIResponse{Code: 404, Message: apimsg.T(zhCtx(), "user.notFound"), MessageKey: "user.notFound"}
-	if got := apimsg.Envelope(zhCtx(), 404, "user.notFound"); !reflect.DeepEqual(got, hand) {
+	hand := models.APIResponse{Code: 404, Message: apimsg.T("user.notFound"), MessageKey: "user.notFound"}
+	if got := apimsg.Envelope(404, "user.notFound"); !reflect.DeepEqual(got, hand) {
 		t.Fatalf("无参数信封与手写字面量不一致\n got %#v\nwant %#v", got, hand)
 	}
-	wire, err := json.Marshal(apimsg.Envelope(zhCtx(), 404, "user.notFound"))
+	wire, err := json.Marshal(apimsg.Envelope(404, "user.notFound"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,30 +82,29 @@ func TestEnvelope_paramsAreTheTextRenderedIntoMessage(t *testing.T) {
 	}
 	const key = "caddy.unknownLogType" // 模板有两个槽：%q 与 %s
 	for _, tc := range cases {
-		for _, ctx := range []tfCtx{zhCtx(), enCtx()} {
-			got := apimsg.Envelope(ctx, 400, key, tc.args...)
-			if len(got.MessageParams) != len(tc.args) {
-				t.Fatalf("%s: 参数个数 got %d, want %d", tc.name, len(got.MessageParams), len(tc.args))
+		got := apimsg.Envelope(400, key, tc.args...)
+		if len(got.MessageParams) != len(tc.args) {
+			t.Fatalf("%s: 参数个数 got %d, want %d", tc.name, len(got.MessageParams), len(tc.args))
+		}
+		params := make([]string, len(tc.args))
+		for i, p := range got.MessageParams {
+			if p == "" {
+				t.Fatalf("%s: 第 %d 个参数为空串——归一丢了值", tc.name, i)
 			}
-			params := make([]string, len(tc.args))
-			for i, p := range got.MessageParams {
-				if p == "" {
-					t.Fatalf("%s: 第 %d 个参数为空串——归一丢了值", tc.name, i)
-				}
-				params[i] = p
-			}
-			if rendered := renderSlots(apimsg.T(ctx, key), params); rendered != got.Message {
-				t.Fatalf("%s: 参数按槽填回模板与 message 不一致\n 填回 %q\nmessage %q", tc.name, rendered, got.Message)
-			}
+			params[i] = p
+		}
+		if rendered := renderSlots(apimsg.T(key), params); rendered != got.Message {
+			t.Fatalf("%s: 参数按槽填回模板与 message 不一致\n 填回 %q\nmessage %q", tc.name, rendered, got.Message)
 		}
 	}
 }
 
-func TestEnvelope_nilContextRendersChinese(t *testing.T) {
-	// 畸形：没有请求上下文（中间件未挂、测试直调）时按中文母本渲染，不崩溃。
-	got := apimsg.Envelope(nil, 400, "notify.dailyItemUnknown", "x")
+func TestEnvelope_alwaysRendersChineseMotherWithoutContext(t *testing.T) {
+	// 后端无请求上下文可依赖：信封恒按中文母本渲染（英文界面由前端按 message_key
+	// 用自己的词条重渲染），且与任何请求头无关。
+	got := apimsg.Envelope(400, "notify.dailyItemUnknown", "x")
 	if got.Message != "未知的日报项目: x" || got.MessageKey != "notify.dailyItemUnknown" || len(got.MessageParams) != 1 {
-		t.Fatalf("nil 上下文下的信封 %#v", got)
+		t.Fatalf("信封 %#v", got)
 	}
 }
 

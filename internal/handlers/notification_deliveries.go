@@ -80,7 +80,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	if raw := c.Query("page_size"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 			return
 		}
 		if n > 200 {
@@ -99,7 +99,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		switch status {
 		case "pending", "sent", "partial", "failed", "dead":
 		default:
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.unsupportedDeliveryStatusFilter", status))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.unsupportedDeliveryStatusFilter", status))
 			return
 		}
 	}
@@ -222,7 +222,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	var req struct {
@@ -233,7 +233,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	}
 	// 空 body 兼容（旧客户端无 body 全量重发）：EOF 视同缺省，坏 JSON 仍 400。
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	uid := contextUserID(c)
@@ -241,15 +241,15 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	var owner int64
 	var status, title string
 	if err := db.DB.QueryRow(`SELECT user_id, status, title FROM notification_deliveries WHERE id=?`, id).Scan(&owner, &status, &title); err != nil {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "notify.deliveryNotFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "notify.deliveryNotFound"))
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "notify.canOnlyResendOwnDelivery"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "notify.canOnlyResendOwnDelivery"))
 		return
 	}
 	if status == "pending" {
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "notify.deliveryAlreadyQueued"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "notify.deliveryAlreadyQueued"))
 		return
 	}
 	// 审计通道名在重置前取快照（重置唤醒投递后结果行可能追加）。
@@ -261,7 +261,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 	}
 	if !found || !reset {
 		// 预检后状态被并发改变（已 pending 或已删除）。
-		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "notify.deliveryAlreadyQueued"))
+		c.JSON(http.StatusConflict, apimsg.Envelope(409, "notify.deliveryAlreadyQueued"))
 		return
 	}
 	subject := "重发投递「" + title + "」"
@@ -272,7 +272,7 @@ func (h *Handlers) ResendNotificationDelivery(c *gin.Context) {
 		subject = "管理员" + subject
 	}
 	recordAudit(c, "重发", "通知投递", services.FormatAuditDetail(services.AuditRawPart(subject) /* audit-detail raw */, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "notify.resendAccepted"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "notify.resendAccepted"))
 }
 
 // resendAuditChannelNames 重发审计通道名：每通道取最新结果行（重发追加行，

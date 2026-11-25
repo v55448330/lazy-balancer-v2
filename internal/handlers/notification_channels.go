@@ -335,24 +335,24 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.malformedRequest"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.malformedRequest"))
 		return
 	}
 	switch req.Type {
 	case channelTypeWebhook, channelTypeEmail, channelTypeQQ, channelTypeWx:
 	default:
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.unsupportedChannelType"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.unsupportedChannelType"))
 		return
 	}
 	if err := validateChannelTarget(req.Type, req.Target); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelTargetValidationFailed", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.channelTargetValidationFailed", apimsg.ErrMsg(err)))
 		return
 	}
 	styleConfig := "{}"
 	if len(req.StyleConfig) > 0 {
 		normalized, err := validateChannelStyle(req.Type, req.StyleConfig)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelStyleValidationFailed", apimsg.ErrMsg(c, err)))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.channelStyleValidationFailed", apimsg.ErrMsg(err)))
 			return
 		}
 		styleConfig = notify.CanonicalTemplateScope(normalized, "")
@@ -399,11 +399,11 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 	var owner int64
 	var typ, name, currentTarget, currentStyle string
 	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,''), COALESCE(style_config,'{}') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget, &currentStyle); err != nil {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.policyNotFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "security.policyNotFound"))
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "notify.canOnlyManageOwnChannel"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "notify.canOnlyManageOwnChannel"))
 		return
 	}
 	var req struct {
@@ -416,7 +416,7 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidRequest", apimsg.ErrMsg(c, err)))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.invalidRequest", apimsg.ErrMsg(err)))
 		return
 	}
 	// 校验先行（无副作用），写库统一进单事务——四条 UPDATE 曾各自独立提交：
@@ -429,14 +429,14 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		req.StyleConfig = restoreMaskedStyleHeaders(req.StyleConfig, currentStyle)
 		normalized, err := validateChannelStyle(typ, req.StyleConfig)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelStyleValidationFailed", apimsg.ErrMsg(c, err)))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.channelStyleValidationFailed", apimsg.ErrMsg(err)))
 			return
 		}
 		normalizedStyle, hasStyle = notify.CanonicalTemplateScope(normalized, currentStyle), true
 	}
 	if req.Target != "" {
 		if err := validateChannelTarget(typ, req.Target); err != nil {
-			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelTargetValidationFailed", apimsg.ErrMsg(c, err)))
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "notify.channelTargetValidationFailed", apimsg.ErrMsg(err)))
 			return
 		}
 		// 旧前端兜底：列表对非属主 target 整体脱敏，旧版编辑把掩码串当新目标
@@ -526,11 +526,11 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 	var owner int64
 	var typ, name, currentTarget string
 	if err := db.DB.QueryRow(`SELECT user_id, type, name, COALESCE(target,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &name, &currentTarget); err != nil {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.policyNotFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "security.policyNotFound"))
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "notify.canOnlyManageOwnChannel"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "notify.canOnlyManageOwnChannel"))
 		return
 	}
 	if _, err := db.DB.Exec(`DELETE FROM notification_channels WHERE id=?`, id); err != nil {
@@ -559,11 +559,11 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	var typ, target, name, style string
 	var owner int64
 	if err := db.DB.QueryRow(`SELECT user_id, type, target, name, COALESCE(style_config,'') FROM notification_channels WHERE id=?`, id).Scan(&owner, &typ, &target, &name, &style); err != nil {
-		c.JSON(http.StatusNotFound, apimsg.Envelope(c, 404, "security.policyNotFound"))
+		c.JSON(http.StatusNotFound, apimsg.Envelope(404, "security.policyNotFound"))
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "notify.canOnlyTestOwnChannel"))
+		c.JSON(http.StatusForbidden, apimsg.Envelope(403, "notify.canOnlyTestOwnChannel"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
@@ -592,10 +592,10 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 		recordAudit(c, "测试", "通知通道", services.FormatAuditDetail(services.AuditRawPart(subject) /* audit-detail raw */, services.AuditResultPart("failed")))
 	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "notify.testMessageSendFailed", err.Error()))
+		c.JSON(http.StatusBadGateway, apimsg.Envelope(502, "notify.testMessageSendFailed", err.Error()))
 		return
 	}
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "notify.testMessageSent"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "notify.testMessageSent"))
 }
 
 // validateChannelStyle 通道消息样式校验+归一（返回规范化 JSON）：

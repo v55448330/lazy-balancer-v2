@@ -78,7 +78,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 	}
 	recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(services.AuditTextPart("audit.validUntil", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
 	notify.Publish(notify.Event{Type: notify.EvtClusterNodeSettings, Fields: map[string]string{"1": c.GetString("username"), "2": "生成了集群注册令牌", "3": "有效期至 " + expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.registrationTokenGenerated"), MessageKey: "cluster.registrationTokenGenerated", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("cluster.registrationTokenGenerated"), MessageKey: "cluster.registrationTokenGenerated", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
 }
 
 func (h *Handlers) RegisterClusterNode(c *gin.Context) {
@@ -174,7 +174,7 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 		}
 	}
 	services.RecordAuditLog("system", "注册", "集群节点", services.FormatAuditDetail(auditParts...), c.ClientIP())
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, messageKey, messageArgs...).WithData(registration))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, messageKey, messageArgs...).WithData(registration))
 }
 
 func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
@@ -219,7 +219,7 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.registrationStatusQueryFailed", err))
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.registrationStatusQueried"), MessageKey: "cluster.registrationStatusQueried", Data: status})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("cluster.registrationStatusQueried"), MessageKey: "cluster.registrationStatusQueried", Data: status})
 }
 
 func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
@@ -251,7 +251,7 @@ func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog("system", "确认", "集群节点", services.FormatAuditDetail(services.AuditTextPart("audit.nodeNamed", nodeName), services.AuditTextPart("audit.registrationSecretInvalid"), services.AuditResultPart("success")), c.ClientIP())
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.registrationConfirmed"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "cluster.registrationConfirmed"))
 }
 
 func (h *Handlers) ApproveClusterNode(c *gin.Context) {
@@ -332,7 +332,7 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 		"2": "更新了节点站点坐标",
 		"3": fmt.Sprintf("节点 %d（纬度 %.4f，经度 %.4f）", id, *req.ServerMapLat, *req.ServerMapLon),
 	}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "cluster.nodeSiteCoordinatesSaved"), MessageKey: "cluster.nodeSiteCoordinatesSaved", Data: gin.H{
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("cluster.nodeSiteCoordinatesSaved"), MessageKey: "cluster.nodeSiteCoordinatesSaved", Data: gin.H{
 		"server_map_lat": *req.ServerMapLat,
 		"server_map_lon": *req.ServerMapLon,
 	}})
@@ -424,7 +424,7 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 	verbKeys := map[string]string{"审批": "cluster.nodeActionApprove", "拒绝": "cluster.nodeActionReject", "删除": "cluster.nodeActionDelete", "更新地址": "cluster.nodeActionUpdateAccessUrl"}
 	verb := action
 	if key, ok := verbKeys[action]; ok {
-		verb = apimsg.T(c, key)
+		verb = apimsg.T(key)
 	}
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeActionSucceeded", verb))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "cluster.nodeActionSucceeded", verb))
 }

@@ -235,7 +235,7 @@ func (h *Handlers) caddyMetricsSnapshot(ctx context.Context, cacheFailure bool) 
 func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 	outcome := h.metricsDashboardCached(c.Request.Context())
 	if outcome.status != 0 {
-		c.JSON(outcome.status, apimsg.Envelope(nil, outcome.status, outcome.key))
+		c.JSON(outcome.status, apimsg.Envelope(outcome.status, outcome.key))
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: outcome.payload})
@@ -402,7 +402,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	var rule models.LbRule
 	database := db.DB
 	if database == nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.databaseNotInitialized"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "system.databaseNotInitialized"))
 		return
 	}
 	err := database.QueryRowContext(c.Request.Context(), `SELECT COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, ruleID).Scan(
@@ -601,7 +601,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 	var protocol string
 	database := db.DB
 	if database == nil {
-		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "system.databaseNotInitialized"))
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(500, "system.databaseNotInitialized"))
 		return
 	}
 	if err := database.QueryRowContext(c.Request.Context(), "SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); dbQueryNotFound(c, err, "规则不存在", "GetRuleMetricsHistory query rule") {

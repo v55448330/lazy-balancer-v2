@@ -112,14 +112,14 @@ func TestDeleteCertJobGuardedRecordsFailureAudit(t *testing.T) {
 // 重试冷却门禁与文案必须同源：门禁说冷却中时文案不得显示「0s」，失败文案
 // 的剩余秒由 services.CertJobRetryRemaining 按 updated_at 扣减后派生（完整
 // 窗口分钟数会在冷却过半后说谎；硬编码会随策略漂移）。文案形态是消息键 +
-// 模板参数，中文母本由目录对账（apimsg.Tf(nil, key, args...)）。
+// 模板参数，中文母本由目录对账（apimsg.Tf(key, args...)）。
 func TestCertJobRetryCooldownGateAndMessageSharePolicy(t *testing.T) {
 	now := time.Now()
 
 	// 不足 1 秒的剩余必须向上取整为 1s（0s 会引导一次必然 429 的重试）。
 	if key, args := certJobCAcooldownKey(now.Add(300*time.Millisecond), now); key != "cert.caCooldownActive" {
 		t.Fatalf("messageKey=%q, want cert.caCooldownActive", key)
-	} else if got := apimsg.Tf(nil, key, args...); !strings.Contains(got, "剩余约 1s") || strings.Contains(got, "剩余约 0s") {
+	} else if got := apimsg.Tf(key, args...); !strings.Contains(got, "剩余约 1s") || strings.Contains(got, "剩余约 0s") {
 		t.Fatalf("message=%q, want 剩余约 1s（<1s 向上取整）", got)
 	}
 
@@ -140,7 +140,7 @@ func TestCertJobRetryCooldownGateAndMessageSharePolicy(t *testing.T) {
 	if messageKey != "cert.jobRetryCooldownRemaining" || len(messageArgs) != 1 {
 		t.Fatalf("messageKey=%q args=%v, want cert.jobRetryCooldownRemaining + 1 参", messageKey, messageArgs)
 	}
-	message := apimsg.Tf(nil, messageKey, messageArgs...)
+	message := apimsg.Tf(messageKey, messageArgs...)
 	if !strings.Contains(message, strconv.FormatInt(wantSeconds, 10)+" 秒") {
 		t.Fatalf("message=%q, want 与剩余秒判据一致的 %d 秒", message, wantSeconds)
 	}

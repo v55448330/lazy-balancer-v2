@@ -22,7 +22,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
 
-	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -266,7 +265,7 @@ func tlsCertificateNotes(certPEM, keyPEM, domain string) importWarnings {
 // tlsCertificateWarnings 是 tlsCertificateNotes 的中文渲染：规则保存链路与
 // 审计明细按中文母本消费，且 certWarningsForResponse 依赖中文前缀分类。
 func tlsCertificateWarnings(certPEM, keyPEM, domain string) []string {
-	return tlsCertificateNotes(certPEM, keyPEM, domain).render(i18n.ZH)
+	return tlsCertificateNotes(certPEM, keyPEM, domain).render()
 }
 
 // tlsCertCoversDomain 判定证书是否覆盖域名:优先标准 SAN 校验(Go 内建通配

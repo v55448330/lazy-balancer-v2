@@ -2,13 +2,14 @@ package apimsg
 
 // Tf 传参点槽数对账钉测：调用方给 Tf 传了参数，词条模板就必须有足够占位槽
 // 承接——codemod 迁移曾把 8 条「尾冒号 + 错误详情」词条的 %s 槽弄丢
-// （zh/en 双语只剩悬空冒号，错误详情被静默丢弃，主错误通道丢载荷）。
+// （母本只剩悬空冒号，错误详情被静默丢弃，主错误通道丢载荷）。
 // 本守卫机械扫描全仓的传参点（AST 计数实参，排除 variadic 展开）：
-//   - apimsg.Tf(c, key, args...)
-//   - apimsg.Envelope(c, code, key, args...)——带键响应信封的构造入口，参数经它转给 Tf
-// 对照 catalog 的 zh/en 槽数（与 Tf 同口径：%s/%d/%v/%q 各占一槽，%% 是
+//   - apimsg.Tf(key, args...)
+//   - apimsg.Envelope(code, key, args...)——带键响应信封的构造入口，参数经它转给 Tf
+// 对照 catalog 的中文母本槽数（与 Tf 同口径：%s/%d/%v/%q 各占一槽，%% 是
 // 转义字面量不占槽）：模板槽数 < 传参数即红。词条改回零槽或新增无槽传参
-// 点此处必红，而不是等线上双语消息丢载荷。
+// 点此处必红，而不是等线上消息丢载荷。英文译文的槽数对等归前端守卫
+// （web/tests/apiMessagesParity.spec.ts）。
 
 import (
 	"fmt"
@@ -43,8 +44,8 @@ func tplSlotCount(tpl string) int {
 	return n
 }
 
-// argSite 一处带模板参数的取词条调用：apimsg.Tf(c, key, args...) 或
-// apimsg.Envelope(c, code, key, args...)。
+// argSite 一处带模板参数的取词条调用：apimsg.Tf(key, args...) 或
+// apimsg.Envelope(code, key, args...)。
 type argSite struct {
 	pos  token.Position
 	call string // "apimsg.Tf" / "apimsg.Envelope"
@@ -69,9 +70,9 @@ func argumentSites(fset *token.FileSet, file *ast.File) (sites []argSite, proble
 		var name string
 		switch sel.Sel.Name {
 		case "Tf":
-			keyIndex, name = 1, "apimsg.Tf"
+			keyIndex, name = 0, "apimsg.Tf"
 		case "Envelope":
-			keyIndex, name = 2, "apimsg.Envelope"
+			keyIndex, name = 1, "apimsg.Envelope"
 		default:
 			return true
 		}
@@ -103,20 +104,17 @@ func argumentSites(fset *token.FileSet, file *ast.File) (sites []argSite, proble
 	return sites, problems
 }
 
-// slotShortfalls 列出 site 的参数放不进模板的语言。键未登记（T 回落键本身）时不报：
-// 拼写错/漏登记由登记守卫拦，这里只对已登记词条做槽数对账。
+// slotShortfalls 列出 site 的参数放不进模板的中文母本。键未登记（T 回落键本身）时
+// 不报：拼写错/漏登记由登记守卫拦，这里只对已登记词条做槽数对账。
 func slotShortfalls(site argSite) []string {
-	if i18n.T(i18n.ZH, site.key) == site.key {
+	tpl := i18n.T(site.key)
+	if tpl == site.key {
 		return nil
 	}
-	var shortfalls []string
-	for _, lang := range []string{i18n.ZH, i18n.EN} {
-		tpl := i18n.T(lang, site.key)
-		if got := tplSlotCount(tpl); got < site.args {
-			shortfalls = append(shortfalls, fmt.Sprintf("%s(%q) 传 %d 参，%s 模板仅 %d 槽（参数被静默丢弃）: %q", site.call, site.key, site.args, lang, got, tpl))
-		}
+	if got := tplSlotCount(tpl); got < site.args {
+		return []string{fmt.Sprintf("%s(%q) 传 %d 参，中文母本模板仅 %d 槽（参数被静默丢弃）: %q", site.call, site.key, site.args, got, tpl)}
 	}
-	return shortfalls
+	return nil
 }
 
 func TestTfCallSites_templateSlotsCoverArgs(t *testing.T) {
@@ -187,11 +185,11 @@ func TestArgumentSites_coversEnvelopeCalls(t *testing.T) {
 import "app/internal/apimsg"
 
 func h(c int) {
-	_ = apimsg.Tf(c, "notify.dailyItemUnknown", "x")
-	_ = apimsg.Envelope(c, 400, "notify.dailyItemUnknown", "x")
-	_ = apimsg.Envelope(c, 400, "notify.dailySendTimeInvalid", "x", "y")
-	_ = apimsg.Envelope(c, 404, "user.notFound")
-	_ = apimsg.Envelope(c, 400, "no.suchKey", "x")
+	_ = apimsg.Tf("notify.dailyItemUnknown", "x")
+	_ = apimsg.Envelope(400, "notify.dailyItemUnknown", "x")
+	_ = apimsg.Envelope(400, "notify.dailySendTimeInvalid", "x", "y")
+	_ = apimsg.Envelope(404, "user.notFound")
+	_ = apimsg.Envelope(400, "no.suchKey", "x")
 }
 `
 	fset := token.NewFileSet()
@@ -228,7 +226,7 @@ func h(c int) {
 			t.Errorf("第 %d 行不该报槽数不足: %v", line, shortfalls)
 		}
 	}
-	if shortfalls := slotShortfalls(byLine[8]); len(shortfalls) != 2 || !strings.Contains(shortfalls[0], "传 2 参") {
-		t.Errorf("第 8 行 0 槽 2 参必须中英文各报一次，got %v", shortfalls)
+	if shortfalls := slotShortfalls(byLine[8]); len(shortfalls) != 1 || !strings.Contains(shortfalls[0], "传 2 参") {
+		t.Errorf("第 8 行 0 槽 2 参必须报一次，got %v", shortfalls)
 	}
 }

@@ -25,7 +25,7 @@ func (h *Handlers) GetClusterStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.statusReadFailed", err))
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "common.querySucceeded"), MessageKey: "common.querySucceeded", Data: status})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("common.querySucceeded"), MessageKey: "common.querySucceeded", Data: status})
 }
 
 func (h *Handlers) ListClusterNodes(c *gin.Context) {
@@ -37,7 +37,7 @@ func (h *Handlers) ListClusterNodes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.nodesReadFailed", err))
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "common.querySucceeded"), MessageKey: "common.querySucceeded", Data: nodes})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("common.querySucceeded"), MessageKey: "common.querySucceeded", Data: nodes})
 }
 
 func (h *Handlers) ReportClusterNode(c *gin.Context) {
@@ -80,7 +80,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 				// 从端重试脱离通知（DELETE 成功但响应丢失）时节点已不存在：
 				// 按幂等成功应答，从端据 200 停止重试；500 会让从端按
 				// 「服务端故障」持续重试并写入 last_sync_error。
-				c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeNotInCluster"))
+				c.JSON(http.StatusOK, apimsg.Envelope(0, "cluster.nodeNotInCluster"))
 				return
 			}
 			recordDetached("failed")
@@ -88,7 +88,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 			return
 		}
 		recordDetached("success")
-		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeDetached"))
+		c.JSON(http.StatusOK, apimsg.Envelope(0, "cluster.nodeDetached"))
 		return
 	}
 	if err := h.clusterService.ReportNode(c.Request.Context(), nodeID, req, time.Now()); err != nil {
@@ -108,5 +108,5 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, clusterErrorKeyedResponse(http.StatusInternalServerError, "cluster.nodeReportFailed", err))
 		return
 	}
-	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cluster.nodeStatusUpdated"))
+	c.JSON(http.StatusOK, apimsg.Envelope(0, "cluster.nodeStatusUpdated"))
 }

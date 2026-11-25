@@ -1,8 +1,11 @@
-// 后端消息词条 → 前端接口消息词条的生成器（web/DESIGN_SPEC.md §25-8）。
+// 后端消息键 + 前端接口消息词条 → 前端渲染表的生成器（web/DESIGN_SPEC.md §25-8）。
 //
-// 后端目录（internal/i18n/catalog_gen.go、catalog_manual.go）是后端响应消息的
-// 中英文母本。前端按 message_key 自己渲染提示文字，需要同一份词条；手抄两份必然
-// 分叉，所以由本脚本导出，tests/apiMessagesParity.spec.ts 钉住「与后端目录逐字相等」。
+// 职责边界（2026-11-25 项目所有者裁定：后端只下发稳定键与参数，文案只归前端）：
+//   - 后端目录（internal/i18n/catalog_*.go）只有「键 + 中文母本」，是接口契约与
+//     message 兜底原文的来源，不含任何英文译文；
+//   - 前端词条 src/locales/apiMessages.en.json 是英文的唯一维护源（手写）；
+//   - 本脚本把两者拼成 src/i18n/apiMessages.ts（前端的 zh/en 渲染表），并校验
+//     键集合双向对等：后端多一个键前端缺词条、前端多一个后端没有的键，都红。
 //
 // 用法（在 web/ 下）：
 //   npm run gen:api-messages           重新导出 src/i18n/apiMessages.ts
@@ -13,11 +16,10 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-/** 一条后端消息词条。 */
+/** 一条后端消息词条：只有键与中文母本，英文译文归前端（src/locales/apiMessages.en.json）。 */
 export interface ApiMessage {
   readonly key: string
   readonly zh: string
-  readonly en: string
 }
 
 /** 后端目录文件（相对仓库根），按此顺序拼接——与后端 init 的登记顺序一致。 */
@@ -31,8 +33,10 @@ export const BACKEND_CATALOG_FILES: readonly string[] = [
 /** 生成文件（相对 web/）。 */
 export const OUTPUT_FILE = 'src/i18n/apiMessages.ts'
 
-// Register("key", "zh", "en")：三个双引号字面量，各自允许 \" 与 \\ 转义。
-const REGISTER_LINE = /^\s*Register\("((?:[^"\\]|\\.)*)", "((?:[^"\\]|\\.)*)", "((?:[^"\\]|\\.)*)"\),?\s*$/
+// Register("key", "zh")：两个双引号字面量，各自允许 \" 与 \\ 转义。
+// 只认两参形态：后端目录不得携带英文译文（英文唯一来源是
+// src/locales/apiMessages.en.json），出现第三参直接解析失败。
+const REGISTER_LINE = /^\s*Register\("((?:[^"\\]|\\.)*)", "((?:[^"\\]|\\.)*)"\),?\s*$/
 
 /**
  * Go 双引号字符串字面量的内容 → 解码后的文本（按 Go 的转义规则，见 go/spec 的
@@ -90,8 +94,8 @@ export const goUnquote = (body: string): string | null => {
 }
 
 /**
- * 解析后端目录源码里的全部 Register(key, zh, en)。
- * 遇到 Register( 却不是单行三参数形态的行直接抛错：静默跳过会让词条悄悄缺失。
+ * 解析后端目录源码里的全部 Register(key, zh)。
+ * 遇到 Register( 却不是单行形态的行直接抛错：静默跳过会让词条悄悄缺失。
  */
 export const parseBackendCatalog = (goSource: string, fileName = '<catalog>'): ApiMessage[] => {
   const entries: ApiMessage[] = []
@@ -99,13 +103,13 @@ export const parseBackendCatalog = (goSource: string, fileName = '<catalog>'): A
     // 注释行（// 与 /* */ 块内的 * 续行）不读：注释里举例的 Register 不是词条。
     if (/^\s*(\/\/|\/\*|\*)/.test(line) || !line.includes('Register(')) return
     const match = REGISTER_LINE.exec(line)
-    if (!match) throw new Error(`${fileName}:${index + 1}: Register 不是单行三参数形态: ${line.trim()}`)
+    if (!match) throw new Error(`${fileName}:${index + 1}: Register 不是单行 (key, zh) 形态: ${line.trim()}`)
     const values = match.slice(1).map((body) => {
       const decoded = goUnquote(body)
       if (decoded === null) throw new Error(`${fileName}:${index + 1}: 字符串字面量含不认识的转义: ${body}`)
       return decoded
     })
-    entries.push({ key: values[0] as string, zh: values[1] as string, en: values[2] as string })
+    entries.push({ key: values[0] as string, zh: values[1] as string })
   })
   return entries
 }
@@ -122,8 +126,8 @@ export const FRONTEND_EN_FILE = 'src/locales/apiMessages.en.json'
 /**
  * 合并中英词条：
  *   - 中文母本一律取后端目录（后端 message 的兜底原文同源）；
- *   - 英文优先取前端词条，其次取后端遗留英文；两者都没有则该键只有中文兜底，
- *     由守卫要求前端补齐（`missing`）。
+ *   - 英文只取前端词条（src/locales/apiMessages.en.json）——后端不再提供英文，
+ *     缺译由守卫要求补齐（`missing`）；
  *   - 前端词条里出现后端目录没有的键 = 死条目（`errors`）——目录改名后必须同步删。
  */
 export const mergeTranslations = (
@@ -139,7 +143,7 @@ export const mergeTranslations = (
   const missing: string[] = []
   for (const entry of entries) {
     zh.push([entry.key, entry.zh])
-    const translated = frontendEnglish[entry.key] ?? entry.en
+    const translated = frontendEnglish[entry.key]
     if (translated) en.push([entry.key, translated])
     else missing.push(entry.key)
   }
@@ -155,10 +159,11 @@ export const renderApiMessagesModule = (entries: readonly ApiMessage[], frontend
   }
   const { zh, en } = mergeTranslations(entries, frontendEnglish)
   return [
-    '// 由 scripts/gen-api-messages.ts 从后端目录导出——不要手改。',
-    '// 中文母本来自后端目录；英文译文由前端词条（src/locales/apiMessages.en.json）补，',
-    '// 后端遗留的英文译文作为次选。改了任一侧后在 web/ 下运行 npm run gen:api-messages；',
-    '// tests/apiMessagesParity.spec.ts 钉住本文件与两侧来源逐字相等。',
+    '// 由 scripts/gen-api-messages.ts 拼装——不要手改。',
+    '// 中文母本来自后端目录（internal/i18n/catalog_*.go，只有键 + 中文）；',
+    '// 英文译文来自前端词条 src/locales/apiMessages.en.json（唯一维护源，手写）。',
+    '// 改了任一侧后在 web/ 下运行 npm run gen:api-messages；',
+    '// tests/apiMessagesParity.spec.ts 钉住键集合双向对等与本文件逐字相等。',
     '// 键是后端响应的 message_key（域名.驼峰名）；渲染入口见 utils/apiMessage.ts。',
     '',
     `/** 中文母本（后端 message 的兜底原文同源）。 */`,

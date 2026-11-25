@@ -48,7 +48,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	}
 	var req services.AutobanConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "common.invalidRequestParams"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "common.invalidRequestParams"))
 		return
 	}
 	// 缺省归一（旧客户端未携带新字段）与 SetAutobanConfig 同单源。
@@ -64,7 +64,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	// 其它写端点同口径。旧实现把两者压成 400 并回传存储层原文，真实故障被
 	// 报成「请求参数无效」，调用方停止重试且响应泄露表/列名。
 	if err := services.ValidateAutobanConfig(req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(err)})
 		return
 	}
 	if err := services.SetAutobanConfig(req); err != nil {
@@ -85,7 +85,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		return
 	}
 	notify.Publish(notify.Event{Type: notify.EvtAutobanCfgChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "更新了自动封禁配置"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "security.autoBanConfigUpdated"), MessageKey: "security.autoBanConfigUpdated", Data: updated})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T("security.autoBanConfigUpdated"), MessageKey: "security.autoBanConfigUpdated", Data: updated})
 }
 
 func boolOnOff(b bool) string {
@@ -263,7 +263,7 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	identity := services.AutobanEntryIdentity(c.Param("identity"))
 	identity, err := services.DeleteAutobanRecidivismGuarded(caddyWriteCtx(c), identity)
 	if errors.Is(err, services.ErrAutobanIdentityBanned) {
-		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "security.recidivismRecordCannotBeRemovedWhileBanned"))
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(400, "security.recidivismRecordCannotBeRemovedWhileBanned"))
 		return
 	}
 	if err != nil {
