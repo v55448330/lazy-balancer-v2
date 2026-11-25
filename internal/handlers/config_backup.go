@@ -6013,13 +6013,12 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	}
 	payload, _, countsSummary, includesWafFiles, err := h.buildLbbakExport(c.Request.Context(), sel)
 	if err != nil {
-		status := http.StatusInternalServerError
-		message := "导出失败: " + err.Error()
 		if errors.Is(err, errUnknownBackupSection) {
-			status = http.StatusBadRequest
-			message = err.Error()
+			// 客户端可修正的分类参数错误：正文即错误原文（已含分类说明）。
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: err.Error()})
+			return
 		}
-		c.JSON(status, models.APIResponse{Code: status, Message: message})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, http.StatusInternalServerError, "backup.exportFailed", err.Error()))
 		return
 	}
 	// 披露口径：通知中心配置（通道/订阅/投递记录/凭据）不在备份面——跨实例
@@ -6050,7 +6049,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		// 尺寸超限（413）属探测面，不落审计；其余读失败与空体是「被拒绝的导入
 		// 尝试」，与核心的事务前校验失败同口径留痕。
 		if isRequestBodyTooLarge(rerr) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: configImportLimitMessage()})
+			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
 			return
 		}
 		failImportValidation(c, "导入", "备份文件读取失败: "+rerr.Error())
@@ -7498,7 +7497,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 阶段描述只出现一次（见 importPartialSuccessMessage）。
 		responseWarnings = append(responseWarnings, importPartialSuccessWarning(c, queueRecoveryErr))
 		notifyImportOutcome(c, action, true, "")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: importPartialSuccessMessage(action, queueRecoveryErr), Data: gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings, "partial": true}})
+		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.importPartialSuccess", action, importFailureCause(queueRecoveryErr)).WithData(gin.H{"summary": counts, "disabled_conflicts": localizedConflicts, "warnings": responseWarnings, "partial": true}))
 		return
 	}
 	notifyImportOutcome(c, action, true, "")

@@ -23,7 +23,7 @@ func (h *Handlers) GetRuleCertInfo(c *gin.Context) {
 	if err != nil {
 		// 底层原因由服务层就地记录（services.GetRuleCertInfo 自带 Logf），
 		// 这里传 nil 避免同一错误双行；仍走统一写点保证「5xx 只有一种形态」。
-		writeInternalError(c, http.StatusInternalServerError, "读取规则证书信息失败", nil)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.ruleCertInfoReadFailed", nil)
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
@@ -71,7 +71,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	// 捕获本地句柄并显式 nil 守卫，整批 500 固定文案（fail-visible）。
 	database := db.DB
 	if database == nil {
-		writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", nil)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.batchRuleCertConfigQueryFailed", nil)
 		return
 	}
 	queryArgs := append([]any{services.GetCertExpiryThreshold()}, args...)
@@ -80,7 +80,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 			?
 		FROM lb_rules WHERE caddy_id IN (%s)`, placeholders), queryArgs...)
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.batchRuleCertConfigQueryFailed", err)
 		return
 	}
 	defer rows.Close()
@@ -98,13 +98,13 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	for rows.Next() {
 		var rule ruleCertificate
 		if err := rows.Scan(&rule.id, &rule.enabled, &rule.enableTLS, &rule.source, &rule.domains, &rule.certPEM, &rule.expiryDays); err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.batchRuleCertConfigQueryFailed", err)
 			return
 		}
 		rules[rule.id] = rule
 	}
 	if err := rows.Err(); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.batchRuleCertConfigQueryFailed", err)
 		return
 	}
 
@@ -114,7 +114,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		WHERE rule_id IN (%s) AND %s
 		ORDER BY rule_id, updated_at DESC, id DESC`, placeholders, services.CertJobMaterialPredicateSQL("")), args...)
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.batchIssuedCertificateQueryFailed", err)
 		return
 	}
 	defer jobRows.Close()
@@ -126,7 +126,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		var domain, status, certPEM, keyPEM string
 		var updatedAt float64
 		if err := jobRows.Scan(&ruleID, &id, &domain, &status, &certPEM, &keyPEM, &updatedAt); err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.batchIssuedCertificateQueryFailed", err)
 			return
 		}
 		// 行装配与 Leaf 预解析策略单源（services.NewCertificateCandidate）：批量与
@@ -134,7 +134,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		candidates[ruleID] = append(candidates[ruleID], services.NewCertificateCandidate(id, domain, status, certPEM, keyPEM, updatedAt, nil))
 	}
 	if err := jobRows.Err(); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.batchIssuedCertificateQueryFailed", err)
 		return
 	}
 

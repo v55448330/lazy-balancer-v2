@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
@@ -22,14 +23,12 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportBodyLimitBytes)
 	var stats notify.ClusterNodeStats
 	if err := c.ShouldBindJSON(&stats); err != nil {
-		// 直写豁免：集群机器接口，消费方为从节点重试逻辑（无用户语言面）。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "统计载荷无效"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.statsPayloadInvalid"))
 		return
 	}
 	date, err := time.Parse("2006-01-02", stats.Date)
 	if err != nil {
-		// 直写豁免：集群机器接口（同上）。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "统计日期格式无效（YYYY-MM-DD）"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.statsDateFormatInvalid"))
 		return
 	}
 	// 降级主节点残留 nodes 行时旧从节点照常上报会让统计错挂主节点簿记；
@@ -41,8 +40,7 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 	// 余量；未来日期与更早日期直接 400——否则未来行永不被保留窗口清理
 	//（只删旧行），成为永久脏数据。
 	if !clusterNodeStatsDateInWindow(date) {
-		// 直写豁免：集群机器接口（同上）。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "统计日期超出允许窗口（今日-2 至今日）"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.statsDateOutOfWindow"))
 		return
 	}
 	nodeID := c.GetInt("cluster_node_id")
@@ -51,7 +49,7 @@ func (h *Handlers) HandleClusterNodeStatsReport(c *gin.Context) {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// 直写豁免：集群机器接口（同上）。
-			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "上报者节点未登记"})
+			c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "cluster.reporterNodeNotRegistered"))
 		case errors.Is(err, services.ErrNotMasterNode):
 			clusterMasterForbidden(c, err)
 		default:

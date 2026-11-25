@@ -105,6 +105,9 @@ const classifyPayload = (rest: string): PayloadKind => {
   if (literal) return { envelope: true, code: literal[1] }
   const envelopeCall = ENVELOPE_CALL.exec(rest)
   if (envelopeCall) return { envelope: true, code: envelopeCall[1] }
+  // `X.WithData(载荷)` 是信封的透明包装：按接收变量解析（变量最后一次赋值为信封即可判定）。
+  const withData = /^([A-Za-z_]\w*)\.WithData\(/.exec(rest)
+  if (withData) return { envelope: false, shape: `var:${withData[1]}` }
   const call = /^([A-Za-z_][\w.]*)\s*\(/.exec(rest)
   if (call) return { envelope: false, shape: `call:${call[1]}` }
   const composite = /^([A-Za-z_][\w.]*)\s*\{/.exec(rest)
@@ -266,6 +269,8 @@ test('扫描器形态自测：同行/多行、两种方法/信封、字面量/�
     'c.JSON(http.StatusBadRequest, apimsg.Envelope(ctx, 400, "backup.importInProgressActionNotAllowed", "开始新的"+action))',
     // 构造入口藏在变量里：与字面量信封同口径解析
     'resp := apimsg.Envelope(c, 500, "common.databaseError")\n\tc.JSON(http.StatusInternalServerError, resp)',
+    // 信封的透明包装：X.WithData(载荷) 按接收变量解析
+    'envelope := apimsg.Envelope(c, 409, "rule.versionConflict")\n\tc.JSON(http.StatusConflict, envelope.WithData(gin.H{"a": 1}))',
   ]
   for (const fixture of fixtures) {
     assert.equal(scan(fixture).pairs.length, 1, `扫描器漏形态：${fixture}`)

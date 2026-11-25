@@ -75,7 +75,7 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidRequest", apimsg.ErrMsg(c, err)))
 		return
 	}
 	if !validateDailySendTime(c, req.SendTime) {
@@ -122,7 +122,7 @@ func (h *Handlers) PreviewNotificationDaily(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidRequest", apimsg.ErrMsg(c, err)))
 		return
 	}
 	switch req.Format {

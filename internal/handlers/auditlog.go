@@ -408,7 +408,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// 锚点，短陈旧不可感知，响应以 total_stale 披露来源（不静默）。
 	total, totalStale, err := cachedAuditLogTotal(c.Request.Context(), auditDB, where, args)
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "查询操作日志失败", fmt.Errorf("统计操作日志总数: %w", err))
+		writeInternalErrorKey(c, http.StatusInternalServerError, "audit.logQueryFailed", fmt.Errorf("统计操作日志总数: %w", err))
 		return
 	}
 
@@ -423,7 +423,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		FROM audit_log`+where+`
 		ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, pageSize, offset)...)
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "查询操作日志失败", fmt.Errorf("查询操作日志明细: %w", err))
+		writeInternalErrorKey(c, http.StatusInternalServerError, "audit.logQueryFailed", fmt.Errorf("查询操作日志明细: %w", err))
 		return
 	}
 	defer rows.Close()
@@ -447,7 +447,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		if err := rows.Scan(&e.ID, &e.Username, &e.Action, &e.Resource, &e.Detail, &e.IPAddress, &createdAt); err != nil {
 			// 与计数分支同口径：本端点在 business 组，任意登录用户可读，响应
 			// 只回固定文案，扫描失败的表/列名与驱动错误只进运行日志。
-			writeInternalError(c, http.StatusInternalServerError, "读取操作日志失败", fmt.Errorf("扫描操作日志行: %w", err))
+			writeInternalErrorKey(c, http.StatusInternalServerError, "audit.logRowScanFailed", fmt.Errorf("扫描操作日志行: %w", err))
 			return
 		}
 		e.CreatedAt = createdAt.UTC().Format("2006-01-02 15:04:05")
@@ -458,7 +458,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		logs = append(logs, e)
 	}
 	if err := rows.Err(); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "遍历操作日志失败", fmt.Errorf("遍历操作日志行: %w", err))
+		writeInternalErrorKey(c, http.StatusInternalServerError, "audit.logIterateFailed", fmt.Errorf("遍历操作日志行: %w", err))
 		return
 	}
 	if logs == nil {

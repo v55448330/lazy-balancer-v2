@@ -51,7 +51,7 @@ func (h *Handlers) ListMCPSessions(c *gin.Context) {
 	query += ` ORDER BY s.last_seen DESC, s.session_id`
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 会话失败", err), MessageKey: "apikey.mcpSessionsLoadFailed"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "apikey.mcpSessionsLoadFailed", err)
 		return
 	}
 	defer rows.Close()
@@ -81,7 +81,7 @@ func (h *Handlers) DisconnectMCPSession(c *gin.Context) {
 		return
 	}
 	if _, err := mcpserver.DisconnectSession(sessionID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("断开 MCP 会话失败", err), MessageKey: "apikey.mcpSessionDisconnectFailed"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "apikey.mcpSessionDisconnectFailed", err)
 		return
 	}
 	recordAudit(c, "断开", "MCP 会话",
@@ -110,7 +110,7 @@ func (h *Handlers) GetMCPStats(c *gin.Context) {
 	var todayCalls, totalErrors int64
 	if err := db.DB.QueryRow(`SELECT COALESCE(SUM(calls),0), COALESCE(SUM(errors),0)
 		FROM mcp_tool_stats WHERE date=?`, today).Scan(&todayCalls, &totalErrors); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "apikey.mcpStatsLoadFailed", err)
 		return
 	}
 	errorRate := 0.0
@@ -120,13 +120,13 @@ func (h *Handlers) GetMCPStats(c *gin.Context) {
 	var activeSessions int64
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM mcp_sessions
 		WHERE last_seen >= datetime('now', '-30 minutes')`).Scan(&activeSessions); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "apikey.mcpStatsLoadFailed", err)
 		return
 	}
 	topRows, err := db.DB.Query(`SELECT tool, SUM(calls) FROM mcp_tool_stats
 		WHERE date=? GROUP BY tool ORDER BY SUM(calls) DESC LIMIT 5`, today)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "apikey.mcpStatsLoadFailed", err)
 		return
 	}
 	defer topRows.Close()
@@ -143,7 +143,7 @@ func (h *Handlers) GetMCPStats(c *gin.Context) {
 	trendRows, err := db.DB.Query(`SELECT date, SUM(calls) FROM mcp_tool_stats
 		WHERE date>=? GROUP BY date`, weekStart)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取 MCP 统计失败", err), MessageKey: "apikey.mcpStatsLoadFailed"})
+		writeInternalErrorKey(c, http.StatusInternalServerError, "apikey.mcpStatsLoadFailed", err)
 		return
 	}
 	defer trendRows.Close()

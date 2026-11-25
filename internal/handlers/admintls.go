@@ -408,7 +408,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	if input.enabledPresent {
 		if _, ok := parseAdminTLSEnabledValue(input.enabledValue); !ok {
 			auditAdminTLSFailure(c, "enabled 取值不在白名单（仅 true/1/false/0）")
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: adminTLSEnabledWhitelistMessage})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cert.adminTlsEnabledValueInvalid"))
 			return
 		}
 	}

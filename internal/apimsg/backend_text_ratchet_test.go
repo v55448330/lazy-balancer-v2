@@ -37,7 +37,7 @@ import (
 const (
 	baselineCatalogRegistrations = 659
 	baselineErrTplRegistrations  = 750
-	baselineLiteralMessageSinks  = 5
+	baselineLiteralMessageSinks  = 1
 )
 
 var backendTextMachineOnlyFiles = map[string]bool{

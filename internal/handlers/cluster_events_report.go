@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
@@ -81,13 +82,11 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportBodyLimitBytes)
 	var req notify.ClusterEventReport
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Events) == 0 {
-		// 直写豁免：集群机器接口，消费方为从节点重试逻辑（无用户语言面）。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上报载荷无效"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.reportPayloadInvalid"))
 		return
 	}
 	if len(req.Events) > 100 {
-		// 直写豁免：集群机器接口（同上，无用户语言面）。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "单批事件数超限（≤100）"})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.eventBatchTooLarge"))
 		return
 	}
 	// 与同族机器端点（节点上报）同一 requireMaster 门——降级主节点残留 nodes
@@ -99,8 +98,7 @@ func (h *Handlers) HandleClusterEventReport(c *gin.Context) {
 	_, reporterLabel, err := h.clusterService.NodeIdentity(c.Request.Context(), nodeID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// 直写豁免：集群机器接口（同上）。
-			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "上报者节点未登记"})
+			c.JSON(http.StatusForbidden, apimsg.Envelope(c, 403, "cluster.reporterNodeNotRegistered"))
 			return
 		}
 		clusterError(c, http.StatusInternalServerError, "读取上报者节点失败", err)

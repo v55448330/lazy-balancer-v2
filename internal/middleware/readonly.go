@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -32,7 +32,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 		// 仍按 500 fail-closed，与写闸原语义一致）。
 		isMaster, err := services.RoleOf(c.Request.Context(), database)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "节点角色查询失败"})
+			c.AbortWithStatusJSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "cluster.roleQueryFailed"))
 			return
 		}
 		if !isMaster {
@@ -42,7 +42,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 				return
 			}
 			recordAuthenticationRejection(c, "slave_write_denied")
-			c.AbortWithStatusJSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "从节点只读，请在主节点操作"})
+			c.AbortWithStatusJSON(http.StatusForbidden, apimsg.Envelope(c, 403, "cluster.slaveReadOnly"))
 			return
 		}
 		if c.GetString("role") != "admin" {
@@ -53,7 +53,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 				return
 			}
 			recordAuthenticationRejection(c, "non_admin_write_denied")
-			c.AbortWithStatusJSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "非管理员用户只读"})
+			c.AbortWithStatusJSON(http.StatusForbidden, apimsg.Envelope(c, 403, "system.nonAdminReadOnly"))
 			return
 		}
 		c.Next()

@@ -153,22 +153,28 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 	}
 	// 重复 ip:port 命中已批准节点时，upsert 会重置审批与令牌——响应与
 	// 审计点名被覆盖节点，避免运营方把覆盖误认为新节点加入。
-	message := "注册成功，等待主节点审批"
+	messageKey := "cluster.registrationAccepted"
+	var messageArgs []any
 	// 审计名与落库值同源（同款归一函数）；失败路径保留原始值供取证。
 	auditParts := []string{fmt.Sprintf("节点 %d", registration.RegistrationID), registerAuditField(models.NormalizeClusterNodeName(req.Name)), registerAuditField(req.IPAddress), "等待审批"}
 	if registration.OverwrittenNodeID > 0 {
 		overwritten := fmt.Sprintf("已覆盖节点 #%d（%s）", registration.OverwrittenNodeID, registerAuditField(registration.OverwrittenNodeName))
 		auditParts = append(auditParts, overwritten)
-		message = "注册成功，" + overwritten + "，等待主节点审批"
+		messageKey = "cluster.registrationAcceptedOverwritten"
+		messageArgs = []any{registration.OverwrittenNodeID, registerAuditField(registration.OverwrittenNodeName)}
 	}
 	// 自述访问地址与来源 IP 不一致时已忽略（不落库），此处显性
 	// 告知——该值决定能力票据投递地址，只能由管理员显式配置。
 	if registration.AccessURLIgnored {
 		auditParts = append(auditParts, "自述访问地址与来源 IP 不一致，已忽略")
-		message += "；自述访问地址与来源 IP 不一致，已忽略，请在节点设置中显式配置访问地址"
+		if messageKey == "cluster.registrationAcceptedOverwritten" {
+			messageKey = "cluster.registrationAcceptedOverwrittenAccessUrlIgnored"
+		} else {
+			messageKey = "cluster.registrationAcceptedAccessUrlIgnored"
+		}
 	}
 	services.RecordAuditLog("system", "注册", "集群节点", services.FormatAuditDetail(auditParts...), c.ClientIP())
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: registration})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, messageKey, messageArgs...).WithData(registration))
 }
 
 func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {

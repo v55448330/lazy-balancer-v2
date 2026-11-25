@@ -460,7 +460,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "获取全局配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "caddy.globalConfigLoadFailed", err)
 		return
 	}
 	// 展示口径与运行时 clamp 对齐(低于下限归默认)。
@@ -828,7 +828,7 @@ func writeConfigValidationFailure(c *gin.Context, err error, auditFailure bool) 
 	var validationErr *configValidationError
 	if !errors.As(err, &validationErr) {
 		auditServerFailure()
-		writeInternalError(c, http.StatusInternalServerError, "预校验规则配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "caddy.ruleConfigPreValidateFailed", err)
 		return
 	}
 	if !isPureConfigValidationError(err) {
@@ -1110,7 +1110,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 			err = errors.Join(err, recovery.err())
 			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail(services.RedactCaddyAdminEndpoint(commitUncertainLabel+"："+err.Error()), services.AuditResultPart("failure")))
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + "：" + err.Error()})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", err.Error()))
 			return
 		}
 	} else if err := commitTx(tx); err != nil {
@@ -1170,16 +1170,16 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	reloadNote.finalize()
 
 	// 成功文案走 apimsg 词条（en 界面不得出现中文）：base 键区分「已应用」与
-	// 「仅落库」，格式清空说明以模板键接在后面。
-	messageKey := "caddy.configUpdatedAndApplied"
+	// 「仅落库」；格式清空说明是外层模板键，base 句作为其参数（响应键取外层键）。
+	configKey := "caddy.configUpdatedAndApplied"
 	if !plan.AffectsCaddy {
-		messageKey = "caddy.configUpdated"
+		configKey = "caddy.configUpdated"
 	}
-	message := apimsg.T(c, messageKey)
 	if formatCleared {
-		message = apimsg.Tf(c, "caddy.accessLogJsonOffFormatCleared", message)
+		c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "caddy.accessLogJsonOffFormatCleared", apimsg.T(c, configKey)).WithData(plan))
+		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, MessageKey: messageKey, Data: plan})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, configKey).WithData(plan))
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
@@ -1434,7 +1434,7 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 	if err != nil {
 		// 本端点在 business 组（任意登录用户可读）：5xx 一律固定文案，路径与
 		// errno 只进运行日志（admin 细节政策只适用于 admin 组端点，见文件头）。
-		writeInternalError(c, http.StatusInternalServerError, "日志文件不可访问", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "caddy.logFileUnreadable", err)
 		return
 	}
 	content = convertLogTimezone(content)

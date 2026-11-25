@@ -639,7 +639,7 @@ func lbbakPayloadFromCtx(c *gin.Context) *lbbakPayload {
 
 func limitConfigImportBody(c *gin.Context) bool {
 	if c.Request.ContentLength > maxConfigImportBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: configImportLimitMessage()})
+		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxConfigImportBytes)
@@ -670,7 +670,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		}
 		raw, err := c.GetRawData()
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: configImportLimitMessage()})
+			c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
 			return
 		}
 		if err != nil {
@@ -867,7 +867,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	body, err := c.GetRawData()
 	if isRequestBodyTooLarge(err) {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: configImportLimitMessage()})
+		c.JSON(http.StatusRequestEntityTooLarge, apimsg.Envelope(c, 413, "backup.importFileTooLarge", maxConfigImportBytes>>20))
 		return
 	}
 	if err != nil {
@@ -1050,29 +1050,33 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			// 出口共用 importPartialSuccess* 单源（此前 v1 自行内联两份同义文案，
 			// 措辞「，但」与单源的「（部分完成）：」分叉，只改单源会静默漂移）。
 			partialWarnings := append(append([]string{}, allWarnings.render(lang)...), importPartialSuccessWarning(c, err))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: importPartialSuccessMessage("导入", err), Data: gin.H{
+			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "backup.importPartialSuccess", "导入", importFailureCause(err)).WithData(gin.H{
 				"imported": imported, "disabled_conflicts": localizeDisabledRuleConflicts(disabledConflicts, lang),
 				"partial": true, "warnings": partialWarnings,
-			}})
+			}))
 			return
 		}
 		// message 正文与审计 detail 同源（阶段描述+真实错误）：err.Error() 自带
 		// 「导入失败」动作前缀，再拼「配置导入失败:」会双前缀。
+		caddyRejected := importFailureCaddyRejected(err)
 		status := http.StatusInternalServerError
-		message := "配置导入失败: " + importFailureAuditDetail(err)
-		if importFailureCaddyRejected(err) {
+		if caddyRejected {
 			status = http.StatusBadRequest
-			message = "备份生成的配置未通过 Caddy 验证，未执行导入: " + importFailureAuditDetail(err)
 		}
-		recordAudit(c, "导入失败", "配置备份", importFailureAuditDetail(err))
-		notifyImportOutcome(c, "导入", false, importFailureAuditDetail(err))
+		auditDetail := importFailureAuditDetail(err)
+		recordAudit(c, "导入失败", "配置备份", auditDetail)
+		notifyImportOutcome(c, "导入", false, auditDetail)
 		// 事务已回滚：循环里的插入计数全部作废，不得报 imported（否则前端/
 		// 运维会误判部分规则已落地）。warnings 透出会话收尾披露（提交不确定态
 		// 下的产物清理去向），否则「删除失败」被读成「磁盘也已收敛」。
 		failureWarnings := append([]string{}, session.failureWarnings.render(lang)...)
-		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{
-			"disabled_conflicts": localizeDisabledRuleConflicts(disabledConflicts, lang), "warnings": failureWarnings,
-		}})
+		failurePayload := gin.H{"disabled_conflicts": localizeDisabledRuleConflicts(disabledConflicts, lang), "warnings": failureWarnings}
+		// 两个键都以字面量出现在构造调用里：调用点槽数对账按字面量取键，变量键无法对账。
+		envelope := apimsg.Envelope(c, status, "backup.v1ImportFailed", auditDetail)
+		if caddyRejected {
+			envelope = apimsg.Envelope(c, status, "backup.v1ImportCaddyRejected", auditDetail)
+		}
+		c.JSON(status, envelope.WithData(failurePayload))
 		return
 	}
 	auditParts := []string{"来源：v1 备份（覆盖导入规则）", fmt.Sprintf("规则 %d 条", imported), fmt.Sprintf("TLS 规则 %d 条", tlsCount), fmt.Sprintf("上游 %d 个", upstreamCount)}

@@ -14,6 +14,7 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
@@ -429,24 +430,30 @@ func oidcManagedWriteGate(c *gin.Context, userID int, fields oidcManagedWriteFie
 	if !oidcUser {
 		return false
 	}
-	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: oidcManagedWriteMessage(fields)})
+	c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "user.oidcManagedFieldsReadOnly", oidcManagedWriteFieldsText(c, fields)))
 	return true
 }
 
-// oidcManagedWriteMessage 按本次实际改动的属性拼装文案（单源）：admin 路径与
-// 自助路径改同一组属性时必须得到同一句话，不因各自手写而措辞分叉。
-func oidcManagedWriteMessage(fields oidcManagedWriteFields) string {
+// oidcManagedWriteFieldsText 按本次实际改动的属性拼出插入模板的字段清单（单源）：
+// admin 路径与自助路径改同一组属性时必须得到同一句话，不因各自手写而措辞分叉。
+// 字段名走词条，en 界面不出现中文属性名。
+func oidcManagedWriteFieldsText(c *gin.Context, fields oidcManagedWriteFields) string {
 	attrs := make([]string, 0, 3)
 	if fields.UsernameChanged {
-		attrs = append(attrs, "用户名")
+		attrs = append(attrs, apimsg.T(c, "user.oidcManagedAttrUsername"))
 	}
 	if fields.DisplayNameChanged {
-		attrs = append(attrs, "显示名")
+		attrs = append(attrs, apimsg.T(c, "user.oidcManagedAttrDisplayName"))
 	}
 	if fields.PasswordChanged {
-		attrs = append(attrs, "密码")
+		attrs = append(attrs, apimsg.T(c, "user.oidcManagedAttrPassword"))
 	}
-	return "OIDC 用户的" + strings.Join(attrs, "、") + "由认证服务管理，请前往 OIDC 服务修改"
+	// 顿号只属中文：en 界面用逗号，不留中文标点。
+	separator := "、"
+	if i18n.FromCtx(c) != i18n.ZH {
+		separator = ", "
+	}
+	return strings.Join(attrs, separator)
 }
 
 // ensureOtherEnabledAdmin 「至少保留一个启用管理员」不变量的唯一判定：同一
@@ -620,11 +627,11 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	recordAudit(c, "删除", "用户", services.AuditUserPart(id, targetUsername))
 	notify.Publish(notify.Event{Type: notify.EvtUserDeleted,
 		Fields: map[string]string{"1": c.GetString("username"), "2": targetUsername}})
-	message := "用户删除成功"
+	messageKey := "user.deleteSucceeded"
 	if targetProvider == "oidc" {
-		message = "OIDC 用户已删除；同一身份下次 SSO 登录会重新开户（默认普通用户，原角色与禁用状态不继承）。如需撤销访问并保留原身份，请改用禁用。"
+		messageKey = "user.oidcDeletedSsoReopens"
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, messageKey))
 }
 
 func (h *Handlers) ToggleUserStatus(c *gin.Context) {
@@ -773,13 +780,13 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	}
 	notify.Publish(notify.Event{Type: notify.EvtUserStatusChanged,
 		Fields: map[string]string{"1": c.GetString("username"), "2": statusUsername, "3": statusAction}})
-	message := "用户状态更新成功"
+	messageKey := "user.statusUpdateSucceeded"
 	if statusProvider == "oidc" && !enable {
-		message = "OIDC 用户已禁用，SSO 登录将被拒绝；重新启用可恢复原身份、角色与绑定，无需删除后重新开户。"
+		messageKey = "user.oidcDisabledSsoRejected"
 	} else if statusProvider == "oidc" {
-		message = "OIDC 用户已重新启用，可继续使用原 SSO 身份登录。"
+		messageKey = "user.oidcReenabledSsoAvailable"
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, messageKey))
 }
 
 // ResetUserPassword 重置密码（管理员重置任意用户 / 非管理员重置本人）。

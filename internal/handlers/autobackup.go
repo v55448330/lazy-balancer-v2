@@ -1150,7 +1150,9 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 // API 文案（客户端契约不变）。失败分支不记成功审计——未交付不得虚记交付。
 // 5xx 的公开文案仍为固定中文（底层错误只进日志/审计），与本文件其余 5xx 写法
 // 同口径。
-func failAutoBackupAccess(c *gin.Context, verb, subject, message string, status int, cause error) {
+// auditAutoBackupAccessFailure 记「自动备份被拒」的操作审计与运行日志（动作 + 对象 +
+// 中文文案 + 原因，级别随状态码）。原函数与键化形态共用，留痕口径只维护一处。
+func auditAutoBackupAccessFailure(c *gin.Context, verb, subject, message string, status int, cause error) {
 	detail := subject + "：" + message
 	recordAudit(c, verb+"失败", "配置备份", detail)
 	level := "warn"
@@ -1158,6 +1160,10 @@ func failAutoBackupAccess(c *gin.Context, verb, subject, message string, status 
 		level = "error"
 	}
 	services.Logf(level, "自动备份%s被拒绝（%d）: %s（%v）", verb, status, detail, cause)
+}
+
+func failAutoBackupAccess(c *gin.Context, verb, subject, message string, status int, cause error) {
+	auditAutoBackupAccessFailure(c, verb, subject, message, status, cause)
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
 }
 

@@ -1660,7 +1660,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 				h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 				joined := errors.Join(err, recovery.err())
 				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(commitUncertainLabel, joined))
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + "：" + joined.Error()})
+				c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", joined.Error()))
 				return true
 			}
 			// 退化提交（DB 已提交、运行配置未生效）与 finishTxApply 同一横幅
@@ -1687,7 +1687,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
 			joined := errors.Join(err, recovery.err())
 			recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail(commitUncertainLabel, joined))
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + "：" + joined.Error()})
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", joined.Error()))
 			return true
 		}
 		h.caddyService.PersistLastGoodBytesInLock(appliedConfig)
@@ -1714,7 +1714,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 		rollbackLeakedTx()
 		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
 		recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel + "：" + err.Error()})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "common.commitResultUncertainWithDetail", err.Error()))
 		return true
 	}
 	h.recordCaddyApplyResult(nil) // 比对证实运行配置=已提交 DB 视图，清除既往失败标记

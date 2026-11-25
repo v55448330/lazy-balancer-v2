@@ -1910,12 +1910,14 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 		detail = services.FormatAuditDetail(detail, fmt.Sprintf("存量 OIDC 身份行 %d 条已不可登录", oidcIdentityRows))
 	}
 	recordAudit(c, "删除", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
-	message := "OIDC 配置已删除"
+	messageKey := "auth.oidcConfigDeleted"
+	var messageArgs []any
 	if oidcIdentityRows > 0 {
-		message = fmt.Sprintf("OIDC 配置已删除；%d 个存量 OIDC 用户已无法登录。重新配置同一 issuer 可恢复原身份绑定；改用不同 issuer 会按新身份重新开户。请删除不再需要的残留用户。", oidcIdentityRows)
+		messageKey = "auth.oidcConfigDeletedUsersLockedOut"
+		messageArgs = []any{oidcIdentityRows}
 	}
 	notify.Publish(notify.Event{Type: notify.EvtOIDCChanged, Fields: map[string]string{"1": c.GetString("username"), "2": "删除并清空"}})
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: gin.H{"oidc_identity_rows": oidcIdentityRows}})
+	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, messageKey, messageArgs...).WithData(gin.H{"oidc_identity_rows": oidcIdentityRows}))
 }
 
 // sanitizeOIDCReturnTo 归一 OIDC 登录的 return_to

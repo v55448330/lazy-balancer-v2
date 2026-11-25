@@ -57,7 +57,7 @@ func fetchCaddyMetrics(ctx context.Context, url string) ([]byte, error) {
 // 6 个消费端点都在任意登录身份可读的组里，响应只回固定文案——底层错误
 // （指标源 URL 与内网 IP:端口、Prometheus 正文片段与行号）只进运行日志。
 func caddyMetricsError(c *gin.Context, err error) {
-	writeInternalError(c, http.StatusBadGateway, "采集 Caddy 指标失败", err)
+	writeInternalErrorKey(c, http.StatusBadGateway, "metrics.caddyScrapeFailed", err)
 }
 
 // metricsOverviewOrZero 返回当前总览；metricsService 未装配（&Handlers{} /
@@ -425,7 +425,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	if rule.Protocol == "tcp" {
 		upstreams, err := loadRuleUpstreams(c.Request.Context(), ruleID)
 		if err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "读取规则上游失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "metrics.ruleUpstreamReadFailed", err)
 			return
 		}
 		metrics, parseErr = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
@@ -585,12 +585,12 @@ func queryMetricsHistory(ctx context.Context, metricsDB *sql.DB, query string, a
 
 // respondMetricsHistoryError 两条历史端点共用的失败出口：时间戳解析失败与
 // 读取失败的固定文案分派（两措辞此前逐分支手写，同族漂移由单源消除）。
-func respondMetricsHistoryError(c *gin.Context, readMessage string, err error) {
+func respondMetricsHistoryError(c *gin.Context, readKey string, err error) {
 	if errors.Is(err, errMetricsHistoryTimestamp) {
-		writeInternalError(c, http.StatusInternalServerError, "解析历史指标时间失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "metrics.historyTimestampParseFailed", err)
 		return
 	}
-	writeInternalError(c, http.StatusInternalServerError, readMessage, err)
+	writeInternalErrorKey(c, http.StatusInternalServerError, readKey, err)
 }
 
 // GetRuleMetricsHistory returns cumulative history rows for one HTTP rule
@@ -639,7 +639,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		FROM recent ORDER BY bucket
 	`, []any{bucketSeconds, bucketSeconds, caddyID, modifier, bucketCount, bucketSeconds}, true)
 	if err != nil {
-		respondMetricsHistoryError(c, "读取历史指标失败", err)
+		respondMetricsHistoryError(c, "metrics.historyQueryFailed", err)
 		return
 	}
 	type row struct {
@@ -750,7 +750,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	if err != nil {
 		// 查询失败是本端点最频繁的读库故障路径，必须与同端点其余三个失败
 		// 分支（Scan/时间解析/rows.Err）共用固定文案 + 日志留痕。
-		respondMetricsHistoryError(c, "读取指标历史失败", err)
+		respondMetricsHistoryError(c, "metrics.ruleHistoryQueryFailed", err)
 		return
 	}
 

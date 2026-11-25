@@ -99,8 +99,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		switch status {
 		case "pending", "sent", "partial", "failed", "dead":
 		default:
-			msg := apimsg.Tf(c, "notify.unsupportedDeliveryStatusFilter", status)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg, MessageKey: "notify.unsupportedDeliveryStatusFilter"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.unsupportedDeliveryStatusFilter", status))
 			return
 		}
 	}

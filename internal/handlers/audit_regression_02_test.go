@@ -110,7 +110,7 @@ func TestDBQueryNotFound_500BranchUsesWriteInternalError(t *testing.T) {
 		t.Fatal("dbQueryNotFound 函数体切片失败")
 	}
 	body := rest[:end]
-	if !strings.Contains(body, `writeInternalError(c, http.StatusInternalServerError, "数据库错误"`) {
+	if !strings.Contains(body, `writeInternalErrorKey(c, http.StatusInternalServerError, "common.databaseError"`) {
 		t.Fatalf("dbQueryNotFound 的 500 分支必须委托统一写点: %s", body)
 	}
 	if strings.Contains(body, "c.JSON(http.StatusInternalServerError") {

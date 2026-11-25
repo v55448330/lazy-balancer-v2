@@ -388,7 +388,7 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidRequest", apimsg.ErrMsg(c, err)))
 		return
 	}
 
@@ -698,7 +698,7 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 	}
 	if err := notify.EnqueueTestDelivery(uid, eventType); err != nil {
 		recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(proxy, "规则「"+group+"」", services.AuditResultPart("failed")))
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
+		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "notify.testMessageEnqueueFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	recordAudit(c, "测试", "通知规则", services.FormatAuditDetail(proxy, "规则「"+group+"」", services.AuditResultPart("success")))
@@ -713,7 +713,7 @@ func (h *Handlers) TestNotificationDaily(c *gin.Context) {
 	}
 	uid := contextUserID(c)
 	if err := notify.DeliverDailyForUser(uid, time.Now()); err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
+		c.JSON(http.StatusBadGateway, apimsg.Envelope(c, 502, "notify.dailyReportSendFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "notify.dailyReportTestQueued"))

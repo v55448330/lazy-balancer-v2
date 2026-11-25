@@ -147,13 +147,13 @@ func (h *Handlers) TicketLogin(c *gin.Context) {
 			}
 		}
 		recordTicketLoginFailure(c, claims.Username, reason)
-		message := "登录票据无效或已过期"
+		messageKey := "cluster.loginTicketInvalidOrExpired"
 		if status == http.StatusInternalServerError {
 			// DB/内部故障（审计侧已归因 database_error）
 			// 不得复用凭证文案——否则运维误判为票据问题并反复重取票据。
-			message = "登录票据校验失败，请稍后重试"
+			messageKey = "cluster.loginTicketValidationFailed"
 		}
-		c.JSON(status, models.APIResponse{Code: status, Message: message})
+		c.JSON(status, apimsg.Envelope(c, status, messageKey))
 		return
 	}
 	h.respondLoginWithMFA(c, user, passwordVersion, 0, true, claims.AuthMethod)

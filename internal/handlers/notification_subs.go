@@ -155,8 +155,7 @@ func (h *Handlers) UpdateNotificationSubscriptions(c *gin.Context) {
 	ops := make([]subOp, 0, len(req.Items))
 	for _, item := range req.Items {
 		if _, ok := catalogByID[item.EventType]; !ok {
-			msg := apimsg.Tf(c, "notify.subscriptionEventNotInCatalog", item.EventType)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg, MessageKey: "notify.subscriptionEventNotInCatalog"})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.subscriptionEventNotInCatalog", item.EventType))
 			return
 		}
 		if item.MinLevel != "" && !validSubLevel(item.MinLevel) {

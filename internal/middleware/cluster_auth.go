@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/apikey"
-	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -28,10 +28,10 @@ func clusterTokenAuth(database *sql.DB) gin.HandlerFunc {
 				// 机器可读错误码：从节点 Pull 据此区分「本服务撤销令牌」（终止）
 				// 与前置代理/身份网关的 401（可重试自愈）。
 				c.Header("X-LB-Error-Code", services.ClusterTokenInvalidErrorCode)
-				c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "集群凭证无效"})
+				c.AbortWithStatusJSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "cluster.credentialInvalid"))
 			} else {
 				services.Logf("error", "cluster token authentication failed: %v", err)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "集群凭证校验失败"})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "cluster.credentialAuthFailed"))
 			}
 			return
 		}
@@ -45,7 +45,7 @@ func registrationAuth(database *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		nodeID, err := strconv.Atoi(c.Param("id"))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "注册编号无效"})
+			c.AbortWithStatusJSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "cluster.registrationIdInvalid"))
 			return
 		}
 		secret := c.GetHeader("X-Registration-Secret")
@@ -56,10 +56,10 @@ func registrationAuth(database *sql.DB) gin.HandlerFunc {
 			if errors.Is(err, services.ErrInvalidClusterAuth) {
 				// 注册密钥枚举同样留痕（reason/path/ip 一分钟去重）。
 				recordAuthenticationRejection(c, "registration_secret_invalid")
-				c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "注册凭证无效"})
+				c.AbortWithStatusJSON(http.StatusUnauthorized, apimsg.Envelope(c, 401, "cluster.registrationCredentialInvalid"))
 			} else {
 				services.Logf("error", "cluster registration authentication failed: %v", err)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "注册凭证校验失败"})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, apimsg.Envelope(c, 500, "cluster.registrationCredentialAuthFailed"))
 			}
 			return
 		}

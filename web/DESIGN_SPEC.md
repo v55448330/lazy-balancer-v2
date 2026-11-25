@@ -388,7 +388,11 @@
    - 只在响应拦截器做，调用方不必各自处理：两条失败路径（业务码失败、HTTP 失败）的
      提示文字与 `ApiRequestError.message` 同源；成功信封能按键渲染时，`message` 就地换成
      渲染结果（直接显示 `res.message` 的成功提示因此自动本地化），渲染不出则原样保留。
-   - 守卫：`tests/apiMessagesParity.spec.ts`（生成文件与后端目录逐字相等、英文译文无汉字、
+   - 5xx 固定文案不随请求语言变化：`internalErrorKeyed` / `securityErrKeyed` /
+     `clusterErrorKeyedResponse` / `failAutoBackupAccessKeyed` 保留既有日志与审计口径，响应按
+     「中文母本 + message_key + message_params」装配（`message` 取键的中文母本，前端按界面
+     语言渲染）。
+   - 守卫：`tests/apiMessagesParity.spec.ts`（生成文件与两侧来源逐字相等、英文译文无汉字、
      解析器判别自检）、`tests/apiMessage.spec.ts`（渲染与回落边界、覆盖后端目录全部占位符
      形态）、`tests/fixtures/apiMessage_format.json`（两侧共享夹具：后端渲染镜像与前端
      渲染器同一结果，Go 侧见 `internal/apimsg/envelope_test.go`）。

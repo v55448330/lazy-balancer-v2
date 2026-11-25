@@ -3368,7 +3368,7 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 	// 出口消息取词条的（apimsg.T(c,"域名.驼峰名")，或经构造入口 apimsg.Envelope(c, code, "键")），
 	// 以词条目录（catalog_gen.go + catalog_manual.go）的 zh 母本回填。键里带点，拼正则前必须转义。
 	var catalogSrc []byte
-	for _, name := range []string{"catalog_gen.go", "catalog_manual.go"} {
+	for _, name := range []string{"catalog_gen.go", "catalog_manual.go", "catalog_unkeyed.go"} {
 		part, err := os.ReadFile(filepath.Join("..", "i18n", name))
 		if err != nil {
 			t.Fatalf("读 catalog 母本失败: %v", err)
@@ -3396,6 +3396,8 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 		}
 	}
 	extractKeyed(body, `apimsg\.Envelope\([^,]+, (409|500|http\.StatusConflict|http\.StatusInternalServerError), "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
+	// 键化写点：writeInternalErrorKey(c, <5xx>, "键", cause)——文案在词条里，以中文母本对账。
+	extractKeyed(body, `writeInternalErrorKey\(c, (http\.StatusInternalServerError), "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"`)
 	extractKeyed(cooldownBody, `return true, (http\.StatusConflict), apimsg\.T\([^,]+, "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
 	extractKeyed(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), apimsg\.T\([^,]+, "([a-z][a-z0-9]*\.[a-z][A-Za-z0-9]+)"\)`)
 	extract(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: "([^"]+)"`)

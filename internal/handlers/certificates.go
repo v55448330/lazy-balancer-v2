@@ -261,13 +261,13 @@ func pruneSupersededDNSCredentialFamily(creds, stored map[string]string) []strin
 // 原「请重新保存配置」在省略/掩码载荷上仍会 500，用户照做只会反复失败。
 func respondStoredDNSCredentialsCorrupted(c *gin.Context, configID int, cause error) {
 	recordAudit(c, "更新失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", configID), services.AuditResultPart("storage_corrupted")))
-	writeInternalError(c, http.StatusInternalServerError, "存储的 DNS 凭证已损坏，请重新填写完整凭证后保存", cause)
+	writeInternalErrorKey(c, http.StatusInternalServerError, "cert.storedDnsCredentialsCorrupted", cause)
 }
 
 func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, dns_provider, COALESCE(dns_credentials,''), COALESCE(enabled,1), created_at, updated_at FROM certificate_configs ORDER BY id")
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "读取证书配置列表失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configListQueryFailed", err)
 		return
 	}
 	defer rows.Close()
@@ -285,7 +285,7 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	for rows.Next() {
 		var cfg models.CertificateConfig
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled, &cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
-			writeInternalError(c, http.StatusInternalServerError, "读取证书配置失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configQueryFailed", err)
 			return
 		}
 		if maskCredentials {
@@ -294,7 +294,7 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 		configs = append(configs, cfg)
 	}
 	if err := rows.Err(); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "读取证书配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configQueryFailed", err)
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configs})
@@ -347,14 +347,14 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	// enabled 缺省 true（「配置默认可用」）：*bool 区分「未提交」与显式 false。
 	enabled := req.Enabled == nil || *req.Enabled
 	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：单行 INSERT
-	// 自洽无半途态；写失败已 writeInternalError 500 点名，取消无一致性收益。
+	// 自洽无半途态；写失败已 writeInternalErrorKey 500 点名，取消无一致性收益。
 	result, err := db.DB.Exec(`
 		INSERT INTO certificate_configs (name, dns_provider, dns_credentials, enabled)
 		VALUES (?, ?, ?, ?)
 	`, name, req.DNSProvider, string(credsJSON), enabled)
 
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "创建证书配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configCreateFailed", err)
 		return
 	}
 
@@ -413,7 +413,11 @@ func queryCertificateConfigRuleRefs(ctx context.Context, q rowsQueryer, query st
 	return references, nil
 }
 
-func formatCertificateConfigReferences(references []certificateConfigRuleRef, referenceKind, verb string) string {
+// certificateConfigReferencesParams 生成引用冲突响应的模板参数：引用条数 +
+// 规则清单文本（超过展示上限时把「等 N 条规则」并入清单文本，与迁移前逐字
+// 一致；清单本身是规则标识，语言无关）。冲突文案（含「启用中的 ACME 规则 /
+// 禁用」等固定修饰）由调用方按场景选键：zh 母本在 i18n 目录、英文归前端词条。
+func certificateConfigReferencesParams(references []certificateConfigRuleRef) (int, string) {
 	listed := make([]string, 0, min(len(references), certificateConfigMaxListedReferences))
 	for _, ref := range references {
 		if len(listed) == certificateConfigMaxListedReferences {
@@ -425,12 +429,11 @@ func formatCertificateConfigReferences(references []certificateConfigRuleRef, re
 			listed = append(listed, ref.caddyID)
 		}
 	}
-	message := fmt.Sprintf("该 DNS 配置正被 %d 条%s引用，%s后这些规则将无法自动签发/续签证书，请先修改规则的 DNS 配置后再%s：%s",
-		len(references), referenceKind, verb, verb, strings.Join(listed, "、"))
+	text := strings.Join(listed, "、")
 	if len(references) > certificateConfigMaxListedReferences {
-		message += fmt.Sprintf(" 等 %d 条规则", len(references))
+		text += fmt.Sprintf(" 等 %d 条规则", len(references))
 	}
-	return message
+	return len(references), text
 }
 
 func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
@@ -466,7 +469,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	//提交导致的清单失真（镜像 事务内旧行模式）。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "更新证书配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configUpdateFailed", err)
 		return
 	}
 	committed := false
@@ -596,12 +599,12 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		references, refsErr := queryCertificateConfigRuleRefs(c.Request.Context(), tx,
 			`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? AND enabled=1 AND tls_source='acme_dns' AND `+enableTLSEnabledSQLPredicate+` ORDER BY caddy_id`, id)
 		if refsErr != nil {
-			writeInternalError(c, http.StatusInternalServerError, "检查规则引用失败", refsErr)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configRuleReferenceCheckFailed", refsErr)
 			return
 		}
 		if len(references) > 0 {
-			message := formatCertificateConfigReferences(references, "启用中的 ACME 规则", "禁用")
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: message})
+			count, listed := certificateConfigReferencesParams(references)
+			c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.dnsConfigReferencedByEnabledAcmeRules", count, listed))
 			return
 		}
 	}
@@ -667,13 +670,13 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	args = append(args, id)
 
 	if _, err := tx.ExecContext(c.Request.Context(), query, args...); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "更新证书配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configUpdateFailed", err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
 		rollbackLeakedTx()
-		writeInternalError(c, http.StatusInternalServerError, "提交证书配置变更失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configChangeCommitFailed", err)
 		return
 	}
 	committed = true
@@ -726,12 +729,12 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 	references, refErr := queryCertificateConfigRuleRefs(c.Request.Context(), db.DB,
 		`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? ORDER BY caddy_id`, id)
 	if refErr != nil {
-		writeInternalError(c, http.StatusInternalServerError, "检查规则引用失败", refErr)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configRuleReferenceCheckFailed", refErr)
 		return
 	}
 	if len(references) > 0 {
-		message := formatCertificateConfigReferences(references, "负载规则", "删除")
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: message})
+		count, listed := certificateConfigReferencesParams(references)
+		c.JSON(http.StatusConflict, apimsg.Envelope(c, 409, "cert.dnsConfigReferencedByRules", count, listed))
 		return
 	}
 	if deleteCertificateConfigPreDeleteHook != nil {
@@ -741,7 +744,7 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 	// 查询与 DELETE 分离两语句、无事务包裹（deleteAPIKey 既有已披露的同族
 	// 分离形态）；单行 DELETE 自洽，写失败已 500 点名，取消无一致性收益。
 	if _, err := db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "删除证书配置失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.configDeleteFailed", err)
 		return
 	}
 	recordAudit(c, "删除", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, provider))
@@ -824,7 +827,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		if credentials != "" {
 			if uerr := json.Unmarshal([]byte(credentials), &creds); uerr != nil {
 				recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("storage_corrupted")))
-				writeInternalError(c, http.StatusInternalServerError, "存储的 DNS 凭证已损坏，请重新填写完整凭证后保存", uerr)
+				writeInternalErrorKey(c, http.StatusInternalServerError, "cert.storedDnsCredentialsCorrupted", uerr)
 				return
 			}
 		}
@@ -895,7 +898,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 	// 「total 大于本页条数」始终表示存在更多行。
 	var total int64
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs j"+whereClause, args...).Scan(&total); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "统计证书任务失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.jobCountFailed", err)
 		return
 	}
 	// cert_pem 只取首证书块（与 /certificates/jobs 同一单源投影）：expires_at
@@ -912,7 +915,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 	queryArgs := append(append([]any{}, args...), pageSize, offset)
 	rows, err := db.DB.Query(query, queryArgs...)
 	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "查询证书任务失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.jobQueryFailed", err)
 		return
 	}
 	defer rows.Close()
@@ -925,7 +928,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 			// 单行读失败必须 fail-visible（与 /certificates/jobs 同语义）：静默
 			// 跳过会让「本页少一行但 total 仍按 COUNT(*) 计入」，翻页集合与 total
 			// 不闭合，且运维只能从应用日志发现；同一坏行在任务页是显式 500。
-			writeInternalError(c, http.StatusInternalServerError, "读取证书任务失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "rule.certJobReadFailed", err)
 			return
 		}
 		// not_after 与 /certificates/jobs 同语义（优先库值 expires_at，缺失时由
@@ -938,7 +941,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 			"expires_at": expiresAtText, "not_after": certJobNotAfter(expiresAt.NullTime, certPEM), "updated_at": updatedAt})
 	}
 	if err := rows.Err(); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "遍历证书任务失败", err)
+		writeInternalErrorKey(c, http.StatusInternalServerError, "cert.jobIterateFailed", err)
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"certificates": certs, "total": total, "page": page, "page_size": pageSize}})
@@ -1006,7 +1009,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	qm := services.GetCAQueueManager()
 	if qm == nil {
 		auditFailure("failed", "CA 队列未初始化")
-		writeInternalError(c, http.StatusInternalServerError, "CA 队列未初始化", errors.New("CA queue manager not initialized"))
+		writeInternalErrorKey(c, http.StatusInternalServerError, "rule.caQueueNotInitialized", errors.New("CA queue manager not initialized"))
 		return
 	}
 	// 队列暂停必须 409 点名原因——EnqueueIfActive 的
@@ -1039,9 +1042,9 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		rows, err := db.DB.Query("SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE enabled=1 AND " + enableTLSEnabledSQLPredicate + " AND tls_source='acme_dns' AND protocol='http' AND COALESCE(domain,'') != ''")
 		if err != nil {
 			// 审计详情/响应体都只放固定归因，底层驱动文本只进运行日志
-			// （writeInternalError 记录 cause）——business 组任意登录用户可读。
+			// （writeInternalErrorKey 记录 cause）——business 组任意登录用户可读。
 			auditFailure("failed", "查询 ACME 规则失败")
-			writeInternalError(c, http.StatusInternalServerError, "查询 ACME 规则失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRulesQueryFailed", err)
 			return
 		}
 		for rows.Next() {
@@ -1049,7 +1052,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			if err := rows.Scan(&ruleID, &domain); err != nil {
 				err = errors.Join(err, rows.Close())
 				auditFailure("failed", "读取 ACME 规则失败")
-				writeInternalError(c, http.StatusInternalServerError, "读取 ACME 规则失败", err)
+				writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRuleReadFailed", err)
 				return
 			}
 			batchTargets = append(batchTargets, certTarget{ruleID: ruleID, domain: domain})
@@ -1057,12 +1060,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		if err := rows.Err(); err != nil {
 			err = errors.Join(err, rows.Close())
 			auditFailure("failed", "遍历 ACME 规则失败")
-			writeInternalError(c, http.StatusInternalServerError, "遍历 ACME 规则失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRulesIterateFailed", err)
 			return
 		}
 		if err := rows.Close(); err != nil {
 			auditFailure("failed", "关闭 ACME 规则结果失败")
-			writeInternalError(c, http.StatusInternalServerError, "关闭 ACME 规则结果失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "cert.acmeRulesCloseFailed", err)
 			return
 		}
 		if issueCertificateBatchSnapshotHook != nil {
@@ -1228,7 +1231,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			}
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			auditFailure("failed", "读取证书任务失败")
-			writeInternalError(c, http.StatusInternalServerError, "读取证书任务失败", err)
+			writeInternalErrorKey(c, http.StatusInternalServerError, "rule.certJobReadFailed", err)
 			return
 		}
 		jobID, changed, err := createOrRequeueCertJob(req.CaddyID, canonicalRuleDomain, 0, qm)
@@ -1474,13 +1477,14 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			// 已入队/重排后队列被并发暂停：按部分成功返回，不能 409 谎报全失败
 			// 剩余目标留给下次触发。
 			skipNote := formulaSkippedNote(skippedCooldown+skippedWaitingCA, skippedInFlight, skippedBlocked, skippedUnsupported, skippedRetired)
-			message := fmt.Sprintf("已创建 %d 个签发任务，已触发重新部署 %d 个；证书签发队列被暂停，剩余目标未处理", queued, redeployed)
+			suffix := batchForceNote
 			if skipNote != "" {
-				message += "（" + skipNote + "）"
+				suffix = "（" + skipNote + "）" + batchForceNote
 			}
-			message += batchForceNote
+			// 审计明细沿用迁移前的中文整句（语言无关）；响应按键 + 参数渲染。
+			message := fmt.Sprintf("已创建 %d 个签发任务，已触发重新部署 %d 个；证书签发队列被暂停，剩余目标未处理", queued, redeployed) + suffix
 			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, message, services.AuditResultPart("partial")))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: gin.H{
+			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.batchIssuancePausedMidBatch", queued, redeployed, suffix).WithData(gin.H{
 				"queued":             queued,
 				"redeployed":         redeployed,
 				"failed":             len(failed),
@@ -1491,7 +1495,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				"skipped_other":      skippedUnsupported,
 				"skipped_retired":    skippedRetired,
 				"paused_mid_batch":   true,
-			}})
+			}))
 			return
 		}
 		if queued == 0 && len(failed) > 0 && redeployed == 0 {
@@ -1552,15 +1556,17 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		if queued == 0 && redeployed > 0 {
 			// 全部目标都只差部署：如实回报「重新部署」而不是「创建签发任务」。
 			skipNote := withForceNote(formulaSkippedNote(skippedCooldown+skippedWaitingCA, skippedInFlight, skippedBlocked, skippedUnsupported, skippedRetired))
-			message := fmt.Sprintf("已触发重新部署 %d 个（不重新签发）", redeployed)
+			suffix := ""
 			if len(failed) > 0 {
-				message += fmt.Sprintf("；%d 个失败: %s", len(failed), strings.Join(failed, "; "))
+				suffix += fmt.Sprintf("；%d 个失败: %s", len(failed), strings.Join(failed, "; "))
 			}
 			if skipNote != "" {
-				message += "；" + skipNote
+				suffix += "；" + skipNote
 			}
+			// 审计明细沿用迁移前的中文整句（语言无关）；响应按键 + 参数渲染。
+			message := fmt.Sprintf("已触发重新部署 %d 个（不重新签发）", redeployed) + suffix
 			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, message, services.AuditResultPart("deployment_retry")))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: gin.H{
+			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.batchIssuanceRedeployedOnly", redeployed, suffix).WithData(gin.H{
 				"queued":             0,
 				"redeployed":         redeployed,
 				"failed":             len(failed),
@@ -1570,7 +1576,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				"skipped_blocked":    skippedBlocked,
 				"skipped_other":      skippedUnsupported,
 				"skipped_retired":    skippedRetired,
-			}})
+			}))
 			return
 		}
 		if queued == 0 && redeployed == 0 {
@@ -1597,22 +1603,24 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		}
 		if len(failed) > 0 || skippedTotal > 0 || redeployed > 0 {
 			skipNote := formulaSkippedNote(skippedCooldown+skippedWaitingCA, skippedInFlight, skippedBlocked, skippedUnsupported, skippedRetired)
+			// format/args 仅供审计明细（迁移前的中文整句，语言无关）；响应按键 +
+			// 同一组参数渲染——suffix 与 args 同序拼接，逐字等价。
 			format := "入队 %d 个任务"
-			message := fmt.Sprintf("已创建 %d 个签发任务", queued)
+			suffix := ""
 			if redeployed > 0 {
 				format += "，重新部署 %d 个"
-				message += fmt.Sprintf("，已触发重新部署 %d 个（不重新签发）", redeployed)
+				suffix += fmt.Sprintf("，已触发重新部署 %d 个（不重新签发）", redeployed)
 			}
 			if len(failed) > 0 {
 				format += "，失败 %d 个"
-				message += fmt.Sprintf("，%d 个失败: %s", len(failed), strings.Join(failed, "; "))
+				suffix += fmt.Sprintf("，%d 个失败: %s", len(failed), strings.Join(failed, "; "))
 			}
 			if skipNote != "" {
 				format += "，" + skipNote
-				message += "，" + skipNote
+				suffix += "，" + skipNote
 			}
 			format += batchForceNote
-			message += batchForceNote
+			suffix += batchForceNote
 			args := []any{queued}
 			if redeployed > 0 {
 				args = append(args, redeployed)
@@ -1621,7 +1629,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				args = append(args, len(failed))
 			}
 			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf(format, args...), services.AuditResultPart("partial")))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: gin.H{
+			c.JSON(http.StatusOK, apimsg.Envelope(c, 0, "cert.batchIssuancePartial", queued, suffix).WithData(gin.H{
 				"queued":             queued,
 				"redeployed":         redeployed,
 				"failed":             len(failed),
@@ -1631,7 +1639,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				"skipped_blocked":    skippedBlocked,
 				"skipped_other":      skippedUnsupported,
 				"skipped_retired":    skippedRetired,
-			}})
+			}))
 			return
 		}
 

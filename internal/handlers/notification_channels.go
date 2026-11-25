@@ -345,14 +345,14 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		return
 	}
 	if err := validateChannelTarget(req.Type, req.Target); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelTargetValidationFailed", apimsg.ErrMsg(c, err)))
 		return
 	}
 	styleConfig := "{}"
 	if len(req.StyleConfig) > 0 {
 		normalized, err := validateChannelStyle(req.Type, req.StyleConfig)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelStyleValidationFailed", apimsg.ErrMsg(c, err)))
 			return
 		}
 		styleConfig = notify.CanonicalTemplateScope(normalized, "")
@@ -416,7 +416,7 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.invalidRequest", apimsg.ErrMsg(c, err)))
 		return
 	}
 	// 校验先行（无副作用），写库统一进单事务——四条 UPDATE 曾各自独立提交：
@@ -429,14 +429,14 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		req.StyleConfig = restoreMaskedStyleHeaders(req.StyleConfig, currentStyle)
 		normalized, err := validateChannelStyle(typ, req.StyleConfig)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelStyleValidationFailed", apimsg.ErrMsg(c, err)))
 			return
 		}
 		normalizedStyle, hasStyle = notify.CanonicalTemplateScope(normalized, currentStyle), true
 	}
 	if req.Target != "" {
 		if err := validateChannelTarget(typ, req.Target); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, apimsg.Envelope(c, 400, "notify.channelTargetValidationFailed", apimsg.ErrMsg(c, err)))
 			return
 		}
 		// 旧前端兜底：列表对非属主 target 整体脱敏，旧版编辑把掩码串当新目标

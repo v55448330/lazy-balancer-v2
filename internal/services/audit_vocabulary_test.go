@@ -70,7 +70,7 @@ var auditVocabDynamicAllowlist = map[string]map[int][]string{
 	// 传入（任务监控/安全防护/配置备份等，均 ≤5 词），动作固定为字面量
 	// 「触发」/「触发失败」。TriggerTaskAsync 仅转发上下文，不再直写审计。
 	"services/task_trigger.go": {2: {"RecordTaskTriggerResult"}},
-	"handlers/autobackup.go":   {1: {"RunAutoBackupOnce", "failAutoBackupAccess"}},
+	"handlers/autobackup.go":   {1: {"RunAutoBackupOnce", "auditAutoBackupAccessFailure"}},
 	"handlers/handlers.go":     {1: {"finishTxApply", "writeApplyFailureBanner"}, 2: {"finishTxApply", "writeApplyFailureBanner"}},
 	// tryIPListHotPathApply 的动作/对象透传 txApplyFinish 字段（热路径收尾镜像
 	// finishTxApply 家族语义；字面量词条在各名单写路径调用点核清，
