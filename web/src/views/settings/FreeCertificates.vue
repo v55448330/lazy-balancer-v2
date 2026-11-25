@@ -30,10 +30,11 @@
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.renewalTime')">
           <el-input-number v-model="global.cert_renewal_days" :min="1" :max="CERT_RENEWAL_DAYS_MAX" controls-position="right" />
-          <span
-            class="form-tip-inline"
+          <!-- 续签窗口收敛说明 47 字超 §26-5 同行阈值 → 块级说明（长尾细节仍在 title 里） -->
+          <div
+            class="form-tip-line"
             :title="t('app.settings.freeCerts.acme.renewalTimeTitle')"
-          >{{ t('app.settings.freeCerts.acme.renewalTimeHint', { max: CERT_RENEWAL_DAYS_MAX }) }}</span>
+          >{{ t('app.settings.freeCerts.acme.renewalTimeHint', { max: CERT_RENEWAL_DAYS_MAX }) }}</div>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.renewalAttempts')">
           <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" controls-position="right" />
@@ -945,9 +946,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* .cred-divider 并入.section-divider*/
-.section-divider { margin: 24px 0 20px; }
-.section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .lb-form :deep(.el-form-item) { margin-bottom: 18px; }
 .card-header {
   display: flex;

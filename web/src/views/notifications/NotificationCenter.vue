@@ -190,7 +190,8 @@
               <span class="daily-label">{{ t('app.notification.rules.dailySendTime') }}</span>
               <div>
                 <el-time-select v-model="dailyDraft.send_time" start="00:00" end="23:30" step="00:30" size="small" style="width: 120px" />
-                <span class="form-tip-inline">{{ t('app.notification.rules.dailyTimeHint') }}</span>
+                <!-- 18 字超 §26-5 同行阈值（中文 16 字）→ 块级说明 -->
+                <div class="form-tip-line">{{ t('app.notification.rules.dailyTimeHint') }}</div>
               </div>
             </div>
             <div class="daily-field">
@@ -346,7 +347,8 @@
          两模式同一版式：通道切换 radio + 格式行 + 编辑器 + 变量芯片 + 提示 + 折叠预览 + 取消/保存，
          仅数据源不同。机器人格式协议固定（仅高亮/预览样式）；rule 模式 webhook/邮件格式由内容决定；
          daily 模式 webhook/email 格式可选。 -->
-    <el-dialog v-model="tplDialogVisible" append-to-body class="dialog-body-inset rule-edit-dialog" width="min(860px, 94vw)" top="5vh">
+    <!-- 宽度 960 = §26-1「复合编辑」档（代码编辑器 + 预览区 + 分区标题）；顶边由全局 6vh 决定 -->
+    <el-dialog v-model="tplDialogVisible" append-to-body class="dialog-body-inset rule-edit-dialog" width="min(960px, 94vw)">
       <template #header>
         <DialogHeader :icon="Bell" :title="t('app.notification.rules.editTemplateTitle')" :subtitle="tplMode === 'rule' ? (tplEditingRule?.title || '') : (tplActiveChannel?.name || '')" tone="primary" />
       </template>
@@ -360,7 +362,8 @@
             <el-radio-button value="zh">中文</el-radio-button>
             <el-radio-button value="en">English</el-radio-button>
           </el-radio-group>
-          <span class="form-tip-inline">{{ t('app.notification.rules.tplLangHint') }}</span>
+          <!-- 26 字超 §26-5 同行阈值 → 块级说明 -->
+          <div class="form-tip-line">{{ t('app.notification.rules.tplLangHint') }}</div>
         </div>
         <div class="tpl-channel-row">
           <span class="tpl-format-label">{{ t('app.notification.rules.tplChannelLabel') }}</span>
@@ -388,7 +391,8 @@
               <el-radio-button value="modules">{{ t('app.notification.daily.modeModules') }}</el-radio-button>
               <el-radio-button value="template">{{ t('app.notification.daily.modeTemplate') }}</el-radio-button>
             </el-radio-group>
-            <span class="form-tip-inline">{{ tplDailyMode === 'modules' ? t('app.notification.daily.modeModulesHint') : t('app.notification.daily.modeTemplateHint') }}</span>
+            <!-- 模式说明 20/30 字超 §26-5 同行阈值 → 块级说明 -->
+            <div class="form-tip-line">{{ tplDailyMode === 'modules' ? t('app.notification.daily.modeModulesHint') : t('app.notification.daily.modeTemplateHint') }}</div>
           </div>
           <!-- JSON/HTML/Markdown 高亮编辑（CodeEditor 全站单源）；纯文本用 textarea；
                日报模块拼装模式下编辑器只读（模板保留但不生效） -->
@@ -1721,7 +1725,7 @@ watch(activeTab, v => {
 .tpl-channel-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .tpl-field { margin-bottom: 12px; }
 .tpl-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.tpl-format-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tpl-format-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .tpl-format-label { flex: none; font-size: 12px; color: #6b7280; }
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -1759,8 +1763,6 @@ watch(activeTab, v => {
 .tpl-md-preview :deep(pre code) { background: none; padding: 0; font-size: 12px; }
 /* HTML 预览 iframe（模板弹框预览专用；独立日报预览弹框已下线）。 */
 .tpl-html-preview { width: 100%; height: 300px; max-height: 46vh; border: 1px solid #e5e7eb; background: #fff; }
-/* 弹框体限高（scoped 形态；append-to-body 的实际生效规则见下方全局块同名类） */
-.rule-edit-dialog :deep(.el-dialog__body) { max-height: calc(100dvh - 180px); overflow-y: auto; }
 /* 预览折叠区：默认折叠防超屏；头仿节标题形态，去默认边框 */
 .tpl-preview-collapse { border: none; --el-collapse-header-height: 36px; }
 .tpl-preview-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; border-bottom: none; }
@@ -1808,7 +1810,10 @@ watch(activeTab, v => {
 .notif-level-section.is-critical .notif-level-head::before { background: var(--el-color-danger, #f56c6c); }
 .notif-level-section.is-warn .notif-level-head::before { background: var(--el-color-warning, #e6a23c); }
 .notif-level-section.is-info .notif-level-head::before { background: var(--el-color-primary, #409eff); }
-.rule-edit-dialog .el-dialog__body { max-height: calc(100vh - 300px); overflow-y: auto; overflow-x: hidden; }
+/* 弹框体限高与内部滚动走全局单源（DESIGN_SPEC §26-2，main.css 的
+   .el-dialog .el-dialog__body）。此处只补「预览弹框禁横向滚动条」（§16）——
+   自写 max-height 公式（曾为 100dvh − 180px / 100vh − 300px）一律废止。 */
+.rule-edit-dialog .el-dialog__body { overflow-x: hidden; }
 .notif-pick-group .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
 .daily-items .el-checkbox.is-bordered .el-checkbox__inner { display: none; }
 .daily-items .el-checkbox.is-bordered .el-checkbox__label { padding-left: 0; }

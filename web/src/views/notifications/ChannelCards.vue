@@ -100,14 +100,16 @@
 
     <!-- 编辑弹窗（DialogHeader 规范）：基本信息 + 传输配置分组。
          机器人协议固定（QQ=Markdown/微信=纯文本），无传输配置区；
-         webhook 保留 method/headers，email 保留 subject/body_format。 -->
-    <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(720px, 94vw)" top="6vh"
+         webhook 保留 method/headers，email 保留 subject/body_format。
+         宽度 760 = §26-1「分栏表单」档（含分区标题的基本信息 / 传输配置两组）；
+         顶边由全局 6vh 决定，组件不再写 top。 -->
+    <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(760px, 94vw)"
       :close-on-click-modal="false" @close="resetDrawer">
       <template #header>
         <DialogHeader :icon="editTarget ? Edit : Plus" :title="editTarget ? t('app.notification.channels.edit') : t('app.notification.channels.add')" :subtitle="typeLabel(drawerForm.type)" tone="primary" />
       </template>
       <DialogSectionHeader :title="t('app.notification.channels.configSection')" />
-      <el-form :label-width="$flw('110px')" :disabled="saving">
+      <el-form :label-width="$flw('112px')" :disabled="saving">
         <el-form-item :label="t('app.notification.channels.name')" :title="t('app.notification.channels.helpName')">
           <el-input v-model="drawerForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
         </el-form-item>
@@ -163,7 +165,7 @@
            消息正文模板已归通知规则（每通道模板），此处不再编辑模板。 -->
       <template v-if="editTarget && (drawerForm.type === 'webhook' || drawerForm.type === 'email')">
         <DialogSectionHeader :title="t('app.notification.channels.transportSection')" class="ch-form-section" />
-        <el-form :label-width="$flw('110px')" :disabled="saving">
+        <el-form :label-width="$flw('112px')" :disabled="saving">
           <template v-if="drawerForm.type === 'webhook'">
             <el-form-item :label="t('app.notification.channels.styleMethod')" :title="t('app.notification.channels.helpMethod')">
               <div class="field-col">
@@ -183,10 +185,9 @@
                   <el-input v-model="row.value" size="small" :placeholder="t('app.notification.channels.styleHeaderValue')" class="header-value" />
                   <el-button size="small" link type="danger" class="header-del" @click="removeHeaderRow(i)">{{ t('app.notification.channels.delete') }}</el-button>
                 </div>
-                <div class="header-foot">
-                  <el-button size="small" link type="primary" :disabled="headerRows.length >= 8" @click="addHeaderRow">+ {{ t('app.notification.channels.styleHeaderAdd') }}</el-button>
-                  <span class="form-tip-inline">{{ t('app.notification.channels.styleHeadersHint') }}</span>
-                </div>
+                <el-button size="small" link type="primary" :disabled="headerRows.length >= 8" @click="addHeaderRow">+ {{ t('app.notification.channels.styleHeaderAdd') }}</el-button>
+                <!-- 允许头清单超 §26-5 同行阈值（中文 16 字 / 英文 40 字符）→ 块级说明 -->
+                <div class="form-tip-line">{{ t('app.notification.channels.styleHeadersHint') }}</div>
               </div>
             </el-form-item>
           </template>
@@ -955,7 +956,7 @@ defineExpose({ fetchChannels })
   display: flex; align-items: center; justify-content: center;
   flex: none;
 }
-.ch-beta-badge { margin-left: 6px; padding: 0 4px; border: 1px solid var(--el-color-warning); border-radius: 2px; color: var(--el-color-warning); font-size: 10px; line-height: 14px; vertical-align: 1px; }
+.ch-beta-badge { margin-left: 6px; padding: 0 4px; border: 1px solid var(--el-color-warning); border-radius: 0; color: var(--el-color-warning); font-size: 10px; line-height: 14px; vertical-align: 1px; }
 .ch-icon-webhook { background: #eff6ff; color: #3b82f6; }
 .ch-icon-email { background: #ecfdf5; color: #10b981; }
 .ch-icon-qq { background: #eff6ff; color: #3b82f6; }
@@ -1009,5 +1010,4 @@ defineExpose({ fetchChannels })
 .header-name { width: 100%; }
 .header-value { width: 100%; }
 .header-del { flex: none; }
-.header-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 </style>

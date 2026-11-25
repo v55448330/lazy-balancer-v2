@@ -18,7 +18,7 @@
       </template>
     </el-alert>
 
-    <el-form v-if="!loadError" :label-width="$flw('130px')" :disabled="saving || nodeWriteBlocked" class="creds-form">
+    <el-form v-if="!loadError" :label-width="$flw('112px')" :disabled="saving || nodeWriteBlocked" class="creds-form">
       <el-form-item :label="t('app.notification.creds.smtpHost')">
         <el-input v-model="form.smtpHost" class="creds-input" />
       </el-form-item>
@@ -48,11 +48,13 @@
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTls')">
         <el-switch v-model="form.smtpTls" />
-        <span class="form-tip-inline">{{ t('app.notification.creds.smtpTlsHint') }}</span>
+        <!-- 端口口径说明超 §26-5 同行阈值（含 5 个拉丁词，en 59 字符）→ 块级说明 -->
+        <div class="form-tip-line">{{ t('app.notification.creds.smtpTlsHint') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpInsecure')">
         <el-switch v-model="form.smtpInsecure" :disabled="nodeWriteBlocked || !form.smtpTls" />
-        <span class="form-tip-inline">{{ t('app.notification.creds.smtpInsecureHint') }}</span>
+        <!-- 21 字超 §26-5 同行阈值 → 块级说明 -->
+        <div class="form-tip-line">{{ t('app.notification.creds.smtpInsecureHint') }}</div>
       </el-form-item>
       <el-form-item :label="t('app.notification.creds.smtpTestTo')">
         <div class="smtp-test-row">

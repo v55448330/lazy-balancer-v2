@@ -316,8 +316,8 @@ test('日报渲染模式显式开关与消息卡预览样式', () => {
   // form-hint 为遗留类新代码不得再用——2026-11-22 用户引用规范纠偏）：
   // 模块/投递时间/发送至全部迁移，且模块描述保持单行完整句。
   assert.match(nc, /<div class="form-tip-line">\{\{ t\('app\.notification\.daily\.modulesHint'\) \}\}<\/div>/, '模块描述=form-tip-line 标准类')
-  // 投递时间=同行后缀 form-tip-inline（规范 §16）；发送至=两条合并单行 form-tip-line
-  assert.match(nc, /<span class="form-tip-inline">\{\{ t\('app\.notification\.rules\.dailyTimeHint'\) \}\}<\/span>/, '投递时间描述=form-tip-inline 同行后缀')
+  // 投递时间描述 18 字超 §26-5 同行阈值（中文 16 字）→ 块级说明；发送至=两条合并单行 form-tip-line
+  assert.match(nc, /<div class="form-tip-line">\{\{ t\('app\.notification\.rules\.dailyTimeHint'\) \}\}<\/div>/, '投递时间描述=form-tip-line 块级说明（§26-5 阈值）')
   assert.match(nc, /\{\{ t\('app\.notification\.rules\.channelSelectHint'\) \}\}\{\{ hasDisabledChannels \? '；' \+ t\('app\.notification\.rules\.channelDisabledHint'\) : '' \}\}/, '发送至两条描述合并单行（条件拼接）')
   assert.ok(!/form-hint.*modulesHint/.test(nc), '模块描述禁用遗留 form-hint')
   // QQ 日报预置=内置模板镜像：每日报告标题/数据周期前缀/对齐分隔行/尾部分节线
@@ -378,7 +378,10 @@ test('通知中心样式块：同选择器单声明 + 死类清零', () => {
   // 行首锚定：后代作用域覆写是合法的单条窄覆写，不构成同选择器重复声明。
   const declCount = (selector: RegExp): number => (nc.match(selector) || []).length
   assert.equal(declCount(/^\.tpl-html-preview \{/gm), 1, '.tpl-html-preview 只允许一条声明')
-  assert.equal(declCount(/^\.rule-edit-dialog :deep\(\.el-dialog__body\) \{/gm), 1, '模板弹框体只允许一条 scoped 声明')
+  assert.equal(declCount(/^\.rule-edit-dialog \.el-dialog__body \{/gm), 1, '弹框体覆写只允许一条（禁横向滚动）')
+  // 弹框体限高/滚动走全局单源（DESIGN_SPEC §26-2）：组件自写 max-height 会在同选择器上
+  // 静默覆盖全局值（本节注释的「弹框体 240→100dvh」正是此形态），驻留即红。
+  assert.equal(declCount(/^\.rule-edit-dialog[^\n]*\{[^\n]*max-height/gm), 0, '弹框体限高禁自写公式')
   assert.equal(declCount(/^\.notif-level-head \{/gm), 1, '级别段标题只允许一条声明')
   assert.equal(declCount(/^\.notif-pick-group \.el-checkbox\.is-bordered \.el-checkbox__label \{/gm), 1, 'bordered 标签只允许一条声明')
   // 死类：模板从未使用（tpl-section-head 仍在用，仅其子标签类残留）

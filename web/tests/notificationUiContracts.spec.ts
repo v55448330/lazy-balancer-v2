@@ -83,7 +83,8 @@ test('通知三组件：form-hint/bind-hint 清零，标准描述类在位且不
   const cards = code(`${NOTIFICATIONS}/ChannelCards.vue`)
   assert.match(cards, /class="form-tip-line"/, '块级描述走 form-tip-line')
   const creds = code(`${NOTIFICATIONS}/SystemCredentials.vue`)
-  assert.match(creds, /class="form-tip-inline"/, 'SMTP 开关同行描述走 form-tip-inline')
+  // SMTP 两条开关说明（端口口径 51 字符 / 跳过校验 21 字）超 §26-5 同行阈值 → 块级。
+  assert.doesNotMatch(creds, /class="form-tip-inline"/, 'SMTP 开关说明超阈值一律块级（§26-5）')
   assert.match(creds, /class="form-tip-line"/, 'SMTP 块级描述走 form-tip-line')
 })
 

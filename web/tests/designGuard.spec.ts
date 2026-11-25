@@ -87,8 +87,10 @@ test('设计守卫：通知面标准（描述类/分区竖条/弹框体高度/�
   // 分区标题彩色竖条：DialogSectionHeader
   assert.match(nc, /import DialogSectionHeader from '@\/components\/DialogSectionHeader\.vue'/, '分区标题必须用 DialogSectionHeader')
   assert.match(nc, /<DialogSectionHeader :title="tplEditorLabel" \/>/, '内容模板分区标题带竖条')
-  // 弹框体高度上限（append-to-body 用全局类）
-  assert.match(nc, /\.rule-edit-dialog \.el-dialog__body \{ max-height: calc\(100vh - \d+px\); overflow-y: auto; overflow-x: hidden; \}/, '模板弹框体必须限高滚动')
+  // 弹框体限高与内部滚动走全局单源（DESIGN_SPEC §26-2）：组件自写的 max-height 公式
+  // （曾有 100dvh − 180px / 100vh − 300px 两份，后者静默覆盖前者）一律废止。
+  assert.ok(!/\.rule-edit-dialog[^}]*max-height/.test(nc), '模板弹框体限高必须走全局（禁自写公式）')
+  assert.match(nc, /\.rule-edit-dialog \.el-dialog__body \{ overflow-x: hidden; \}/, '预览弹框体禁横向滚动（§16）')
   // 预览固定高度（2026-11-22 裁定：独立日报预览弹框下线，预览统一收敛到编辑消息模板弹框）
   assert.match(nc, /height: 360px; max-height: 46vh/, '预览区必须固定高度')
   assert.ok(!/daily-preview-dialog/.test(nc), '独立日报预览弹框已下线（不得残留弹框类）')
