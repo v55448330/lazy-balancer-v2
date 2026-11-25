@@ -47,6 +47,9 @@ func clusterErrorKeyedResponse(status int, key string, cause error, args ...any)
 // failAutoBackupAccessKeyed 是 failAutoBackupAccess 的键化形态：审计明细（动作 + 对象 + 中文
 // 母本）、日志级别与日志正文口径逐字保留。
 func failAutoBackupAccessKeyed(c *gin.Context, verb, subject, key string, status int, cause error, args ...any) {
-	auditAutoBackupAccessFailure(c, verb, subject, i18n.T(i18n.ZH, key), status, cause)
-	c.JSON(status, apimsg.Envelope(nil, status, key, args...))
+	resp := apimsg.Envelope(nil, status, key, args...)
+	// 审计明细与运行日志沿用中文母本文案（不随请求语言变）：带槽词条必须在此按 args
+	// 填充，键化前的明细才逐字不变（如「读取备份文件失败: <err>」不得退化成剩下 %s 的模板）。
+	auditAutoBackupAccessFailure(c, verb, subject, resp.Message, status, cause)
+	c.JSON(status, resp)
 }

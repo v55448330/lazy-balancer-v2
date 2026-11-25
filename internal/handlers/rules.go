@@ -21,6 +21,7 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
@@ -3611,7 +3612,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// 中间件不兜底——提交后的每个失败分支都必须留痕（与 EnableRule 的
 		// failEnableWithStatus 对称），否则「曾提交并已回滚」在操作审计里缺席。
 		// 真实 /load 已发生 → 重载审计；补偿恢复失败 → 分叉横幅。
-		failUpdateWithStatus := func(message string, status int, cause error) {
+		failUpdateWithStatus := func(key string, status int, cause error) {
+			message := i18n.T(i18n.ZH, key)
 			if cause != nil {
 				services.Logf("error", "UpdateRule post-commit failure for caddy_id=%s: %s: %v", caddyID, message, cause)
 			}
@@ -3630,23 +3632,23 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
 				services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
 			if restoreErr != nil {
-				writeInternalError(c, http.StatusInternalServerError, message+"；规则与 Caddy 恢复失败", nil)
+				c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, "rule.restoreRuleAndCaddyFailed", message))
 				return
 			}
-			c.JSON(status, models.APIResponse{Code: status, Message: message})
+			c.JSON(status, apimsg.Envelope(nil, status, key))
 		}
 		var jobID, jobProviderID int
 		var jobStatus string
 		var jobExpiresAt sql.NullTime
 		jobErr := db.DB.QueryRow("SELECT id,status,expires_at,COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, canonicalACMEDomainForJobLookup(domain)).Scan(&jobID, &jobStatus, &jobExpiresAt, &jobProviderID)
 		if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
-			failUpdateWithStatus("读取证书任务失败", http.StatusInternalServerError, jobErr)
+			failUpdateWithStatus("rule.certJobReadFailed", http.StatusInternalServerError, jobErr)
 			return
 		}
 		if jobErr == nil {
 			resolvedJobProviderID, resolveJobErr := services.ResolveCAProviderID(jobProviderID)
 			if resolveJobErr != nil {
-				failUpdateWithStatus("解析证书任务 CA 提供商失败", http.StatusInternalServerError, resolveJobErr)
+				failUpdateWithStatus("rule.certJobCAProviderResolveFailed", http.StatusInternalServerError, resolveJobErr)
 				return
 			}
 			caProviderChanged = caProviderChanged || resolvedJobProviderID != caProviderID
@@ -3676,7 +3678,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					}
 				}
 				if err != nil {
-					failUpdateWithStatus("恢复证书任务失败", http.StatusInternalServerError, err)
+					failUpdateWithStatus("rule.certJobResumeFailed", http.StatusInternalServerError, err)
 					return
 				}
 				// （第二出口）：Resume 后已应用配置同样缺 TLS——补一次重渲染
@@ -3687,7 +3689,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				reapplyErr := h.caddyService.GenerateAndApplyConfigForceInLock() // 已持锁——InLock 变体防重入死锁
 				h.recordCaddyApplyResult(reapplyErr)
 				if reapplyErr != nil {
-					failUpdateWithStatus("恢复证书任务后重载 Caddy 配置失败", http.StatusInternalServerError, reapplyErr)
+					failUpdateWithStatus("rule.caddyReloadAfterCertJobResumeFailed", http.StatusInternalServerError, reapplyErr)
 					return
 				}
 				// 第二轮已持久化恢复后的 TLS 配置，首轮 note 不得再回写无 TLS 载荷。
@@ -3764,7 +3766,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			reapplyErr := h.caddyService.GenerateAndApplyConfigForceInLock() // 已持锁——InLock 变体防重入死锁
 			h.recordCaddyApplyResult(reapplyErr)
 			if reapplyErr != nil {
-				failUpdateWithStatus("域名迁移后重载 Caddy 配置失败", http.StatusInternalServerError, reapplyErr)
+				failUpdateWithStatus("rule.caddyReloadAfterDomainMigrationFailed", http.StatusInternalServerError, reapplyErr)
 				return
 			}
 			// 第二轮已持久化新域视图，首轮 note 不得再回写旧视图载荷。
@@ -4070,13 +4072,17 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	fail := func(status int, message string) {
+	// fail 是复制端点的失败出口：key 为语义键，响应经键化信封（前端按界面语言
+	// 渲染，缺词条回落 message）；审计取键的中文母本并按参数插值——迁移前的中文
+	// 文案逐字不变。参数经变参传入，调用点的实参只求值一次。
+	fail := func(status int, key string, args ...any) {
 		recordAudit(c, "复制失败", "负载规则", services.FormatAuditDetail(
-			services.AuditRulePart(caddyID), message, services.AuditResultPart("failure")))
-		c.JSON(status, models.APIResponse{Code: status, Message: message})
+			services.AuditRulePart(caddyID), apimsg.Tf(nil, key, args...), services.AuditResultPart("failure")))
+		c.JSON(status, apimsg.Envelope(nil, status, key, args...))
 	}
 	// failInternal 5xx 分支：审计/日志保留底层错误，响应只回固定文案。
-	failInternal := func(message string, cause error) {
+	failInternal := func(key string, cause error) {
+		message := i18n.T(i18n.ZH, key)
 		services.Logf("error", "DuplicateRule failed for caddy_id=%s: %s: %v", caddyID, message, cause)
 		detail := message
 		if cause != nil {
@@ -4084,12 +4090,12 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		}
 		recordAudit(c, "复制失败", "负载规则", services.FormatAuditDetail(
 			services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: message})
+		c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, key))
 	}
 
 	rows, err := db.DB.Query(`SELECT `+lbRuleColumns+` FROM lb_rules WHERE caddy_id = ?`, caddyID)
 	if err != nil {
-		failInternal("读取规则失败", err)
+		failInternal("rule.loadFailed", err)
 		return
 	}
 	rules, err := scanLbRules(rows)
@@ -4099,11 +4105,11 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 	if err != nil {
 		services.Logf("error", "DuplicateRule scan error for caddy_id=%s: %v", caddyID, err)
-		fail(http.StatusInternalServerError, "读取规则失败")
+		fail(http.StatusInternalServerError, "rule.loadFailed")
 		return
 	}
 	if len(rules) == 0 {
-		fail(http.StatusNotFound, "规则不存在")
+		fail(http.StatusNotFound, "rule.ruleNotFound")
 		return
 	}
 	// 复制前补挂载关联数据——scanLbRules 不带 Upstreams/PathRules，
@@ -4111,7 +4117,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// 预检（DynamicDNS && count>1）在复制路径永不触发。
 	// 不再对 rule.Domain 规范化——落库域名已由 Create/Update 与启动迁移规范化。
 	if err := hydrateRuleRelations(c.Request.Context(), rules); err != nil {
-		failInternal("读取规则关联数据失败", err)
+		failInternal("rule.relatedDataLoadFailed", err)
 		return
 	}
 	rule := rules[0]
@@ -4224,7 +4230,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// （host/端口/权重/查重/健康检查/请求体大小）——坏上游/坏值不得原样
 	// 放大到副本，400 点名源规则。
 	if err := h.validateDuplicateRulePayload(rule); err != nil {
-		fail(http.StatusBadRequest, fmt.Sprintf("源规则 %s（%s）：%s", rule.Name, caddyID, err.Error()))
+		fail(http.StatusBadRequest, "rule.sourceRuleInvalid", rule.Name, caddyID, err.Error())
 		return
 	}
 
@@ -4232,14 +4238,14 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	newCaddyID, err := services.GenerateCaddyID()
 	if err != nil {
-		fail(http.StatusInternalServerError, "生成规则 ID 失败")
+		fail(http.StatusInternalServerError, "rule.idGenerationFailed")
 		return
 	}
 
 	nowTime := time.Now().UTC()
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		fail(http.StatusInternalServerError, "开启复制事务失败")
+		fail(http.StatusInternalServerError, "rule.beginDuplicateTransactionFailed")
 		return
 	}
 	committed := false
@@ -4302,7 +4308,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		TCPTryDuration:     rule.TCPTryDuration,
 		TCPTryInterval:     rule.TCPTryInterval,
 	}); err != nil {
-		fail(http.StatusBadRequest, "源规则配置不合法："+err.Error())
+		fail(http.StatusBadRequest, "rule.sourceRuleConfigInvalid", err.Error())
 		return
 	}
 
@@ -4314,7 +4320,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// 源行启用上游池混布同检——保存门只拦新建/更新载荷，复制是对存量混布行
 	// （直改 DB 或更早版本落库）的旁路放大通道。
 	if err := mixedUpstreamPoolError(rule); err != nil {
-		fail(http.StatusBadRequest, "源规则配置不合法："+err.Error())
+		fail(http.StatusBadRequest, "rule.sourceRuleConfigInvalid", err.Error())
 		return
 	}
 
@@ -4331,7 +4337,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// 规则文本长度上限：副本名累积后缀截断到上限内（源名可能已含后缀或接近上限）。
 	duplicate.Name = ruleDuplicateName(rule.Name)
 	if err := validateRuleTextLengths(duplicate.Name, rule.Description); err != nil {
-		fail(http.StatusBadRequest, fmt.Sprintf("源规则 %s（%s）：%s", rule.Name, caddyID, err.Error()))
+		fail(http.StatusBadRequest, "rule.sourceRuleInvalid", rule.Name, caddyID, err.Error())
 		return
 	}
 	duplicate.Enabled = false
@@ -4342,7 +4348,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	duplicateColumns := services.LbRuleInsertColumns("id")
 	if _, err := tx.Exec(services.LbRuleInsertSQL(duplicateColumns), services.LbRuleInsertArgs(&duplicate, duplicateColumns)...); err != nil {
 		services.Logf("error", "Failed to duplicate rule %s: %v", caddyID, err)
-		failInternal("复制规则失败，已回滚", err)
+		failInternal("rule.duplicateRuleFailedRolledBack", err)
 		return
 	}
 
@@ -4355,7 +4361,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		FROM upstreams u WHERE rule_id = ?
 	`, caddyID)
 	if err != nil {
-		failInternal("读取上游失败，已回滚", err)
+		failInternal("rule.upstreamReadFailedRolledBack", err)
 		return
 	}
 	for upstreamRows.Next() {
@@ -4371,7 +4377,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		}
 		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.OriginDomain); err != nil {
 			upstreamRows.Close()
-			failInternal("扫描上游失败，已回滚", err)
+			failInternal("rule.upstreamScanFailedRolledBack", err)
 			return
 		}
 		if rule.Protocol == "tcp" {
@@ -4385,7 +4391,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, newCaddyID, u.Host, u.Port, u.Weight, false /* dynamic_dns 废弃列：复制时归 0 */, u.Enabled, u.Protocol, u.MaxConnections, u.OriginDomain); err != nil {
 			upstreamRows.Close()
-			failInternal("复制上游失败，已回滚", err)
+			failInternal("rule.upstreamDuplicateFailedRolledBack", err)
 			return
 		}
 	}
@@ -4393,11 +4399,11 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		if closeErr := upstreamRows.Close(); closeErr != nil {
 			services.Logf("error", "DuplicateRule failed to close upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
 		}
-		failInternal("遍历上游失败，已回滚", err)
+		failInternal("rule.upstreamIterateFailedRolledBack", err)
 		return
 	}
 	if err := upstreamRows.Close(); err != nil {
-		failInternal("关闭上游游标失败，已回滚", err)
+		failInternal("rule.upstreamCursorCloseFailedRolledBack", err)
 		return
 	}
 
@@ -4406,7 +4412,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// INSERT SELECT 原始行——legacy 死形态（空 match_type/空白地址）
 		// 不得随复制放大到副本。
 		if err := replacePathRulesTx(caddyWriteCtx(c), tx, newCaddyID, rule.PathRules); err != nil {
-			failInternal("复制路径规则失败，已回滚", err)
+			failInternal("rule.pathRuleDuplicateFailedRolledBack", err)
 			return
 		}
 	}
@@ -4426,21 +4432,21 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		INSERT INTO security_policy_bindings (rule_caddy_id, policy_id, rank)
 		SELECT ?, policy_id, rank FROM security_policy_bindings WHERE rule_caddy_id = ?
 	`, newCaddyID, caddyID); err != nil {
-		failInternal("复制策略绑定失败，已回滚", err)
+		failInternal("rule.policyBindingDuplicateFailedRolledBack", err)
 		return
 	}
 	var droppedBindings int64
 	if rule.Protocol == "tcp" {
 		affected, err := pruneTCPUnsupportedBindings(caddyWriteCtx(c), tx)
 		if err != nil {
-			failInternal("复制策略绑定失败（清理 TCP 不支持绑定），已回滚", err)
+			failInternal("rule.policyBindingDuplicateCleanupFailedRolledBack", err)
 			return
 		}
 		droppedBindings = affected
 	}
 	var copiedBindings int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id = ?`, newCaddyID).Scan(&copiedBindings); err != nil {
-		failInternal("读取副本绑定失败，已回滚", err)
+		failInternal("rule.duplicateBindingReadFailedRolledBack", err)
 		return
 	}
 
@@ -4451,7 +4457,12 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发
 		// （本端点无 Caddy 交互，不走 recoverCommittedView 全收口）。
 		rollbackLeakedTx()
-		fail(http.StatusInternalServerError, commitUncertainLabel)
+		// 提交结果不确定没有稳定键：commitUncertainLabel 是整条提交收尾家族共用的
+		// 包级中文单源常量（尚未键化），把中文常量当键上送会让 message_key 变成
+		// 中文——此处保留原响应形态，文案仍取同一单源。
+		recordAudit(c, "复制失败", "负载规则", services.FormatAuditDetail(
+			services.AuditRulePart(caddyID), commitUncertainLabel, services.AuditResultPart("failure")))
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: commitUncertainLabel})
 		return
 	}
 	committed = true
@@ -5044,7 +5055,11 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		sideErr = errors.Join(dbErr, jobsErr, h.pinLastGoodAfterCompensation())
 		return runtimeErr, sideErr
 	}
-	failEnableWithStatus := func(message string, status int, cause error) {
+	// failEnableRespond 是启用端点提交后失败的统一出口：message 供运行日志与操作
+	// 审计（迁移前中文文案逐字保留），key 非空时响应走键化信封（message 即键的
+	// 中文母本）；key 为空表示该文案由跨文件 certEnqueueErrorResponse 按错误种类
+	// 拼接（409 含可操作详情），无单条键可对应，保留原响应形态。
+	failEnableRespond := func(key, message string, status int, cause error) {
 		// 启用端点为 Explicit 审计策略，中间件不兜底；此前
 		// 提交后的失败（CA 解析/任务读取/Resume 0 行等）只回滚无操作审计，
 		// 运维无法追溯谁在何时启用了哪条规则以及失败原因。
@@ -5065,20 +5080,34 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			services.Logf("error", "补偿失败: EnableRule compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
 			recordAudit(c, "启用失败", "负载规则", services.FormatAuditDetail(
 				services.AuditRulePart(caddyID), detail, "补偿恢复失败: "+restoreErr.Error(), services.AuditResultPart("failure")))
-			writeInternalError(c, http.StatusInternalServerError, message+"；规则与 Caddy 恢复失败", nil)
+			c.JSON(http.StatusInternalServerError, apimsg.Envelope(nil, http.StatusInternalServerError, "rule.restoreRuleAndCaddyFailed", message))
 			return
 		}
 		recordAudit(c, "启用失败", "负载规则", services.FormatAuditDetail(
 			services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
-		c.JSON(status, models.APIResponse{Code: status, Message: message})
+		if key == "" {
+			c.JSON(status, models.APIResponse{Code: status, Message: message})
+			return
+		}
+		c.JSON(status, apimsg.Envelope(nil, status, key))
 	}
-	failEnable := func(message string, cause error) {
-		failEnableWithStatus(message, http.StatusInternalServerError, cause)
+	failEnableWithStatus := func(key string, status int, cause error) {
+		failEnableRespond(key, i18n.T(i18n.ZH, key), status, cause)
 	}
-	// 入队失败按错误种类定状态（证书签发任务未运行 → 409）；4xx 保留细节文案。
-	failCertEnqueue := func(prefix string, enqueueErr error) {
-		status, message := certEnqueueErrorResponse(prefix, enqueueErr)
-		failEnableWithStatus(message, status, enqueueErr)
+	failEnable := func(key string, cause error) {
+		failEnableWithStatus(key, http.StatusInternalServerError, cause)
+	}
+	// 入队失败按错误种类定状态（证书签发任务未运行 → 409）；文案由跨文件
+	// certEnqueueErrorResponse 按错误种类拼接。500 的文案即前缀本身（等于键的
+	// 中文母本）→ 走键化信封；409 的冲突详情由该 helper 拼装、无单条键可对应，
+	// 保留原响应形态。
+	failCertEnqueue := func(key string, enqueueErr error) {
+		status, message := certEnqueueErrorResponse(i18n.T(i18n.ZH, key), enqueueErr)
+		if status == http.StatusInternalServerError {
+			failEnableRespond(key, message, status, enqueueErr)
+			return
+		}
+		failEnableRespond("", message, status, enqueueErr)
 	}
 
 	domain := ruleDomain
@@ -5103,7 +5132,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if err == nil {
 			hasJob = true
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			failEnable("读取证书任务失败", err)
+			failEnable("rule.certJobReadFailed", err)
 			return
 		}
 		// 续期天数读取单源（services.GetCertRenewalDays）——
@@ -5119,7 +5148,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if hasJob {
 			resolvedJobProviderID, resolveJobErr := services.ResolveCAProviderID(jobProviderID)
 			if resolveJobErr != nil {
-				failEnable("解析证书任务 CA 提供商失败", resolveJobErr)
+				failEnable("rule.certJobCAProviderResolveFailed", resolveJobErr)
 				return
 			}
 			if resolvedJobProviderID != caProviderID {
@@ -5130,12 +5159,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		switch action {
 		case EnableCertJobCreate:
 			if queueManager == nil {
-				failEnable("CA 队列未初始化，无法创建证书任务", nil)
+				failEnable("rule.caQueueUninitializedNoCreate", nil)
 				return
 			}
 			err = enqueueCertJob()
 			if err != nil {
-				failCertEnqueue("创建证书任务失败", err)
+				failCertEnqueue("rule.certJobCreateFailed", err)
 				return
 			}
 			// 与禁用侧同通道留痕（对照 [WARN] cancelled）：入队成功后才写，
@@ -5157,12 +5186,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			// 的事实记账，中止已验证有效的恢复会让续签链断裂且无补偿。
 			resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', "+services.IssuedFinalizeResetSQL()+", updated_at=datetime('now') WHERE id=?", jobID)
 			if err != nil {
-				failEnable("恢复证书任务失败", err)
+				failEnable("rule.certJobResumeFailed", err)
 				return
 			}
 			resumed, err := resumeResult.RowsAffected()
 			if err != nil || resumed != 1 {
-				failEnable("恢复证书任务失败：任务行不存在或已被并发变更", nil)
+				failEnable("rule.certJobResumeRowChanged", nil)
 				return
 			}
 			// Resume 把 'disabled'→'issued' 发生在 ApplyConfigFromTx 之后——
@@ -5176,7 +5205,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			reapplyErr := h.caddyService.GenerateAndApplyConfigForceInLock() // 已持锁——InLock 变体防重入死锁
 			h.recordCaddyApplyResult(reapplyErr)
 			if reapplyErr != nil {
-				failEnable("恢复证书任务后重载 Caddy 配置失败", reapplyErr)
+				failEnable("rule.caddyReloadAfterCertJobResumeFailed", reapplyErr)
 				return
 			}
 			// 第二轮已持久化恢复后的 TLS 配置，首轮 note 不得再回写无 TLS 载荷。
@@ -5186,12 +5215,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
 		case EnableCertJobRenew:
 			if queueManager == nil {
-				failEnable("CA 队列未初始化，无法续签证书", nil)
+				failEnable("rule.caQueueUninitializedNoRenew", nil)
 				return
 			}
 			err = enqueueCertJob()
 			if err != nil {
-				failCertEnqueue("续签排队失败", err)
+				failCertEnqueue("rule.certJobRenewEnqueueFailed", err)
 				return
 			}
 			// 与禁用侧同通道留痕（对照 [WARN] cancelled）：入队成功后才写。
@@ -5199,12 +5228,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			recordAudit(c, "续签", "证书任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
 		case EnableCertJobRetry:
 			if queueManager == nil {
-				failEnable("CA 队列未初始化，无法重试证书任务", nil)
+				failEnable("rule.caQueueUninitializedNoRetry", nil)
 				return
 			}
 			err = enqueueCertJob()
 			if err != nil {
-				failCertEnqueue("重试排队失败", err)
+				failCertEnqueue("rule.certJobRetryEnqueueFailed", err)
 				return
 			}
 			// 与禁用侧同通道留痕：失败/暂停任务经启用重新排队。

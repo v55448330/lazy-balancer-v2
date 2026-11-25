@@ -924,8 +924,6 @@ var adminBusiness5xxDetailFunctions = map[string]string{
 	"autobackup.go:AutoBackupSettings":                "设置/备份列表读取失败需管理员看到 errno",
 	"autobackup.go:UpdateAutoBackupSettings":          "设置事务写失败需点名（DB 锁/只读库）",
 	"autobackup.go:RunAutoBackupNow":                  "引擎触发失败需点名（admission/执行错误）",
-	"autobackup.go:readAutoBackupRowData":             "还原的备份文件读取失败需点名（权限/errno）；同函数的导入预览入口走固定文案",
-	"autobackup.go:DownloadAutoBackup":                "备份文件读取失败需点名（权限/errno）",
 	"admintls.go:UpdateAdminTLS":                      "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",
 	"config_backup.go:ExportConfigBackup":             "导出失败需管理员区分备份内容错误与系统故障",
 	"config_backup.go:failImportTx":                   "导入/还原必须点名事务回滚原因（既有响应契约）",
@@ -954,7 +952,6 @@ func TestAdminBusiness5xxDetailPolicyRoutesAreAdminGroup(t *testing.T) {
 		"config_backup.go:failImportTx":                   "导入事务回滚收尾的内部辅助函数，无独立路由入口",
 		"securityiplists.go:tryIPListHotPathApply":        "名单热路径提交收尾的内部辅助函数，无独立路由入口（由各名单写端点调用）",
 		"taskmonitor.go:respondTaskTriggerAdmissionError": "admission 错误映射的内部辅助函数，无独立路由入口（trigger/toggle/cancel/control 共用）",
-		"autobackup.go:readAutoBackupRowData":             "还原与导入预览共用的「查行 → 读文件」入口，无独立路由（RestoreAutoBackup 与 ValidateConfigImport 调用）",
 	}
 	registrations := caddyRouteGroupRegistrations(t)
 	routed := 0

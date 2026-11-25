@@ -1038,7 +1038,7 @@ func (h *Handlers) autoBackupDir() (string, error) {
 func (h *Handlers) autoBackupRowByID(c *gin.Context, verb, rawID string) (autoBackupRowView, bool) {
 	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil || id <= 0 {
-		failAutoBackupAccess(c, verb, fmt.Sprintf("备份 ID %q", rawID), "无效的备份 ID",
+		failAutoBackupAccessKeyed(c, verb, fmt.Sprintf("备份 ID %q", rawID), "backup.autoBackupInvalidId",
 			http.StatusBadRequest, err)
 		return autoBackupRowView{}, false
 	}
@@ -1049,17 +1049,17 @@ func (h *Handlers) autoBackupRowByID(c *gin.Context, verb, rawID string) (autoBa
 	view, err := scanAutoBackupRowView(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			failAutoBackupAccess(c, verb, subject, "备份不存在", http.StatusNotFound, err)
+			failAutoBackupAccessKeyed(c, verb, subject, "backup.autoBackupNotFound", http.StatusNotFound, err)
 			return autoBackupRowView{}, false
 		}
 		// 5xx 文案与归因沿用 dbQueryNotFound 的口径（固定「数据库错误」，
 		// 底层错误只进日志/审计）——本分支直接调用，故在此显式拼 operation。
-		failAutoBackupAccess(c, verb, subject, "数据库错误", http.StatusInternalServerError,
+		failAutoBackupAccessKeyed(c, verb, subject, "common.databaseError", http.StatusInternalServerError,
 			fmt.Errorf("查询自动备份行: %w", err))
 		return autoBackupRowView{}, false
 	}
 	if !autoBackupSafeFilename(view.Filename) {
-		failAutoBackupAccess(c, verb, fmt.Sprintf("备份 #%d", view.ID), "备份文件名非法",
+		failAutoBackupAccessKeyed(c, verb, fmt.Sprintf("备份 #%d", view.ID), "backup.autoBackupFilenameInvalid",
 			http.StatusBadRequest, fmt.Errorf("非法备份文件名 %q", view.Filename))
 		return autoBackupRowView{}, false
 	}
@@ -1076,14 +1076,14 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 		return
 	}
 	// 失败面单源：删除族（行面/文件面/提交面）每个拒绝分支都经
-	// failAutoBackupAccess 落「删除失败」审计——此前六条分支裸写响应，
+	// failAutoBackupAccessKeyed 落「删除失败」审计——此前六条分支裸写响应，
 	// 管理员在列表点删除而失败时审计页零记录，与同族还原/下载的收尾契约
 	// 不一致。subject 与文件面同形（备份 id + 文件名）便于按文件复盘。
 	subject := fmt.Sprintf("备份 #%d 文件 %s", view.ID, view.Filename)
 	// 目录守卫先于事务：相对/空目录时不得先删行再在 CWD 下删同名文件。
 	backupDir, dirErr := h.autoBackupDir()
 	if dirErr != nil {
-		failAutoBackupAccess(c, "删除", subject, "备份目录无效", http.StatusInternalServerError, dirErr)
+		failAutoBackupAccessKeyed(c, "删除", subject, "backup.autoBackupDirInvalid", http.StatusInternalServerError, dirErr)
 		return
 	}
 	// 行删除先在事务内确认影响行数，再删文件：0 行（并发先到者已删）
@@ -1095,29 +1095,29 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	// 不因客户端断开半途中止。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,
+		failAutoBackupAccessKeyed(c, "删除", subject, "backup.autoBackupRecordDeleteFailed", http.StatusInternalServerError,
 			fmt.Errorf("开启删除事务: %w", err))
 		return
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(`DELETE FROM auto_backups WHERE id=?`, view.ID)
 	if err != nil {
-		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,
+		failAutoBackupAccessKeyed(c, "删除", subject, "backup.autoBackupRecordDeleteFailed", http.StatusInternalServerError,
 			fmt.Errorf("删除自动备份行: %w", err))
 		return
 	}
 	deleted, err := res.RowsAffected()
 	if err != nil {
-		failAutoBackupAccess(c, "删除", subject, "删除备份记录失败", http.StatusInternalServerError,
+		failAutoBackupAccessKeyed(c, "删除", subject, "backup.autoBackupRecordDeleteFailed", http.StatusInternalServerError,
 			fmt.Errorf("读取删除行数: %w", err))
 		return
 	}
 	if deleted == 0 {
-		failAutoBackupAccess(c, "删除", subject, "备份不存在（可能已被删除）", http.StatusNotFound, sql.ErrNoRows)
+		failAutoBackupAccessKeyed(c, "删除", subject, "backup.autoBackupNotFoundMayBeDeleted", http.StatusNotFound, sql.ErrNoRows)
 		return
 	}
 	if err := os.Remove(filepath.Join(backupDir, view.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		failAutoBackupAccess(c, "删除", subject, "删除备份文件失败", http.StatusInternalServerError,
+		failAutoBackupAccessKeyed(c, "删除", subject, "backup.autoBackupFileDeleteFailed", http.StatusInternalServerError,
 			fmt.Errorf("删除备份文件 %s: %w", view.Filename, err))
 		return
 	}
@@ -1130,8 +1130,8 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 		// 连接的读会看到未提交的删除）。统一补发 ROLLBACK 才能真正兑现文案里
 		// 「记录已恢复保留」的承诺（与提交失败族同一收尾）。
 		rollbackLeakedTx()
-		failAutoBackupAccess(c, "删除", subject,
-			"备份记录提交失败（备份文件已删除、记录已恢复保留，请再次删除该记录）",
+		failAutoBackupAccessKeyed(c, "删除", subject,
+			"backup.autoBackupRecordCommitFailed",
 			http.StatusInternalServerError, fmt.Errorf("提交删除事务: %w", err))
 		return
 	}
@@ -1144,6 +1144,10 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 // 来源：失败审计 + 运行日志 + 原状态码信封。行面（autoBackupRowByID 的 400/
 // 404/500）与文件面（failRestoreFileAccess 的 404/413/500）共用本函数——此前
 // 两个阶段各写各的裸 c.JSON，被拒尝试在操作审计页零记录。
+//
+// 生产失败分支已统一走键化形态 failAutoBackupAccessKeyed（keyed_errors.go，
+// 键 + 中文母本 + 模板参数），本函数只服务尚未键化的一处 413 文件超限分支，
+// 留痕口径与键化形态共用（同经 auditAutoBackupAccessFailure）。
 //
 // 动作词取词表内静态字面量（操作标签 ≤4 词）：还原失败 / 下载失败 / 删除失败；
 // 对象固定「配置备份」。subject 携带备份标识与阶段供审计复盘，message 保持原
@@ -1168,9 +1172,11 @@ func failAutoBackupAccess(c *gin.Context, verb, subject, message string, status 
 }
 
 // failRestoreFileAccess 是自动备份「还原/预览/下载」进入导入核心之前**文件面**
-// 失败的收尾适配器：文件面与行面同经 failAutoBackupAccess 落「还原失败/预览
-// 失败/下载失败」审计 + 运行日志 + 原状态码响应。verb 必须与调用方的实际动作
-// 一致（预览失败不得记成还原失败，否则审计复盘会把只读探测当成高危操作）。
+// 失败的收尾适配器：文件面与行面同经 failAutoBackupAccessKeyed 落「还原失败/
+// 预览失败/下载失败」审计 + 运行日志 + 原状态码响应；本适配器现只服务未键化的
+// 413 超限分支（文案单源在导入组 configImportLimitMessage，待该组统一键化）。
+// verb 必须与调用方的实际动作一致（预览失败不得记成还原失败，否则审计复盘会把
+// 只读探测当成高危操作）。
 // 与 HTTP 读体超限的 413 不同（那属客户端探测面、不落审计），这里的 413 来自
 // 本地备份文件自身超限，是管理员操作的真实失败面。
 func failRestoreFileAccess(c *gin.Context, verb, subject, message string, status int, cause error) {
@@ -1265,16 +1271,16 @@ func (h *Handlers) readAutoBackupRowData(c *gin.Context, verb, rawID string, dis
 	}
 	switch failure.kind {
 	case autoBackupReadDirInvalid:
-		failRestoreFileAccess(c, verb, subject, "备份目录无效", http.StatusInternalServerError, failure.cause)
+		failAutoBackupAccessKeyed(c, verb, subject, "backup.autoBackupDirInvalid", http.StatusInternalServerError, failure.cause)
 	case autoBackupReadMissing:
-		failRestoreFileAccess(c, verb, subject, "备份文件已不存在", http.StatusNotFound, failure.cause)
+		failAutoBackupAccessKeyed(c, verb, subject, "backup.autoBackupFileMissing", http.StatusNotFound, failure.cause)
 	case autoBackupReadTooLarge:
 		failRestoreFileAccess(c, verb, subject, configImportLimitMessage(), http.StatusRequestEntityTooLarge, failure.cause)
 	default:
 		if discloseReadError {
-			failRestoreFileAccess(c, verb, subject, "读取备份文件失败: "+failure.cause.Error(), http.StatusInternalServerError, failure.cause)
+			failAutoBackupAccessKeyed(c, verb, subject, "backup.autoBackupFileReadFailed", http.StatusInternalServerError, failure.cause, failure.cause.Error())
 		} else {
-			failRestoreFileAccess(c, verb, subject, "读取备份文件失败", http.StatusInternalServerError, failure.cause)
+			failAutoBackupAccessKeyed(c, verb, subject, "backup.autoBackupFileUnreadable", http.StatusInternalServerError, failure.cause)
 		}
 	}
 	return nil, "", false
@@ -1309,7 +1315,7 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 	// 目录守卫（同还原）：相对/空 BackupDir 不得在 CWD 下读取同名文件。
 	backupDir, dirErr := h.autoBackupDir()
 	if dirErr != nil {
-		failRestoreFileAccess(c, "下载", subject, "备份目录无效", http.StatusInternalServerError, dirErr)
+		failAutoBackupAccessKeyed(c, "下载", subject, "backup.autoBackupDirInvalid", http.StatusInternalServerError, dirErr)
 		return
 	}
 	path := filepath.Join(backupDir, view.Filename)
@@ -1319,16 +1325,16 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			failRestoreFileAccess(c, "下载", subject, "备份文件已不存在", http.StatusNotFound, err)
+			failAutoBackupAccessKeyed(c, "下载", subject, "backup.autoBackupFileMissing", http.StatusNotFound, err)
 			return
 		}
-		failRestoreFileAccess(c, "下载", subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
+		failAutoBackupAccessKeyed(c, "下载", subject, "backup.autoBackupFileReadFailed", http.StatusInternalServerError, err, err.Error())
 		return
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		failRestoreFileAccess(c, "下载", subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
+		failAutoBackupAccessKeyed(c, "下载", subject, "backup.autoBackupFileReadFailed", http.StatusInternalServerError, err, err.Error())
 		return
 	}
 	c.Header("Cache-Control", "no-store, private")
